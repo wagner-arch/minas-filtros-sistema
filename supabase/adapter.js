@@ -32,6 +32,8 @@
    DIFERENÇAS PROPOSITAIS EM RELAÇÃO AO BANCO ANTIGO (leia antes de integrar)
    a) TODA falha REJEITA a promise (rede, RLS, sessão expirada). O HTML de hoje
       engole o erro em grava()/apaga(); a correção fica no INTEGRACAO.md.
+      O erro traz .ehRLS / .ehSessao / .ehRede e mensagem pronta para o toast;
+      db.online, db.ultimoErro e db.aoEstado(ok,erro) alimentam o banner de falha.
    b) Toda leitura de coleção sai ORDENADA por id e PAGINADA (o PostgREST corta
       em 1000 linhas por resposta): limit(2000) de pontos/movest volta completo.
    c) get() devolve também q.total (total real no banco) para a tela poder dizer
@@ -128,9 +130,13 @@
 
   function ehTexto(v) { return typeof v === "string" && v !== ""; }
 
-  /* loja só entra em filtro montado à mão (.or) — valide para não abrir brecha */
+  /* loja e nomes de campo/coleção entram em filtros montados à mão (.or, canal do
+     Realtime, coluna data->>campo). Valide antes de concatenar. */
   function lojaSegura(v) {
     return ehTexto(v) && /^[A-Za-z0-9_-]{1,40}$/.test(v);
+  }
+  function nomeSeguro(v) {
+    return ehTexto(v) && /^[A-Za-z0-9_]{1,60}$/.test(v);
   }
 
   /* Erro único do adapter: mensagem em português para a tela + tudo do original
@@ -174,12 +180,6 @@
       return e;
     }
     return ErroBanco("Falha no banco (" + (contexto || "docs") + "): " + msg, contexto, erro);
-  }
-
-  /* toda resposta do supabase-js volta como {data,error}: aqui o error vira throw */
-  function conferir(resp, contexto) {
-    if (resp && resp.error) throw traduzir(resp.error, contexto);
-    return resp;
   }
 
   /* impede que alguém cole a service_role no HTML (ela ignora a RLS) */
@@ -273,14 +273,40 @@
       versao: VERSAO_ADAPTER,
       sb: sb,
       lojaPadrao: opcoes.lojaPadrao || null,
+      /* estado da conexão, para o banner de falha persistente (INTEGRACAO.md, item 4).
+         ultimoErro guarda a última falha e some sozinho quando algo volta a dar certo;
+         aoEstado, se você preencher, é chamado só nas VIRADAS online<->offline. */
+      online: true,
       ultimoErro: null,
+      aoEstado: typeof opcoes.aoEstado === "function" ? opcoes.aoEstado : null,
       colecoes: Object.keys(CAMPO_LOJA),
       restritas: COLECOES_RESTRITAS.slice()
     };
 
-    /* registra o último erro para o banner de falha persistente do INTEGRACAO.md */
-    function anotar(e) { adapter.ultimoErro = { quando: new Date().toISOString(), erro: e }; return e; }
+    function definirOnline(ok, e) {
+      var antes = adapter.online;
+      adapter.online = !!ok;
+      if (antes !== adapter.online && typeof adapter.aoEstado === "function") {
+        try { adapter.aoEstado(adapter.online, e || null); } catch (x) { console.warn("aoEstado", x); }
+      }
+    }
+    /* registra o erro e devolve ele mesmo, para usar como `throw anotar(e)` */
+    function anotar(e) {
+      adapter.ultimoErro = { quando: new Date().toISOString(), mensagem: e.message, erro: e };
+      /* falta de permissão não é queda de servidor: só rede/sessão derrubam o estado */
+      if (e.ehRede || e.ehSessao) definirOnline(false, e);
+      return e;
+    }
     function estourar(e) { throw anotar(e); }
+
+    /* toda resposta do supabase-js volta como {data,error}: aqui o error vira throw.
+       NADA é engolido — é o contrário do grava()/apaga() de hoje. */
+    function conferir(resp, contexto) {
+      if (resp && resp.error) throw anotar(traduzir(resp.error, contexto));
+      adapter.ultimoErro = null;
+      definirOnline(true, null);
+      return resp;
+    }
 
     /* -------------------- monta o SELECT de uma coleção -------------------- */
     function montarConsulta(colecao, filtros, contar) {
@@ -298,6 +324,10 @@
       }
 
       var campoData = ehTexto(filtros.campoData) ? filtros.campoData : campoDataDe(colecao);
+      /* o nome do campo entra na URL como coluna (data->>x): só letras e números */
+      if (campoData && !nomeSeguro(campoData)) {
+        estourar(ErroBanco("Campo de data inválido: " + campoData, colecao, null));
+      }
       if (campoData && (ehTexto(filtros.de) || ehTexto(filtros.ate))) {
         /* comparação de texto em ISO: 'yyyy-mm-dd' e 'yyyy-mm' ordenam certo.
            Documento SEM o campo fica de fora do período — de propósito. */
@@ -389,13 +419,21 @@
     var seqCanal = 0;
 
     function assinarColecao(colecao, cb, opcoesAssin) {
+      /* o nome vai concatenado no filtro do canal ("colecao=eq.<nome>") */
+      if (!nomeSeguro(colecao)) estourar(ErroBanco("Coleção inválida para Realtime: " + colecao, colecao, null));
       opcoesAssin = opcoesAssin || {};
       var aoFalhar = typeof opcoesAssin.aoFalhar === "function" ? opcoesAssin.aoFalhar : null;
       var filtros = opcoesAssin.filtros || null;
       var limite = typeof opcoesAssin.limite === "number" ? opcoesAssin.limite : null;
 
       var vivo = true, canal = null, timerRetry = null, espera = 1000;
-      var buscando = false, refazer = false;
+      var buscando = false, refazer = false, timerJunta = null;
+
+      /* uma entrada de NF dispara 50+ eventos seguidos; junta a rajada num get só */
+      function agendarRecarga() {
+        if (!vivo || timerJunta) return;
+        timerJunta = setTimeout(function () { timerJunta = null; recarregar(); }, 150);
+      }
 
       async function recarregar() {
         if (!vivo) return;
@@ -430,7 +468,7 @@
         canal.on(
           "postgres_changes",
           { event: "*", schema: "public", table: TABELA, filter: "colecao=eq." + colecao },
-          function () { recarregar(); }
+          function () { agendarRecarga(); }
         );
         canal.subscribe(function (status, err) {
           if (!vivo) return;
@@ -445,7 +483,7 @@
       }
 
       /* voltou da aba dormindo / voltou a internet: o socket pode ter perdido eventos */
-      function aoVoltar() { if (vivo && (!document.hidden)) recarregar(); }
+      function aoVoltar() { if (vivo && (!document.hidden)) agendarRecarga(); }
       window.addEventListener("online", aoVoltar);
       document.addEventListener("visibilitychange", aoVoltar);
 
@@ -456,6 +494,7 @@
       return function cancelar() {
         vivo = false;
         if (timerRetry) { clearTimeout(timerRetry); timerRetry = null; }
+        if (timerJunta) { clearTimeout(timerJunta); timerJunta = null; }
         window.removeEventListener("online", aoVoltar);
         document.removeEventListener("visibilitychange", aoVoltar);
         if (canal) { try { sb.removeChannel(canal); } catch (e) { /* ignora */ } canal = null; }

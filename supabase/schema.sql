@@ -21,6 +21,13 @@
 --  10. Publicacao Realtime
 --  11. Bloco COMENTADO de semente (numeradores e primeiro perfil)
 --
+-- DEPOIS DE RODAR ESTE ARQUIVO, no painel:
+--   * Authentication > Providers: deixe so "Email"; desligue
+--     "Enable email signups" (as contas sao criadas por convite).
+--   * Project Settings > API: o teto padrao de linhas por resposta
+--     (max-rows) e 1000. Ou eleve esse numero, ou o adapter pagina com
+--     .range() - as cargas de pontos e movest passam de 1000 linhas.
+--
 -- NAO HA NENHUM DADO REAL NESTE ARQUIVO.
 -- =====================================================================
 
@@ -31,7 +38,16 @@
 -- pgcrypto: gen_random_uuid() e funcoes de hash (o Supabase ja costuma
 -- deixar instalada no schema "extensions"; o if not exists evita erro).
 -- =====================================================================
-create extension if not exists pgcrypto with schema extensions;
+-- O bloco DO evita que o script inteiro morra na primeira linha caso a
+-- extensao ja exista em outro schema ou o papel nao possa instalar.
+do $blk$
+begin
+  create extension if not exists pgcrypto with schema extensions;
+exception
+  when others then
+    raise notice 'pgcrypto nao instalada agora (%). O schema funciona sem ela.', sqlerrm;
+end;
+$blk$;
 
 
 -- =====================================================================
