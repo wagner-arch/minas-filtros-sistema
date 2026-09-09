@@ -244,37 +244,85 @@ as $fn$
 $fn$;
 
 -- E uma colecao restrita (dados de RH ou biometria)?
---   rh           -> CPF, RG, endereco, filhos, salario, VR, CTPS, PIS
+--   rh           -> CPF, RG, endereco, filhos, CTPS, PIS
+--   remuneracao  -> salario, VR e valores dos premios (um doc por user_id).
+--                   Separada de 'rh' de proposito: o PROPRIO colaborador
+--                   precisa ler a dele (os KPIs "Salario fixo", "Vale
+--                   refeicao" e "Total do mes" do Cartao de Ponto, HTML
+--                   renderPonto/totalRemuneracao), enquanto CPF, RG e CTPS
+--                   continuam so para o gestor. Ver a policy
+--                   docs_select_minha_remuneracao no item 8.1.
 --   ponto_fotos  -> foto JPEG de cada batida do cartao de ponto
 --   pontos_fotos -> mesmo conteudo; os dois nomes ficam na lista porque
 --                   o inventario usa o plural em um trecho. O adapter
 --                   deve escolher UM e usar sempre o mesmo.
 --   facial       -> foto facial de referencia + assinatura de luz
+-- 'pontos' NAO entra nesta lista porque o proprio colaborador precisa
+-- gravar a batida dele; a protecao dela (geolocalizacao, assinatura
+-- facial, atestado) esta nas policies dedicadas do item 8.6.
 create or replace function public.colecao_restrita(p_colecao text)
 returns boolean
 language sql
 immutable
 as $fn$
-  select p_colecao in ('rh','ponto_fotos','pontos_fotos','facial');
+  select p_colecao in ('rh','remuneracao','ponto_fotos','pontos_fotos','facial');
+$fn$;
+
+-- E uma colecao "comum" (sem regra propria)? Serve as policies gerais.
+-- Ficam de fora, alem das restritas:
+--   config -> matriz de permissoes (config/funcoes), faixas de comissao e
+--             coeficientes de forma de pagamento. E a configuracao do
+--             sistema, nao dado operacional: so gestor grava (item 8.7).
+--   pontos -> folha de ponto. Cada um grava a sua, o gestor ajusta e
+--             ninguem le a do colega (item 8.6).
+create or replace function public.colecao_geral(p_colecao text)
+returns boolean
+language sql
+immutable
+as $fn$
+  select not public.colecao_restrita(p_colecao)
+     and p_colecao not in ('config','pontos');
 $fn$;
 
 -- O documento pertence ao proprio usuario logado?
 -- Aceita as duas formas de autoria que o HTML grava:
---   data->>'nome'          (nome do colaborador, padrao antigo)
---   data->>'colaboradorId' (user_id, padrao novo recomendado)
+--   data->>'nome' / data->>'colaborador' (nome, padrao antigo)
+--   data->>'colaboradorId' / data->>'id' (user_id, padrao novo)
+--
+-- Esta funcao e avaliada UMA VEZ POR LINHA (o argumento depende da linha),
+-- por isso e escrita em plpgsql com variaveis: as comparacoes que NAO
+-- tocam public.perfis vem primeiro e, quando elas resolvem, nem chega a
+-- consultar a tabela. Na versao anterior, em SQL, meu_nome() era chamada
+-- DUAS vezes por linha - dois selects em perfis para cada linha varrida.
 create or replace function public.eh_meu_documento(p_data jsonb)
 returns boolean
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public, pg_temp
 as $fn$
-  select coalesce(
-           (p_data->>'nome')          = public.meu_nome() or
-           (p_data->>'colaborador')   = public.meu_nome() or
-           (p_data->>'colaboradorId') = auth.uid()::text  or
-           (p_data->>'id')            = auth.uid()::text,
-         false);
+declare
+  v_uid  text;
+  v_nome text;
+begin
+  if p_data is null then
+    return false;
+  end if;
+
+  v_uid := auth.uid()::text;
+  if v_uid is not null
+     and (p_data->>'colaboradorId' = v_uid or p_data->>'id' = v_uid) then
+    return true;                    -- resolveu sem ler public.perfis
+  end if;
+
+  v_nome := public.meu_nome();      -- uma unica leitura de perfis por linha
+  if v_nome is null then
+    return false;
+  end if;
+
+  return coalesce(p_data->>'nome'        = v_nome, false)
+      or coalesce(p_data->>'colaborador' = v_nome, false);
+end;
 $fn$;
 
 -- Base inicial de cada tipo de numeracao, usada apenas quando o
@@ -293,6 +341,35 @@ as $fn$
            when 'fornecedor' then 1001
            else 1
          end;
+$fn$;
+
+-- Tipos de numeracao VALIDOS. Fora desta lista, proximo_numero recusa:
+-- um tipo digitado errado cairia no "else 1" de base_numerador e
+-- recomecaria a numeracao do 1 sem nenhum aviso.
+create or replace function public.tipo_numerador_valido(p_tipo text)
+returns boolean
+language sql
+immutable
+as $fn$
+  select p_tipo in ('pedido','orcamento','os','cliente','fornecedor');
+$fn$;
+
+-- Tipos cujo contador e UNICO para as 3 lojas.
+-- 'fornecedor' e o caso de hoje: a colecao fornecedores e global (documento
+-- sem loja, catalogo compartilhado) e o codigo FOR-xxxx e sequencial no
+-- catalogo inteiro (HTML: "FOR-"+String(fornecedores.length+1001), sem
+-- filtro de loja). Se cada loja tivesse o seu contador, mf, wf e dv
+-- emitiriam FOR-1002 para tres fornecedores diferentes.
+-- proximo_numero troca a loja por '*' nestes tipos, para o adapter poder
+-- continuar chamando proximoNumero(lojaAtual, 'fornecedor') sem saber da
+-- regra. Se um dia produto ou centro de custo ganhar codigo sequencial,
+-- acrescente o tipo AQUI e em tipo_numerador_valido.
+create or replace function public.tipo_numerador_global(p_tipo text)
+returns boolean
+language sql
+immutable
+as $fn$
+  select p_tipo in ('fornecedor');
 $fn$;
 
 
@@ -361,6 +438,36 @@ create trigger tg_perfis_antes_de_gravar
   before insert or update on public.perfis
   for each row execute function public.perfis_antes_de_gravar();
 
+-- Numerador NUNCA anda para tras. Isto e uma trava fisica contra a causa
+-- mais provavel de numero repetido depois da migracao: rodar o bloco de
+-- semente 11.2 uma segunda vez (na semana seguinte, ao cadastrar a loja
+-- dv, ao reconferir a carga) com os valores anotados no papel na data da
+-- migracao - o contador ja avancou e o "ultimo" antigo o rebaixaria.
+-- Vale tambem para um UPDATE manual errado no painel.
+-- Se em algum caso legitimo for MESMO preciso baixar o contador:
+--   alter table public.numeradores disable trigger tg_numeradores_antes_de_gravar;
+--   update public.numeradores set ultimo = <valor> where loja='mf' and tipo='pedido';
+--   alter table public.numeradores enable  trigger tg_numeradores_antes_de_gravar;
+create or replace function public.numeradores_antes_de_gravar()
+returns trigger
+language plpgsql
+as $fn$
+begin
+  if tg_op = 'UPDATE' and new.ultimo < old.ultimo then
+    raise exception 'Numerador nao retrocede: %/% ja esta em % e a gravacao tentou %. Numero ja emitido nao pode ser reusado.',
+      old.loja, old.tipo, old.ultimo, new.ultimo
+      using errcode = '23514';
+  end if;
+  new.atualizado_em := now();
+  return new;
+end;
+$fn$;
+
+drop trigger if exists tg_numeradores_antes_de_gravar on public.numeradores;
+create trigger tg_numeradores_antes_de_gravar
+  before insert or update on public.numeradores
+  for each row execute function public.numeradores_antes_de_gravar();
+
 
 -- =====================================================================
 -- 7. INDICES
@@ -377,7 +484,48 @@ create trigger tg_perfis_antes_de_gravar
 create index if not exists ix_docs_colecao_loja on public.docs (colecao, loja);
 
 -- Busca por conteudo dentro do jsonb (ex.: data @> '{"clienteId":"..."}').
-create index if not exists ix_docs_data_gin on public.docs using gin (data);
+--
+-- ATENCAO A OPCLASS - jsonb_path_ops, NAO o padrao jsonb_ops.
+-- O padrao (gin (data), sem opclass) indexa CADA chave e CADA valor
+-- escalar como uma entrada separada, e uma entrada de GIN nao pode passar
+-- de ~2712 bytes (BLCKSZ/3): o insert morre com
+--   ERROR: index row size N exceeds maximum 2712 for index "ix_docs_data_gin".
+-- Os documentos deste sistema tem exatamente isso: a foto da batida de
+-- ponto e a foto facial sao dataURL JPEG em base64 de 6 a 10 KB (e base64
+-- de JPEG nao comprime, entao o TOAST/pglz nao salva), e os anexos de
+-- pedido idem. Como o indice nasce com a tabela vazia, o script rodaria
+-- sem erro no SQL Editor e a falha so apareceria em producao, na primeira
+-- batida de ponto com foto - e ninguem mais bateria ponto.
+-- jsonb_path_ops guarda um hash de caminho+valor (int32), nao tem limite
+-- de tamanho, e continua atendendo @>, @? e @@ (perde so o operador "?"
+-- de existencia de chave, que o adapter nao usa).
+--
+-- Hoje NENHUMA consulta do adapter usa containment (so .eq/.or/.gte/.lte
+-- sobre data->>campo), entao este indice ainda e custo de escrita sem
+-- beneficio de leitura. Ele fica aqui pronto para a primeira consulta que
+-- precisar dele; se quiser economizar escrita ate la, apague com
+--   drop index if exists public.ix_docs_data_gin;
+-- O bloco DO so derruba o indice se ele existir com a opclass ERRADA
+-- (versao anterior deste schema): assim reexecutar o arquivo numa base ja
+-- carregada nao reconstroi um GIN gigante a toa.
+do $blk$
+declare v_opclass text;
+begin
+  select oc.opcname into v_opclass
+    from pg_index i
+    join pg_class c on c.oid = i.indexrelid
+    join pg_opclass oc on oc.oid = i.indclass[0]
+   where c.relname = 'ix_docs_data_gin'
+     and c.relnamespace = 'public'::regnamespace;
+
+  if v_opclass is not null and v_opclass <> 'jsonb_path_ops' then
+    raise notice 'ix_docs_data_gin estava com a opclass % (estoura em foto base64); recriando com jsonb_path_ops.', v_opclass;
+    execute 'drop index public.ix_docs_data_gin';
+  end if;
+
+  execute 'create index if not exists ix_docs_data_gin on public.docs using gin (data jsonb_path_ops)';
+end;
+$blk$;
 
 -- Indices parciais por colecao + campo de data (ver inventario):
 create index if not exists ix_docs_clientes_criadoem  on public.docs (loja, (data->>'criadoEm'))   where colecao = 'clientes';
@@ -399,14 +547,66 @@ create index if not exists ix_docs_notas_emissao      on public.docs (loja, (dat
 
 -- Indices de apoio a regras de negocio que hoje so existem no navegador
 -- (e por isso falham quando a lista em memoria vem truncada):
---   equipamento por numero de serie na loja
-create index if not exists ix_docs_equipamentos_serie on public.docs (loja, (data->>'serie')) where colecao = 'equipamentos';
---   nota fiscal por fornecedor + numero na loja (antiduplicidade)
-create index if not exists ix_docs_notas_forn_numero  on public.docs (loja, (data->>'fornecedorId'), (data->>'numero')) where colecao = 'notas';
 --   ponto do dia por colaborador
 create index if not exists ix_docs_pontos_colab_data  on public.docs (loja, (data->>'colaborador'), (data->>'data')) where colecao = 'pontos';
 --   fotos de ponto do proprio colaborador
 create index if not exists ix_docs_pontofotos_nome    on public.docs ((data->>'nome'), (data->>'data')) where colecao in ('ponto_fotos','pontos_fotos');
+
+-- ---------------------------------------------------------------------
+-- 7.1 INDICES UNICOS - a rede de protecao da numeracao
+-- ---------------------------------------------------------------------
+-- Indice NAO-UNICO nao impede nada: ele acelera a consulta que o
+-- navegador nem faz. Quem garante que dois pedidos nao saiam com o mesmo
+-- numero e o UNIQUE. Sem ele, basta esquecer a semente 11.2 depois de
+-- importar o historico para o primeiro pedido novo sair como 20801 e
+-- duplicar em silencio ~250 numeros de venda - exatamente o defeito que
+-- esta migracao existe para matar.
+--
+-- Sao indices PARCIAIS: valem so para a colecao citada e so quando o
+-- campo esta preenchido (documento antigo sem numero nao trava a carga).
+--
+-- IMPORTANTE - se um destes falhar, e porque JA existe duplicidade nos
+-- dados importados. O bloco DO transforma o erro em NOTICE para nao
+-- derrubar (e reverter) o schema inteiro; a consulta que lista os
+-- duplicados esta no item 11.5.
+do $blk$
+declare
+  v_ddl text;
+  v_lista text[] := array[
+    -- pedido: um numero por loja
+    'create unique index if not exists ux_docs_pedidos_numero on public.docs (loja, (data->>''numero'')) where colecao = ''pedidos'' and (data->>''numero'') is not null',
+    -- orcamento: um numero por loja
+    'create unique index if not exists ux_docs_orcamentos_numero on public.docs (loja, (data->>''numero'')) where colecao = ''orcamentos'' and (data->>''numero'') is not null',
+    -- ordem de servico: um numero por loja
+    'create unique index if not exists ux_docs_ordens_numero on public.docs (loja, (data->>''numero'')) where colecao = ''ordens'' and (data->>''numero'') is not null',
+    -- nota de fornecedor: o mesmo numero so entra uma vez por fornecedor
+    -- (substitui o ix_docs_notas_forn_numero, que era so um indice de busca)
+    'create unique index if not exists ux_docs_notas_forn_numero on public.docs (loja, (data->>''fornecedorId''), (data->>''numero'')) where colecao = ''notas'' and (data->>''numero'') is not null',
+    -- equipamento: numero de serie nao se repete na loja
+    -- (substitui o ix_docs_equipamentos_serie)
+    'create unique index if not exists ux_docs_equip_serie on public.docs (loja, (data->>''serie'')) where colecao = ''equipamentos'' and nullif(data->>''serie'','''') is not null',
+    -- cliente: o codigo MF-01002 nao se repete na loja
+    'create unique index if not exists ux_docs_clientes_codigo on public.docs (loja, (data->>''codigo'')) where colecao = ''clientes'' and nullif(data->>''codigo'','''') is not null',
+    -- fornecedor: o codigo FOR-xxxx e global (catalogo das 3 lojas)
+    'create unique index if not exists ux_docs_fornecedores_codigo on public.docs ((data->>''codigo'')) where colecao = ''fornecedores'' and nullif(data->>''codigo'','''') is not null'
+  ];
+begin
+  foreach v_ddl in array v_lista loop
+    begin
+      execute v_ddl;
+    exception
+      when others then
+        raise notice 'Indice unico NAO criado (%). Ha duplicidade nos dados: veja o item 11.5, corrija e rode este comando de novo: %', sqlerrm, v_ddl;
+    end;
+  end loop;
+end;
+$blk$;
+
+-- Os antigos ix_docs_equipamentos_serie e ix_docs_notas_forn_numero
+-- viraram os unicos acima (mesmas colunas, agora com garantia). Se a base
+-- veio de uma execucao anterior deste arquivo, apague os duplicados:
+drop index if exists public.ix_docs_equipamentos_serie;
+drop index if exists public.ix_docs_notas_forn_numero;
 
 
 -- =====================================================================

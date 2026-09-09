@@ -26,16 +26,33 @@
    - db.doc("config/empresa").set(obj)
    - db.auth.entrar/sair/sessao/aoMudar/redefinirSenha
    - db.perfil()                        -> linha de public.perfis do usuário logado
+     (traz jornada, ultimo_acesso e consentiu_facial_em — o cartão de ponto precisa)
+   - db.perfis(somenteAtivos)           -> a equipe inteira, com jornada
+   - db.perfilGravar(linha)             -> upsert em public.perfis (só Administrador passa na RLS)
+   - db.registrarAcesso()               -> RPC registrar_acesso (carimba ultimo_acesso)
+   - db.registrarConsentimentoFacial()  -> RPC do aceite LGPD (art. 11)
    - db.proximoNumero(loja, tipo)       -> RPC atômica proximo_numero (fim das colisões)
    - EXTENSÕES: get({loja, de, ate}), contar(), exportar() — o HTML antigo ignora.
 
    DIFERENÇAS PROPOSITAIS EM RELAÇÃO AO BANCO ANTIGO (leia antes de integrar)
    a) TODA falha REJEITA a promise (rede, RLS, sessão expirada). O HTML de hoje
       engole o erro em grava()/apaga(); a correção fica no INTEGRACAO.md.
-      O erro traz .ehRLS / .ehSessao / .ehRede e mensagem pronta para o toast;
-      db.online, db.ultimoErro e db.aoEstado(ok,erro) alimentam o banner de falha.
-   b) Toda leitura de coleção sai ORDENADA por id e PAGINADA (o PostgREST corta
-      em 1000 linhas por resposta): limit(2000) de pontos/movest volta completo.
+      O erro traz .ehRLS / .ehSessao / .ehRede e mensagem pronta para o toast.
+      DOIS estados alimentam o banner, e eles são diferentes:
+        db.online         -> rede/sessão. Volta sozinho quando o servidor responde.
+        db.falhaPendente  -> a ÚLTIMA GRAVAÇÃO PERDIDA (inclusive erro de permissão).
+                             NÃO some por causa de uma leitura que deu certo: só sai
+                             quando a mesma gravação der certo ou o usuário chamar
+                             db.reconhecerFalha(). É o banner persistente do item 4.
+      db.aoEstado(ok, erro) é chamado nas viradas de (online && !falhaPendente).
+   b) Toda leitura de coleção sai PAGINADA (o PostgREST corta em 1000 linhas por
+      resposta): limit(2000) de pontos/movest chega inteiro em vez de cortado em 1000.
+      ATENÇÃO — limite NÃO é o mesmo que "cabe tudo": quando a coleção tem mais
+      documentos que o limite pedido, o adapter traz os MAIS NOVOS (ordena por id
+      decrescente, que no id do sistema é ordem de criação) e devolve o array já
+      em ordem crescente. O registro de hoje NUNCA fica de fora — quem fica é o
+      mais antigo. E o corte é anunciado: snap.truncado + db.aoTruncar(colecao,
+      total, trazidos). Sem limite, a leitura sai crescente e completa.
    c) get() devolve também q.total (total real no banco) para a tela poder dizer
       "mostrando 500 de 3.212".
    ========================================================================== */
@@ -74,12 +91,44 @@
     config: null,
     rh: null,
     facial: null,
-    pontos_fotos: "loja"
+    ponto_fotos: "loja"
   };
+
+  /* AS 18 COLEÇÕES DE DADOS DO DIA A DIA — é esta lista (branca, explícita) que
+     o backup exporta. "config", "rh", "facial" e "ponto_fotos" ficam FORA de
+     propósito: config/usuarios guarda CPF, salário, CTPS/PIS, filhos e a foto
+     facial dos 7 colaboradores enquanto o documento antigo não for apagado. */
+  var COLECOES_DADOS = [
+    "clientes", "produtos", "pedidos", "orcamentos", "atendimentos",
+    "fechamentos", "ajustes", "pontos", "caixas", "centros",
+    "fornecedores", "titulos", "movs", "movest", "requisicoes",
+    "equipamentos", "ordens", "notas"
+  ];
+
+  /* documentos de config que o backup NUNCA leva (dado pessoal):
+     usuarios   = cadastro antigo com hash de senha, CPF, salário e facial;
+     celebracoes = aniversário/data de nascimento de todo mundo. */
+  var CONFIG_NAO_EXPORTA = ["usuarios", "celebracoes"];
+
+  /* nomes que alguém pode digitar por engano — o adapter recusa em vez de
+     gravar num "primo" da coleção certa (o schema aceita os dois nomes nas
+     policies só por segurança; aqui escolhemos UM, no singular). */
+  var APELIDOS_PROIBIDOS = { pontos_fotos: "ponto_fotos" };
+
+  /* coleções append-only: gravar é INSERT puro, nunca upsert. "ponto_fotos" é
+     assim porque a RLS deixa o colaborador INSERIR a foto da própria batida e
+     NÃO deixa atualizar (schema.sql, 8.3) — um upsert em id repetido cairia no
+     ON CONFLICT DO UPDATE e levaria 42501, travando a marcação para sempre. */
+  var COLECOES_SO_INSERIR = ["ponto_fotos"];
+
+  /* coleções cujo "campo de data" é COMPETÊNCIA 'yyyy-mm' (e não 'yyyy-mm-dd').
+     Comparar "2025-03" >= "2025-03-09" dá FALSO e some com o mês inteiro, então
+     o filtro de período é truncado para 7 caracteres nessas coleções. */
+  var COLECOES_COMPETENCIA = ["fechamentos", "ajustes"];
 
   /* campo de data usado nos filtros de período (extensão get({de,ate})).
      Compare sempre no MESMO formato do campo: 'yyyy-mm-dd', ou 'yyyy-mm'
-     em fechamentos/ajustes (competência). */
+     em fechamentos/ajustes (competência — ver COLECOES_COMPETENCIA). */
   var CAMPO_DATA = {
     clientes: "criadoEm",
     produtos: null,
@@ -100,12 +149,12 @@
     ordens: "abertura",
     notas: "emissao",
     config: null,
-    pontos_fotos: "data"
+    ponto_fotos: "data"
   };
 
   /* coleções com dado pessoal sensível — a RLS já barra, isto é só sinalização
-     para quem for ler este arquivo e para o aviso no console. */
-  var COLECOES_RESTRITAS = ["rh", "facial", "ponto_fotos", "pontos_fotos"];
+     para quem for ler este arquivo, para o aviso no console e para o backup. */
+  var COLECOES_RESTRITAS = ["rh", "facial", "ponto_fotos"];
 
   /* ------------------------------------------------------------------------
      UTILITÁRIOS
@@ -208,6 +257,26 @@
   function campoDataDe(colecao) {
     return Object.prototype.hasOwnProperty.call(CAMPO_DATA, colecao) ? CAMPO_DATA[colecao] : null;
   }
+  function ehCompetencia(colecao) { return COLECOES_COMPETENCIA.indexOf(colecao) >= 0; }
+  function soInserir(colecao) { return COLECOES_SO_INSERIR.indexOf(colecao) >= 0; }
+
+  /* recusa o apelido errado (pontos_fotos) antes que ele vire uma segunda
+     coleção com metade das fotos e nenhum filtro de data. */
+  function conferirNomeColecao(colecao) {
+    if (Object.prototype.hasOwnProperty.call(APELIDOS_PROIBIDOS, colecao)) {
+      throw ErroBanco(
+        "Coleção \"" + colecao + "\" não existe neste sistema — use \"" +
+        APELIDOS_PROIBIDOS[colecao] + "\".", colecao, null
+      );
+    }
+    return colecao;
+  }
+
+  /* 'yyyy-mm-dd' -> 'yyyy-mm' nas coleções de competência (fechamentos/ajustes) */
+  function ajustarLimiteData(colecao, valor) {
+    if (!ehTexto(valor)) return valor;
+    return ehCompetencia(colecao) ? valor.slice(0, 7) : valor;
+  }
 
   /* ------------------------------------------------------------------------
      FORMATOS DE RETORNO (idênticos aos que o HTML já consome)
@@ -273,43 +342,102 @@
       versao: VERSAO_ADAPTER,
       sb: sb,
       lojaPadrao: opcoes.lojaPadrao || null,
-      /* estado da conexão, para o banner de falha persistente (INTEGRACAO.md, item 4).
-         ultimoErro guarda a última falha e some sozinho quando algo volta a dar certo;
-         aoEstado, se você preencher, é chamado só nas VIRADAS online<->offline. */
+      /* ---- estado, para o banner de falha (INTEGRACAO.md, item 4) --------
+         online        = rede/sessão/permissão do servidor. Volta a true sozinho
+                         assim que qualquer chamada é respondida.
+         falhaPendente = a última GRAVAÇÃO que não entrou (rede, sessão, RLS).
+                         NÃO é apagada por uma leitura que deu certo — senão o
+                         banner sumiria em segundos por causa do Realtime e o
+                         usuário acharia que o pedido foi salvo. Sai quando a
+                         MESMA gravação der certo ou em db.reconhecerFalha().
+         aoEstado(ok, erro) dispara nas viradas de (online && !falhaPendente). */
       online: true,
       ultimoErro: null,
+      falhaPendente: null,
       aoEstado: typeof opcoes.aoEstado === "function" ? opcoes.aoEstado : null,
+      /* chamado quando uma leitura com limite deixou documentos para trás:
+         aoTruncar(colecao, total, trazidos) — a tela mostra "500 de 3.212". */
+      aoTruncar: typeof opcoes.aoTruncar === "function" ? opcoes.aoTruncar : null,
       colecoes: Object.keys(CAMPO_LOJA),
+      colecoesDados: COLECOES_DADOS.slice(),
       restritas: COLECOES_RESTRITAS.slice()
     };
 
+    /* "tudo certo" = servidor respondendo E nenhuma gravação perdida em aberto */
+    adapter.tudoOk = function () { return !!adapter.online && !adapter.falhaPendente; };
+
+    var okAnterior = true;
+    function avaliarEstado(e) {
+      var ok = adapter.tudoOk();
+      if (ok === okAnterior) return;
+      okAnterior = ok;
+      if (typeof adapter.aoEstado !== "function") return;
+      var motivo = ok ? null : (e ||
+        (adapter.falhaPendente && adapter.falhaPendente.erro) ||
+        (adapter.ultimoErro && adapter.ultimoErro.erro) || null);
+      try { adapter.aoEstado(ok, motivo); } catch (x) { console.warn("aoEstado", x); }
+    }
+
     function definirOnline(ok, e) {
-      var antes = adapter.online;
       adapter.online = !!ok;
-      if (antes !== adapter.online && typeof adapter.aoEstado === "function") {
-        try { adapter.aoEstado(adapter.online, e || null); } catch (x) { console.warn("aoEstado", x); }
-      }
+      avaliarEstado(e);
     }
     /* registra o erro e devolve ele mesmo, para usar como `throw anotar(e)` */
     function anotar(e) {
-      adapter.ultimoErro = { quando: new Date().toISOString(), mensagem: e.message, erro: e };
-      /* falta de permissão não é queda de servidor: só rede/sessão derrubam o estado */
+      adapter.ultimoErro = { quando: new Date().toISOString(), contexto: e.contexto || "", mensagem: e.message, erro: e };
+      /* rede e sessão derrubam o estado do servidor. RLS não é queda de servidor,
+         mas também não pode passar calado: vira falha pendente (banner aceso). */
       if (e.ehRede || e.ehSessao) definirOnline(false, e);
+      else if (e.ehRLS) marcarFalha(e);
       return e;
     }
+    /* gravação que não entrou: fica pendurada até dar certo ou ser reconhecida */
+    function marcarFalha(e) {
+      adapter.falhaPendente = {
+        quando: new Date().toISOString(),
+        contexto: e.contexto || "",
+        mensagem: e.message,
+        erro: e
+      };
+      avaliarEstado(e);
+      return e;
+    }
+    /* a MESMA gravação deu certo (mesmo contexto: "gravar pedidos/abc") */
+    function limparFalha(contexto) {
+      adapter.ultimoErro = null;
+      if (adapter.falhaPendente && adapter.falhaPendente.contexto === contexto) {
+        adapter.falhaPendente = null;
+      }
+      avaliarEstado(null);
+    }
+    /* o usuário clicou em "entendi" no banner (ou refez o trabalho na mão) */
+    adapter.reconhecerFalha = function () {
+      adapter.falhaPendente = null;
+      avaliarEstado(null);
+      return true;
+    };
     function estourar(e) { throw anotar(e); }
 
     /* toda resposta do supabase-js volta como {data,error}: aqui o error vira throw.
-       NADA é engolido — é o contrário do grava()/apaga() de hoje. */
-    function conferir(resp, contexto) {
-      if (resp && resp.error) throw anotar(traduzir(resp.error, contexto));
-      adapter.ultimoErro = null;
+       NADA é engolido — é o contrário do grava()/apaga() de hoje.
+       ehEscrita=true nas operações que MUDAM o banco: só elas acendem e apagam
+       o banner persistente. Leitura que deu certo devolve o "online", nunca
+       apaga uma gravação perdida. */
+    function conferir(resp, contexto, ehEscrita) {
+      if (resp && resp.error) {
+        var e = anotar(traduzir(resp.error, contexto));
+        if (ehEscrita) marcarFalha(e);
+        throw e;
+      }
       definirOnline(true, null);
+      if (ehEscrita) limparFalha(contexto);
       return resp;
     }
 
-    /* -------------------- monta o SELECT de uma coleção -------------------- */
-    function montarConsulta(colecao, filtros, contar) {
+    /* -------------------- monta o SELECT de uma coleção --------------------
+       crescente=false traz os documentos MAIS NOVOS primeiro (usado quando há
+       limite, para o corte deixar de fora o antigo e não o de hoje). */
+    function montarConsulta(colecao, filtros, contar, crescente) {
       var q = sb.from(TABELA).select("id,data", contar ? { count: "exact" } : undefined).eq("colecao", colecao);
       filtros = filtros || {};
 
@@ -323,34 +451,59 @@
         }
       }
 
+      var pediuPeriodo = ehTexto(filtros.de) || ehTexto(filtros.ate);
       var campoData = ehTexto(filtros.campoData) ? filtros.campoData : campoDataDe(colecao);
       /* o nome do campo entra na URL como coluna (data->>x): só letras e números */
       if (campoData && !nomeSeguro(campoData)) {
         estourar(ErroBanco("Campo de data inválido: " + campoData, colecao, null));
       }
-      if (campoData && (ehTexto(filtros.de) || ehTexto(filtros.ate))) {
-        /* comparação de texto em ISO: 'yyyy-mm-dd' e 'yyyy-mm' ordenam certo.
+      /* pedir período numa coleção sem campo de data mapeado NÃO pode devolver a
+         coleção inteira em silêncio (era assim que um get({de:hoje,ate:hoje}) em
+         ponto_fotos trazia todas as fotos JPEG já batidas). Estoura. */
+      if (pediuPeriodo && !campoData) {
+        estourar(ErroBanco(
+          "A coleção \"" + colecao + "\" não tem campo de data mapeado: o filtro de " +
+          "período seria ignorado. Informe {campoData:\"...\"} ou tire de/ate.", colecao, null
+        ));
+      }
+      if (campoData && pediuPeriodo) {
+        /* comparação de TEXTO em ISO. Os dois lados precisam estar no MESMO
+           formato: 'yyyy-mm-dd' na maioria e 'yyyy-mm' na competência de
+           fechamentos/ajustes ("2025-03" >= "2025-03-09" é FALSO e apagaria o
+           mês inteiro). ajustarLimiteData() trunca quando é competência.
            Documento SEM o campo fica de fora do período — de propósito. */
-        if (ehTexto(filtros.de)) q = q.gte("data->>" + campoData, filtros.de);
-        if (ehTexto(filtros.ate)) q = q.lte("data->>" + campoData, filtros.ate);
+        var de = ajustarLimiteData(colecao, filtros.de);
+        var ate = ajustarLimiteData(colecao, filtros.ate);
+        if (ehTexto(de)) q = q.gte("data->>" + campoData, de);
+        if (ehTexto(ate)) q = q.lte("data->>" + campoData, ate);
       }
 
       /* ordem fixa: sem ela o .range() da paginação pode repetir/pular linhas.
-         (id é a 2ª coluna da chave primária, então sai do índice, de graça.) */
-      return q.order("id", { ascending: true });
+         (id é a 2ª coluna da chave primária, então sai do índice, de graça.)
+         O id do sistema começa com Date.now().toString(36), então ordem de id é
+         ordem de criação: decrescente = mais novos primeiro. */
+      return q.order("id", { ascending: crescente !== false });
     }
 
     /* -------------------- lê a coleção inteira, paginando ------------------
        O PostgREST devolve no máximo ~1000 linhas por resposta; limit(2000) de
        pontos/movest e limit(1000) de titulos/movs vinham cortados. Aqui a
-       primeira página traz o count exato e o laço busca o resto por .range(). */
+       primeira página traz o count exato e o laço busca o resto por .range().
+
+       QUANDO HÁ LIMITE a leitura é feita do MAIS NOVO para o mais antigo e o
+       resultado é invertido no fim. Motivo: o id nasce de Date.now(), então
+       ordenar por id crescente é ordenar do mais antigo para o mais novo — com
+       limit(500) numa coleção de 3.000 documentos, a venda de hoje não voltava
+       no F5 seguinte e sumia do Contas a Receber, da comissão e da agenda.
+       Com o limite atingido e ainda havendo documentos, avisa por aoTruncar(). */
     async function buscarColecao(colecao, limite, filtros) {
       var alvo = (typeof limite === "number" && limite > 0) ? limite : Infinity;
+      var crescente = !isFinite(alvo);  /* sem limite: crescente e completo */
       var linhas = [], total = null, offset = 0, guarda = 0;
 
       while (linhas.length < alvo) {
         var tam = Math.min(PAGINA, alvo - linhas.length);
-        var q = montarConsulta(colecao, filtros, offset === 0).range(offset, offset + tam - 1);
+        var q = montarConsulta(colecao, filtros, offset === 0, crescente).range(offset, offset + tam - 1);
         var r = conferir(await q, "ler " + colecao);
         var lote = r.data || [];
         if (offset === 0 && typeof r.count === "number") total = r.count;
@@ -362,7 +515,20 @@
         if (total === null && lote.length < tam) break;            /* sem count: heurística */
         if (++guarda > 200) break;                                 /* trava anti-laço infinito */
       }
-      return fazerQuerySnap(linhas, total === null ? linhas.length : total);
+
+      /* veio do mais novo para o mais antigo: devolve na ordem de sempre */
+      if (!crescente) linhas.reverse();
+
+      var snap = fazerQuerySnap(linhas, total === null ? linhas.length : total);
+      if (snap.truncado && typeof adapter.aoTruncar === "function") {
+        try { adapter.aoTruncar(colecao, snap.total, snap.size); }
+        catch (e) { console.warn("aoTruncar", e); }
+      }
+      if (snap.truncado) {
+        console.warn("[adapter] " + colecao + ": carregados os " + snap.size +
+          " mais recentes de " + snap.total + " no banco (limite da tela).");
+      }
+      return snap;
     }
 
     async function buscarDoc(colecao, id) {
