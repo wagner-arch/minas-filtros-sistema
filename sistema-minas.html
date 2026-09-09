@@ -625,12 +625,17 @@ img{max-width:100%}
   .modal .box{width:100%!important;max-width:none;max-height:90vh;
     max-height:calc(var(--vv, 90dvh) - 20px);
     padding:22px 16px calc(20px + env(safe-area-inset-bottom));border-radius:16px 16px 0 0}
-  .actions{display:flex;flex-wrap:wrap;gap:10px}
-  .actions>.btn{flex:1 1 140px;justify-content:center;min-height:46px}
+  .actions{display:flex;flex-wrap:wrap;gap:8px}
+  .actions>.btn{flex:1 1 auto;justify-content:center;min-height:42px}
+  .btn{padding:9px 14px;font-size:14px;min-height:42px}
+  .btn.sm{padding:6px 11px;font-size:13px;min-height:34px}
+  .novo-btn{padding:13px 16px}
+  .barra-inf button{min-height:52px;font-size:10.5px}
+  .barra-inf button svg{width:20px;height:20px}
 
   /* --- bater ponto: botão grande, dá para acertar em pé --- */
-  #po_botoes{flex-direction:column}
-  #po_botoes>.btn{width:100%;min-height:54px;font-size:16px}
+  #po_botoes{flex-direction:column;gap:8px}
+  #po_botoes>.btn{flex:0 0 auto;width:100%;min-height:44px;font-size:15px}
 
   /* --- câmera em pé, como o celular é segurado --- */
   .cam-area{aspect-ratio:3/4;max-height:52vh;margin:12px auto}
@@ -920,6 +925,7 @@ img{max-width:100%}
             <button type="button" data-ab="orc" aria-current="true">Orçamentos</button>
             <button type="button" data-ab="ped">Vendas</button>
             <button type="button" data-ab="ate">Atendimentos</button>
+            <button type="button" data-ab="os">Ordens de Serviço</button>
           </div>
 
           <div class="ab-corpo" data-ab="orc">
@@ -942,6 +948,14 @@ img{max-width:100%}
             <div class="tw"><table>
               <thead><tr><th>Data</th><th>Tipo</th><th>Quem</th><th>Natureza</th><th>Registro</th></tr></thead>
               <tbody id="ch_ate"></tbody>
+            </table></div>
+          </div>
+
+          <div class="ab-corpo" data-ab="os" hidden>
+            <div class="kpis" id="ch_osKpis"></div>
+            <div class="tw"><table>
+              <thead><tr><th>OS</th><th>Abertura</th><th>Equipamento</th><th>Tipo</th><th>Prazo</th><th>Situação</th></tr></thead>
+              <tbody id="ch_os"></tbody>
             </table></div>
           </div>
         </div>
@@ -4960,6 +4974,7 @@ function abrirUsuario(i){
   sp.value=u.perfil||"Vendedor";
   $("u_ativo").value=(u.ativo===false?"nao":"sim");
   CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)e.value=u[k]||"";});
+  try{ajustarConjuge();}catch(e){}
   ["salario","vr","assiduidade","desempenho"].forEach(function(k){$("u_"+k).value=(u[k]!=null?u[k]:"");});
   var j=jornadaDe(u.nome||"");
   $("u_entrada").value=u.entrada||j.entrada;$("u_almocoIni").value=u.almocoIni||j.almocoIni;
@@ -8109,10 +8124,43 @@ function renderCliHist(c){
   var ba=$("ch_ate");ba.innerHTML="";
   if(!ats.length)ba.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum contato registrado</div></div></td></tr>';
   ats.forEach(function(a){
-    ba.innerHTML+="<tr><td>"+esc(a.data)+(a.inicio?'<div class="t-sub">'+esc(a.inicio)+"</div>":"")+"</td>"+
+    var tr=document.createElement("tr");tr.className="clickable";
+    var reg=a.obs||"";
+    var ult=(a.acoes&&a.acoes.length)?a.acoes[a.acoes.length-1]:null;
+    if(ult&&ult.texto)reg=(reg?reg+" · ":"")+ult.texto;
+    tr.innerHTML="<td>"+esc(a.data)+(a.inicio?'<div class="t-sub">'+esc(a.inicio)+"</div>":"")+"</td>"+
       "<td>"+esc(a.tipo||"—")+"</td><td>"+esc(a.colaborador||"—")+"</td>"+
-      "<td>"+(a.natureza==="atendimento"?'<span class="pill p-ok">Atendimento</span>':'<span class="pill p-acc">Atividade</span>')+"</td>"+
-      "<td>"+esc(a.obs||"—")+"</td></tr>";
+      "<td>"+(a.natureza==="atendimento"?'<span class="pill p-ok">Atendimento</span>':'<span class="pill p-acc">Atividade</span>')+
+        (a.status==="finalizado"?' <span class="pill p-mut">'+esc(a.situacao||"concluída")+"</span>":"")+"</td>"+
+      "<td>"+esc(reg||"—")+'<div class="t-sub">toque para ver o que aconteceu</div></td>';
+    tr.onclick=function(){abrirDetalhes(a);};
+    ba.appendChild(tr);
+  });
+
+  /* ---- ordens de serviço deste cliente ---- */
+  var oss=ordens.filter(function(o){return o.clienteId===c.id;})
+    .sort(function(a,b){return b.numero-a.numero;});
+  var emAberto=oss.filter(function(o){
+    return ["concluida","entregue","cancelada","reprovada"].indexOf(o.status)<0;});
+  var atrasadas=emAberto.filter(function(o){return o.prazo&&o.prazo<hojeISO();});
+  $("ch_osKpis").innerHTML=
+    '<div class="kpi"><div class="l">Em aberto</div><div class="v">'+emAberto.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Fora do prazo</div><div class="v" style="color:'+
+      (atrasadas.length?"var(--crit)":"inherit")+'">'+atrasadas.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Total de OS</div><div class="v">'+oss.length+"</div></div>";
+  var bs=$("ch_os");bs.innerHTML="";
+  if(!oss.length)bs.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma ordem de serviço</div>Abra pela atividade do cliente ou na tela de Ordens de Serviço.</div></td></tr>';
+  oss.forEach(function(o){
+    var st=osStatusO(o.status);
+    var atras=(o.prazo&&o.prazo<hojeISO()&&["concluida","entregue","cancelada"].indexOf(o.status)<0);
+    var tr=document.createElement("tr");tr.className="clickable";
+    tr.innerHTML="<td><b>"+o.numero+"</b></td><td>"+esc(o.abertura||o.data||"—")+"</td>"+
+      '<td><div class="t-main">'+esc(o.equipamento||"—")+'</div><div class="t-sub">'+esc(o.serie||"sem série")+"</div></td>"+
+      "<td>"+esc(osTipoN(o.tipo))+"</td>"+
+      "<td>"+(o.prazo?esc(o.prazo)+(atras?' <span class="pill p-crit">atrasada</span>':""):"—")+"</td>"+
+      '<td><span class="pill '+st.cls+'">'+st.n+"</span></td>";
+    tr.onclick=function(){ir("os");abrirOS(o);};
+    bs.appendChild(tr);
   });
 }
 
@@ -8575,6 +8623,23 @@ var OS_STATUS=[
   {k:"cancelada",n:"Cancelada",cls:"p-mut"}
 ];
 var DIAS_DESCARTE=90;
+function sincronizarSerieOS(){
+  var p=produtos.filter(function(x){return x.id===$("os_prod").value;})[0];
+  var comSerie=!!(p&&p.serie==="sim");
+  var e=$("os_serie");
+  e.disabled=!comSerie;
+  e.placeholder=comSerie?"Digite ou leia o código de barras":"esta peça não tem número de série";
+  if(!comSerie)e.value="";
+  var lbl=document.querySelector('label[for="os_serie"]');
+  if(lbl)lbl.style.opacity=comSerie?"":"0.5";
+}
+function ajustarConjuge(){
+  var v=$("u_estcivil").value||"";
+  var casado=/casad|uni[ãa]o/i.test(v);
+  var f=$("u_conjuge").closest?$("u_conjuge").closest(".fld"):$("u_conjuge").parentNode;
+  if(f)f.hidden=!casado;
+  if(!casado)$("u_conjuge").value="";
+}
 function osTipoN(k){var t=OS_TIPOS.filter(function(x){return x.k===k;})[0];return t?t.n:k;}
 function osStatusO(k){return OS_STATUS.filter(function(x){return x.k===k;})[0]||OS_STATUS[0];}
 function totalOS(o){
@@ -8643,6 +8708,7 @@ function abrirOS(o,ctx){
   $("os_nome").value=v.cliente||"";$("os_tel").value=v.tel||"";$("os_doc").value=v.doc||"";
   $("os_end").value=v.endereco||"";$("os_cidade").value=v.cidade||"";$("os_email").value=v.email||"";
   $("os_prod").value=v.produtoId||"";$("os_serie").value=v.serie||"";
+  try{sincronizarSerieOS();if(v.serie)$("os_serie").value=v.serie;}catch(e){}
   $("os_marca").value=v.marca||"";$("os_compra").value=v.compra||"";
   $("os_tipoSel").value=v.tipo||"orcamento";
   $("os_abertura").value=v.abertura||hojeISO();
@@ -10738,7 +10804,9 @@ function ligar(){
   $("osFicha").onclick=async function(){var o=await salvarOS();if(o)fichaOS();};
   $("os_nome").oninput=function(){osCli=null;$("os_achou").innerHTML="";buscarClienteOS();};
   $("os_nome").onblur=function(){setTimeout(function(){$("os_sug").hidden=true;},180);};
-  $("os_prod").onchange=notaGarantiaOS;$("os_compra").onchange=notaGarantiaOS;
+  $("os_prod").onchange=function(){sincronizarSerieOS();notaGarantiaOS();};
+  $("os_compra").onchange=notaGarantiaOS;
+  $("u_estcivil").onchange=ajustarConjuge;
   $("os_tipoSel").onchange=function(){notaFabricante();calcOS();};
   $("os_status").onchange=calcOS;
   ["os_mao","os_taxa","os_desc"].forEach(function(id){$(id).oninput=calcOS;});
