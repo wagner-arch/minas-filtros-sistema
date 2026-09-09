@@ -2965,6 +2965,30 @@ img{max-width:100%}
   </div>
 </div>
 
+
+<div class="modal" id="consModal" hidden>
+  <div class="box">
+    <h3>Uso da sua imagem no ponto</h3>
+    <div class="sub" id="cons_nome"></div>
+    <p class="big-q">Cada batida tira uma foto do seu rosto e guarda junto a hora e a localização.
+      A foto serve para provar que foi você quem bateu — nada além disso.</p>
+    <div class="note">
+      <b>O que é guardado:</b> a foto da batida, a hora e as coordenadas.<br>
+      <b>Por quanto tempo:</b> as fotos das batidas são apagadas depois de <b id="cons_dias">90</b> dias;
+      a sua foto de referência fica enquanto você trabalhar na empresa.<br>
+      <b>Quem vê:</b> só o Administrador e o Financeiro.<br>
+      <b>Onde fica:</b> no sistema da Minas Filtros. A comparação é feita no próprio aparelho e a
+      imagem não é enviada para nenhuma outra empresa.
+    </div>
+    <p class="help">Foto de rosto é dado biométrico, considerado sensível pela LGPD (art. 11).
+      Você pode recusar: a batida continua valendo, gravando hora e localização, sem foto.
+      Pode mudar de ideia depois pedindo ao Administrador.</p>
+    <div class="actions">
+      <button class="btn" type="button" id="cons_sim">Aceito ser fotografado</button>
+      <button class="btn ghost" type="button" id="cons_nao">Não aceito — só hora e local</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="camModal" hidden>
   <div class="box" style="width:min(520px,100%)">
     <h3 id="cam_titulo">Confirmação facial</h3>
@@ -6951,6 +6975,41 @@ function pegarLocal(cb){
       cb(null,err&&err.code===1?"Você não autorizou a localização.":"Não foi possível obter a localização.");},
     {enableHighAccuracy:true,timeout:7000,maximumAge:0});
 }
+/* ---------- consentimento de uso da imagem (LGPD art. 11) ---------- */
+var DIAS_GUARDA_FOTO=90,consCb=null,consUs=null;
+function pedirConsentimentoImagem(u,cb){
+  consUs=u;consCb=cb;
+  $("cons_nome").textContent=u.nome||usuarioAtual;
+  $("cons_dias").textContent=DIAS_GUARDA_FOTO;
+  $("consModal").hidden=false;
+}
+async function responderConsentimento(aceitou){
+  var u=consUs,cb=consCb;
+  $("consModal").hidden=true;consUs=null;consCb=null;
+  if(u){
+    if(aceitou)u.consentiuFacialEm=new Date().toISOString();
+    else u.recusouFacialEm=new Date().toISOString();
+    try{await gravarUsuarios();}catch(e){console.warn(e);}
+  }
+  if(cb)cb(aceitou);
+}
+/* apaga as fotos das batidas passadas do prazo de guarda; a hora, a
+   localização e a parecença continuam no registro */
+async function limparFotosAntigas(){
+  var limite=new Date();limite.setDate(limite.getDate()-DIAS_GUARDA_FOTO);
+  var corte=iso(limite),mudou=0;
+  for(var i=0;i<pontos.length;i++){
+    var p=pontos[i];
+    if(!p.data||p.data>=corte)continue;
+    var tocou=false;
+    MARCACOES.forEach(function(m){
+      var b=p[m.k];
+      if(b&&b.foto){b.foto="";b.fotoExpirada=true;tocou=true;}
+    });
+    if(tocou){mudou++;try{await grava("pontos",p);}catch(e){console.warn(e);}}
+  }
+  if(mudou)console.log(mudou+" dia(s) de ponto tiveram a foto apagada pelo prazo de guarda");
+}
 async function baterPonto(k){
   var quem=usuarioAtual,hoje=hojeISO(),j=jornadaDe(quem),m=MARCACOES.filter(function(x){return x.k===k;})[0];
   if(!j.bate){toast("Este colaborador não bate ponto.");return;}
@@ -6975,43 +7034,63 @@ async function baterPonto(k){
   if(k==="almocoFim"&&minutos(agora)<minutos(j.almocoIni)){
     $("po_status").innerHTML='<div class="note crit"><b>Ainda é cedo para o retorno do almoço.</b></div>';return;}
 
-  /* foto primeiro: sem confirmação facial não há batida */
+  /* consentimento de imagem: foto de rosto é dado biométrico (LGPD, art. 11).
+     Sem o aceite registrado a batida vale, mas guarda só hora e localização. */
   var u=usuarioPor(quem)||{};
+  if(quem===usuarioAtual&&!u.consentiuFacialEm&&!u.recusouFacialEm){
+    pedirConsentimentoImagem(u,function(aceitou){
+      if(aceitou)comFoto(u,k,m,j,p,hoje,quem);
+      else gravarBatida(u,k,m,j,p,hoje,quem,"",null);
+    });
+    return;
+  }
+  if(u.recusouFacialEm){gravarBatida(u,k,m,j,p,hoje,quem,"",null);return;}
+  comFoto(u,k,m,j,p,hoje,quem);
+}
+function comFoto(u,k,m,j,p,hoje,quem){
+  var agora=agoraHM();
   abrirCamera("ponto",m.n,quem+" · "+hoje+" às "+agora,function(foto,sig){
     if(!foto)return;
-    var par=parecenca(u.facialSig,sig);
-    var conferir=(par==null||par<FACE_LIMITE);
-    $("po_geo").innerHTML='<div class="note">Buscando sua localização…</div>';
-    pegarLocal(async function(loc,erro){
-      var hora=agoraHM();
-      var reg=p||{id:uid(),loja:lojaAtual,colaborador:quem,data:hoje,tipo:"normal",criadoEm:hoje};
-      reg[k]={hora:hora,lat:loc?loc.lat:null,lng:loc?loc.lng:null,prec:loc?loc.prec:null,
-        semGeo:!loc,motivoGeo:erro||"",foto:foto,sig:sig,
-        parecenca:par,conferirFace:conferir,semFotoRef:!u.facial,
-        em:new Date().toISOString()};
-      if(!p)pontos.push(reg);
-      await grava("pontos",reg);
-      var prev=j[m.campo],d=minutos(hora)-minutos(prev);
-      var atrasado=(m.cobraAtraso&&d>j.tolerancia);
-      $("po_status").innerHTML='<div class="note '+(atrasado?"warn":"ok")+'"><b>'+m.n+" registrado às "+esc(hora)+".</b>"+
-        (prev?" Previsto "+esc(prev)+"."+(d===0?" No horário.":(d>0?" "+d+" min depois.":" "+(-d)+" min antes.")):"")+
-        (atrasado?"<br><b>Atraso de "+(d-j.tolerancia)+" min</b> além da tolerância de "+j.tolerancia+
-          " min — desconta "+(d-j.tolerancia)+"% do prêmio de assiduidade.":"")+"</div>";
-      $("po_geo").innerHTML=
-        (loc
-          ? '<div class="note ok"><b>Localização gravada.</b> Latitude '+loc.lat+" · longitude "+loc.lng+
-            " · precisão de "+loc.prec+" m.</div>"
-          : '<div class="note warn"><b>Batida registrada sem localização.</b> '+esc(erro||"")+
-            " A marcação vale, mas fica assinalada como sem geolocalização.</div>")+
-        (u.facial
+    gravarBatida(u,k,m,j,p,hoje,quem,foto,sig);
+  });
+}
+function gravarBatida(u,k,m,j,p,hoje,quem,foto,sig){
+  var par=foto?parecenca(u.facialSig,sig):null;
+  var conferir=!!foto&&(par==null||par<FACE_LIMITE);
+  $("po_geo").innerHTML='<div class="note">Buscando sua localização…</div>';
+  pegarLocal(async function(loc,erro){
+    var hora=agoraHM();
+    var reg=p||{id:uid(),loja:lojaAtual,colaborador:quem,data:hoje,tipo:"normal",criadoEm:hoje};
+    reg[k]={hora:hora,lat:loc?loc.lat:null,lng:loc?loc.lng:null,prec:loc?loc.prec:null,
+      semGeo:!loc,motivoGeo:erro||"",foto:foto||"",sig:sig||null,
+      parecenca:par,conferirFace:conferir,semFotoRef:!u.facial,semFoto:!foto,
+      em:new Date().toISOString()};
+    if(!p)pontos.push(reg);
+    await grava("pontos",reg);
+    var prev=j[m.campo],d=minutos(hora)-minutos(prev);
+    var atrasado=(m.cobraAtraso&&d>j.tolerancia);
+    $("po_status").innerHTML='<div class="note '+(atrasado?"warn":"ok")+'"><b>'+m.n+" registrado às "+esc(hora)+".</b>"+
+      (prev?" Previsto "+esc(prev)+"."+(d===0?" No horário.":(d>0?" "+d+" min depois.":" "+(-d)+" min antes.")):"")+
+      (atrasado?"<br><b>Atraso de "+(d-j.tolerancia)+" min</b> além da tolerância de "+j.tolerancia+
+        " min — desconta "+(d-j.tolerancia)+"% do prêmio de assiduidade.":"")+"</div>";
+    $("po_geo").innerHTML=
+      (loc
+        ? '<div class="note ok"><b>Localização gravada.</b> Latitude '+loc.lat+" · longitude "+loc.lng+
+          " · precisão de "+loc.prec+" m.</div>"
+        : '<div class="note warn"><b>Batida registrada sem localização.</b> '+esc(erro||"")+
+          " A marcação vale, mas fica assinalada como sem geolocalização.</div>")+
+      (!foto
+        ? '<div class="note warn"><b>Batida sem foto.</b> Você não autorizou o uso da imagem — '+
+          "valem a hora e a localização. O Administrador pode mudar isso no seu cadastro.</div>"
+        : (u.facial
           ? (conferir
             ? '<div class="note warn"><b>Foto marcada para conferência.</b> A imagem ficou diferente da cadastrada'+
-              (dist!=null?" (distância "+dist+")":"")+". O Administrador vê as duas lado a lado no histórico.</div>"
-            : '<div class="note ok"><b>Foto compatível com a cadastrada.</b></div>')
-          : '<div class="note warn"><b>Sem foto de referência no seu cadastro.</b> A batida guardou a imagem, mas não há comparação.</div>');
-      toast(m.n+" registrado às "+hora+".");
-      renderPonto();
-    });
+              (par!=null?" (parecença de "+par+"%)":"")+". O Administrador vê as duas lado a lado no histórico.</div>"
+            : '<div class="note ok"><b>Foto compatível com a cadastrada'+
+              (par!=null?" ("+par+"%)":"")+".</b></div>')
+          : '<div class="note warn"><b>Sem foto de referência no seu cadastro.</b> A batida guardou a imagem, mas não há comparação.</div>'));
+    toast(m.n+" registrado às "+hora+".");
+    renderPonto();
   });
 }
 function renderPonto(){
@@ -10482,6 +10561,8 @@ function ligar(){
     $("cam_tirar").hidden=false;$("cam_refazer").hidden=true;$("cam_confirmar").hidden=true;};
   $("cam_confirmar").onclick=confirmarFoto;
   $("cam_fechar").onclick=function(){pararCamera();$("camModal").hidden=true;camCb=null;};
+  $("cons_sim").onclick=function(){responderConsentimento(true);};
+  $("cons_nao").onclick=function(){responderConsentimento(false);};
   $("fo_fechar").onclick=function(){$("fotosModal").hidden=true;};
   $("u_tirarFoto").onclick=function(){
     var n=$("u_nome").value.trim()||"colaborador";
@@ -11327,6 +11408,7 @@ function erro(msg){
   try{opcoesProduto();render();}catch(e){erro("render: "+e.message);}
   try{ouvirPedidos();}catch(e){console.warn(e);}
   try{var nEq=await sincronizarEquipamentos();if(nEq){renderManut();console.log(nEq+" equipamento(s) criados de vendas antigas");}}catch(e){console.warn(e);}
+  try{await limparFotosAntigas();}catch(e){console.warn(e);}
 })();
 })();
 </script>
