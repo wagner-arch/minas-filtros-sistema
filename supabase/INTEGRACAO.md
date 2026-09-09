@@ -1,7 +1,9 @@
 # INTEGRAÇÃO — trocar o banco do artifact pelo Supabase
 
-Plano de edição do arquivo `sistema-minas.html`, item a item, na ordem em que
-as mudanças devem ser aplicadas.
+Plano de edição do arquivo `sistema-minas.html`, item a item. Os itens estão
+agrupados por assunto; **a ordem de aplicação é outra** e está logo abaixo, na
+seção "Ordem de aplicação" — seguir a numeração dos itens deixa o sistema sem
+abrir no meio do caminho.
 
 **Nada aqui foi aplicado no HTML.** Este documento é a lista de tarefas; quem
 edita é você (ou o Claude, num passo seguinte, com este arquivo na mão).
@@ -9,32 +11,43 @@ edita é você (ou o Claude, num passo seguinte, com este arquivo na mão).
 | | |
 |---|---|
 | Arquivo alvo | `C:\Users\User\Desktop\Notebook Wagner\MinasFiltros\Projetos\Sistema Minas Filtros Claude\sistema-minas.html` |
-| Tamanho conferido | **11.363 linhas**, 1,77 MB (reconferido em 2026-09-09, depois da mudança do estilo de celular) |
+| Tamanho conferido | **11.515 linhas**, 1,78 MB (2026-09-09, 14h42) — e **crescendo**: eram 10.943 quando os itens foram escritos e 11.363 quarenta minutos atrás |
 | Companheiros | `supabase\schema.sql` (roda no SQL Editor), `supabase\adapter.js` (vai junto do HTML) |
 | Biblioteca | `https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js` — **conferida hoje: HTTP 200**, 218 KB, define a global `supabase` (o cdnjs **não** publica o supabase-js) |
 
-## Aviso sobre os números de linha — SOME 184
+## Aviso sobre os números de linha — NÃO CONFIE EM NENHUM DELES
 
-**Todo número de linha do JS citado neste documento está 184 linhas atrás do
-arquivo de hoje.** Os itens foram escritos quando o arquivo tinha 10.943 linhas
-— e 10.943 era só até o `</script>` do sistema, não o fim do arquivo. Depois
-disso, duas coisas mudaram:
+**Os números de linha deste documento apontam para um arquivo que não existe
+mais.** Os itens foram escritos quando o `sistema-minas.html` tinha 10.943
+linhas — e 10.943 era só até o `</script>` do sistema, nem era o fim do arquivo.
+Desde então:
 
-1. O `<style id="estiloCelular">` do módulo de celular saiu do fim do arquivo e
-   subiu para o cabeçalho (**hoje linhas 504–678**, logo depois do estilo
-   principal, "para o celular já pintar o layout certo enquanto o resto do
-   arquivo chega"). São **184 linhas inseridas antes de todo o JS**. Confira com
-   três âncoras: o que este documento chama de linha 3226 (`var db=null,…`) está
-   hoje na **3410**; `gravarUsuarios`, citada como 4525, está na **4709**;
-   `fcSalvar`, citada como 10174, está na **10358**.
-2. O comportamento do celular (gaveta + barra inferior) continuou no fim, agora
-   nas linhas **11131–11363** — 236 linhas que nenhum inventário viu. É o
-   **item 28**, novo.
+- o `<style id="estiloCelular">` do módulo de celular saiu do fim do arquivo e
+  subiu para o cabeçalho (**hoje linhas 504–678**), empurrando **todo o JS**
+  para baixo;
+- o comportamento do celular (gaveta + barra inferior) continuou no fim, hoje
+  nas linhas **11264–11515** — 250 linhas que nenhum inventário viu. É o
+  **item 28**, novo;
+- e o arquivo **continua sendo editado enquanto este documento é revisado**:
+  11.363 linhas às 14h33, 11.515 às 14h42. O deslocamento não é uma constante
+  que dá para anotar aqui — às 14h33 era `+184` no arquivo inteiro; às 14h42 já
+  era `+204` no começo e `+317` perto do fim.
 
-Os itens **não** foram renumerados de propósito: renumerar 27 itens à mão é onde
-o erro entra. **Procure pelo texto, não pelo número** — cada item traz o trecho
-de hoje completo o bastante para servir de âncora de `Ctrl+F`, e o texto em si
-não mudou.
+Renumerar 28 itens à mão a cada mudança é exatamente onde o erro entra, então
+**os números ficaram como estavam, e a regra é: procure pelo texto.** Cada item
+traz o trecho de hoje completo o bastante para servir de âncora de `Ctrl+F`, e o
+texto em si não mudou. Quando precisar do número de verdade, pergunte ao
+arquivo:
+
+```
+grep -n "async function gravarUsuarios" sistema-minas.html
+grep -n '\$("fcSalvar").onclick'        sistema-minas.html
+grep -n "function saldoCaixa"           sistema-minas.html
+```
+
+> Se você for aplicar isto com o Claude: mande-o **reconferir cada âncora com
+> `grep -n` antes de editar**, e nunca abrir o arquivo por número de linha. Vale
+> também para os inventários antigos que estiverem na mão.
 
 ## Ordem de aplicação — a ordem dos itens NÃO é a ordem de aplicação
 
@@ -62,7 +75,7 @@ sistema não abre**:
 | 5º | 11, 12 | `#usuario` vira `<span>`, `montarSelects()` idempotente, troca de loja |
 | 6º | **3, 3b** | só agora o boot novo tem tudo o que ele cita |
 | 7º | 4–10, 14, 14b | tela de login, Supabase Auth e o fim do `config/usuarios` |
-| 8º | 19, 21–25 | numeração atômica, RH/LGPD e travas de tela |
+| 8º | 19, **22 antes do 21**, 23–25 | numeração atômica, RH/LGPD e travas de tela (o 21 usa `RH_CARREGADO` e `remDe()`, que nascem no 22) |
 | 9º | 26, 27, 28 | produção: demo escondido, backup e o módulo celular |
 
 Entre o 6º e o 7º passo o sistema **abre e loga** (ainda com a tela de login
@@ -71,8 +84,9 @@ testar: falta metade das funções que o boot cita.
 
 ## Mapa da obra (28 itens em 9 blocos)
 
-Números de linha da coluna da direita: **numeração antiga, some 184** (veja o
-aviso acima). A do item 28 é a de hoje.
+Números de linha da coluna da direita: **numeração antiga (arquivo de 10.943
+linhas)**, para orientação de *onde no arquivo*, nunca para abrir direto. Veja o
+aviso acima.
 
 | Bloco | Itens | O que resolve | Linhas (antigas) |
 |---|---|---|---|
@@ -83,8 +97,8 @@ aviso acima). A do item 28 é a de hoje.
 | E — Numeração atômica | 19 | duas abas nunca mais geram o mesmo número | 3441, 3830, 4940, 5545, 8520, 8810 |
 | F — Realtime | 20 | pedidos e clientes vivos entre as abas | 9344 |
 | G — RH e biometria | 21–23b | LGPD: RH, remuneração e foto em coleções restritas | 4698, 4748, 6479, 6571, 6713, 6787, 6843, 6867, 6897, 10121 |
-| H — Travas de tela | 24–25, 28 | `ir()` respeita permissão; reset de senha; barra do celular | 9732, 9979, 10068, 10080 · **11226, 11256 (hoje)** |
-| I — Produção | 26–27 | demo escondido, backup diário em JSON | 2568, 5992–6022, 10089, 2565 |
+| H — Travas de tela | 24–25, 28 | `ir()` respeita permissão; reset de senha; barra do celular | 9732, 9979, 10068, 10080 · item 28 por âncora de texto |
+| I — Produção | 26–27c | demo escondido, backup diário em JSON, `config/usuarios` apagado e trancado | 2568, 5991–6022, 10089, 2565 |
 
 ---
 
@@ -137,8 +151,14 @@ var MODO_TESTE=(location.hostname==="localhost"||location.hostname==="127.0.0.1"
 `location.hostname===""` cobre o arquivo aberto direto do disco (`file://`),
 que é como você testa hoje.
 
-**E, no fim do `<script>` gigante do sistema** — a última linha antes do `})();`
-que fecha a IIFE (hoje **linha 11126**; o `})();` de cima, na 11125, é o boot):
+**E, no fim do `<script>` gigante do sistema** — entre os **dois** `})();`
+seguidos que fecham o arquivo: o de cima fecha a IIFE assíncrona do boot, o de
+baixo fecha a IIFE geral (`(function(){ "use strict";`). Ache assim:
+
+```
+grep -n "^})();" sistema-minas.html
+```
+e cole **antes do último** dos dois:
 
 ```js
 /* Ponte de diagnóstico. TODO o sistema vive dentro de
@@ -287,14 +307,19 @@ Mudanças de ordem que importam:
 O `schema.sql` cria as RPCs `registrar_acesso()` e
 `registrar_consentimento_facial()`.
 
-> **Confira antes de colar: o `adapter.js` de hoje já as expõe** —
-> `adapter.registrarAcesso` (linha 1038), `adapter.registrarConsentimentoFacial`
-> (1046) e `adapter.perfilGravar` (1018, citada no item 14). Se estiverem lá,
-> **não cole nada**; este bloco fica só como referência do que a versão antiga
-> do adapter não tinha. Confira também que `adapter.perfil()` (linha 883)
-> seleciona **`consentiu_facial_em`** e **`jornada`** — sem essas duas colunas o
-> item 23 pede o aceite de LGPD em toda batida e o Cartão de Ponto perde a
-> jornada de cada um.
+> **Confira antes de colar: o `adapter.js` de hoje já as expõe.**
+> ```
+> grep -n "adapter.registrarAcesso\|adapter.registrarConsentimentoFacial\|adapter.perfilGravar" adapter.js
+> ```
+> Se as três aparecerem, **não cole nada** — este bloco fica só como referência
+> do que a versão antiga do adapter não tinha (`adapter.perfilGravar` é a que o
+> item 14 usa). Confira também o `select` de `adapter.perfil()`:
+> ```
+> grep -n "user_id,nome,funcao" adapter.js
+> ```
+> tem que trazer **`consentiu_facial_em`** e **`jornada`** na lista. Sem essas
+> duas colunas o item 23 pede o aceite de LGPD em toda batida e o Cartão de
+> Ponto perde a jornada de cada um.
 
 Se faltar alguma, acrescente em `supabase\adapter.js` logo **antes** da linha
 `adapter.collection = refColecao;`:
@@ -692,7 +717,8 @@ function usuarioPorId(id){return USUARIOS.filter(function(u){return u.id===id;})
     /* A equipe já veio de public.perfis em entrarComSessao(). O antigo
        config/usuarios guardava senha, CPF, salário e foto facial num único
        documento que TODO cliente baixava no boot — ele não é mais lido nem
-       gravado. Apague o documento no banco depois de migrar (item 27b). */
+       gravado. Apagar o documento no banco é o passo 9 do painel (item 27b),
+       e o item 27c tranca a recriação por policy. */
     sincronizarEquipe();
 ```
 
@@ -711,17 +737,26 @@ async function gravarPerfil(u){
              tolerancia:u.tolerancia,bateponto:u.bateponto}});
 }
 async function gravarRH(userId,dados){await grava("rh",Object.assign({id:userId},dados));}
+async function gravarRemuneracao(userId,dados){await grava("remuneracao",Object.assign({id:userId},dados));}
 async function gravarFacial(userId,foto,sig){await grava("facial",{id:userId,foto:foto,sig:sig,em:new Date().toISOString()});}
 ```
 
-> `db.perfilGravar` ainda não existe no adapter — acrescente junto com o item 3b:
+> Três coleções e não uma só: `rh` (CPF, RG, CTPS, PIS, endereço, filhos — só
+> gestor lê), `remuneracao` (salário, VR e os dois prêmios — **o próprio
+> colaborador lê a dele**, é a folha dele) e `facial` (biometria). O `id` de
+> cada documento **é o `user_id`**: é por ele que a RLS reconhece o dono
+> (`eh_meu_documento`, `schema.sql` item 5). Ver o item 22.
+
+> `db.perfilGravar` **já existe** no `adapter.js` de hoje
+> (`grep -n "adapter.perfilGravar" adapter.js`) — é este:
 > ```js
 >     adapter.perfilGravar = async function (linha) {
 >       conferir(await sb.from("perfis").upsert(linha, { onConflict: "user_id" }), "gravar perfil");
 >       return true;
 >     };
 > ```
-> A RLS só deixa `Administrador` gravar em `perfis` — é isso que queremos.
+> Se não encontrar, acrescente junto com o item 3b. A RLS só deixa
+> `Administrador` gravar em `perfis` — é isso que queremos.
 
 ### Os 8 chamadores de `gravarUsuarios()` — nenhum pode ficar para trás
 
@@ -791,8 +826,8 @@ Dois estragos, um de cada vez:
 (a linha `if(antigo&&antigo!==n)USUARIOS.forEach(...)` de cima **sai** — ela
 passou para dentro do `try`, depois do banco aceitar.)
 
-**E o método no `adapter.js`**, junto dos outros de perfil (perto do
-`adapter.perfilGravar`, linha 1018):
+**E o método no `adapter.js`**, junto dos outros de perfil (logo depois de
+`adapter.perfilGravar = async function`):
 ```js
     /* Renomeia a função de todo mundo que a usava. Só Administrador passa na
        RLS (perfis_update_admin) — para os demais isto rejeita, e é o certo. */
@@ -854,10 +889,20 @@ Trocas, uma a uma (as linhas são as de hoje):
 
 Três avisos que valem mais que a tabela:
 
-1. **`movest` e `titulos` não podem ter janela de tempo.** `saldoEm()` soma o
-   razão de estoque inteiro e o saldo do caixa depende de todos os títulos:
-   cortar linha antiga não "esconde histórico", **corrompe saldo**. Por isso
-   ali é `soLoja()`, sem `de`.
+1. **`movest`, `titulos` e `movs` não podem ter janela de tempo.** `saldoEm()`
+   soma o razão de estoque inteiro, o saldo do caixa depende de todos os
+   títulos — e `movs` **é o razão do caixa**: `saldoCaixa()` (linha 4836) faz
+   `s = +c.saldo` e soma **todo** movimento com `m.data >= c.dataSaldo`. Os
+   caixas semeados no primeiro boot ficam com `dataSaldo` congelado naquele dia
+   (linha 3318, `nc.dataSaldo=hojeISO()`) e ninguém mexe nisso depois: passados
+   18 meses, os movimentos entre `dataSaldo` e `hoje−18m` deixam de ser
+   carregados e **o saldo da tela de Caixas e do Fluxo fica errado, sem nenhum
+   aviso**. Cortar linha antiga nas três não "esconde histórico", **corrompe
+   saldo**. Por isso ali é `soLoja()`, sem `de`.
+   (Se um dia `movs` pesar demais, o caminho não é a janela de tempo: é
+   guardar o saldo consolidado por caixa numa data de corte — mover o
+   `dataSaldo` para frente junto com o valor — e só então cortar o que vier
+   antes dela.)
 2. O adapter **pagina sozinho** (`.range()` de 1000 em 1000): `limit(100000)`
    volta completo, não é mentira como no PostgREST cru.
 3. As leituras saem **ordenadas por id**, então a lista é estável entre um F5 e
@@ -1165,8 +1210,12 @@ e no `fnSalvar` (linha 10251) antes de gravar:
     f={id:uid(),codigo:"FOR-"+String(await db.proximoNumero("global","fornecedor")),tipo:"Pessoa Jurídica",
 ```
 
-> `"global"` é a "loja" do contador de fornecedor, já que o cadastro é
-> compartilhado. Semeie essa linha no item 11.2 do `schema.sql`.
+> O fornecedor é um **contador único das três lojas** — o cadastro é
+> compartilhado. `proximo_numero()` sabe disso: para os tipos globais ela
+> ignora o `p_loja` que você mandar e usa `'*'`. Ou seja, o `"global"` das duas
+> chamadas acima funciona, mas a linha na tabela `numeradores` é
+> **`('*','fornecedor', …)`** — semear `('global','fornecedor', …)` cria uma
+> linha que ninguém lê. Veja o passo 6 do painel.
 
 ---
 
@@ -1223,19 +1272,67 @@ function ouvirRealtime(){
     try{renderClientes();}catch(e){}
   },{filtros:soLoja(),aoFalhar:function(e){falhaBanco(e);}}));
 
-  /* títulos: baixa feita pelo financeiro aparece no caixa de quem está vendo */
-  canais.push(col("titulos").onSnapshot(function(snap){
-    titulos=snap.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    try{renderTitulos();}catch(e){}
-  },{filtros:soLoja(),aoFalhar:function(e){falhaBanco(e);}}));
+  /* TÍTULOS FICAM DE FORA NA FASE 1 — veja o porquê logo abaixo. */
 }
 ```
 
-> Confira os nomes das funções de render antes de colar (`renderClientes`,
-> `renderTitulos`) — se o nome for outro no arquivo, ajuste. O `onSnapshot` do
-> adapter refaz o `get()` inteiro a cada evento e devolve a lista completa,
-> exatamente como o banco antigo fazia; a assinatura devolve o `unsubscribe`,
-> que agora é guardado em `canais` e usado na troca de loja e no logout.
+### Por que `titulos` não entra no Realtime
+
+Era a terceira assinatura do rascunho e ela **não paga o que custa**:
+
+- `onSnapshot` do adapter não recebe um delta: a cada evento ele **refaz o
+  `get()` inteiro** da coleção (`assinarColecao` → `buscarColecao`), e sem
+  `limite` o alvo é `Infinity` — pagina de 1000 em 1000 até o fim;
+- uma venda em 12x grava **12 títulos** (`gerarReceberDoPedido`, linha 5059) e
+  `darEntrada` grava **50+**. Cada rajada, mesmo com o debounce de 150 ms, faz
+  **toda aba aberta** rebaixar a coleção de títulos da loja — que o próprio
+  item 15 dimensiona em até 50.000 documentos jsonb;
+- com 3 lojas e 7 pessoas, isso vira o gargalo do sistema e a conta de egress
+  do projeto — para atualizar uma tela que quase ninguém está olhando na hora.
+
+**Em troca, dê um recarregamento na entrada da tela.** Hoje `renderReceber()` e
+`renderPagar()` desenham a partir do array `titulos` em memória, que só é
+preenchido por `carregar()` — sem Realtime e sem isto, o financeiro veria a
+baixa do colega só depois de um F5. No `ir()` (item 24), depois da troca de
+tela:
+
+```js
+  /* Contas a Receber/Pagar não têm Realtime (veja o item 20): recarrega a
+     coleção ao entrar na tela, que é quando o número precisa estar certo. */
+  if(s==="receber"||s==="pagar"){
+    (async function(){
+      try{
+        var q=await col("titulos").limit(50000).get(soLoja());
+        titulos=q.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+        renderReceber();renderPagar();
+      }catch(e){falhaBanco(e);}
+    })();
+  }
+```
+
+Se um dia quiser o tempo real ali, entre com filtro apertado e limite
+explícito, nunca a coleção toda:
+
+```js
+  /* SÓ SE PRECISAR — o mês corrente, não os 50.000 títulos da loja */
+  canais.push(col("titulos").onSnapshot(function(snap){
+    titulos=snap.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    try{renderReceber();renderPagar();}catch(e){}
+  },{filtros:{loja:lojaAtual,de:iso(new Date(new Date().getFullYear(),new Date().getMonth(),1))},
+     limite:5000,aoFalhar:function(e){falhaBanco(e);}}));
+```
+
+> **`renderTitulos` não existe** no `sistema-minas.html`. As funções são
+> `renderReceber()` (linha 5043) e `renderPagar()` (5052) — e como o callback
+> fica dentro de `try{}catch(e){}`, o `ReferenceError` seria **engolido**: o
+> array `titulos` trocaria e as duas telas continuariam mostrando os dados
+> velhos até o F5, sem sintoma nenhum. Confira `renderClientes` e
+> `renderPedidos` da mesma forma antes de colar
+> (`grep -n "^function render" sistema-minas.html`) — essas duas existem.
+>
+> O `onSnapshot` do adapter devolve a lista completa a cada evento, exatamente
+> como o banco antigo fazia; a assinatura devolve o `unsubscribe`, que agora é
+> guardado em `canais` e usado na troca de loja e no logout.
 
 ---
 
@@ -1243,14 +1340,19 @@ function ouvirRealtime(){
 
 O `config/usuarios` de hoje é baixado por todo cliente **antes de qualquer
 senha**, e leva junto CPF, RG, endereço, filhos, salário, CTPS/PIS e a foto
-facial em base64 (~50–70 KB). A RLS do `schema.sql` já trata `rh`, `facial` e
-`ponto_fotos` como coleções restritas: leitura e escrita só para
-`Administrador`/`Financeiro`, com **duas exceções** — o colaborador lê a própria
-biometria e insere a própria foto de ponto.
+facial em base64 (~50–70 KB). A RLS do `schema.sql` já trata `rh`,
+`remuneracao`, `facial` e `ponto_fotos` como coleções restritas: **escrita** só
+para `Administrador`/`Financeiro`, e leitura idem, com **três exceções** — o
+colaborador lê a própria biometria, insere a própria foto de ponto e lê a
+própria remuneração (item 22).
 
-## Item 21 — o cadastro de colaborador em três gravações
+## Item 21 — o cadastro de colaborador em quatro gravações
 
 **Linhas 10121–10147 (`usSalvar`).**
+
+> **Aplique o item 22 antes deste.** É lá que nascem `RH`, `REM`, `FACIAL`,
+> `RH_CARREGADO`, `carregarRH()`, `rhDe()` e `remDe()` — o código abaixo usa os
+> sete.
 
 **Hoje** (tudo num objeto só, gravado no documento que todo mundo lê):
 ```js
@@ -1267,70 +1369,210 @@ biometria e insere a própria foto de ponto.
 ```js
     u.nome=n;u.perfil=$("u_perfil").value;u.ativo=($("u_ativo").value==="sim");
     u.loja=$("u_loja").value||u.loja||lojaAtual;
-    CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)u[k]=e.value.trim?e.value.trim():e.value;});
-    ["salario","vr","assiduidade","desempenho"].forEach(function(k){u[k]=parseFloat($("u_"+k).value)||0;});
+    /* Jornada CONTINUA no objeto em memória: não é dado sensível e mora em
+       perfis.jornada, justamente para o Cartão de Ponto funcionar sem abrir
+       'rh' (item 22). */
     ["entrada","almocoIni","almocoFim","saida"].forEach(function(k){u[k]=$("u_"+k).value;});
     u.tolerancia=parseInt($("u_tolerancia").value,10);if(isNaN(u.tolerancia))u.tolerancia=2;
     u.bateponto=$("u_bateponto").value;
-    u.temfilhos=$("u_temfilhos").value;
-    u.filhos=(u.temfilhos==="sim")?usFilhos.filter(function(f){return f.nome||f.nasc;}):[];
-    if(!editandoUs)USUARIOS.push(u);
+
+    /* RH, remuneração e filhos são montados DIRETO DOS CAMPOS e NÃO voltam
+       para `u`. `u` é um item de USUARIOS — a lista que a tela inteira usa e
+       que qualquer gravador de config/usuarios levaria de volta para o
+       documento que TODO autenticado lê. Enquanto CPF, RG, endereço, CTPS,
+       PIS, filhos e salário estiverem dentro de USUARIOS, o vazamento que
+       esta migração existe para matar volta pela primeira brecha. */
+    var rh={nome:n};
+    CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)rh[k]=(e.value.trim?e.value.trim():e.value);});
+    rh.temfilhos=$("u_temfilhos").value;
+    rh.filhos=(rh.temfilhos==="sim")?usFilhos.filter(function(f){return f.nome||f.nasc;}):[];
+    var rem={nome:n};
+    ["salario","vr","assiduidade","desempenho"].forEach(function(k){rem[k]=parseFloat($("u_"+k).value)||0;});
+
+    /* TRAVA CONTRA APAGAR RH REAL. grava() é upsert integral, sem merge: se o
+       formulário foi preenchido antes de carregarRH() terminar (ou para quem
+       não tem permissão de ler 'rh'), os campos vieram em branco e salvar
+       agora ZERA CPF, RG, endereço, filhos, CTPS, PIS, salário e VR no banco.
+       Não há de onde recuperar — o config/usuarios antigo é apagado no passo 9
+       do painel. */
+    if(!RH_CARREGADO){
+      $("u_alerta").innerHTML='<div class="note crit"><b>O cadastro de RH ainda não carregou.</b> '+
+        "Feche e abra este colaborador de novo antes de salvar — salvar agora apagaria CPF, endereço e salário.</div>";
+      return;
+    }
     try{
-      /* 1) identidade e jornada — todo mundo autenticado pode ler */
+      /* 1) identidade, loja e jornada — todo autenticado pode ler */
       await gravarPerfil(u);
       /* 2) RH — coleção restrita: só Administrador e Financeiro leem */
-      var rh={};
-      CAMPOS_US.forEach(function(k){rh[k]=u[k]||"";});
-      ["salario","vr","assiduidade","desempenho"].forEach(function(k){rh[k]=+u[k]||0;});
-      rh.temfilhos=u.temfilhos;rh.filhos=u.filhos;rh.nome=u.nome;
       await gravarRH(u.id,rh);
-      /* 3) biometria — coleção restrita própria */
+      /* 3) remuneração — restrita para escrita, mas o dono lê a dele */
+      await gravarRemuneracao(u.id,rem);
+      /* 4) biometria — coleção restrita própria */
       if(usFacial)await gravarFacial(u.id,usFacial,usFacialSig);
+      RH[u.id]=rh;REM[u.id]=rem;          /* os mapas em memória acompanham */
+      if(usFacial)FACIAL[u.id]={foto:usFacial,sig:usFacialSig};
     }catch(e){
       toast("O cadastro NÃO foi salvo: "+e.message);return;
     }
+    /* memória só DEPOIS que o banco aceitou (regra do item 17). O
+       `USUARIOS.push` antes do try deixava um colaborador fantasma na lista
+       toda vez que gravarPerfil recusasse — e ela recusa sempre para quem
+       ainda não tem acesso criado no painel (item 25). */
+    if(!editandoUs)USUARIOS.push(u);
     sincronizarEquipe();aplicarPerfil();
 ```
 
 O bloco de renomeação das linhas 10138–10144 (`nomeAntigo`) pode **sair**: com
 `user_id` como chave, renomear deixa de precisar reescrever histórico. Se quiser
 manter por enquanto, deixe — mas ele hoje só muda a memória, sem regravar nada,
-então é ilusão de correção.
+então é ilusão de correção. (Renomear **função** é outra história e tem item
+próprio: 14b.)
 
 **Falta um campo no formulário:** `u_loja`. Acrescente no HTML do cadastro, ao
 lado de `u_perfil`, um `<select id="u_loja">` com as três lojas — hoje
-`USUARIOS` não tem loja nenhuma, e é dela que sai a `lojaAtual` de cada pessoa.
-O campo fica ao lado de `u_perfil` (**linha 2344**) e é preenchido em
-`abrirUsuario` (**linha 4756**, junto do `sp.value=u.perfil`):
+`USUARIOS` não tem loja nenhuma, e é dela que sai a `lojaAtual` de cada pessoa
+(item 3, `lojaAtual=p.loja||LOJAS[0].id`).
+
+O campo fica ao lado de `u_perfil` (**linha 2344**):
 ```html
             <div class="fld"><label for="u_loja">Loja</label><select id="u_loja"></select></div>
 ```
 
-## Item 22 — ler RH sob demanda
-
-**`renderUsuarios`, linhas 4707–4716** lê `u.facial`, `u.email`, `u.salario`
-direto da lista. Como esses campos não vêm mais no boot, carregue-os só quando a
-tela abrir:
-
+**E precisa ser POPULADO** — um `<select>` sem `<option>` devolve `""` para
+sempre, e a linha `u.loja=$("u_loja").value||u.loja||lojaAtual;` acima nunca
+conseguiria **mudar** a loja de ninguém. Nada mais no documento preenche esse
+select: `montarSelects()` (item 12a) não o toca, e `u_perfil` só se preenche
+sozinho porque `abrirUsuario` tem o `funcoes.forEach` da linha 4755. Em
+`abrirUsuario`, **logo depois** de `sp.value=u.perfil||"Vendedor";`
+(**linha 4756**):
 ```js
-/* Só o gestor carrega RH, e só ao abrir Configurações › Usuários. */
-var RH={},FACIAL={};
-async function carregarRH(){
-  if(!pode("gerenciarUsuarios")&&!ehGestor())return;
-  var q=await col("rh").limit(200).get();
-  RH={};q.docs.forEach(function(d){RH[d.id]=d.data()||{};});
-  var f=await col("facial").limit(200).get();
-  FACIAL={};f.docs.forEach(function(d){FACIAL[d.id]=d.data()||{};});
-}
-function rhDe(u){return (u&&RH[u.id])||{};}
+  var sj=$("u_loja");sj.innerHTML="";
+  LOJAS.forEach(function(l){var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;sj.appendChild(o);});
+  sj.value=u.loja||lojaAtual;
 ```
 
-E nas linhas de render troque `u.facial` → `(FACIAL[u.id]||{}).foto`,
-`u.salario` → `rhDe(u).salario`, `u.email||u.tel` → `rhDe(u).email||rhDe(u).tel`.
-Mesmo tratamento em **`abrirUsuario` (4748–4770)**, **`totalRemuneracao` (6571)**
-e **`premioAssiduidade` (6554)**.
+## Item 22 — ler RH e remuneração sob demanda
 
-**`jornadaDe` (6479) NÃO muda de lugar**: jornada não é dado sensível e vive em
+O `USUARIOS.forEach` de `renderUsuarios` lê `u.facial`, `u.email||u.tel`,
+`u.salario`, `u.assiduidade` e `u.desempenho` direto da lista. Nenhum desses
+campos vem mais no boot.
+
+### A decisão que faltava: o colaborador VÊ a própria remuneração
+
+`renderPonto` monta, **para o próprio colaborador**, cinco cartões — "Salário
+fixo", "Vale refeição", "Assiduidade", "Desempenho" e "Total do mês" — a partir
+de `totalRemuneracao(quem,c)` e `premioAssiduidade(quem,c)`. Se esses dois
+passarem a ler `rh`, os cinco cartões viram **R$ 0,00** para Carol, Verônica,
+Franciele, Guilherme e Jaqueline: `rh` é fechado a Administrador/Financeiro por
+decisão do `schema.sql` ("'rh' fica de fora de proposito: CPF, RG, CTPS e
+endereco so para gestor"). Zero silencioso é pior que "sem acesso" — vira "o
+sistema novo apagou meu salário" no primeiro dia.
+
+**A regra é esta: a folha é dele, ele vê a dele; CPF, RG, CTPS, endereço e
+filhos continuam só para o gestor.** Se estiver errado, o que muda é a policy
+`docs_select_minha_remuneracao` (e aí o item passa a mandar **apagar** os cinco
+cartões de `renderPonto`, não deixá-los mostrando zero).
+
+Por isso o `schema.sql` já traz **três** coleções restritas separadas, e não uma
+só — é o que permite abrir o contracheque sem abrir o cadastro:
+
+| Coleção | O que guarda | Quem lê |
+|---|---|---|
+| `rh` | CPF, RG, CTPS, PIS, endereço, filhos, admissão | só `sou_gestor_rh()` = Administrador, Financeiro |
+| `remuneracao` | `salario`, `vr`, `assiduidade`, `desempenho` | o gestor **e o próprio dono** (`docs_select_minha_remuneracao`) |
+| `facial` | foto de referência da conferência | o gestor **e o próprio dono** (`docs_select_minha_biometria`) |
+
+O `id` do documento **é o `user_id`** nas três — é por ele que
+`eh_meu_documento()` reconhece o dono. Escrita nas três continua só para o
+gestor.
+
+### O código
+
+```js
+/* Espelha sou_gestor_rh() do Postgres (schema.sql item 5). NÃO use ehGestor()
+   aqui: ehGestor() é pode("verTudo"), que o Gerente também tem — e para ele a
+   RLS devolveria 0 linhas SEM ERRO NENHUM, que é justamente o zero silencioso
+   que queremos evitar. */
+function ehGestorRH(){
+  var f=perfilLogado&&perfilLogado.funcao;
+  return f==="Administrador"||f==="Financeiro";
+}
+
+var RH={},REM={},FACIAL={},RH_CARREGADO=false;
+
+async function carregarRH(){
+  if(!db||!usuarioId)return;
+  if(ehGestorRH()){
+    var q=await col("rh").limit(200).get();
+    RH={};q.docs.forEach(function(d){RH[d.id]=d.data()||{};});
+    var r=await col("remuneracao").limit(200).get();
+    REM={};r.docs.forEach(function(d){REM[d.id]=d.data()||{};});
+    var f=await col("facial").limit(200).get();
+    FACIAL={};f.docs.forEach(function(d){FACIAL[d.id]=d.data()||{};});
+    RH_CARREGADO=true;                  /* o item 21 exige esta trava */
+    return;
+  }
+  /* Não-gestor: nem tenta ler 'rh' (não é dele). Lê o PRÓPRIO contracheque e a
+     PRÓPRIA foto de referência — cada um com policy própria no Postgres. */
+  RH={};REM={};FACIAL={};RH_CARREGADO=false;
+  try{
+    var meu=await col("remuneracao").doc(usuarioId).get();
+    if(meu.exists)REM[usuarioId]=meu.data()||{};
+    var minha=await col("facial").doc(usuarioId).get();
+    if(minha.exists)FACIAL[usuarioId]=minha.data()||{};
+  }catch(e){console.warn("remuneracao/facial próprios",e);}
+}
+function rhDe(u){return (u&&RH[u.id])||{};}
+function remDe(u){return (u&&REM[u.id])||{};}
+```
+
+### Quem chama `carregarRH()` — sem isto ela nunca roda
+
+Este era o buraco: a função existia e ninguém a chamava. Dois pontos, e os dois
+são obrigatórios.
+
+**1) No login**, dentro de `entrarComSessao()` (item 3), **antes** de
+`opcoesProduto();render();` — é o que enche `REM[usuarioId]` a tempo de
+`renderPonto` desenhar os cinco cartões com o valor certo:
+```js
+  try{await carregarRH();}catch(e){console.warn("carregarRH",e);}
+```
+
+**2) Ao abrir um colaborador**, porque `abrirUsuario` preenche o formulário com
+`rhDe(u)`: com `RH={}` os campos abrem **em branco** e o item 21 regrava esse
+branco por cima do RH real. `abrirUsuario` **vira `async`** (linha 4748) e a
+primeira linha passa a ser o `await`:
+```js
+async function abrirUsuario(i){
+  try{await carregarRH();}
+  catch(e){falhaBanco(e);toast("Não deu para carregar o cadastro de RH.");return;}
+  editandoUs=(i==null?null:USUARIOS[i]);
+  /* …o resto igual… */
+```
+Os dois chamadores (`tr.onclick` e o botão `data-ued`, no fim de
+`renderUsuarios`) continuam iguais: chamam sem `await` e a função abre o
+formulário sozinha quando termina.
+
+### As trocas, uma a uma
+
+| Onde | Hoje | Fica |
+|---|---|---|
+| `renderUsuarios` | `u.facial` | `(FACIAL[u.id]||{}).foto` |
+| `renderUsuarios` | `u.email\|\|u.tel` | `rhDe(u).email\|\|rhDe(u).tel` |
+| `renderUsuarios` | `u.salario` | `remDe(u).salario` |
+| `renderUsuarios` | `(+u.assiduidade\|\|0)+(+u.desempenho\|\|0)` | `(+remDe(u).assiduidade\|\|0)+(+remDe(u).desempenho\|\|0)` |
+| `abrirUsuario` | `CAMPOS_US.forEach(…e.value=u[k]…)` | `var rh=rhDe(u);CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)e.value=rh[k]\|\|"";});` |
+| `abrirUsuario` | `$("u_"+k).value=(u[k]!=null?u[k]:"")` (salário, vr, prêmios) | mesma linha lendo `remDe(u)` |
+| `abrirUsuario` | `usFilhos=(u.filhos\|\|[]).slice()` | `usFilhos=(rhDe(u).filhos\|\|[]).slice()` |
+| `abrirUsuario` | `usFacial=u.facial\|\|""` | `usFacial=(FACIAL[u.id]\|\|{}).foto\|\|""` |
+| `premioAssiduidade` | `var u=usuarioPor(quem)\|\|{},valor=+u.assiduidade\|\|0;` | `var valor=+remDe(usuarioPor(quem)).assiduidade\|\|0;` |
+| `premioDesempenho` | `var u=usuarioPor(quem)\|\|{},valor=+u.desempenho\|\|0;` | `var valor=+remDe(usuarioPor(quem)).desempenho\|\|0;` |
+| `totalRemuneracao` | `+u.salario`, `+u.vr` | `var m=remDe(usuarioPor(quem));` e `+m.salario`, `+m.vr` |
+
+`premioDesempenho` entra na lista de propósito: ele lê o mesmo campo pelo mesmo
+caminho e ficaria zerado junto com os outros dois.
+
+**`jornadaDe` NÃO muda de lugar**: jornada não é dado sensível e vive em
 `perfis.jornada`, justamente para o Cartão de Ponto funcionar sem abrir `rh`.
 Ajuste só a origem:
 ```js
@@ -1341,9 +1583,25 @@ function jornadaDe(n){
 }
 ```
 
+### `remuneracao` no `adapter.js`
+
+A coleção é nova e o adapter ainda não a conhece
+(`grep -n remuneracao adapter.js` volta vazio). Em `supabase\adapter.js`:
+
+- em `var CAMPO_LOJA = {`, ao lado de `rh: null,`: **`remuneracao: null,`**
+  (é global, um documento por pessoa, sem loja — sem isso `set()` tenta carimbar
+  uma loja que não existe);
+- em `var COLECOES_RESTRITAS = [`: `["rh", "remuneracao", "facial", "ponto_fotos"]`;
+- **não** acrescente em `COLECOES_DADOS`: backup não leva salário.
+
+Do lado do Postgres já está tudo pronto —
+`grep -n "colecao_restrita" schema.sql` mostra `remuneracao` na lista, e a
+policy `docs_select_minha_remuneracao` já existe.
+
 > Vendedor que abrir Configurações › Usuários vai receber **lista vazia de RH**
 > (a RLS corta no servidor) — e é esse o comportamento correto. O teste 7 do
-> aceite verifica exatamente isso.
+> aceite verifica exatamente isso. O que ele **vê** é a própria remuneração, na
+> própria tela de Ponto, e só ela: o teste 7b verifica esse par.
 
 ## Item 23 — a foto de ponto sai de dentro do ponto
 
@@ -1396,6 +1654,19 @@ E, antes disso, o consentimento (LGPD art. 11) — uma vez por pessoa:
   }
 ```
 
+> **A condição só funciona se a coluna chegar no login.** `adapter.perfil()`
+> tem que trazer `consentiu_facial_em` no `select` — se não trouxer, o campo é
+> sempre `undefined`, a condição é sempre verdadeira e o `confirm()` aparece
+> **nas 4 batidas de cada dia, de cada pessoa, para sempre**. Além do incômodo,
+> quem clicar em Cancelar por engano não bate o ponto, e
+> `registrar_consentimento_facial()` é chamada toda vez — o consentimento fica
+> registrado no banco e nunca é consultado, que é o contrário do que o art. 11
+> pede. O `adapter.js` de hoje já traz a coluna (`grep -n "consentiu_facial_em"
+> adapter.js`); confira antes de testar. Prova rápida, em modo teste:
+> `mfDebug.perfil.consentiu_facial_em`
+> tem que sair com uma data depois da primeira batida — e continuar lá no F5
+> seguinte.
+
 **Renders que liam `b.foto`:**
 
 - **Linha 6787** (tabela do dia): troque a miniatura por contagem/pill —
@@ -1434,10 +1705,53 @@ async function verFotosDia(quem,data){
 ```js
   if(!pode("ajustarPonto")){toast("Você não tem permissão para ajustar ponto.");return;}
 ```
-A ação `ajustarPonto` já existe em `ACOES` e nunca foi usada. Espelhe na RLS:
-`update` de `docs` com `colecao='pontos'` só para quem tem a ação — na Fase 1 a
-policy de update geral já cobre `authenticated`; se quiser apertar, acrescente
-uma policy própria no `schema.sql`.
+
+**Atenção: sozinha, essa troca TIRA do Erico o ajuste de ponto.** A mensagem de
+hoje promete "Só o Administrador **ou o Financeiro**", e `ehGestor()` é
+`pode("verTudo")`, que o Financeiro tem. Mas em `SEED_FUNCOES` o Financeiro é
+
+```js
+    acoes:["verTudo","verCustos","aprovarFinanceiro","reabrirVenda","baixarTitulos","exportar"]
+```
+
+— **sem `ajustarPonto`**. Só o Administrador tem a ação (por `ACOES.map`). Quem
+faz esse ajuste hoje é o Erico; trocar a checagem sem trocar a semente é tirar
+dele a tarefa no dia da virada.
+
+**Duas correções junto com a troca:**
+
+1. Em `SEED_FUNCOES`, na linha do Financeiro, acrescente a ação:
+```js
+    acoes:["verTudo","verCustos","aprovarFinanceiro","reabrirVenda","baixarTitulos","exportar","ajustarPonto"]
+```
+
+2. A semente **não conserta quem já está no banco**: `config/funcoes` foi
+   gravado no primeiro boot, e `migrarTelasNovas()` (linha 9714) só acrescenta
+   **telas** a quem tem `verTudo` — nunca ações. Acrescente a migração de ação
+   dentro dela, antes do `if(mudou)await gravarFuncoes();`:
+```js
+  /* ações novas não entram por migrarTelasNovas (ela só cuida de telas):
+     'ajustarPonto' passou a ser exigida pelo item 23b e o Financeiro precisa
+     dela para continuar fazendo o que já fazia. */
+  funcoes.forEach(function(f){
+    if(f.nome==="Financeiro"&&(f.acoes||[]).indexOf("ajustarPonto")<0){
+      f.acoes=(f.acoes||[]).concat(["ajustarPonto"]);mudou=true;}
+  });
+```
+   `migrarTelasNovas()` sai cedo (`if(!novas.length)return;`) quando não há tela
+   nova: **mova esse `return` para depois do bloco acima**, ou troque-o por
+   `var novas=…` sem `return` e deixe as duas migrações decidirem juntas o
+   `mudou`. Senão a ação nunca é acrescentada.
+
+> Quem grava `config/funcoes` agora é só Administrador/Financeiro
+> (`docs_config_gestor`, `schema.sql` item 8.6) — a migração roda no login de
+> um dos dois e passa a valer para todo mundo. No login de um Vendedor ela
+> falha com 42501; deixe a chamada dentro de `try/catch`.
+
+A ação `ajustarPonto` já existia em `ACOES` e nunca tinha sido usada. Espelhe na
+RLS: `update` de `docs` com `colecao='pontos'` só para quem tem a ação — na Fase
+1 a policy de update geral já cobre `authenticated`; se quiser apertar,
+acrescente uma policy própria no `schema.sql`.
 
 ---
 
@@ -1510,14 +1824,81 @@ function ir(s){
     catch(e){toast("Não deu para enviar: "+e.message);}};
 ```
 
+## Item 28 — o MÓDULO CELULAR, que nenhum inventário viu
+
+O arquivo tem um segundo par `<style>`+`<script>` que os inventários não
+alcançaram: o **estilo** em `<style id="estiloCelular">` (às 14h42, linhas
+504–678, logo depois do estilo principal) e o **comportamento** — gaveta, barra
+inferior e cabeçalho compacto — no fim do arquivo (11264–11515 no mesmo
+momento; ache com `grep -n "AJUSTES DE CELULAR" sistema-minas.html`). Ele mexe
+justamente nos elementos que os itens 11, 12 e 24 alteram:
+
+- move `.lojasel` (que contém `#loja` **e** `#usuario`), `#perfilPill` e
+  `#btSair` do cabeçalho para dentro da gaveta
+  (`Array.prototype.forEach.call(topo.querySelectorAll(".lojasel"),guardar);`);
+- esconde os originais no topo (`.top .lojasel,.top #perfilPill,.top .sair{display:none}`);
+- e estiliza `.gaveta-pe .lojasel select{width:100%;padding:11px 12px;font-size:16px}`
+  — regra que **deixa de valer** quando o item 11a troca o `<select id="usuario">`
+  por um `<span>`.
+
+**28a — a barra inferior oferece telas proibidas.** Ache a linha:
+```
+grep -n "b.hidden=!alvo" sistema-minas.html
+```
+**Hoje:**
+```js
+      b.hidden=!alvo||alvo.hidden;
+```
+**Fica:**
+```js
+      /* aplicarPerfil() esconde tela proibida com style.display="none", NÃO com
+         o atributo hidden — sem esta segunda condição a barra do celular
+         continua oferecendo "Clientes" e "Ponto" a quem não tem acesso, e o
+         toque passa a devolver "Você não tem acesso a esta tela." (item 24). */
+      b.hidden=!alvo||alvo.hidden||alvo.style.display==="none";
+```
+
+**28b — e o observador não acorda quando isso muda.** Ache:
+```
+grep -n 'attributeFilter:\["aria-current","hidden"\]' sistema-minas.html
+```
+**Hoje:**
+```js
+      subtree:true,attributes:true,attributeFilter:["aria-current","hidden"]
+```
+**Fica:**
+```js
+      subtree:true,attributes:true,attributeFilter:["aria-current","hidden","style"]
+```
+Sem `"style"` na lista, `sincronizar()` não é chamada quando `aplicarPerfil()`
+roda — a barra fica com o desenho do login anterior até a próxima navegação.
+
+**28c — confira o `<span id="usuario">` dentro da gaveta.** A regra
+`.gaveta-pe .pill{display:inline-block;align-self:flex-start}` já existe e pega
+o `<span class="pill">` do item 11a, então ele **deve** aparecer. Abra o site no
+celular (ou F12 → 375×812), abra a gaveta e confirme que o nome do operador
+aparece legível ao lado do cargo. Se ficar apertado, a regra a ajustar é essa,
+não o HTML.
+
+> Este item é **cosmético + permissão**: nada aqui fala com o banco. Deixe-o
+> por último, mas não o pule — todo o módulo existe porque parte da equipe usa o
+> sistema no celular, e "o menu de baixo abre uma tela que dá erro" é o tipo de
+> coisa que vira chamado no primeiro dia.
+
 ---
 
 # BLOCO I — PRODUÇÃO
 
 ## Item 26 — esconder o gerador de dados de teste
 
-Três lugares, **e a ordem importa**: se apagar o card sem apagar o wiring,
-`$("dtGerar")` vira `null` e **todo o `ligar()` quebra**.
+Cinco edições (26a a 26d), **e a ordem importa**: se apagar o card sem apagar o
+wiring, `$("dtGerar")` vira `null` e **todo o `ligar()` quebra** — nenhum botão
+do sistema volta a funcionar.
+
+Esconder não é o mesmo que desligar: 26a e 26b tiram o card da tela, 26c troca a
+chave de ambiente, **26c-bis** tranca as duas funções por perfil e **26d** apaga
+os dois estragos que o gerador faz em dado real. Os quatro primeiros sem o
+último ainda deixam o botão apagar as metas do mês.
 
 **26a — wiring, linhas 10089–10090** (apague primeiro):
 ```js
@@ -1537,21 +1918,114 @@ Três lugares, **e a ordem importa**: se apagar o card sem apagar o wiring,
         <h2>Dados de teste</h2>
 ```
 
-**26c — a chave**, junto das constantes do item 1:
+**26c — a chave já está no item 1b.** `var MODO_TESTE` é definida lá, e **não**
+por querystring:
+
 ```js
-/* liga o gerador de demo só quando a URL tiver ?teste=1 */
+/* ERRADO — não use: */
 var MODO_TESTE=(location.search.indexOf("teste=1")>=0);
 ```
 
+`?teste=1` esconde o **botão**, não a função. Qualquer pessoa logada digita
+`.../sistema-minas.html?teste=1` na barra de endereço e o card volta inteiro. A
+chave tem que ser algo que o usuário não controle — o `location.hostname` do
+item 1b, que em produção (GitHub Pages / Firebase) nunca é `localhost`.
+
+**26c-bis — e esconder o botão não basta.** `gerarDemo` e `limparDemo`
+continuam sendo funções globais dentro da IIFE, chamáveis por qualquer coisa
+que tenha alcance a elas; e do lado do servidor **não há trava nenhuma**: as
+~120 gravações do gerador caem em `pedidos`, `titulos`, `movs`, `movest` e
+`clientes`, todas liberadas por `docs_insert_geral` para qualquer autenticado.
+Ponha a trava **dentro das duas funções**, na primeira linha:
+
+```js
+async function gerarDemo(){
+  if(!MODO_TESTE||!perfilLogado||perfilLogado.funcao!=="Administrador"){
+    toast("Indisponível em produção.");return;}
+  /* …resto igual… */
+}
+async function limparDemo(){
+  if(!MODO_TESTE||!perfilLogado||perfilLogado.funcao!=="Administrador"){
+    toast("Indisponível em produção.");return;}
+  /* …resto igual… */
+}
+```
+
+Sem isso, um clique curioso numa tarde apaga as metas do mês da equipe inteira
+(veja 26d) e enche o faturamento de vendas falsas — com números de pedido que
+**consomem a numeração real**: depois do item 19 o número vem da RPC
+`proximo_numero`, e número queimado não volta.
+
 **26d — dois estragos do demo que precisam sumir antes de ir para produção:**
 
-- **Linhas 5992–6018**: `gerarDemo` escreve CPF, salário, endereço e filhos
-  **falsos por cima dos 7 colaboradores reais** (`u.demoTocado=true`), e
-  `limparDemo` **não desfaz**. Remova esse bloco inteiro ou condicione a gravar
-  em `rh` só quando a coleção estiver vazia.
-- **`limparDemo`, linhas 6460–6462**: apaga `metas[nm]` de **toda** a EQUIPE e
-  zera `celebracoes={}` — dados reais, que nunca tiveram flag `demo`.
-  Se mantiver o gerador, restrinja a limpeza aos nomes que o demo criou.
+- **Apague as linhas 5991–6022 de `gerarDemo`.** Não é "remova ou condicione":
+  é apagar. O bloco escreve CPF, salário, endereço e filhos **falsos por cima
+  dos 7 colaboradores reais** (`u.demoTocado=true`) e `limparDemo` **não
+  desfaz**. A faixa termina **quatro linhas depois** do que os inventários
+  indicavam, porque a gravação está fora do `forEach`. Âncoras:
+  do comentário `/* --- remuneração e jornada dos colaboradores --- */` até a
+  linha `log.push("remuneração, jornada, endereço e dados pessoais dos 7 colaboradores");`,
+  inclusive — a próxima linha a sobreviver é o comentário
+  `/* --- fornecedores --- */`.
+
+  | Linha (antiga) | Conteúdo | Sai? |
+  |---|---|---|
+  | 5991 | `/* --- remuneração e jornada dos colaboradores --- */` | sim |
+  | 5992–6018 | `var rem={…}` + o `USUARIOS.forEach(…)` que carimba CPF/salário | sim |
+  | 6019–6020 | o comentário e `var inativo={…}` — **variável morta**, ninguém a usa | sim |
+  | **6021** | **`await gravarUsuarios();sincronizarEquipe();`** | **sim** |
+  | 6022 | `log.push("remuneração, jornada, endereço e dados pessoais dos 7 colaboradores");` | sim |
+
+  Parar na 6018, como dizia a versão anterior deste item, deixa a **chamada
+  órfã** da 6021 — e `gravarUsuarios` foi apagada no item 14. `gerarDemo`
+  morreria de `ReferenceError` no meio do cenário, deixando o banco com meio
+  conjunto de teste e sem o toast final. E o sintoma apareceria justamente
+  quando alguém fosse testar. Confira o resultado com
+  `grep -n "demoTocado\|gravarUsuarios" sistema-minas.html` — as duas têm que
+  sumir.
+
+- **`limparDemo`, linhas 6460–6462:** apaga `metas[nm]` de **toda** a EQUIPE e
+  zera `celebracoes={}` — dados reais, que nunca tiveram flag `demo`, das 3
+  lojas.
+
+  O estrago começa antes: **`gerarDemo` já sobrescreve as metas reais.** No
+  bloco `/* --- metas --- */` ele faz `metas[n]=JSON.parse(JSON.stringify(alvo))`
+  para **todo** membro da EQUIPE que não seja Administrador, Financeiro ou
+  Estoquista. Não há flag `demo` em lugar nenhum, então `limparDemo` não tem
+  como saber o que era teste e apaga tudo. E `celebracoes` o gerador **nem
+  escreve** — `limparDemo` zera um dado que o demo nunca criou.
+
+  São duas edições, uma em cada função.
+
+  **Em `gerarDemo`, antes do `EQUIPE.forEach` das metas:**
+  ```js
+    /* guarda as metas reais antes de escrever por cima: é o que limparDemo
+       devolve depois. Sem isto, o teste apaga o mês da equipe e não há
+       de onde recuperar. */
+    try{await db.doc("config/metas_pre_demo").set({dados:JSON.parse(JSON.stringify(metas)),em:new Date().toISOString()});}
+    catch(e){toast("Não deu para guardar as metas atuais — o teste foi cancelado.");return;}
+  ```
+
+  **E em `limparDemo`, no lugar das três linhas de hoje:**
+  ```js
+    /* Devolve as metas que gerarDemo guardou. A versão anterior apagava
+       metas[nm] de TODA a equipe e zerava celebracoes — dados reais, das 3
+       lojas, que nunca tiveram flag 'demo'. Um clique apagava o mês. */
+    try{
+      var bkp=await db.doc("config/metas_pre_demo").get();
+      if(bkp.exists&&bkp.data()&&bkp.data().dados){
+        metas=bkp.data().dados;
+        await gravarMetas();
+        await db.doc("config/metas_pre_demo").delete();
+      }
+    }catch(e){toast("As metas anteriores NÃO foram restauradas: "+e.message);}
+    /* celebracoes NÃO se apaga: guarda quais parabéns já foram exibidos para
+       cada pessoa, e o gerador nunca escreve nela. Zerar só faz o sistema
+       parabenizar todo mundo de novo. */
+  ```
+  Ajuste o texto do `dt_log` logo abaixo, que hoje promete "mais as metas e as
+  comemorações que o teste tinha criado" — agora ele **devolve** as metas e não
+  mexe nas comemorações.
 
 ## Item 27 — export diário em JSON
 
@@ -1566,9 +2040,11 @@ Acrescente a função perto de `gravarEmpresa` e o botão no card da empresa
 ```
 
 ```js
-/* Backup diário: um arquivo por loja, com tudo que o adapter consegue ler.
-   RH, biometria e fotos de ponto ficam de fora de propósito (o adapter já
-   exclui as coleções restritas) — backup não é motivo para espalhar CPF. */
+/* Backup diário: um arquivo por loja. O que entra é a lista branca
+   COLECOES_DADOS do adapter (as 18 coleções do dia a dia). Ficam de fora, de
+   propósito: 'rh', 'remuneracao', 'facial' e 'ponto_fotos' (nem constam da
+   lista) e, dentro de 'config', os documentos 'usuarios' e 'celebracoes'
+   (CONFIG_NAO_EXPORTA) — backup não é motivo para espalhar CPF e salário. */
 async function baixarBackup(){
   if(!db){toast("Sem banco.");return;}
   if(!pode("exportar")){toast("Você não tem permissão para exportar.");return;}
@@ -1590,11 +2066,52 @@ async function baixarBackup(){
 ```
 E em `ligar()`: `$("emBackup").onclick=baixarBackup;`
 
-**27b — faxina no banco depois que tudo estiver de pé:** apague o documento
-antigo com senhas e RH.
+> **Confira no `adapter.js` antes de confiar nessa lista** — o backup só é
+> seguro se as duas variáveis estiverem certas:
+> ```
+> grep -n "COLECOES_DADOS\|CONFIG_NAO_EXPORTA" adapter.js
+> ```
+> `COLECOES_DADOS` tem que ter **18** nomes e nenhum deles pode ser `rh`,
+> `remuneracao`, `facial`, `ponto_fotos` ou `config`; `CONFIG_NAO_EXPORTA` tem
+> que conter `"usuarios"` e `"celebracoes"`. Uma versão antiga do adapter
+> percorria `Object.keys(CAMPO_LOJA)`, que **inclui `config`**, e filtrava só as
+> coleções restritas: o backup saía com o `config/usuarios` inteiro — hash de
+> senha, CPF, RG, endereço, filhos, salário, CTPS, PIS e a foto facial em base64
+> dos 7 — dentro de um `.json` que qualquer um com a ação `exportar` baixa e
+> manda por WhatsApp.
+
+**27b — apagar o `config/usuarios` NÃO é rodapé: é o passo 9 do painel.**
+Enquanto esse documento existir, `docs_select_config` o entrega a **qualquer
+autenticado** pelo REST — o vendedor lê salário e CPF de todo mundo com um
+`GET /rest/v1/docs?colecao=eq.config&id=eq.usuarios`, sem passar pela tela.
+O comando está no passo a passo, e o teste 9 do aceite confere que ele foi
+rodado.
+
+**27c — e feche no servidor, para não depender da revisão do HTML.** Mesmo com
+os itens 14, 21, 25, 26d e 14b aplicados, basta **uma** aba antiga do
+`sistema-minas.html` aberta em algum celular para recriar o documento no
+primeiro `carregar()`. Acrescente ao `schema.sql`, junto das policies de
+`config` (item 8.6):
+
 ```sql
-delete from public.docs where colecao='config' and id='usuarios';
+-- config/usuarios NAO existe mais: identidade em public.perfis, RH em
+-- colecao='rh', salario em 'remuneracao', biometria em 'facial'. Esta policy
+-- e RESTRICTIVE de proposito: policies PERMISSIVE se somam (basta UMA liberar),
+-- as RESTRICTIVE se multiplicam (todas precisam liberar). Assim nem o
+-- Administrador recria o documento por engano - e uma aba antiga do HTML
+-- ainda apontando para la falha na hora, em vez de vazar de novo.
+drop policy if exists docs_bloqueia_usuarios on public.docs;
+create policy docs_bloqueia_usuarios on public.docs
+  as restrictive
+  for all to authenticated
+  using      (not (colecao = 'config' and id = 'usuarios'))
+  with check (not (colecao = 'config' and id = 'usuarios'));
 ```
+
+> Rode isto **depois** de conferir que a migração dos dados terminou: enquanto
+> alguém ainda precisar ler o documento velho para copiar CPF e salário para
+> `rh`/`remuneracao`, a policy atrapalha. A ordem certa é: migrar → conferir →
+> `delete` (27b) → policy (27c).
 
 ---
 
@@ -1663,18 +2180,82 @@ Confira no fim: `select nome, funcao, loja, ativo from public.perfis order by no
 — sete linhas.
 
 **6. Semear os numeradores** ← **o passo que ninguém pode pular**
-Levante no CRM atual, **por loja**, o **maior número já emitido** de cada tipo
-(não o próximo). Depois rode o bloco do item 11.2 do `schema.sql` com os valores
-reais. Os placeholders são texto de propósito: colar sem preencher dá erro do
-Postgres em vez de gravar zero e reiniciar a numeração.
+
+Este passo roda **depois** de importar o histórico, não antes — e o número não
+se levanta na tela do CRM antigo. Não dá: o número de pedido de hoje sai de
+`pedidos.filter(loja).length+20801` sobre um array truncado em 500, então a
+lista de Pedidos **não mostra** o maior número emitido de forma confiável.
+Pergunte ao banco, que é onde os dados já estão:
+
 ```sql
-insert into public.numeradores (loja, tipo, ultimo) values
-  ('mf','pedido', 20847), ('mf','orcamento', 1042), ('mf','os', 3018),
-  ('mf','cliente', 1213), ('global','fornecedor', 87)
-  -- ...idem para wf e dv...
-on conflict (loja, tipo) do update set ultimo=excluded.ultimo, atualizado_em=now();
+-- 6.1 — quanto cada contador tem que valer (só olha, não grava)
+select loja, max((data->>'numero')::int) as maior
+  from public.docs
+ where colecao='pedidos' and loja is not null and (data->>'numero') ~ '^[0-9]+$'
+ group by loja order by loja;
+-- repita trocando 'pedidos' por 'orcamentos' e por 'ordens'
 ```
-Confira **sem consumir número**:
+
+```sql
+-- 6.2 — e então grave, derivado dos mesmos dados (sem digitar número nenhum)
+insert into public.numeradores (loja, tipo, ultimo)
+select d.loja, 'pedido', max(nullif(d.data->>'numero','')::int)
+  from public.docs d
+ where d.colecao='pedidos' and d.loja is not null and (d.data->>'numero') ~ '^[0-9]+$'
+ group by d.loja
+on conflict (loja, tipo) do update
+   set ultimo = greatest(numeradores.ultimo, excluded.ultimo);
+```
+Repita trocando `'pedidos'/'pedido'` por `'orcamentos'/'orcamento'` e
+`'ordens'/'os'`. Para **cliente**, o número está no sufixo do código
+(`MF-01002` → 1002):
+```sql
+insert into public.numeradores (loja, tipo, ultimo)
+select d.loja, 'cliente', max(nullif(regexp_replace(d.data->>'codigo','\D','','g'),'')::int)
+  from public.docs d
+ where d.colecao='clientes' and d.loja is not null
+ group by d.loja
+on conflict (loja, tipo) do update
+   set ultimo = greatest(numeradores.ultimo, excluded.ultimo);
+```
+E para **fornecedor** — que é um contador só para as três lojas:
+```sql
+insert into public.numeradores (loja, tipo, ultimo)
+select '*', 'fornecedor', max(nullif(regexp_replace(d.data->>'codigo','\D','','g'),'')::int)
+  from public.docs d
+ where d.colecao='fornecedores'
+on conflict (loja, tipo) do update
+   set ultimo = greatest(numeradores.ultimo, excluded.ultimo);
+```
+
+Três armadilhas neste passo, todas já vistas:
+
+1. **A loja do fornecedor é `'*'`, não `'global'`.** `proximo_numero()` força
+   `v_loja := '*'` para os tipos globais (item 9.1 do `schema.sql`). Uma linha
+   semeada em `('global','fornecedor', …)` **nunca é lida por ninguém**: a RPC
+   cria `('*','fornecedor')` do zero, na base 1001, e volta a emitir códigos já
+   usados.
+2. **O valor é o maior SUFIXO já emitido, não a contagem de fornecedores.** Os
+   códigos de hoje são `FOR-1001`, `FOR-1002`… (as duas fórmulas do HTML são
+   `"FOR-"+String(fornecedores.length+1001)`) e `base_numerador('fornecedor')`
+   é **1001**. Semear `87` — a contagem — faz o próximo nascer `FOR-88` e a
+   sequência voltar a passar por 1001, 1002…, colidindo com o que já existe. E
+   não há checagem de código duplicado de fornecedor no HTML: a única checagem é
+   sobre o CNPJ.
+3. **`on conflict … do update set ultimo = excluded.ultimo` REBAIXA o
+   contador.** Use `greatest(...)`, como acima. Rodar o bloco uma segunda vez na
+   semana seguinte (ao cadastrar a loja `dv`, ao reconferir a carga) devolveria
+   o contador ao valor do dia da migração e os próximos pedidos repetiriam
+   números já emitidos. O trigger `tg_numeradores_antes_de_gravar` recusa o
+   retrocesso de qualquer jeito — o `greatest()` evita o erro.
+
+Se preferir digitar os valores à mão, o `schema.sql` traz o bloco com
+placeholders no item 11.2 (`TROCAR_ULTIMO_PEDIDO_MF`…). Eles são texto de
+propósito: colar sem preencher dá erro do Postgres em vez de gravar zero e
+reiniciar a numeração.
+
+Confira **sem consumir número** (`proximo_numero()` reserva de verdade — não a
+use para conferir):
 ```sql
 select loja, tipo, ultimo, ultimo+1 as proximo from public.numeradores order by loja, tipo;
 ```
@@ -1692,13 +2273,57 @@ e lança erro se alguém colar por engano.
 Suba `sistema-minas.html` **e** a pasta `supabase/` com o `adapter.js`. Depois
 abra o site e siga o teste de aceite abaixo.
 
+**9. Apagar o `config/usuarios` — e trancar a porta** ← **não é opcional**
+
+Assim que o teste de aceite passar (em especial o 1, o 6 e o 7), rode:
+```sql
+-- confira o que vai embora, primeiro
+select id, jsonb_array_length(data->'lista') as pessoas from public.docs
+ where colecao='config' and id='usuarios';
+
+delete from public.docs where colecao='config' and id='usuarios';
+```
+Enquanto esse documento existir, `docs_select_config` o entrega a **qualquer
+autenticado**: um `GET /rest/v1/docs?colecao=eq.config&id=eq.usuarios` com a
+anon key e um login de vendedor devolve hash de senha, CPF, RG, endereço,
+filhos, salário, CTPS, PIS e a foto facial em base64 dos 7 — sem passar por
+tela nenhuma. É o vazamento que esta migração existe para fechar.
+
+Depois do `delete`, aplique a policy **restritiva** do item 27c, senão qualquer
+aba antiga do HTML ainda aberta recria o documento no próximo `carregar()`.
+
+Confira que sumiu **e** que não volta:
+```sql
+select count(*) from public.docs where colecao='config' and id='usuarios';  -- 0
+select policyname, permissive from pg_policies
+ where schemaname='public' and tablename='docs' and policyname='docs_bloqueia_usuarios';
+```
+A segunda consulta tem que devolver uma linha com `permissive = RESTRICTIVE`.
+
 ---
 
 # TESTE DE ACEITE
 
-Dez verificações objetivas. Faça na ordem; cada uma tem um resultado que dá para
-apontar com o dedo. Se alguma falhar, o item correspondente é o que voltar a
-mexer.
+Doze verificações objetivas (1 a 11, mais a 7b). Faça na ordem; cada uma tem um
+resultado que dá para apontar com o dedo. Se alguma falhar, o item correspondente é o que voltar
+a mexer.
+
+> **Antes de começar — os testes de console precisam do `mfDebug`.** Todo o JS
+> do sistema vive dentro de `(function(){ "use strict"; … })()`: `db`, `$` e
+> `perfilLogado` são variáveis **locais** dessa IIFE. Digitar `db` ou
+> `$("usuario")` no console de um site publicado devolve
+> `ReferenceError: db is not defined` — não é bug, é escopo. O item 1b publica
+> `window.mfDebug` **só fora de produção**, e é por ele que os testes 2, 6, 7 e
+> 7b falam com o banco. Duas formas de rodá-los:
+>
+> - **em `localhost`** (`python -m http.server` na pasta, ou o arquivo aberto
+>   direto do disco): `MODO_TESTE` é verdadeiro e `mfDebug` existe;
+> - **contra o site publicado**, sem ligar modo teste: use o `curl` do teste 7,
+>   que fala com o PostgREST com o `access_token` da sessão.
+>
+> **O SQL Editor do painel não vale como teste de RLS** — ele roda como
+> `postgres`, que **ignora** todas as policies. Um `select` lá dando resultado
+> não prova nada sobre o que o vendedor consegue ler.
 
 ### 1. Login de verdade
 Abra o site numa janela anônima. **Espere ver:** só logo, e-mail, senha e
@@ -1710,10 +2335,11 @@ genérica, sem dizer se o e-mail existe. (Itens 3, 4, 6, 8)
 ### 2. A loja vem do perfil
 Entre como **Carol** (Vendedor, loja `mf`). **Espere ver:** o seletor de loja no
 cabeçalho **desabilitado**, marcando "Minas Filtros"; o nome dela ao lado, como
-texto — **não como `<select>`**. Tente `$("usuario")` no console: é um `span`,
-não dá para virar Administrador. Entre como Wagner: o seletor está habilitado
-com as três lojas, e trocar de loja recarrega os dados (toast "Carregando…").
-(Itens 11, 12)
+texto — **não como `<select>`**. Confirme sem console, com o F12 → Elements:
+procure `id="usuario"` e veja que a tag é `<span>`, não `<select>` — não há como
+virar Administrador. (Em `localhost`, `mfDebug.$("usuario").tagName` devolve
+`"SPAN"`.) Entre como Wagner: o seletor está habilitado com as três lojas, e
+trocar de loja recarrega os dados (toast "Carregando…"). (Itens 11, 12)
 
 ### 3. Venda gera número sem colisão com 2 abas
 Abra o sistema em **duas abas**, as duas na mesma loja, logadas com pessoas
@@ -1746,44 +2372,107 @@ select colecao, id, data->>'nome' from public.docs where colecao='ponto_fotos' o
 select data ? 'foto' from public.docs where colecao='pontos' order by atualizado_em desc limit 1;
 ```
 A foto está em `ponto_fotos`; o documento de `pontos` **não tem** campo `foto`
-(só `fotoId`). Ainda como Carol, no console:
+(só `fotoId`). Ainda como Carol, **em `localhost`**, no console:
 ```js
-(await db.collection("ponto_fotos").limit(50).get()).docs.map(d=>d.data().nome)
+(await mfDebug.db.collection("ponto_fotos").limit(50).get()).docs.map(d=>d.data().nome)
 ```
 **Só o nome dela.** As fotos dos colegas não vêm. (Item 23)
 
 ### 7. Vendedor não lê RH
-Logada como Carol, no console:
+Logada como Carol, **em `localhost`**, no console:
 ```js
-(await db.collection("rh").limit(50).get()).size
+(await mfDebug.db.collection("rh").limit(50).get()).size
 ```
 **Espere ver: `0`** — a RLS corta no servidor, não é a tela que esconde. Tente
 gravar:
 ```js
-await db.collection("rh").doc("x").set({id:"x",salario:99999})
+await mfDebug.db.collection("rh").doc("x").set({id:"x",salario:99999})
 ```
 **Espere ver:** promessa **rejeitada**, com mensagem de permissão. Entre como
 Wagner e repita: agora a leitura traz os documentos. (Itens 21, 22)
 
+**Contra o site publicado**, sem modo teste, o mesmo par de verificações pelo
+PostgREST — pegue o `access_token` em F12 → Application → Local Storage
+(`sb-<projeto>-auth-token`) e:
+```
+curl -s "https://SEUPROJETO.supabase.co/rest/v1/docs?colecao=eq.rh&select=id" \
+     -H "apikey: SUA_CHAVE_ANON_PUBLICA" \
+     -H "Authorization: Bearer <access_token da Carol>"
+```
+**Espere ver:** `[]`. Repetindo com o token do Wagner, os documentos aparecem.
+
+### 7b. Mas a Carol VÊ o próprio salário
+Ainda como Carol, abra **Cartão de Ponto**. **Espere ver:** os cartões "Salário
+fixo", "Vale refeição", "Assiduidade", "Desempenho" e "Total do mês" com os
+**valores dela**, não `R$ 0,00`. Zero nesses cinco cartões é o sintoma de
+`carregarRH()` não ter sido chamada no login (item 22) ou de `totalRemuneracao`
+ainda estar lendo `rh` em vez de `remuneracao`. E confirme o outro lado — que é
+**só** a dela:
+```
+curl -s "https://SEUPROJETO.supabase.co/rest/v1/docs?colecao=eq.remuneracao&select=id" \
+     -H "apikey: SUA_CHAVE_ANON_PUBLICA" -H "Authorization: Bearer <token da Carol>"
+```
+**Espere ver:** exatamente **uma** linha, com o `user_id` dela. (Item 22)
+
 ### 8. Realtime entre duas abas
 Duas abas na mesma loja. Na aba A, registre uma venda. **Espere ver:** a venda
 aparecer na lista da aba B **sem F5**, em poucos segundos. Repita com um cliente
-novo e com a baixa de um título. Feche a aba A e confirme, no painel
-(Database → Realtime inspector), que a assinatura dela caiu. (Item 20)
+novo. Feche a aba A e confirme, no painel (Database → Realtime inspector), que a
+assinatura dela caiu.
 
-### 9. Export JSON
+**Títulos NÃO entram neste teste.** Na fase 1 há Realtime só em `pedidos` e
+`clientes` (item 20): uma baixa de título feita na aba A **não** aparece sozinha
+na aba B, e isso é o comportamento esperado — Contas a Receber recarrega quando
+alguém entra na tela. (Item 20)
+
+### 9. Export JSON — e o `config/usuarios` fora do mapa
 Configurações › Empresa → **Baixar backup do dia**. **Espere ver:** um arquivo
-`minasfiltros-mf-2026-09-09.json`. Abra: tem as coleções da **loja atual**, tem
-`_meta` com data e autor, e **não tem** `rh`, `facial` nem `ponto_fotos`.
+`minasfiltros-mf-2026-09-09.json`. Abra e confira, com o `Ctrl+F` do editor:
+
+- tem as coleções da **loja atual** e `_meta` com data e autor;
+- **não tem** `rh`, `remuneracao`, `facial` nem `ponto_fotos`;
+- dentro de `config`, **não tem** o documento `usuarios` nem `celebracoes`;
+- busque por `"senha"`, `"salario"`, `"ctps"` e `"facial"` no arquivo inteiro:
+  **zero ocorrências** (são campos que só existiam no `config/usuarios` e no RH).
+
+> O **CPF do cliente** continua no backup, e isso é de propósito: ele está em
+> `clientes.doc` (e `conjcpf`, do cônjuge), é a carteira da empresa e sem ele o
+> JSON não restaura nada. O que o teste procura é dado de **colaborador**. O
+> arquivo baixado é, ainda assim, um documento com dado pessoal de cliente:
+> guarde-o como tal, não mande por WhatsApp.
+
+E no SQL Editor, que o documento antigo já foi embora (passo 9 do painel):
+```sql
+select count(*) from public.docs where colecao='config' and id='usuarios';
+```
+**Espere ver: `0`.** Se vier `1`, o backup pode estar limpo e o vazamento
+continuar de pé — o documento é legível por qualquer autenticado pelo REST,
+sem passar por tela nenhuma.
+
 Como Carol (sem a ação `exportar`), o botão avisa que ela não tem permissão.
-(Item 27)
+(Itens 27, 27b, 27c)
 
 ### 10. Gerador de demo escondido
-Abra o site normal: em Configurações › Empresa **não existe** o card "Dados de
-teste". Abra com `?teste=1`: o card aparece e funciona. Confirme que o resto da
-tela continua respondendo (se `ligar()` tivesse quebrado, **nenhum** botão do
-sistema funcionaria — é o sintoma de ter apagado o card sem apagar o wiring).
-(Item 26)
+Abra o site publicado: em Configurações › Empresa **não existe** o card "Dados
+de teste". Tente forçar com `?teste=1` na URL — **continua não existindo**
+(a chave é o `location.hostname`, não a querystring). Abra o mesmo arquivo em
+`localhost` logado como Wagner: o card aparece e funciona. Logado como Carol em
+`localhost`, o card aparece mas os dois botões respondem "Indisponível em
+produção." Confirme que o resto da tela continua respondendo (se `ligar()`
+tivesse quebrado, **nenhum** botão do sistema funcionaria — é o sintoma de ter
+apagado o card sem apagar o wiring). (Item 26)
+
+### 11. Renomear função não tranca ninguém
+Como Wagner, em Configurações › Permissões, renomeie a função **`Prospector`**
+para `Prospecção` e salve. **Espere ver:** o toast "Função salva.", a lista
+redesenhada na hora (sem F5) e, no banco:
+```sql
+select nome, funcao from public.perfis where funcao in ('Prospector','Prospecção');
+```
+a Jaqueline já com `Prospecção`. Depois **entre como ela**: o menu tem que vir
+igual ao de antes. Se vier o menu de Vendedor, `perfis.funcao` ficou com o nome
+antigo — é o item 14b que não foi aplicado. Renomeie de volta ao terminar.
+(Item 14b)
 
 ---
 
@@ -1818,4 +2507,9 @@ Vale registrar, para ninguém procurar problema onde não tem:
 4. **Migração dos dados antigos.** Este documento trata da troca do banco. Levar
    o conteúdo do artifact para o Postgres é tarefa própria — e a ordem certa é:
    exportar do artifact → conferir → importar → **só então** semear os
-   numeradores com o maior número que veio junto.
+   numeradores (passo 6 do painel, que os deriva por SQL do que foi importado) →
+   copiar CPF/salário do `config/usuarios` velho para `rh` e `remuneracao` →
+   apagar o `config/usuarios` e ligar a policy restritiva (passo 9).
+5. **Realtime em `titulos`.** Fica em `pedidos` e `clientes`. A razão está no
+   item 20: cada evento rebaixa a coleção inteira, e uma venda em 12x gera 12
+   eventos.
