@@ -941,22 +941,111 @@
       return r.count || 0;
     };
 
-    /* backup diário: devolve {colecao:[documentos]} pronto para virar JSON */
+    /* backup diário: devolve {colecao:[documentos]} pronto para virar JSON.
+
+       LISTA BRANCA, não lista negra. Só as 18 coleções de dados entram. Ficam de
+       fora, de propósito:
+         rh / facial / ponto_fotos -> CPF, salário, CTPS/PIS, biometria;
+         config                    -> config/usuarios ainda guarda o cadastro
+                                      antigo dos 7 colaboradores (hash de senha,
+                                      CPF, RG, filhos, salário, VR, CTPS, PIS e a
+                                      foto facial em base64) e config/celebracoes
+                                      guarda a data de nascimento de todo mundo.
+       As demais configurações (empresa, formas de pagamento, metas, funções,
+       faixas de comissão...) VÃO no backup, documento a documento, porque sem
+       elas o JSON não serve para restaurar nada. */
     adapter.exportar = async function (filtros) {
-      var saida = {}, nomes = adapter.colecoes.filter(function (c) {
-        return COLECOES_RESTRITAS.indexOf(c) < 0; /* RH e biometria ficam de fora */
-      });
-      for (var i = 0; i < nomes.length; i++) {
-        var snap = await buscarColecao(nomes[i], null, filtros);
-        saida[nomes[i]] = snap.docs.map(function (d) { var o = d.data() || {}; o.id = d.id; return o; });
+      var saida = {};
+      var i, nome;
+
+      for (i = 0; i < COLECOES_DADOS.length; i++) {
+        nome = COLECOES_DADOS[i];
+        /* de/ate só valem onde existe campo de data mapeado (produtos e centros
+           não têm): o filtro de loja continua valendo para todas. */
+        var f = filtros;
+        if (f && (ehTexto(f.de) || ehTexto(f.ate)) && !campoDataDe(nome)) {
+          f = {};
+          Object.keys(filtros).forEach(function (k) {
+            if (k !== "de" && k !== "ate") f[k] = filtros[k];
+          });
+        }
+        var snap = await buscarColecao(nome, null, f);
+        saida[nome] = snap.docs.map(function (d) { var o = d.data() || {}; o.id = d.id; return o; });
       }
+
+      /* config: documento a documento, pulando o que tem dado pessoal */
+      var cfg = await buscarColecao("config", null, null);
+      saida.config = cfg.docs
+        .filter(function (d) { return CONFIG_NAO_EXPORTA.indexOf(d.id) < 0; })
+        .map(function (d) { var o = d.data() || {}; o.id = d.id; return o; });
+
       return saida;
     };
 
-    /* uma ida ao banco só para saber se ele responde (banner de falha) */
+    /* Uma ida ao banco para saber se ele responde E se este acesso É ALGUÉM.
+       Só conferir a conectividade não bastava: um usuário do Auth sem linha em
+       public.perfis passa por todas as policies com "0 linhas e nenhum erro" —
+       o sistema abria inteiro, vazio, sem avisar nada, e só estourava lá na
+       frente, no primeiro INSERT. */
     adapter.testar = async function () {
-      conferir(await sb.from(TABELA).select("id", { count: "exact", head: true }).eq("colecao", "config"), "testar conexão");
+      var s = await adapter.auth.sessao();
+      if (!s || !s.user) throw anotar(ErroBanco("Ninguém está logado.", "testar conexão", null));
+      var p = await adapter.perfil();
+      if (!p) {
+        throw anotar(ErroBanco(
+          "Este acesso ainda não tem colaborador cadastrado — peça ao Administrador " +
+          "para cadastrar você em Equipe antes de usar o sistema.", "testar conexão", null
+        ));
+      }
+      if (p.ativo === false) {
+        throw anotar(ErroBanco("Este colaborador está inativo — fale com o Administrador.", "testar conexão", null));
+      }
+      conferir(
+        await sb.from(TABELA).select("id", { count: "exact", head: true }).eq("colecao", "config"),
+        "testar conexão"
+      );
       return true;
+    };
+
+    /* -------------------- perfis: gravação e carimbos ---------------------
+       Os três métodos abaixo são chamados pelo INTEGRACAO.md (itens 3b, 14, 21 e
+       23). Sem eles o "Salvar colaborador" estoura com
+       "db.perfilGravar is not a function" e — pior — o consentimento LGPD da
+       foto de ponto cai num catch silencioso enquanto a foto é gravada. */
+
+    /* substitui o antigo gravarUsuarios(): identidade + jornada em public.perfis.
+       A RLS só deixa o Administrador gravar aqui — é isso que queremos. */
+    adapter.perfilGravar = async function (linha) {
+      if (!linha || typeof linha !== "object" || !ehTexto(linha.user_id)) {
+        throw anotar(ErroBanco(
+          "perfilGravar: informe o user_id do colaborador (crie o acesso no painel do Supabase primeiro).",
+          "gravar perfil", null
+        ));
+      }
+      if (!ehTexto(linha.nome) || !ehTexto(linha.funcao)) {
+        throw anotar(ErroBanco("perfilGravar: nome e função são obrigatórios.", "gravar perfil", null));
+      }
+      conferir(
+        await sb.from("perfis").upsert(linha, { onConflict: "user_id" }),
+        "gravar perfil",
+        true
+      );
+      return true;
+    };
+
+    /* carimba perfis.ultimo_acesso sem abrir update de perfis para o cliente
+       (que deixaria qualquer um trocar a própria função) */
+    adapter.registrarAcesso = async function () {
+      var r = conferir(await sb.rpc("registrar_acesso"), "registrar acesso", true);
+      return r.data || null;
+    };
+
+    /* LGPD art. 11 — chamado no aceite da PRIMEIRA batida com foto.
+       Devolve o carimbo (timestamptz). Se isto falhar, NÃO grave a foto: guardar
+       biometria sem a prova do consentimento é exatamente o que a ANPD cobra. */
+    adapter.registrarConsentimentoFacial = async function () {
+      var r = conferir(await sb.rpc("registrar_consentimento_facial"), "registrar consentimento", true);
+      return r.data || null;
     };
 
     /* -------------------- superfície principal ---------------------------- */
