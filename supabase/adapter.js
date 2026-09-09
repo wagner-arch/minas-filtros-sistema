@@ -541,13 +541,20 @@
       return fazerDocSnap(id, r.data.data, true);
     }
 
-    /* -------------------- grava (upsert integral, sem merge) --------------- */
-    async function gravarDoc(colecao, id, obj) {
+    /* -------------------- grava (upsert integral, sem merge) ---------------
+       ops.upsert === false força INSERT puro (coleção append-only). As coleções
+       de COLECOES_SO_INSERIR já são insert por padrão. */
+    async function gravarDoc(colecao, id, obj, ops) {
       if (obj === null || typeof obj !== "object") {
         estourar(ErroBanco("set() precisa de um objeto em " + colecao + ".", colecao, null));
       }
-      /* set() sem id: gera um e devolve, para o chamador saber onde gravou */
-      var idFinal = ehTexto(id) ? id : (ehTexto(obj.id) ? obj.id : novoId());
+      /* id é obrigatório: gravar com id inventado cria documento órfão, que
+         nunca mais é achado por id e é regravado num id diferente na próxima vez.
+         Quem quer id automático usa add(). */
+      var idFinal = ehTexto(id) ? id : (ehTexto(obj.id) ? obj.id : null);
+      if (!ehTexto(idFinal)) {
+        estourar(ErroBanco("set() sem id em " + colecao + " — informe doc(id) ou use add().", colecao, null));
+      }
 
       var corpo = {};
       Object.keys(obj).forEach(function (k) { if (obj[k] !== undefined) corpo[k] = obj[k]; });
@@ -557,21 +564,43 @@
       var loja = null;
       if (campo) loja = ehTexto(corpo[campo]) ? corpo[campo] : (ehTexto(adapter.lojaPadrao) ? adapter.lojaPadrao : null);
 
+      var linha = { colecao: colecao, id: idFinal, loja: loja, data: corpo };
+      var contexto = "gravar " + colecao + "/" + idFinal;
+      var apenasInserir = (ops && typeof ops.upsert === "boolean") ? !ops.upsert : soInserir(colecao);
+
+      if (apenasInserir) {
+        var r = await sb.from(TABELA).insert(linha);
+        /* id repetido numa coleção append-only = o documento JÁ ESTÁ gravado.
+           É o caso da foto de ponto reenviada porque o registro de "pontos"
+           falhou: a foto certa já está no banco, então isto é sucesso, não erro.
+           (Com upsert seria ON CONFLICT DO UPDATE e a RLS mataria a batida.) */
+        if (r && r.error && String(r.error.code || "") === "23505") {
+          limparFalha(contexto);
+          return idFinal;
+        }
+        conferir(r, contexto, true);
+        return idFinal;
+      }
+
       conferir(
-        await sb.from(TABELA).upsert(
-          { colecao: colecao, id: idFinal, loja: loja, data: corpo },
-          { onConflict: "colecao,id" }
-        ),
-        "gravar " + colecao + "/" + idFinal
+        await sb.from(TABELA).upsert(linha, { onConflict: "colecao,id" }),
+        contexto,
+        true
       );
       return idFinal;
     }
 
     async function apagarDoc(colecao, id) {
-      /* apagar id que não existe resolve em silêncio (o HTML conta com isso) */
+      /* sem id não há o que apagar: um delete de id vazio resolveria em silêncio
+         e a tela diria "apagado" sem ter apagado nada. */
+      if (!ehTexto(id)) {
+        estourar(ErroBanco("delete() sem id em " + colecao + ".", colecao, null));
+      }
+      /* apagar id que existe no banco ou não resolve igual (o HTML conta com isso) */
       conferir(
         await sb.from(TABELA).delete().eq("colecao", colecao).eq("id", id),
-        "apagar " + colecao + "/" + id
+        "apagar " + colecao + "/" + id,
+        true
       );
     }
 
@@ -594,6 +623,12 @@
 
       var vivo = true, canal = null, timerRetry = null, espera = 1000;
       var buscando = false, refazer = false, timerJunta = null;
+      /* trocando = estamos derrubando o canal velho de propósito. O
+         removeChannel() dispara o callback do canal antigo com "CLOSED" e, sem
+         esta trava, esse CLOSED agendaria um novo retry — o canal saudável que
+         acabou de entrar seria derrubado 1s depois, para sempre, e cada
+         reconexão refaria a leitura COMPLETA da coleção. */
+      var trocando = false;
 
       /* uma entrada de NF dispara 50+ eventos seguidos; junta a rajada num get só */
       function agendarRecarga() {
@@ -627,23 +662,37 @@
         }, espera);
       }
 
+      function fecharCanal() {
+        if (!canal) return;
+        trocando = true;
+        try { sb.removeChannel(canal); } catch (e) { /* ignora */ }
+        canal = null;
+        trocando = false;
+      }
+
       function abrirCanal() {
         if (!vivo) return;
-        if (canal) { try { sb.removeChannel(canal); } catch (e) { /* ignora */ } canal = null; }
-        canal = sb.channel("docs:" + colecao + ":" + (++seqCanal));
-        canal.on(
+        fecharCanal();
+        var meuCanal = sb.channel("docs:" + colecao + ":" + (++seqCanal));
+        canal = meuCanal;
+        meuCanal.on(
           "postgres_changes",
           { event: "*", schema: "public", table: TABELA, filter: "colecao=eq." + colecao },
-          function () { agendarRecarga(); }
+          function () { if (meuCanal === canal) agendarRecarga(); }
         );
-        canal.subscribe(function (status, err) {
-          if (!vivo) return;
+        meuCanal.subscribe(function (status, err) {
+          /* callback de canal já substituído: ignora (senão o CLOSED do canal
+             velho derruba o novo e a reconexão vira laço de 1 em 1 segundo) */
+          if (!vivo || meuCanal !== canal) return;
           if (status === "SUBSCRIBED") {
             espera = 1000;
             recarregar(); /* estado atual na entrada e depois de cada reconexão */
-          } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
             if (err) anotar(traduzir(err, "realtime " + colecao));
             agendarRetry();
+          } else if (status === "CLOSED") {
+            /* fechamento nosso (troca de canal / cancelar) não pede retry */
+            if (!trocando) agendarRetry();
           }
         });
       }
@@ -663,23 +712,50 @@
         if (timerJunta) { clearTimeout(timerJunta); timerJunta = null; }
         window.removeEventListener("online", aoVoltar);
         document.removeEventListener("visibilitychange", aoVoltar);
-        if (canal) { try { sb.removeChannel(canal); } catch (e) { /* ignora */ } canal = null; }
+        fecharCanal();
       };
     }
 
     /* -------------------- referências (a superfície que o HTML usa) -------- */
 
+    /* doc(id) SEM id (undefined, null ou "") vira uma referência VAZIA: dá para
+       ler (devolve exists:false, como o Firestore devolve para id inexistente,
+       e é isso que `col("facial").doc((usuarioPor(x)||{}).id||"")` espera), mas
+       gravar ou apagar nela estoura. Antes o adapter inventava um id: o registro
+       entrava no banco num id aleatório, nunca mais era achado, e a gravação
+       seguinte criava OUTRO; e o delete "dava certo" sem apagar nada. */
     function refDoc(colecao, id) {
-      var idRef = ehTexto(id) ? id : novoId(); /* doc() sem id: já nasce com um */
+      var idRef = ehTexto(id) ? id : null;
+      var vazia = idRef === null;
+      /* REJEITA a promise (não estoura solto): quem chama está em `await ... catch` */
+      function semId(acao) {
+        return Promise.reject(anotar(ErroBanco(
+          acao + "() sem id em " + colecao + " — o documento não tem identificador.",
+          colecao, null
+        )));
+      }
       return {
-        id: idRef,
+        id: idRef || "",
+        vazia: vazia,
         colecao: colecao,
-        path: colecao + "/" + idRef,
-        get: function () { return buscarDoc(colecao, idRef); },
-        set: function (obj) { return gravarDoc(colecao, idRef, obj); },
-        delete: function () { return apagarDoc(colecao, idRef); },
+        path: colecao + "/" + (idRef || ""),
+        get: function () {
+          if (vazia) return Promise.resolve(fazerDocSnap("", undefined, false));
+          return buscarDoc(colecao, idRef);
+        },
+        set: function (obj, ops) {
+          if (vazia) return semId("set");
+          return gravarDoc(colecao, idRef, obj, ops);
+        },
+        delete: function () {
+          if (vazia) return semId("delete");
+          return apagarDoc(colecao, idRef);
+        },
         /* atalhos que o HTML não usa hoje, mas que evitam surpresa se alguém tentar */
-        update: function (obj) { return gravarDoc(colecao, idRef, obj); },
+        update: function (obj, ops) {
+          if (vazia) return semId("update");
+          return gravarDoc(colecao, idRef, obj, ops);
+        },
         onSnapshot: function () {
           throw ErroBanco("onSnapshot de documento não implementado — assine a coleção.", colecao, null);
         }
@@ -688,6 +764,7 @@
 
     function refColecao(colecao) {
       if (!ehTexto(colecao)) throw new Error("collection(): informe o nome da coleção.");
+      conferirNomeColecao(colecao); /* recusa "pontos_fotos" (o certo é ponto_fotos) */
 
       function comLimite(n) {
         var limite = (typeof n === "number" && n > 0) ? Math.floor(n) : null;
@@ -724,7 +801,8 @@
         orderBy: function () {
           throw ErroBanco("orderBy() não existe — a leitura já sai ordenada por id.", colecao, null);
         },
-        add: function (obj) { return refDoc(colecao, null).set(obj); }
+        /* add() é o ÚNICO lugar que inventa id (set()/delete() exigem um) */
+        add: function (obj, ops) { return refDoc(colecao, novoId()).set(obj, ops); }
       };
     }
 
@@ -736,7 +814,7 @@
       if (corte <= 0 || corte === caminho.length - 1) {
         throw new Error("doc(\"" + caminho + "\"): o caminho precisa ser \"colecao/id\".");
       }
-      return refDoc(caminho.slice(0, corte), caminho.slice(corte + 1));
+      return refDoc(conferirNomeColecao(caminho.slice(0, corte)), caminho.slice(corte + 1));
     }
 
     /* -------------------- Auth ------------------------------------------- */
@@ -809,16 +887,25 @@
         if (!s || !s.user) return null; /* sem sessão: sem perfil, sem erro */
         id = s.user.id;
       }
+      /* jornada, ultimo_acesso e consentiu_facial_em PRECISAM vir:
+         - jornada: sem ela o cartão de ponto usa a jornada padrão para todo
+           mundo, calcula atraso/falta com o horário errado e erra o prêmio de
+           assiduidade (dinheiro); quem tem bateponto:"nao" volta a ser cobrado.
+         - consentiu_facial_em: sem ele o termo LGPD reaparece em TODA batida.
+         - ultimo_acesso: a tela de usuários mostra "nunca acessou" sem ele. */
       var r = conferir(
-        await sb.from("perfis").select("user_id,nome,funcao,loja,ativo,criado_em").eq("user_id", id).maybeSingle(),
+        await sb.from("perfis")
+          .select("user_id,nome,funcao,loja,ativo,jornada,ultimo_acesso,consentiu_facial_em,criado_em")
+          .eq("user_id", id).maybeSingle(),
         "ler perfil"
       );
       return r.data || null;
     };
 
-    /* toda a equipe (alimenta USUARIOS/EQUIPE no lugar de config/usuarios) */
+    /* toda a equipe (alimenta USUARIOS/EQUIPE no lugar de config/usuarios).
+       jornada vai junto: é ela que o cartão de ponto usa em jornadaDe(nome). */
     adapter.perfis = async function (somenteAtivos) {
-      var q = sb.from("perfis").select("user_id,nome,funcao,loja,ativo").order("nome", { ascending: true });
+      var q = sb.from("perfis").select("user_id,nome,funcao,loja,ativo,jornada").order("nome", { ascending: true });
       if (somenteAtivos !== false) q = q.eq("ativo", true);
       var r = conferir(await q, "ler perfis");
       return r.data || [];
@@ -833,7 +920,8 @@
       }
       var r = conferir(
         await sb.rpc("proximo_numero", { p_loja: loja, p_tipo: tipo }),
-        "gerar número de " + tipo
+        "gerar número de " + tipo,
+        true /* muda o banco: entra no controle do banner */
       );
       var n = (r && r.data !== null && r.data !== undefined) ? Number(r.data) : NaN;
       if (!isFinite(n)) throw anotar(ErroBanco("O banco não devolveu o próximo número de " + tipo + ".", "numeracao", null));
