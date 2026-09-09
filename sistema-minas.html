@@ -622,7 +622,8 @@ img{max-width:100%}
 
   /* --- janelas viram folha de baixo para cima --- */
   .modal{padding:0;align-items:flex-end}
-  .modal .box{width:100%!important;max-width:none;max-height:90vh;max-height:90dvh;
+  .modal .box{width:100%!important;max-width:none;max-height:90vh;
+    max-height:calc(var(--vv, 90dvh) - 20px);
     padding:22px 16px calc(20px + env(safe-area-inset-bottom));border-radius:16px 16px 0 0}
   .actions{display:flex;flex-wrap:wrap;gap:10px}
   .actions>.btn{flex:1 1 140px;justify-content:center;min-height:46px}
@@ -3276,6 +3277,25 @@ img{max-width:100%}
       <label for="na_nome">Cliente <span class="req">*</span></label>
       <input id="na_nome" autocomplete="off" placeholder="Comece a digitar…">
       <div class="auto" id="na_sug" hidden></div>
+    </div>
+    <div id="na_cadWrap" hidden>
+      <div class="note warn" id="na_cadAviso"></div>
+      <div class="grid g3" style="margin-top:4px">
+        <div class="fld"><label for="na_tel">Telefone <span class="req">*</span></label>
+          <input id="na_tel" type="tel" inputmode="tel" placeholder="(37) 9 9999-0000"></div>
+        <div class="fld"><label for="na_cidade">Cidade <span class="req" id="na_reqEnd">*</span></label>
+          <input id="na_cidade" autocapitalize="words"></div>
+        <div class="fld"><label for="na_bairro">Bairro <span class="req">*</span></label>
+          <input id="na_bairro" autocapitalize="words"></div>
+      </div>
+      <div class="grid g3" style="margin-top:4px">
+        <div class="fld"><label for="na_rua">Rua <span class="req">*</span></label>
+          <input id="na_rua" autocapitalize="words"></div>
+        <div class="fld"><label for="na_num">Número</label>
+          <input id="na_num" inputmode="numeric"></div>
+        <div class="fld"><label for="na_ref">Ponto de referência</label>
+          <input id="na_ref" placeholder="Ex.: em frente à padaria"></div>
+      </div>
     </div>
     <div class="sect" style="margin-top:6px">
       <p class="sect-t">Tipo do contato que será feito</p>
@@ -6768,9 +6788,13 @@ function pararCamera(){
 /* assinatura simples da imagem: média de luz em blocos 8x8 e variância.
    Não é reconhecimento facial — serve para achar foto escura, câmera tapada
    e batida repetida com a mesma imagem. */
-function assinatura(canvas){
-  var cx=canvas.getContext("2d"),d=cx.getImageData(0,0,canvas.width,canvas.height).data;
-  var bl=8,w=canvas.width,h=canvas.height,g=[],soma=0,n=0;
+var FACE_OK=88,FACE_LIMITE=72,FACE_TENTATIVAS=3,camTentativas=0;
+function assinatura(canvas,corte){
+  var cw=canvas.width,ch=canvas.height,f=(corte>0&&corte<=1)?corte:1;
+  var ox=Math.round(cw*(1-f)/2),oy=Math.round(ch*(1-f)/2),
+      w=Math.max(8,Math.round(cw*f)),h=Math.max(8,Math.round(ch*f));
+  var cx=canvas.getContext("2d"),d=cx.getImageData(ox,oy,w,h).data;
+  var bl=8,g=[],soma=0,n=0;
   for(var by=0;by<bl;by++)for(var bx=0;bx<bl;bx++){
     var s=0,c=0;
     for(var y=Math.floor(by*h/bl);y<Math.floor((by+1)*h/bl);y+=2)
@@ -6788,8 +6812,29 @@ function distancia(a,b){
   var d=0;for(var i=0;i<a.hash.length;i++)if(a.hash[i]!==b.hash[i])d++;
   return d;
 }
+/* Parecença entre duas assinaturas, de 0 a 100.
+   Compara o brilho dos 64 blocos por correlação: não se abala com a foto
+   inteira mais clara ou mais escura, só com a distribuição mudar de forma.
+   Continua não sendo reconhecimento facial — é uma conferência de imagem. */
+function parecenca(a,b){
+  if(!a||!b)return null;
+  var x=a.blocos,y=b.blocos;
+  if(!x||!y||x.length!==y.length||x.length<16){
+    var d=distancia(a,b);
+    return d==null?null:Math.max(0,Math.round(100-(d*100/a.hash.length)*1.6));
+  }
+  var n=x.length,mx=0,my=0,i;
+  for(i=0;i<n;i++){mx+=x[i];my+=y[i];}
+  mx/=n;my/=n;
+  var sxy=0,sxx=0,syy=0;
+  for(i=0;i<n;i++){var dx=x[i]-mx,dy=y[i]-my;sxy+=dx*dy;sxx+=dx*dx;syy+=dy*dy;}
+  if(sxx<=0||syy<=0)return null;
+  var r=sxy/Math.sqrt(sxx*syy);
+  return Math.max(0,Math.min(100,Math.round(r*100)));
+}
 function abrirCamera(modo,titulo,sub,cb){
-  camModo=modo;camCb=cb;camFoto="";
+  camModo=modo;camCb=cb;camFoto="";camTentativas=0;
+  try{$("cam_confirmar").textContent="Confirmar";}catch(e){}
   $("cam_titulo").textContent=titulo;$("cam_sub").textContent=sub||"";
   $("cam_preview").hidden=true;$("cam_video").hidden=false;$("cam_guia").hidden=false;
   $("cam_lado").hidden=true;$("cam_alerta").innerHTML="";
@@ -6815,7 +6860,7 @@ function tirarFoto(){
   var cx=cv.getContext("2d");
   cx.drawImage(v,(v.videoWidth-lado)/2,(v.videoHeight-lado)/2,lado,lado,0,0,180,180);
   camFoto=cv.toDataURL("image/jpeg",0.6);
-  var sig=assinatura(cv);
+  var sig=assinatura(cv,0.62);
   $("cam_preview").src=camFoto;$("cam_preview").hidden=false;
   $("cam_video").hidden=true;$("cam_guia").hidden=true;
   $("cam_tirar").hidden=true;$("cam_refazer").hidden=false;$("cam_confirmar").hidden=false;
@@ -6828,12 +6873,31 @@ function tirarFoto(){
     var u=usuarioPor(usuarioAtual)||{};
     if(u.facial){
       $("cam_ref").src=u.facial;$("cam_agora").src=camFoto;$("cam_lado").hidden=false;
-      var d=distancia(u.facialSig,sig);
+      var p=parecenca(u.facialSig,sig);
+      window.__camPar=p;
       var msg="";
-      if(d==null)msg='<div class="note"><b>Confira as duas fotos lado a lado antes de confirmar.</b></div>';
-      else if(d<=8)msg='<div class="note ok"><b>As imagens são compatíveis.</b> Enquadramento e iluminação batem com a foto cadastrada.</div>';
-      else if(d<=18)msg='<div class="note warn"><b>Diferença moderada em relação à foto cadastrada.</b> Pode ser luz ou ângulo. Confira antes de confirmar.</div>';
-      else msg='<div class="note crit"><b>A imagem está bem diferente da foto cadastrada.</b> Reenquadre o rosto e tente de novo. A batida fica marcada para conferência.</div>';
+      if(p==null){
+        msg='<div class="note"><b>Não deu para comparar com a foto cadastrada.</b> '+
+          "Confira as duas imagens lado a lado antes de confirmar.</div>";
+      }else if(p>=FACE_OK){
+        msg='<div class="note ok"><b>Rosto compatível ('+p+"%).</b> Pode confirmar.</div>";
+      }else if(p>=FACE_LIMITE){
+        msg='<div class="note warn"><b>Diferença moderada ('+p+"%).</b> "+
+          "Costuma ser luz ou ângulo. Confira as duas fotos antes de confirmar.</div>";
+      }else{
+        camTentativas++;
+        $("cam_confirmar").hidden=true;
+        msg='<div class="note crit"><b>Esta imagem não bate com a foto cadastrada ('+p+"%).</b> "+
+          "Centralize o rosto no oval, sem boné e sem óculos escuros, com a luz de frente, e tire de novo. "+
+          "Tentativa "+camTentativas+" de "+FACE_TENTATIVAS+".</div>";
+        if(camTentativas>=FACE_TENTATIVAS){
+          $("cam_confirmar").hidden=false;
+          $("cam_confirmar").textContent="Registrar para conferência";
+          msg+='<div class="note warn"><b>Não conseguiu depois de '+FACE_TENTATIVAS+" tentativas?</b> "+
+            "Dá para registrar assim mesmo: a batida entra marcada para conferência do Administrador, "+
+            "com as duas fotos guardadas.</div>";
+        }
+      }
       $("cam_alerta").innerHTML=msg+(problema?'<div class="note warn">'+problema+"</div>":"");
     } else {
       $("cam_alerta").innerHTML='<div class="note warn"><b>Você não tem foto facial cadastrada.</b> '+
@@ -6896,15 +6960,15 @@ async function baterPonto(k){
   var u=usuarioPor(quem)||{};
   abrirCamera("ponto",m.n,quem+" · "+hoje+" às "+agora,function(foto,sig){
     if(!foto)return;
-    var dist=distancia(u.facialSig,sig);
-    var conferir=(dist==null||dist>18);
+    var par=parecenca(u.facialSig,sig);
+    var conferir=(par==null||par<FACE_LIMITE);
     $("po_geo").innerHTML='<div class="note">Buscando sua localização…</div>';
     pegarLocal(async function(loc,erro){
       var hora=agoraHM();
       var reg=p||{id:uid(),loja:lojaAtual,colaborador:quem,data:hoje,tipo:"normal",criadoEm:hoje};
       reg[k]={hora:hora,lat:loc?loc.lat:null,lng:loc?loc.lng:null,prec:loc?loc.prec:null,
         semGeo:!loc,motivoGeo:erro||"",foto:foto,sig:sig,
-        distFacial:dist,conferirFace:conferir,semFotoRef:!u.facial,
+        parecenca:par,conferirFace:conferir,semFotoRef:!u.facial,
         em:new Date().toISOString()};
       if(!p)pontos.push(reg);
       await grava("pontos",reg);
@@ -9121,6 +9185,44 @@ async function registrarEnvio(o,via){
 }
 /* toda vez que um orçamento é finalizado, o vendedor agenda o retorno */
 var naCtx=null,naTipos=[];
+/* ---------- atividade só existe com cadastro ----------
+   Visita presencial sem endereço e ligação sem telefone não viram atividade:
+   o vendedor sai daqui com um lead gravado, não com um nome solto. */
+function naPedeEndereco(){
+  return naTipos.some(function(t){return /visita|presencial|instala|entrega|assist|manuten/i.test(t);});
+}
+function naLimparCadastro(){
+  ["na_tel","na_cidade","na_bairro","na_rua","na_num","na_ref"].forEach(function(id){
+    var e=document.getElementById(id);if(e)e.value="";});
+}
+function naConferirCadastro(){
+  var w=$("na_cadWrap");if(!w)return;
+  var ligado=!!(naCtx&&naCtx.clienteId);
+  if(ligado){w.hidden=true;return;}
+  var digitado=$("na_nomeWrap").hidden?(naCtx&&naCtx.cliente):$("na_nome").value.trim();
+  if(!digitado){w.hidden=true;return;}
+  w.hidden=false;
+  var visita=naPedeEndereco();
+  $("na_reqEnd").hidden=false;
+  ["na_cidade","na_bairro","na_rua"].forEach(function(id){
+    var l=document.querySelector('label[for="'+id+'"] .req');
+    if(l)l.style.visibility=visita?"visible":"hidden";
+  });
+  $("na_cadAviso").innerHTML="<b>"+esc(digitado)+" ainda não tem cadastro.</b> "+
+    (visita
+      ? "Para agendar uma visita o sistema precisa do telefone e do endereço — é para lá que alguém vai. Preencha e o cadastro nasce como lead."
+      : "Informe ao menos o telefone. O cadastro nasce como lead e vira cliente na primeira venda.");
+}
+async function naCriarLead(nome){
+  var c={id:uid(),loja:lojaAtual,codigo:proxCodigo(),criadoEm:iso(new Date()),
+    criadoPor:usuarioAtual,tipo:"Pessoa Física",origem:(naCtx&&naCtx.origem)||"Atividade",
+    nome:nome,tel:$("na_tel").value.trim(),cidade:$("na_cidade").value.trim(),
+    bairro:$("na_bairro").value.trim(),rua:$("na_rua").value.trim(),
+    num:$("na_num").value.trim(),comp:$("na_ref").value.trim()};
+  clientes.push(c);
+  if(db){try{await col("clientes").doc(c.id).set(c);}catch(e){console.warn(e);}}
+  return c;
+}
 function abrirNovaAtividade(ctx){
   naCtx=ctx;naTipos=(ctx.tipos||[]).slice();
   $("na_sub").textContent=ctx.cliente||"";
@@ -9133,7 +9235,8 @@ function abrirNovaAtividade(ctx){
   var d=new Date();d.setDate(d.getDate()+(ctx.dias||3));
   $("na_data").value=iso(d);$("na_hora").value=ctx.hora||"09:00";
   $("na_obs").value=ctx.obs||"";$("na_alerta").innerHTML="";
-  renderChipsNa();
+  naLimparCadastro();
+  renderChipsNa();naConferirCadastro();
   $("ativModal").hidden=false;
 }
 function renderChipsNa(){
@@ -9145,7 +9248,7 @@ function renderChipsNa(){
     b.onclick=function(){
       var i=naTipos.indexOf(t);
       if(i>=0)naTipos.splice(i,1);else naTipos.push(t);
-      b.setAttribute("aria-pressed",String(naTipos.indexOf(t)>=0));};
+      b.setAttribute("aria-pressed",String(naTipos.indexOf(t)>=0));naConferirCadastro();};
     w.appendChild(b);
   });
 }
@@ -9159,7 +9262,7 @@ function buscarClienteNa(){
     b.onclick=function(){
       naCtx.clienteId=c.id;naCtx.cliente=c.nome;naCtx.tel=c.tel;naCtx.doc=c.doc;
       naCtx.cidade=c.cidade;naCtx.origem=c.origem;
-      $("na_nome").value=c.nome;$("na_sub").textContent=c.nome;box.hidden=true;};
+      $("na_nome").value=c.nome;$("na_sub").textContent=c.nome;box.hidden=true;naConferirCadastro();};
     box.appendChild(b);
   });
   box.hidden=false;
@@ -9173,9 +9276,39 @@ async function criarAtividadeRetorno(){
   }
   if(!$("na_data").value){$("na_alerta").innerHTML='<div class="note crit"><b>Informe a data do retorno.</b></div>';return;}
   if(!naTipos.length){$("na_alerta").innerHTML='<div class="note warn"><b>Marque ao menos um tipo</b> de contato.</div>';return;}
+
+  /* sem cadastro não há atividade: quem for atender precisa saber para onde ir
+     e para qual número ligar */
+  if(!naCtx.clienteId){
+    naConferirCadastro();
+    var visita=naPedeEndereco(),falta=[];
+    if(!$("na_tel").value.trim())falta.push("telefone");
+    if(visita){
+      if(!$("na_cidade").value.trim())falta.push("cidade");
+      if(!$("na_bairro").value.trim())falta.push("bairro");
+      if(!$("na_rua").value.trim())falta.push("rua");
+    }
+    if(falta.length){
+      $("na_alerta").innerHTML='<div class="note crit"><b>Falta preencher:</b> '+falta.join(" · ")+
+        ".</b> "+(visita
+          ? "Uma visita sem endereço manda alguém para lugar nenhum."
+          : "Sem telefone não há como fazer o contato.")+"</div>";
+      var alvo=document.getElementById(falta[0]==="telefone"?"na_tel":"na_"+falta[0]);
+      if(alvo){try{alvo.focus();}catch(e){}}
+      return;
+    }
+    var novo=await naCriarLead(naCtx.cliente);
+    naCtx.clienteId=novo.id;naCtx.tel=novo.tel;naCtx.cidade=novo.cidade;
+    naCtx.origem=novo.origem;
+    toast("Lead "+novo.codigo+" cadastrado.");
+  }
+
+  var vinc=clientes.filter(function(c){return c.id===naCtx.clienteId;})[0]||{};
   var a={id:uid(),loja:lojaAtual,natureza:"atividade",
-    clienteId:naCtx.clienteId||"",cliente:naCtx.cliente,tel:naCtx.tel||"",
-    doc:naCtx.doc||"",cidade:naCtx.cidade||"",origem:naCtx.origem||"",
+    clienteId:naCtx.clienteId||"",cliente:naCtx.cliente,tel:naCtx.tel||vinc.tel||"",
+    doc:naCtx.doc||vinc.doc||"",cidade:naCtx.cidade||vinc.cidade||"",
+    endereco:[vinc.rua,vinc.num,vinc.bairro,vinc.cidade].filter(Boolean).join(", "),
+    origem:naCtx.origem||vinc.origem||"",
     colaborador:$("na_resp").value,vendedor:naCtx.colaborador||"",
     tipos:naTipos.slice(),tipo:naTipos.join(" · "),
     data:$("na_data").value,inicio:$("na_hora").value,fim:"",
@@ -10777,7 +10910,7 @@ function ligar(){
   $("opEnviar").onclick=function(){if(editandoOrc)abrirEnvio(editandoOrc);};
   $("ev_fechar").onclick=function(){$("envioModal").hidden=true;};
   $("na_criar").onclick=criarAtividadeRetorno;
-  $("na_nome").oninput=buscarClienteNa;
+  $("na_nome").oninput=function(){if(naCtx)naCtx.clienteId="";buscarClienteNa();naConferirCadastro();};
   $("na_nome").onblur=function(){setTimeout(function(){$("na_sug").hidden=true;},180);};
   $("na_pular").onclick=function(){
     $("ativModal").hidden=true;naCtx=null;
@@ -11356,6 +11489,25 @@ function erro(msg){
   envolverFolha();
   setTimeout(envolverFolha,2000);
 
+
+  /* ---- o teclado do celular não pode cobrir o campo que está sendo digitado ---- */
+  if(window.visualViewport){
+    var vv=window.visualViewport;
+    var medirVV=function(){
+      try{document.documentElement.style.setProperty("--vv",vv.height+"px");}catch(e){}
+    };
+    vv.addEventListener("resize",medirVV);
+    medirVV();
+  }
+  document.addEventListener("focusin",function(e){
+    var el=e.target;
+    if(!el||!/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName||""))return;
+    if(!celular())return;
+    setTimeout(function(){
+      try{el.scrollIntoView({block:"center",behavior:"smooth"});}
+      catch(x){try{el.scrollIntoView();}catch(y){}}
+    },330);
+  });
   window.addEventListener("resize",function(){posicionar();sincronizar();});
   montarBarra();
   posicionar();

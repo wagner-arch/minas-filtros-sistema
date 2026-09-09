@@ -9,36 +9,82 @@ edita é você (ou o Claude, num passo seguinte, com este arquivo na mão).
 | | |
 |---|---|
 | Arquivo alvo | `C:\Users\User\Desktop\Notebook Wagner\MinasFiltros\Projetos\Sistema Minas Filtros Claude\sistema-minas.html` |
-| Tamanho conferido | **10.943 linhas**, 1,7 MB (lido em 2026-09-09) |
+| Tamanho conferido | **11.363 linhas**, 1,77 MB (reconferido em 2026-09-09, depois da mudança do estilo de celular) |
 | Companheiros | `supabase\schema.sql` (roda no SQL Editor), `supabase\adapter.js` (vai junto do HTML) |
 | Biblioteca | `https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js` — **conferida hoje: HTTP 200**, 218 KB, define a global `supabase` (o cdnjs **não** publica o supabase-js) |
 
-## Aviso sobre os números de linha
+## Aviso sobre os números de linha — SOME 184
 
-Os inventários anteriores foram feitos numa cópia com **8 linhas a menos**. Todas
-as linhas citadas **aqui** foram reconferidas linha a linha no arquivo de hoje
-(10.943 linhas) — some 8 se comparar com o inventário (inventário 3218 = hoje
-**3226**).
+**Todo número de linha do JS citado neste documento está 184 linhas atrás do
+arquivo de hoje.** Os itens foram escritos quando o arquivo tinha 10.943 linhas
+— e 10.943 era só até o `</script>` do sistema, não o fim do arquivo. Depois
+disso, duas coisas mudaram:
 
-**Como aplicar sem se perder:** cada item traz o *trecho de hoje* completo o
-bastante para servir de âncora de busca. Procure pelo texto, não pelo número —
-a partir do item 2 os números já andaram. Aplique **na ordem dos itens**: a
-ordem foi montada para o sistema nunca ficar quebrado no meio do caminho
-(primeiro liga o banco, depois o login, depois o resto).
+1. O `<style id="estiloCelular">` do módulo de celular saiu do fim do arquivo e
+   subiu para o cabeçalho (**hoje linhas 504–678**, logo depois do estilo
+   principal, "para o celular já pintar o layout certo enquanto o resto do
+   arquivo chega"). São **184 linhas inseridas antes de todo o JS**. Confira com
+   três âncoras: o que este documento chama de linha 3226 (`var db=null,…`) está
+   hoje na **3410**; `gravarUsuarios`, citada como 4525, está na **4709**;
+   `fcSalvar`, citada como 10174, está na **10358**.
+2. O comportamento do celular (gaveta + barra inferior) continuou no fim, agora
+   nas linhas **11131–11363** — 236 linhas que nenhum inventário viu. É o
+   **item 28**, novo.
 
-## Mapa da obra (27 itens em 9 blocos)
+Os itens **não** foram renumerados de propósito: renumerar 27 itens à mão é onde
+o erro entra. **Procure pelo texto, não pelo número** — cada item traz o trecho
+de hoje completo o bastante para servir de âncora de `Ctrl+F`, e o texto em si
+não mudou.
 
-| Bloco | Itens | O que resolve | Linhas de hoje |
+## Ordem de aplicação — a ordem dos itens NÃO é a ordem de aplicação
+
+Os itens estão numerados por assunto. Aplicados na sequência 1, 2, 3…, **o
+sistema não abre**:
+
+- o boot novo do item 3 passa `{aoEstado:bancoMudouEstado}` — identificador
+  avaliado na hora. Sem o item 17, é `ReferenceError`, cai no
+  `catch(e){db=null;erro(…)}` da linha seguinte e **todo mundo vê "Sem conexão
+  com o banco."**, com o Supabase perfeito do outro lado;
+- `entrarComSessao()` chama `ouvirRealtime()`, que só nasce no item 20: sem ele
+  a senha certa é recusada com "ouvirRealtime is not defined";
+- e `montarSelects()` roda antes do item 12a reescrevê-la — a versão de hoje faz
+  `su.value=usuarioAtual` num `<select id="usuario">` que o item 11a ainda não
+  converteu em `<span>`.
+
+**Aplique nesta ordem:**
+
+| Ordem | Itens | Por quê |
+|---|---|---|
+| 1º | 1, 1b, 2, 13 | constantes, globais e a lista de usuários vazia — nenhum deles quebra nada sozinho |
+| 2º | **17** | `falhaBanco` e `bancoMudouEstado` **antes** de qualquer um que os cite |
+| 3º | 15, 16, 18 | `janela()`, `soLoja()`, `carregar()` que propaga o erro, `grava/apaga` que avisam (todos chamam `falhaBanco`) |
+| 4º | **20** | `ouvirRealtime()` / `pararRealtime()` — o item 3 chama as duas, e o item 20 usa `janela()`/`soLoja()` do 15 |
+| 5º | 11, 12 | `#usuario` vira `<span>`, `montarSelects()` idempotente, troca de loja |
+| 6º | **3, 3b** | só agora o boot novo tem tudo o que ele cita |
+| 7º | 4–10, 14, 14b | tela de login, Supabase Auth e o fim do `config/usuarios` |
+| 8º | 19, 21–25 | numeração atômica, RH/LGPD e travas de tela |
+| 9º | 26, 27, 28 | produção: demo escondido, backup e o módulo celular |
+
+Entre o 6º e o 7º passo o sistema **abre e loga** (ainda com a tela de login
+antiga) — é o ponto natural para parar e testar. Antes disso não adianta
+testar: falta metade das funções que o boot cita.
+
+## Mapa da obra (28 itens em 9 blocos)
+
+Números de linha da coluna da direita: **numeração antiga, some 184** (veja o
+aviso acima). A do item 28 é a de hoje.
+
+| Bloco | Itens | O que resolve | Linhas (antigas) |
 |---|---|---|---|
 | A — Ligar o Supabase | 1–3 | o HTML passa a falar com o Postgres | 3168, 3226, 10928 |
 | B — Login de verdade | 4–12 | senha no servidor, fim do "troca de operador sem senha" | 498, 519, 521, 4826, 9985, 9991, 9996, 10084, 10649, 10830–10895 |
-| C — Perfis no lugar de `config/usuarios` | 13–14 | CPF, salário e foto saem do doc que todo mundo baixa | 3213, 3306 |
+| C — Perfis no lugar de `config/usuarios` | 13–14b | CPF, salário e foto saem do doc que todo mundo baixa | 3213, 3306, 4525, 10174 |
 | D — Carga por loja e erro visível | 15–18 | fim dos limits que congelam; toast que não mente | 3264–3348, 4523, 9247 |
 | E — Numeração atômica | 19 | duas abas nunca mais geram o mesmo número | 3441, 3830, 4940, 5545, 8520, 8810 |
-| F — Realtime | 20 | pedidos, clientes e títulos vivos entre as abas | 9344 |
-| G — RH e biometria | 21–23 | LGPD: RH e foto em coleção restrita | 4698, 4748, 6479, 6571, 6713, 6787, 6867, 6897, 10121 |
-| H — Travas de tela | 24–25 | `ir()` respeita permissão; reset de senha | 9732, 9979, 10068, 10080 |
-| I — Produção | 26–27 | demo escondido, backup diário em JSON | 2568, 5992, 10089, 2565 |
+| F — Realtime | 20 | pedidos e clientes vivos entre as abas | 9344 |
+| G — RH e biometria | 21–23b | LGPD: RH, remuneração e foto em coleções restritas | 4698, 4748, 6479, 6571, 6713, 6787, 6843, 6867, 6897, 10121 |
+| H — Travas de tela | 24–25, 28 | `ir()` respeita permissão; reset de senha; barra do celular | 9732, 9979, 10068, 10080 · **11226, 11256 (hoje)** |
+| I — Produção | 26–27 | demo escondido, backup diário em JSON | 2568, 5992–6022, 10089, 2565 |
 
 ---
 
@@ -76,6 +122,49 @@ var SUPABASE_ANON="SUA_CHAVE_ANON_PUBLICA";
 > `supabase/` tem que subir junto (só `adapter.js`; o `schema.sql` fica de fora
 > do site — ele não é segredo, mas não tem por que ir).
 
+## Item 1b — `MODO_TESTE` e o gancho de diagnóstico
+
+**No mesmo `<script>` do item 1**, junto de `SUPABASE_URL` e `SUPABASE_ANON`:
+
+```js
+/* Ambiente. NÃO usar querystring (`?teste=1`): qualquer pessoa logada digita
+   isso na barra de endereço e traz de volta o gerador de dados falsos. O
+   hostname o usuário não controla — no GitHub Pages / Firebase nunca é
+   localhost. */
+var MODO_TESTE=(location.hostname==="localhost"||location.hostname==="127.0.0.1"||location.hostname==="");
+```
+
+`location.hostname===""` cobre o arquivo aberto direto do disco (`file://`),
+que é como você testa hoje.
+
+**E, no fim do `<script>` gigante do sistema** — a última linha antes do `})();`
+que fecha a IIFE (hoje **linha 11126**; o `})();` de cima, na 11125, é o boot):
+
+```js
+/* Ponte de diagnóstico. TODO o sistema vive dentro de
+   `(function(){ "use strict"; … })()`, então `db`, `$` e `perfilLogado` são
+   variáveis LOCAIS: no console do navegador elas não existem, e os testes de
+   aceite 2, 6 e 7 devolveriam "db is not defined". Fora de produção, e só
+   fora, publicamos um ponteiro para elas.
+   Os `get` são de propósito: `db` é reatribuída no boot, então copiar o valor
+   agora guardaria `null` para sempre. */
+if(MODO_TESTE){
+  window.mfDebug={
+    $:$,
+    get db(){return db;},
+    get perfil(){return perfilLogado;},
+    get loja(){return lojaAtual;}
+  };
+  console.log("mfDebug disponível (modo teste).");
+}
+```
+
+> Em produção `MODO_TESTE` é `false` e `window.mfDebug` **não existe** — o
+> console volta a não ter atalho nenhum para o banco. Para rodar os testes 6 e
+> 7 do aceite (os que provam a LGPD) contra o site publicado sem ligar o modo
+> teste, use o `curl` do próprio teste, que fala com o PostgREST com o
+> `access_token` da sessão.
+
 ## Item 2 — globais: sem loja e sem usuário antes do login
 
 **Linha 3226.**
@@ -94,6 +183,13 @@ var db=null,lojaAtual="",usuarioId=null,perfilLogado=null,
 ```
 
 ## Item 3 — o boot: criar o adapter e só então decidir login ou sessão
+
+> **NÃO aplique este item ainda.** Ele é o 6º da tabela de ordem: cita
+> `bancoMudouEstado` (item 17), `ouvirRealtime()` (item 20), `falhaBanco`
+> (item 17) e a `montarSelects()` reescrita (item 12a). Aplicado antes deles, o
+> sistema **para de abrir** e o sintoma aponta para o lugar errado ("Sem
+> conexão com o banco" com o Supabase no ar). Aplique **17, 15, 16, 18, 20, 11
+> e 12 primeiro**.
 
 **Linhas 10928–10941** (a IIFE final).
 
@@ -189,8 +285,18 @@ Mudanças de ordem que importam:
 ### Item 3b — dois métodos a acrescentar no `adapter.js`
 
 O `schema.sql` cria as RPCs `registrar_acesso()` e
-`registrar_consentimento_facial()`, mas o adapter ainda não as expõe.
-Acrescente, em `supabase\adapter.js`, logo **antes** da linha
+`registrar_consentimento_facial()`.
+
+> **Confira antes de colar: o `adapter.js` de hoje já as expõe** —
+> `adapter.registrarAcesso` (linha 1038), `adapter.registrarConsentimentoFacial`
+> (1046) e `adapter.perfilGravar` (1018, citada no item 14). Se estiverem lá,
+> **não cole nada**; este bloco fica só como referência do que a versão antiga
+> do adapter não tinha. Confira também que `adapter.perfil()` (linha 883)
+> seleciona **`consentiu_facial_em`** e **`jornada`** — sem essas duas colunas o
+> item 23 pede o aceite de LGPD em toda batida e o Cartão de Ponto perde a
+> jornada de cada um.
+
+Se faltar alguma, acrescente em `supabase\adapter.js` logo **antes** da linha
 `adapter.collection = refColecao;`:
 
 ```js
@@ -519,7 +625,20 @@ function montarSelects(){
       await carregar();          /* a carga agora é por loja: precisa recarregar */
       ouvirRealtime();           /* e reassinar o Realtime na loja nova */
       render();toast(nomeLoja());
-    }catch(e){falhaBanco(e);toast("Não deu para carregar "+nomeLoja()+".");}
+    }catch(e){
+      /* NÃO dá para só avisar e continuar. carregar() atribui coleção por
+         coleção, em sequência (linhas 3264 a 3347): se estourar em `titulos`,
+         clientes/produtos/pedidos/orcamentos/pontos/caixas já são da loja NOVA
+         e titulos/movs/movEst/requisicoes/equipamentos/ordens/notas continuam
+         sendo da ANTERIOR. A tela fica com o Contas a Receber de uma loja em
+         cima da carteira de clientes de outra — e dá para baixar título da
+         loja errada com um banner vermelho como único aviso.
+         Recarregar é a única saída honesta (o item 9 usa location.reload() no
+         logout pelo mesmo motivo: não sobrar meia sessão em memória). */
+      falhaBanco(e);
+      toast("Não deu para carregar "+nomeLoja()+" — recarregando a página.");
+      setTimeout(function(){location.reload();},1500);
+    }
   };
 ```
 
@@ -604,6 +723,90 @@ async function gravarFacial(userId,foto,sig){await grava("facial",{id:userId,fot
 > ```
 > A RLS só deixa `Administrador` gravar em `perfis` — é isso que queremos.
 
+### Os 8 chamadores de `gravarUsuarios()` — nenhum pode ficar para trás
+
+`grep -n "gravarUsuarios" sistema-minas.html` devolve **9 linhas**: a definição
+e **8 chamadas**. Apagar a função e esquecer uma chamada dá `ReferenceError` no
+meio de um `async` — e o que vem *depois* do `await` simplesmente não roda
+(a tela fica pela metade, sem toast, até o F5). Mantê-la "por segurança" é pior:
+ela regrava `{lista:USUARIOS}` em `config/usuarios`, e `config` é lido por
+**todo autenticado** (`docs_select_config`, `schema.sql` item 8.1) — o vazamento
+volta inteiro.
+
+| Linha (antiga) | Onde | Quem resolve |
+|---|---|---|
+| 3308 | `carregar()` | item 14, acima |
+| **6021** | `gerarDemo` | **item 26d** — a linha sai junto com o bloco 5992–6022 |
+| 10073 | `usAdd` | item 25 |
+| 10082 | `u_zerarSenha` | item 25 |
+| 10145 | `usSalvar` | item 21 |
+| **10174** | `fcSalvar` | **item 14b**, logo abaixo |
+| 10876, 10885 | `entrarSistema` | item 8 |
+
+Depois de aplicar os itens acima, `grep -n "gravarUsuarios" sistema-minas.html`
+tem que voltar **vazio**.
+
+## Item 14b — renomear uma função sem trancar todo mundo para fora
+
+**Linhas 10159–10177 (`$("fcSalvar").onclick`).** É o item que faltava: nenhum
+outro fala desta linha.
+
+**Hoje:**
+```js
+    if(antigo&&antigo!==n)USUARIOS.forEach(function(u){if(u.perfil===antigo)u.perfil=n;});
+    await gravarFuncoes();await gravarUsuarios();
+```
+
+Dois estragos, um de cada vez:
+
+1. `gravarUsuarios` some no item 14 → `ReferenceError` **depois** do
+   `await gravarFuncoes()`. A função é gravada, mas `aplicarPerfil()`,
+   `renderFuncoes()`, `renderPermissoes()`, `renderUsuarios()` e o toast (as
+   três linhas seguintes) **não rodam**. A tela fica mentindo até o F5.
+2. Mesmo corrigindo o (1), a linha só mexe em `USUARIOS` **na memória**.
+   `perfis.funcao` no Postgres continua com o nome ANTIGO. No próximo login
+   `perfilDe(nome)` devolve o nome antigo, `funcaoPor(antigo)` devolve `null` e
+   cai no fallback `funcaoPor("Vendedor")` (linha 9733). Se o Administrador
+   renomear a função **`Administrador`**, ele perde Configurações e **não
+   conserta mais pelo aplicativo**: `perfis_update_admin` (`schema.sql`, item
+   10) exige `minha_funcao()='Administrador'`. Só pelo SQL Editor.
+
+**Fica:**
+```js
+    await gravarFuncoes();
+    if(antigo&&antigo!==n){
+      /* renomear a função tem que valer no Postgres também: é de perfis.funcao
+         que sai a permissão de cada um no próximo login. */
+      try{
+        await db.renomearFuncao(antigo,n);
+        USUARIOS.forEach(function(u){if(u.perfil===antigo)u.perfil=n;});
+        if(perfilLogado&&perfilLogado.funcao===antigo)perfilLogado.funcao=n;
+      }catch(e){
+        falhaBanco(e);
+        toast("A função foi salva, mas os colaboradores continuam com o nome antigo: "+e.message);
+        renderFuncoes();return;
+      }
+    }
+```
+(a linha `if(antigo&&antigo!==n)USUARIOS.forEach(...)` de cima **sai** — ela
+passou para dentro do `try`, depois do banco aceitar.)
+
+**E o método no `adapter.js`**, junto dos outros de perfil (perto do
+`adapter.perfilGravar`, linha 1018):
+```js
+    /* Renomeia a função de todo mundo que a usava. Só Administrador passa na
+       RLS (perfis_update_admin) — para os demais isto rejeita, e é o certo. */
+    adapter.renomearFuncao = async function (antigo, novo) {
+      conferir(await sb.from("perfis").update({ funcao: novo }).eq("funcao", antigo),
+               "renomear funcao");
+      return true;
+    };
+```
+
+> Vale um aviso na tela antes de deixar renomear `Administrador`: é a única
+> função cujo nome está escrito à mão dentro das policies do Postgres
+> (`minha_funcao() = 'Administrador'`). Renomeá-la **não** renomeia a policy.
+
 ---
 
 # BLOCO D — CARGA POR LOJA E ERRO VISÍVEL
@@ -642,7 +845,7 @@ Trocas, uma a uma (as linhas são as de hoje):
 | 3321 | `col("centros").limit(200).get()` | `col("centros").limit(500).get()` (global) |
 | 3328 | `col("fornecedores").limit(300).get()` | `col("fornecedores").limit(2000).get()` (global) |
 | 3330 | `col("titulos").limit(1000).get()` | `col("titulos").limit(50000).get(soLoja())` |
-| 3332 | `col("movs").limit(1000).get()` | `col("movs").limit(50000).get(janela())` |
+| 3332 | `col("movs").limit(1000).get()` | `col("movs").limit(50000).get(soLoja())` ← **sem janela**, veja o aviso 1 |
 | 3334 | `col("movest").limit(2000).get()` | `col("movest").limit(100000).get(soLoja())` |
 | 3336 | `col("requisicoes").limit(500).get()` | `col("requisicoes").limit(5000).get(janela())` |
 | 3338 | `col("equipamentos").limit(1000).get()` | `col("equipamentos").limit(20000).get(soLoja())` |
