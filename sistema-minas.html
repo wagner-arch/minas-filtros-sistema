@@ -9000,6 +9000,34 @@ function renderMnPecas(){
   Array.prototype.forEach.call(b.querySelectorAll("[data-mnrm]"),function(bt){
     bt.onclick=function(){mnPecas.splice(+bt.getAttribute("data-mnrm"),1);renderMnPecas();};});
 }
+/* Feita a manutenção, a próxima já nasce agendada na data do vencimento.
+   Sem isso a lista mostra a data, mas ninguém é lembrado no dia. */
+async function agendarProximaManut(e,reg){
+  var px=proximaDe(e);
+  if(!px)return null;
+  var ja=atendimentos.filter(function(a){
+    return a.equipId===e.id&&a.natureza==="atividade"&&a.status!=="finalizado"&&a.data===px;})[0];
+  if(ja)return null;
+  var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
+  var tipoManut=tipos.filter(function(t){return /manuten|visita|pós/i.test(t);})[0]||tipos[0]||"Visita presencial";
+  var a={id:uid(),loja:e.loja||lojaAtual,natureza:"atividade",
+    clienteId:e.clienteId||"",cliente:e.cliente||c.nome||"",
+    tel:c.tel||"",doc:c.doc||"",cidade:c.cidade||"",uf:c.uf||"",
+    endereco:[c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "),
+    origem:c.origem||"",
+    colaborador:(reg&&reg.tecnico)||e.tecnico||usuarioAtual,
+    vendedor:e.tecnico||"",
+    tipos:[tipoManut],tipo:tipoManut,
+    data:px,inicio:(reg&&reg.hora)||"09:00",fim:"",
+    obs:"Manutenção periódica · "+(e.produto||"")+
+      (e.serie?" · série "+e.serie:(e.local?" · "+e.local:""))+
+      " · vence "+px,
+    origemOrc:"",origemAtiv:"",equipId:e.id,
+    situacao:"pendente",status:"aberto",criadaPorManut:true};
+  atendimentos.push(a);
+  await grava("atendimentos",a);
+  return a;
+}
 async function registrarManut(){
   var e=mnEq||eqPor($("mn_serie").value);
   if(!e){$("mn_alerta").innerHTML='<div class="note crit"><b>Escolha o equipamento na lista.</b> Procure pela série, pelo nome do cliente ou pelo número do pedido.</div>';return;}
@@ -9034,9 +9062,15 @@ async function registrarManut(){
     titulos.push(t);await grava("titulos",t);
     msg+=" "+BRL(valor)+" em Contas a Receber.";
   }
-  /* atividade de visita ligada a este equipamento se encerra junto */
-  var visita=atendimentos.filter(function(a){return a.equipId===e.id&&a.natureza==="atividade"&&a.status!=="finalizado";})[0];
-  if(visita){await concluirAtivPorAcao(visita,"Concluída pela manutenção de "+data);msg+=" Visita da agenda concluída.";}
+  /* baixa a manutenção que estava pendente e já agenda a próxima */
+  var pendentes=atendimentos.filter(function(a){
+    return a.equipId===e.id&&a.natureza==="atividade"&&a.status!=="finalizado";});
+  for(var v=0;v<pendentes.length;v++){
+    await concluirAtivPorAcao(pendentes[v],"Concluída pela manutenção de "+data);
+  }
+  if(pendentes.length)msg+=" "+pendentes.length+" visita"+(pendentes.length===1?"":"s")+" da agenda concluída"+(pendentes.length===1?"":"s")+".";
+  var nova=await agendarProximaManut(e,reg);
+  if(nova)msg+=" Próxima visita agendada para "+nova.data+".";
   $("manutModal").hidden=true;mnEq=null;
   toast(msg);
   renderManut();if(editandoEq===e){renderHistEq();$("mp_ultima").value=e.ultimaManut;notaEquip();}
