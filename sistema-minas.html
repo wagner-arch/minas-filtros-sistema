@@ -12060,6 +12060,15 @@ function erro(msg){
      que preenche tudo de uma vez. */
 
   var UF_PADRAO="MG",cacheCidades={},cacheRuas={},cacheBairros={},bairrosVistos={};
+  /* nome do estado -> sigla, para quando o mapa não devolver a sigla pronta */
+  var UF_POR_ESTADO={
+    "acre":"AC","alagoas":"AL","amapa":"AP","amazonas":"AM","bahia":"BA","ceara":"CE",
+    "distrito federal":"DF","espirito santo":"ES","goias":"GO","maranhao":"MA",
+    "mato grosso":"MT","mato grosso do sul":"MS","minas gerais":"MG","para":"PA",
+    "paraiba":"PB","parana":"PR","pernambuco":"PE","piaui":"PI","rio de janeiro":"RJ",
+    "rio grande do norte":"RN","rio grande do sul":"RS","rondonia":"RO","roraima":"RR",
+    "santa catarina":"SC","sao paulo":"SP","sergipe":"SE","tocantins":"TO"
+  };
   var ACENTOS="áàâãäéèêëíìîïóòôõöúùûüçñ",SEM="aaaaaeeeeiiiiooooouuuucn";
 
   function escT(s){return String(s==null?"":s).replace(/[&<>"]/g,function(m){
@@ -12525,6 +12534,8 @@ function erro(msg){
         mapaAlvo.value=coordValida(v);
         mapaAlvo.__escolhido=mapaAlvo.value;
         try{mapaAlvo.dispatchEvent(new Event("input",{bubbles:true}));}catch(e){}
+        var pc=coordValida(v).split(",");
+        try{if(window.preencherPeloPontoMF)window.preencherPeloPontoMF(pc[0],pc[1],function(){});}catch(e){}
       }
       d.hidden=true;
     };
@@ -12634,6 +12645,33 @@ function erro(msg){
     });
     botao("Marcar no mapa",function(){abrirMapa(campo);});
 
+    /* a coordenada diz onde é: o sistema pergunta ao mapa a que cidade
+       aquele ponto pertence e já preenche o cadastro */
+    function preencherPeloPonto(la,lo,cb){
+      fetch("https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&addressdetails=1&lat="+
+        la+"&lon="+lo)
+        .then(function(r){return r.json();})
+        .then(function(j){
+          var a=(j&&j.address)||{};
+          var cidade=a.city||a.town||a.village||a.municipality||a.hamlet||"";
+          var uf=String(a["ISO3166-2-lvl4"]||"").replace("BR-","");
+          if(!uf&&a.state)uf=UF_POR_ESTADO[normalizar(a.state)]||"";
+          var bairro=a.suburb||a.neighbourhood||a.quarter||a.city_district||"";
+          var rural=(document.getElementById("c_tipoend")||{}).value==="rural";
+          preenchendoCEP=true;
+          if(cidade)confirmar("c_cidade",cidade);
+          if(uf)confirmar("c_uf",uf);
+          if(!rural){
+            if(bairro)confirmar("c_bairro",bairro);
+            if(a.road)confirmar("c_rua",a.road);
+            if(a.postcode)preencher("c_cep",a.postcode,true);
+          }
+          preenchendoCEP=false;
+          if(rural&&cidade){try{if(window.aplicarTipoEnderecoMF)window.aplicarTipoEnderecoMF();}catch(e){}}
+          cb(cidade,uf,a,rural);
+        },function(){cb("","",{},false);});
+    }
+
     /* marca o ponto de onde a pessoa está, na hora */
     function marcarAqui(aoTerminar){
       if(!navigator.geolocation){
@@ -12643,14 +12681,23 @@ function erro(msg){
       }
       avisoGeo("Procurando a sua localização…");
       navigator.geolocation.getCurrentPosition(function(pos){
-        campo.value=pos.coords.latitude.toFixed(6)+","+pos.coords.longitude.toFixed(6);
+        var la=pos.coords.latitude,lo=pos.coords.longitude;
+        campo.value=la.toFixed(6)+","+lo.toFixed(6);
         campo.__escolhido=campo.value;
         atualizarLink();
         var m=Math.round(pos.coords.accuracy||0);
-        avisoGeo("Ponto gravado com precisão de "+m+" m."+
-          (m>60?" A precisão ficou baixa — se puder, saia de baixo de laje ou de árvore e toque de novo.":
-                " Toque nos botões abaixo para conferir a rota.")+
-          " Para ajustar o ponto na mão, use “Marcar no mapa”.","ok");
+        avisoGeo("Ponto gravado com precisão de "+m+" m. Descobrindo a cidade…","ok");
+        preencherPeloPonto(la,lo,function(cidade,uf,a,rural){
+          var onde=[a.road,a.suburb||a.neighbourhood,cidade&&uf?cidade+"/"+uf:cidade]
+            .filter(Boolean).join(", ");
+          avisoGeo("Ponto gravado com precisão de "+m+" m"+(onde?" — "+onde:"")+"."+
+            (cidade?(rural
+              ? " Cidade preenchida; escreva a estrada e a comunidade."
+              : " Cidade, bairro e rua preenchidos pelo ponto — confira o número.")
+              : " Não consegui descobrir a cidade por aqui; escolha na lista.")+
+            (m>60?" A precisão ficou baixa: se puder, saia de baixo de laje ou de árvore e toque de novo.":""),
+            m>60?"":"ok");
+        });
         if(aoTerminar)aoTerminar(true);
       },function(e){
         avisoGeo(e&&e.code===1
@@ -12660,6 +12707,7 @@ function erro(msg){
       },{enableHighAccuracy:true,timeout:12000,maximumAge:0});
     }
     var bLocal=botao("Marcar onde estou",function(){marcarAqui();});
+    window.preencherPeloPontoMF=preencherPeloPonto;
 
     var bEnd=botao("Buscar pelo endereço",function(){
       var rua=valorDe("c_rua"),num=valorDe("c_num"),bairro=valorDe("c_bairro"),
