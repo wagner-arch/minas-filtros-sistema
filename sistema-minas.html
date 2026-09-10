@@ -185,6 +185,9 @@
   .auto button{display:block;width:100%;text-align:left;background:none;border:0;font:inherit;
     padding:9px 11px;border-radius:7px;cursor:pointer;color:var(--ink)}
   .auto button:hover{background:var(--accent-2)}
+  .lnk-cli{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--accent);
+    cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:2px}
+  .lnk-cli:hover{opacity:.8}
   .auto button span{display:block;font-size:12.5px;color:var(--ink-3)}
 
   /* ---------- calendário ---------- */
@@ -1903,6 +1906,18 @@ img{max-width:100%}
               <option value="emdia">Em dia</option>
               <option value="premium">Só plano Premium</option>
             </select>
+            <select id="mpProd" style="max-width:200px"></select>
+            <select id="mpGrupo" style="max-width:170px"></select>
+            <select id="mpIdade" style="max-width:170px">
+              <option value="">Todas as idades</option>
+              <option value="0-30">Até 30 anos</option>
+              <option value="31-45">31 a 45 anos</option>
+              <option value="46-60">46 a 60 anos</option>
+              <option value="61-200">Acima de 60 anos</option>
+              <option value="sem">Sem data de nascimento</option>
+            </select>
+            <input id="mpDe" type="date" title="Vence a partir de" style="max-width:160px">
+            <input id="mpAte" type="date" title="Vence até" style="max-width:160px">
             <span class="count" id="mpCount"></span>
             <span class="sp"></span>
             <button class="btn" type="button" id="mpBaixa">Registrar manutenção</button>
@@ -8917,8 +8932,43 @@ function renderManut(){
   var n2=n1.filter(function(e){return !bai||e._c.bairro===bai;});
   encherFiltro("mpRua",unicos(n2.map(function(e){return e._c;}),"rua"),"Todas as ruas");
   var rua=$("mpRua").value,sit=$("mpSit").value;
+  var n3=n2.filter(function(e){return !rua||e._c.rua===rua;});
+
+  /* produto e grupo saem dos próprios equipamentos da lista */
+  var grupos=[],prods=[];
+  n3.forEach(function(e){
+    var p=produtos.filter(function(x){return x.id===e.produtoId;})[0]||{};
+    e._g=p.grupo||"";
+    if(e.produto&&prods.indexOf(e.produto)<0)prods.push(e.produto);
+    if(e._g&&grupos.indexOf(e._g)<0)grupos.push(e._g);
+  });
+  encherFiltro("mpGrupo",grupos.sort(),"Todos os grupos");
+  var grp=$("mpGrupo").value;
+  var n4=n3.filter(function(e){return !grp||e._g===grp;});
+  encherFiltro("mpProd",prods.sort(),"Todos os produtos");
+  var prodSel=$("mpProd").value;
+  var n5=n4.filter(function(e){return !prodSel||e.produto===prodSel;});
+
+  /* idade do cliente e janela de vencimento */
+  var faixa=$("mpIdade").value,de=$("mpDe").value,ate=$("mpAte").value;
+  var n6=n5.filter(function(e){
+    if(!faixa)return true;
+    var a=idadeDe(e._c.nasc);
+    if(faixa==="sem")return a==null;
+    if(a==null)return false;
+    var p=faixa.split("-");
+    return a>=+p[0]&&a<=+p[1];
+  }).filter(function(e){
+    if(!de&&!ate)return true;
+    var px=proximaDe(e);
+    if(!px)return false;
+    if(de&&px<de)return false;
+    if(ate&&px>ate)return false;
+    return true;
+  });
+
   var q=($("mpBusca").value||"").toLowerCase().trim(),num=q.replace(/\D/g,"");
-  var lista=n2.filter(function(e){return !rua||e._c.rua===rua;})
+  var lista=n6
     .filter(function(e){
       var s=sitEq(e);
       if(sit==="vencida")return s.k==="vencida";
@@ -8956,8 +9006,8 @@ function renderManut(){
     var s=sitEq(e),c=e._c,px=proximaDe(e);
     var tr=document.createElement("tr");tr.className="clickable";
     var idade=idadeDe(c.nasc);
-    tr.innerHTML='<td><div class="t-main">'+esc(e.cliente||c.nome||"—")+'</div><div class="t-sub">'+
-        esc(c.tel||"")+(idade!=null?" · "+idade+" anos":"")+"</div></td>"+
+    tr.innerHTML='<td><div class="t-main"><button type="button" class="lnk-cli" data-mpcli="'+esc(e.clienteId||"")+'">'+esc(e.cliente||c.nome||"—")+"</button></div>"+
+        '<div class="t-sub">'+esc(c.tel||"")+(idade!=null?" · "+idade+" anos":"")+"</div></td>"+
       '<td><div class="t-main">'+esc(e.produto||"—")+'</div><div class="t-sub"><code>'+
         esc(e.serie||"sem série")+"</code>"+(e.local?" · "+esc(e.local):"")+
         ((e.plano&&e.plano!=="Bronze")?' <span class="pill p-acc">'+esc(e.plano)+"</span>":"")+"</div></td>"+
@@ -8978,6 +9028,18 @@ function renderManut(){
       abrirEquip(e);};
     b.appendChild(tr);
   });
+  /* nome do cliente na lista abre o atendimento já preenchido */
+  Array.prototype.forEach.call(b.querySelectorAll("[data-mpcli]"),function(bt){
+    bt.onclick=function(ev){
+      ev.stopPropagation();
+      var cid=bt.getAttribute("data-mpcli");
+      var c=clientes.filter(function(x){return x.id===cid;})[0];
+      if(!c){toast("Este equipamento não está ligado a um cadastro de cliente.");return;}
+      ir("atend");
+      try{abrirAtend(null);}catch(e){}
+      try{preencherCliente(c);}catch(e){}
+      toast("Atendimento aberto para "+(c.nome||"")+" — registre o contato.");
+    };});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mpb]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
       var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mpb");})[0];
@@ -11434,7 +11496,8 @@ function ligar(){
 
   /* ---- Manutenção periódica ---- */
   $("mpBusca").oninput=renderManut;
-  ["mpCidade","mpBairro","mpRua","mpSit"].forEach(function(id){$(id).onchange=renderManut;});
+  ["mpCidade","mpBairro","mpRua","mpSit","mpProd","mpGrupo","mpIdade","mpDe","mpAte"]
+    .forEach(function(id){$(id).onchange=renderManut;});
   $("mpNovo").onclick=function(){abrirEquip(null);};
   $("mpBaixa").onclick=function(){abrirManut(null);};
   $("mpCancelar").onclick=function(){$("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;};
