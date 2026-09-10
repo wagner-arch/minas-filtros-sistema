@@ -1935,7 +1935,7 @@ img{max-width:100%}
           </div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="mp_tecnico">Técnico de referência</label><select id="mp_tecnico"></select></div>
-            <div class="fld"><label for="mp_local">Onde está instalado</label><input id="mp_local" placeholder="Cozinha, copa, área externa…"></div>
+            <div class="fld"><label for="mp_local" id="mp_lblLocal">Informações · localização do produto</label><input id="mp_local" placeholder="Cozinha, ao lado da geladeira"></div>
             <div class="fld" style="grid-column:span 2"><label for="mp_obs">Observações</label><input id="mp_obs" placeholder="Acesso, horário melhor, particularidades"></div>
           </div>
           <div id="mp_achou"></div>
@@ -4310,7 +4310,8 @@ async function salvarPedido(){
   var cli=clientes.filter(function(c){return c.id===$("v_cliente").value;})[0];
   var anexados=ANEXOS.filter(function(a){return a.arquivo;}).map(function(a){return a.rot;});
   var ped={id:uid(),loja:lojaAtual,numero:(pedidos.filter(function(p){return p.loja===lojaAtual;}).length+20801),
-    data:new Date().toISOString().slice(0,10),cliente:cli?cli.nome:"—",clienteId:cli?cli.id:"",
+    data:new Date().toISOString().slice(0,10),hora:agoraHM(),
+    cliente:cli?cli.nome:"—",clienteId:cli?cli.id:"",
     prospector:$("v_prosp").value,vendedor:$("v_vend").value,instalador:$("v_inst").value,
     itens:itens.slice(),formas:formas.slice(),total:r.total,depreciado:r.dep,base:r.base,pontos:r.pontos,
     obs:$("v_obs").value.trim(),usoImagem:$("v_imagem").value,anexos:anexados,assinado:true,
@@ -8652,18 +8653,31 @@ function eqPor(termo){
    cliente + o intervalo do produto. Comprou o refil de novo, o relógio
    reinicia na data da compra. Uma troca registrada depois da última venda
    também reinicia — senão o sistema cobraria uma visita que já foi feita. */
-function ultimaVendaDe(e){
-  var d="";
+function vendaMaisRecenteDe(e){
+  var achado=null;
   for(var i=0;i<pedidos.length;i++){
     var p=pedidos[i];
     if(p.status==="Cancelada")continue;
     if(e.clienteId&&p.clienteId!==e.clienteId)continue;
     for(var j=0;j<(p.itens||[]).length;j++){
-      if(p.itens[j].pid!==e.produtoId)continue;
-      if(!d||String(p.data||"")>d)d=String(p.data||"");
+      var it=p.itens[j];
+      if(it.pid!==e.produtoId)continue;
+      /* com série, só conta a venda daquele aparelho; sem série, qualquer
+         venda do mesmo produto para o mesmo cliente reinicia o prazo */
+      if(e.serie&&it.serie&&it.serie!==e.serie)continue;
+      if(!achado||String(p.data||"")>String(achado.data||""))achado=p;
     }
   }
-  return d;
+  return achado;
+}
+function ultimaVendaDe(e){
+  var p=vendaMaisRecenteDe(e);
+  return p?String(p.data||""):"";
+}
+function horaUltimaVendaDe(e){
+  var p=vendaMaisRecenteDe(e);
+  if(!p)return "";
+  return p.hora||(p.instalacao?String(p.instalacao).split(" ")[1]:"")||"";
 }
 function baseManut(e){
   var b=ultimaVendaDe(e)||e.compradoEm||e.instaladoEm||"";
@@ -8795,20 +8809,16 @@ function renderManut(){
     tr.innerHTML='<td><div class="t-main">'+esc(e.cliente||c.nome||"—")+'</div><div class="t-sub">'+
         esc(c.tel||"")+(idade!=null?" · "+idade+" anos":"")+"</div></td>"+
       '<td><div class="t-main">'+esc(e.produto||"—")+'</div><div class="t-sub"><code>'+
-        esc(e.serie||"sem série")+"</code>"+
+        esc(e.serie||"sem série")+"</code>"+(e.local?" · "+esc(e.local):"")+
         ((e.plano&&e.plano!=="Bronze")?' <span class="pill p-acc">'+esc(e.plano)+"</span>":"")+"</div></td>"+
       '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
         '</div><div class="t-sub">'+esc([c.bairro,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
         mapaLink(c.geo)+"</div></td>"+
-      '<td><div class="t-main">'+esc(e.compradoEm||e.instaladoEm||"—")+'</div><div class="t-sub">'+
-        (e.pedidoNumero?"pedido "+esc(String(e.pedidoNumero)):"")+"</div></td>"+
+      "<td>"+esc(e.compradoEm||e.instaladoEm||"—")+"</td>"+
       '<td class="num">'+(e.valorCompra!=null?BRL(e.valorCompra):"—")+"</td>"+
       "<td>"+esc(e.formaPgto||"—")+"</td>"+
       '<td><div class="t-main">'+esc(e.ultimaManut||e.instaladoEm||"—")+'</div><div class="t-sub">'+
-        (e.ultimaManut
-          ? esc(e.ultimaManutHora||"")+(e.ultimoValor?" · "+BRL(e.ultimoValor):"")+
-            (e.ultimaForma?" · "+esc(e.ultimaForma):"")
-          : "instalação")+"</div></td>"+
+        (e.ultimaManut?esc(e.ultimaManutHora||""):esc(horaUltimaVendaDe(e)||"instalação"))+"</div></td>"+
       "<td><b>"+esc(px||"—")+"</b>"+(e.manutDias?'<div class="t-sub">a cada '+e.manutDias+" dias</div>":"")+"</td>"+
       '<td><span class="pill '+s.cls+'">'+s.n+"</span></td>"+
       '<td class="num"><button class="btn ghost sm" type="button" data-mpb="'+e.id+'">Manutenção</button> '+
@@ -8853,6 +8863,7 @@ function abrirEquip(e){
   $("mp_dias").value=v.manutDias||"";$("mp_ultima").value=v.ultimaManut||"";
   $("mp_plano").value=v.plano||"Bronze";$("mp_tecnico").value=v.tecnico||usuarioAtual;
   $("mp_local").value=v.local||"";$("mp_obs").value=v.obs||"";
+  try{ajustarLocalEquip();}catch(e){}
   if(v.clienteId)eqCli=clientes.filter(function(c){return c.id===v.clienteId;})[0]||null;
   $("mp_achou").innerHTML="";$("mp_sug").hidden=true;$("mp_alerta").innerHTML="";
   $("mpDesativar").style.display=e?"":"none";
@@ -8891,12 +8902,33 @@ function buscarClienteEq(){
     box.appendChild(b);});
   box.hidden=false;
 }
+/* sem número de série, é a localização que identifica o aparelho:
+   o campo passa a ser obrigatório e o rótulo avisa */
+function ajustarLocalEquip(){
+  var s=$("mp_serie"),l=$("mp_local"),lbl=$("mp_lblLocal");
+  if(!s||!l||!lbl)return;
+  var semSerie=!s.value.trim();
+  lbl.innerHTML="Informações · localização do produto"+(semSerie?' <span class="req">*</span>':"");
+  l.placeholder=semSerie
+    ? "Obrigatório sem série — ex.: cozinha, ao lado da geladeira"
+    : "Cozinha, copa, área externa…";
+}
 async function salvarEquip(){
   var serie=$("mp_serie").value.trim(),pid=$("mp_prod").value;
-  if(!$("mp_nome").value.trim()||!pid||!serie){
-    $("mp_alerta").innerHTML='<div class="note crit"><b>Cliente, produto e número de série são obrigatórios.</b></div>';return null;}
-  var dup=equipamentos.filter(function(x){return x.loja===lojaAtual&&x.serie===serie&&x!==editandoEq;})[0];
-  if(dup){$("mp_alerta").innerHTML='<div class="note crit"><b>Já existe equipamento com esta série</b> — '+esc(dup.cliente||"")+".</div>";return null;}
+  var local=$("mp_local").value.trim();
+  if(!$("mp_nome").value.trim()||!pid){
+    $("mp_alerta").innerHTML='<div class="note crit"><b>Cliente e produto são obrigatórios.</b></div>';return null;}
+  /* sem série, é a localização que identifica o aparelho na casa do cliente */
+  if(!serie&&!local){
+    $("mp_alerta").innerHTML='<div class="note crit"><b>Informe a localização do produto.</b> '+
+      "Este aparelho não tem número de série, então é a localização que diz qual é ele — "+
+      "por exemplo <i>cozinha, ao lado da geladeira</i> ou <i>refeitório do 2º andar</i>.</div>";
+    try{$("mp_local").focus();}catch(e){}
+    return null;}
+  if(serie){
+    var dup=equipamentos.filter(function(x){return x.loja===lojaAtual&&x.serie===serie&&x!==editandoEq;})[0];
+    if(dup){$("mp_alerta").innerHTML='<div class="note crit"><b>Já existe equipamento com esta série</b> — '+esc(dup.cliente||"")+".</div>";return null;}
+  }
   var p=produtos.filter(function(x){return x.id===pid;})[0]||{};
   var e=editandoEq||{id:uid(),loja:lojaAtual,historico:[],ativo:true,criadoEm:hojeISO()};
   e.cliente=eqCli?eqCli.nome:$("mp_nome").value.trim();e.clienteId=eqCli?eqCli.id:(e.clienteId||"");
@@ -8916,7 +8948,7 @@ function abrirManut(e){
   opcoes("mn_peca",produtos.filter(function(p){return (p.status||"ativo")==="ativo";}),
     function(p){return p.id;},function(p){return p.cod+" · "+p.nome;},null);
   $("mn_serie").value=e?(e.serie||e.cliente||""):"";$("mn_data").value=hojeISO();
-  $("mn_hora").value=agoraHM();
+  $("mn_hora").value=(e?horaUltimaVendaDe(e):"")||agoraHM();
   var sf=$("mn_forma");
   if(!sf.options.length){
     var o0=document.createElement("option");o0.value="";o0.textContent="—";sf.appendChild(o0);
@@ -8936,7 +8968,9 @@ function notaManutEq(){
   if(!e){$("mn_eq").innerHTML='<div class="note warn"><b>Série não encontrada.</b> Confira o número ou cadastre o equipamento primeiro.</div>';return;}
   var s=sitEq(e),c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
   $("mn_eq").innerHTML="<b>"+esc(e.produto)+"</b> · "+esc(e.cliente||c.nome||"")+
-    (c.cidade?" · "+esc(c.cidade):"")+"<br>Instalado em "+esc(e.instaladoEm||"—")+
+    (c.cidade?" · "+esc(c.cidade):"")+
+    (e.serie?"<br>Série "+esc(e.serie):(e.local?"<br>Sem série · <b>"+esc(e.local)+"</b>":"<br>Sem série e sem localização"))+
+    "<br>Instalado em "+esc(e.instaladoEm||"—")+
     " · última manutenção "+esc(e.ultimaManut||"nunca")+" · <span class=\"pill "+s.cls+"\">"+s.n+"</span>"+
     "<br>Plano <b>"+esc(e.plano||"Bronze")+"</b> · "+(e.historico||[]).length+" manutenção(ões) no histórico";
 }
@@ -8952,8 +8986,7 @@ function buscarSerie(){
   ach.forEach(function(e){
     var b=document.createElement("button");b.type="button";
     b.innerHTML="<b>"+esc(e.cliente||"—")+"</b><span>"+esc(e.produto||"")+" · "+
-      (e.serie?"série "+esc(e.serie):"sem série")+
-      (e.pedidoNumero?" · pedido "+esc(String(e.pedidoNumero)):"")+"</span>";
+      (e.serie?"série "+esc(e.serie):"sem série")+(e.local?" · "+esc(e.local):"")+"</span>";
     b.onclick=function(){$("mn_serie").value=e.serie||e.cliente||"";mnEq=e;box.hidden=true;notaManutEq();};
     box.appendChild(b);});
   box.hidden=false;
@@ -11224,6 +11257,7 @@ function ligar(){
   $("mp_nome").onblur=function(){setTimeout(function(){$("mp_sug").hidden=true;},180);};
   $("mp_prod").onchange=function(){$("mp_dias").value="";notaEquip();};
   ["mp_dias","mp_inst","mp_ultima"].forEach(function(id){$(id).onchange=notaEquip;});
+  $("mp_serie").oninput=ajustarLocalEquip;
   $("mpSalvar").onclick=async function(){
     var e=await salvarEquip();if(!e)return;
     $("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;
