@@ -1465,6 +1465,7 @@ img{max-width:100%}
           <div class="grid g4" style="margin-top:16px">
             <div class="fld" style="grid-column:span 2"><label for="os_end">Endereço</label><input id="os_end"></div>
             <div class="fld"><label for="os_cidade">Cidade</label><input id="os_cidade"></div>
+            <div class="fld"><label for="os_uf">Estado</label><input id="os_uf" maxlength="2" placeholder="MG"></div>
             <div class="fld"><label for="os_email">E-mail</label><input id="os_email" type="email"></div>
           </div>
           <div id="os_achou"></div>
@@ -3342,6 +3343,8 @@ img{max-width:100%}
           <input id="na_cidade" autocapitalize="words"></div>
         <div class="fld"><label for="na_bairro">Bairro <span class="req">*</span></label>
           <input id="na_bairro" autocapitalize="words"></div>
+        <div class="fld"><label for="na_uf">Estado</label>
+          <input id="na_uf" maxlength="2" placeholder="MG"></div>
       </div>
       <div class="grid g3" style="margin-top:4px">
         <div class="fld"><label for="na_rua">Rua <span class="req">*</span></label>
@@ -3883,7 +3886,8 @@ var CO_LEAD=[["tipo","Tipo de contato"],["nome","Nome e sobrenome"],["sexo","Sex
   ["origem","Origem do contato"],["tel","Telefone"]];
 /* obrigatórios do CLIENTE — exigidos para vender */
 var CO_CLI=CO_LEAD.concat([["doc","CPF/CNPJ"],["nasc","Data de nascimento"],["cep","CEP"],
-  ["rua","Rua"],["num","Número"],["comp","Complemento"],["bairro","Bairro"],["cidade","Cidade"]]);
+  ["rua","Rua"],["num","Número"],["comp","Complemento"],["bairro","Bairro"],["cidade","Cidade"],
+  ["uf","Estado"],["geo","Geolocalização"]]);
 var CAMPOS_CLI=["nome","doc","apelido","nasc","tel","email","prof","cep","rua","num","comp","bairro","cidade","uf",
   "tipoend","ref","geo",
   "sexo","ie","respNome","respContato","respTel","comprasNome","comprasTel","comprasEmail",
@@ -11933,8 +11937,8 @@ function erro(msg){
   var GRUPOS_END=[
     {cep:"c_cep", rua:"c_rua", bairro:"c_bairro", cidade:"c_cidade", uf:"c_uf"},
     {cep:"u_cep", rua:"u_rua", bairro:"u_bairro", cidade:"u_cidade", uf:"u_uf"},
-    {cep:"",      rua:"na_rua",bairro:"na_bairro",cidade:"na_cidade",uf:""},
-    {cep:"",      rua:"",      bairro:"",         cidade:"os_cidade",uf:""},
+    {cep:"",      rua:"na_rua",bairro:"na_bairro",cidade:"na_cidade",uf:"na_uf"},
+    {cep:"",      rua:"",      bairro:"",         cidade:"os_cidade",uf:"os_uf"},
     {cep:"",      rua:"",      bairro:"",         cidade:"at_cidade",uf:""}
   ];
   var cacheCEP={},buscandoCEP={},preenchendoCEP=false;
@@ -12469,6 +12473,130 @@ function erro(msg){
     d.innerHTML=texto?'<div class="note '+(tipo==="erro"?"crit":(tipo==="ok"?"ok":"warn"))+'">'+escT(texto)+"</div>":"";
   }
 
+
+  /* ================= MAPA PARA MARCAR O PONTO =================
+     Tocar no campo de geolocalização abre o mapa. A pessoa arrasta até o
+     lugar certo, confirma, e a coordenada fica gravada no cadastro.
+     (O aplicativo do Google Maps não devolve o ponto para o sistema; por
+     isso a marcação é feita neste mapa, e o Maps e o Waze ficam para
+     traçar a rota depois.) */
+  var mapaPronto=false,mapaObj=null,mapaAlvo=null;
+
+  function carregarMapa(cb){
+    if(mapaPronto){cb();return;}
+    var css=document.createElement("link");
+    css.rel="stylesheet";
+    css.href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+    document.head.appendChild(css);
+    var s=document.createElement("script");
+    s.src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+    s.onload=function(){mapaPronto=true;cb();};
+    s.onerror=function(){cb(new Error("mapa"));};
+    document.head.appendChild(s);
+  }
+
+  function montarModalMapa(){
+    if(document.getElementById("mapaModal"))return;
+    var d=document.createElement("div");
+    d.className="modal";d.id="mapaModal";d.hidden=true;
+    d.innerHTML='<div class="box" style="width:min(720px,100%)">'+
+      "<h3>Marque o ponto do endereço</h3>"+
+      '<div class="sub">Arraste o mapa até o local. O alfinete do meio é o ponto que será gravado.</div>'+
+      '<div id="mapaAviso"></div>'+
+      '<div id="mapaCaixa" style="position:relative;height:52vh;min-height:280px;'+
+        'border-radius:12px;overflow:hidden;margin:12px 0;background:var(--bg)">'+
+        '<div id="mapaTela" style="position:absolute;inset:0"></div>'+
+        '<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-100%);'+
+          'font-size:34px;line-height:1;pointer-events:none;text-shadow:0 2px 6px rgba(0,0,0,.4)">📍</div>'+
+      "</div>"+
+      '<div class="fld"><label for="mapaCoord">Coordenada escolhida</label>'+
+        '<input id="mapaCoord" readonly></div>'+
+      '<div class="actions">'+
+        '<button class="btn" type="button" id="mapaUsar">Usar este ponto</button>'+
+        '<button class="btn ghost" type="button" id="mapaAqui">Ir para onde estou</button>'+
+        '<button class="btn mut" type="button" id="mapaFechar">Cancelar</button>'+
+      "</div></div>";
+    document.body.appendChild(d);
+
+    document.getElementById("mapaFechar").onclick=function(){d.hidden=true;};
+    document.getElementById("mapaUsar").onclick=function(){
+      var v=document.getElementById("mapaCoord").value;
+      if(mapaAlvo&&coordValida(v)){
+        mapaAlvo.value=coordValida(v);
+        mapaAlvo.__escolhido=mapaAlvo.value;
+        try{mapaAlvo.dispatchEvent(new Event("input",{bubbles:true}));}catch(e){}
+      }
+      d.hidden=true;
+    };
+    document.getElementById("mapaAqui").onclick=function(){
+      if(!navigator.geolocation||!mapaObj)return;
+      var av=document.getElementById("mapaAviso");
+      av.innerHTML='<div class="note">Procurando você…</div>';
+      navigator.geolocation.getCurrentPosition(function(p){
+        av.innerHTML='<div class="note ok">Precisão de '+Math.round(p.coords.accuracy||0)+" m.</div>";
+        mapaObj.setView([p.coords.latitude,p.coords.longitude],18);
+      },function(){
+        av.innerHTML='<div class="note crit">Você não autorizou a localização.</div>';
+      },{enableHighAccuracy:true,timeout:10000,maximumAge:0});
+    };
+  }
+
+  function centroInicial(campo,cb){
+    var c=coordValida(campo.value);
+    if(c){var p=c.split(",");cb([+p[0],+p[1]],18);return;}
+    var cidade=valorDe("c_cidade"),uf=valorDe("c_uf")||UF_PADRAO;
+    if(navigator.geolocation){
+      navigator.geolocation.getCurrentPosition(function(p){
+        cb([p.coords.latitude,p.coords.longitude],17);
+      },function(){buscarCidade();},{enableHighAccuracy:false,timeout:6000,maximumAge:300000});
+    }else{buscarCidade();}
+    function buscarCidade(){
+      if(!cidade){cb([-19.8597,-44.6083],13);return;}
+      fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q="+
+        encodeURIComponent(cidade+", "+uf+", Brasil"))
+        .then(function(r){return r.json();})
+        .then(function(j){
+          if(j&&j.length)cb([+j[0].lat,+j[0].lon],14);
+          else cb([-19.8597,-44.6083],13);
+        },function(){cb([-19.8597,-44.6083],13);});
+    }
+  }
+
+  function abrirMapa(campo){
+    mapaAlvo=campo;
+    montarModalMapa();
+    var modal=document.getElementById("mapaModal");
+    var av=document.getElementById("mapaAviso");
+    modal.hidden=false;
+    av.innerHTML='<div class="note">Abrindo o mapa…</div>';
+    carregarMapa(function(erro){
+      if(erro||!window.L){
+        av.innerHTML='<div class="note crit"><b>Não consegui carregar o mapa.</b> '+
+          "Sem internet, use o botão “Pegar do meu aparelho” — ele não precisa de mapa.</div>";
+        return;
+      }
+      av.innerHTML="";
+      centroInicial(campo,function(centro,zoom){
+        if(!mapaObj){
+          mapaObj=L.map("mapaTela",{zoomControl:true}).setView(centro,zoom);
+          L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{
+            maxZoom:19,attribution:"© OpenStreetMap"}).addTo(mapaObj);
+          mapaObj.on("move",function(){
+            var c=mapaObj.getCenter();
+            document.getElementById("mapaCoord").value=c.lat.toFixed(6)+","+c.lng.toFixed(6);
+          });
+        }else{
+          mapaObj.setView(centro,zoom);
+        }
+        setTimeout(function(){
+          try{mapaObj.invalidateSize();}catch(e){}
+          var c=mapaObj.getCenter();
+          document.getElementById("mapaCoord").value=c.lat.toFixed(6)+","+c.lng.toFixed(6);
+        },200);
+      });
+    });
+  }
+  window.abrirMapaMF=abrirMapa;
   function ligarGeo(){
     var campo=document.getElementById("c_geo");
     var acoes=document.getElementById("c_geoAcoes");
@@ -12495,6 +12623,13 @@ function erro(msg){
         if(p[3])a.href=p[3];
       });
     }
+
+    /* tocar no campo abre o mapa para marcar o ponto */
+    campo.readOnly=true;
+    campo.style.cursor="pointer";
+    campo.placeholder="toque para marcar no mapa";
+    campo.addEventListener("click",function(){abrirMapa(campo);});
+    botao("Marcar no mapa",function(){abrirMapa(campo);});
 
     var bLocal=botao("Pegar do meu aparelho",function(){
       if(!navigator.geolocation){avisoGeo("Este aparelho não informa localização.","erro");return;}
@@ -12534,12 +12669,7 @@ function erro(msg){
         });
     });
 
-    campo.addEventListener("input",function(){
-      atualizarLink();
-      if(campo.value.trim()&&!coordValida(campo.value)){
-        avisoGeo("Escreva como latitude, longitude — por exemplo -19.859768, -44.608352. Ou use os botões acima.","erro");
-      }else{avisoGeo("");}
-    });
+    campo.addEventListener("input",function(){atualizarLink();});
     atualizarLink();
 
     /* ---- urbano x rural ---- */
