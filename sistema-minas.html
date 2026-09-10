@@ -11894,6 +11894,117 @@ function erro(msg){
       catch(x){try{el.scrollIntoView();}catch(y){}}
     },330);
   });
+
+  /* ---- CEP: digitou o CEP (no campo de CEP ou no de Cidade), o sistema
+     busca na base dos Correios e preenche rua, bairro, cidade e UF ---- */
+  var GRUPOS_END=[
+    {cep:"c_cep", rua:"c_rua", bairro:"c_bairro", cidade:"c_cidade", uf:"c_uf"},
+    {cep:"u_cep", rua:"u_rua", bairro:"u_bairro", cidade:"u_cidade", uf:"u_uf"},
+    {cep:"",      rua:"na_rua",bairro:"na_bairro",cidade:"na_cidade",uf:""},
+    {cep:"",      rua:"",      bairro:"",         cidade:"os_cidade",uf:""},
+    {cep:"",      rua:"",      bairro:"",         cidade:"at_cidade",uf:""}
+  ];
+  var cacheCEP={},buscandoCEP={};
+
+  function soDigitos(v){return String(v||"").replace(/\D/g,"");}
+  function formatarCEP(d){return d.length===8?d.slice(0,5)+"-"+d.slice(5):d;}
+
+  function avisoCEP(campo,texto,tipo){
+    if(!campo)return;
+    var pai=campo.parentNode;if(!pai)return;
+    var av=pai.querySelector(".aviso-cep");
+    if(!texto){if(av&&av.parentNode)av.parentNode.removeChild(av);return;}
+    if(!av){
+      av=document.createElement("div");
+      av.className="aviso-cep help";
+      av.style.marginTop="5px";
+      pai.appendChild(av);
+    }
+    av.style.color=(tipo==="erro"?"var(--crit)":(tipo==="ok"?"var(--ok)":"var(--ink-3)"));
+    av.textContent=texto;
+  }
+
+  function porCEP(d){
+    if(cacheCEP[d])return Promise.resolve(cacheCEP[d]);
+    return fetch("https://viacep.com.br/ws/"+d+"/json/")
+      .then(function(r){return r.json();})
+      .then(function(j){
+        if(!j||j.erro)throw new Error("nao achou");
+        return {rua:j.logradouro||"",bairro:j.bairro||"",cidade:j.localidade||"",uf:j.uf||""};
+      })
+      .then(null,function(){
+        return fetch("https://brasilapi.com.br/api/cep/v2/"+d)
+          .then(function(r){return r.json();})
+          .then(function(j){
+            if(!j||!j.city)throw new Error("nao achou");
+            return {rua:j.street||"",bairro:j.neighborhood||"",cidade:j.city||"",uf:j.state||""};
+          });
+      })
+      .then(function(e){cacheCEP[d]=e;return e;});
+  }
+
+  function preencher(id,valor){
+    if(!id||!valor)return false;
+    var e=document.getElementById(id);
+    if(!e)return false;
+    e.value=valor;
+    try{
+      e.dispatchEvent(new Event("input",{bubbles:true}));
+      e.dispatchEvent(new Event("change",{bubbles:true}));
+    }catch(x){}
+    return true;
+  }
+
+  function aplicarCEP(g,campo,d){
+    if(buscandoCEP[d])return;
+    buscandoCEP[d]=true;
+    avisoCEP(campo,"Procurando o CEP "+formatarCEP(d)+"…");
+    porCEP(d).then(function(e){
+      buscandoCEP[d]=false;
+      preencher(g.cep,formatarCEP(d));
+      preencher(g.cidade,e.cidade);
+      preencher(g.uf,e.uf);
+      if(e.bairro)preencher(g.bairro,e.bairro);
+      if(e.rua)preencher(g.rua,e.rua);
+      var onde=[e.rua,e.bairro].filter(Boolean).join(", ");
+      if(e.rua){
+        avisoCEP(campo,onde+" — "+e.cidade+"/"+e.uf+". Falta só o número.","ok");
+      }else{
+        avisoCEP(campo,e.cidade+"/"+e.uf+" — este CEP vale para a cidade toda; escreva a rua e o bairro.","");
+      }
+    },function(){
+      buscandoCEP[d]=false;
+      avisoCEP(campo,"CEP "+formatarCEP(d)+" não encontrado na base dos Correios. Confira o número ou preencha à mão.","erro");
+    });
+  }
+
+  function ligarCEP(){
+    GRUPOS_END.forEach(function(g){
+      [g.cep,g.cidade].forEach(function(id){
+        if(!id)return;
+        var campo=document.getElementById(id);
+        if(!campo||campo.__cepLigado)return;
+        campo.__cepLigado=true;
+        var tratar=function(){
+          var d=soDigitos(campo.value);
+          if(d.length===8){aplicarCEP(g,campo,d);}
+          else if(!d.length){avisoCEP(campo,"");}
+          else if(id===g.cep&&d.length<8){avisoCEP(campo,"");}
+        };
+        campo.addEventListener("input",tratar);
+        campo.addEventListener("blur",function(){
+          if(id===g.cep){
+            var d=soDigitos(campo.value);
+            if(d.length===8)campo.value=formatarCEP(d);
+          }
+        });
+      });
+      var c=document.getElementById(g.cidade);
+      if(c&&!c.placeholder)c.placeholder="Cidade ou CEP";
+    });
+  }
+  ligarCEP();
+  setTimeout(ligarCEP,2500);
   window.addEventListener("resize",function(){posicionar();sincronizar();});
   montarBarra();
   posicionar();
