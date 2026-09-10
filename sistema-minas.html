@@ -13042,6 +13042,164 @@ function erro(msg){
   }
   ligarGeo();
   setTimeout(ligarGeo,2500);
+
+  /* ================= LEITOR DE CÓDIGO DE BARRAS =================
+     Aponta a câmera do celular para a etiqueta e o número de série entra
+     sozinho. Usa o leitor nativo do navegador quando existe (Android) e,
+     quando não existe (iPhone), carrega a biblioteca ZXing. */
+  var zxingPronto=false,zxLeitor=null,codStream=null,codParar=null,codAlvo=null;
+
+  function carregarZXing(cb){
+    if(zxingPronto){cb();return;}
+    var s=document.createElement("script");
+    s.src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
+    s.onload=function(){zxingPronto=true;cb();};
+    s.onerror=function(){cb(new Error("zxing"));};
+    document.head.appendChild(s);
+  }
+
+  function montarModalCodigo(){
+    if(document.getElementById("codModal"))return;
+    var d=document.createElement("div");
+    d.className="modal";d.id="codModal";d.hidden=true;
+    d.innerHTML='<div class="box" style="width:min(560px,100%)">'+
+      "<h3>Ler código de barras</h3>"+
+      '<div class="sub">Aponte a câmera para a etiqueta do aparelho. O número entra sozinho.</div>'+
+      '<div id="codAviso"></div>'+
+      '<div style="position:relative;background:#0B1220;border-radius:12px;overflow:hidden;'+
+        'aspect-ratio:4/3;margin:12px 0">'+
+        '<video id="codVideo" autoplay playsinline muted style="position:absolute;inset:0;'+
+          'width:100%;height:100%;object-fit:cover"></video>'+
+        '<div style="position:absolute;left:8%;right:8%;top:38%;height:24%;'+
+          'border:2px solid rgba(255,255,255,.7);border-radius:8px;pointer-events:none"></div>'+
+      "</div>"+
+      '<div class="fld"><label for="codManual">Ou digite o número</label>'+
+        '<input id="codManual" inputmode="numeric" placeholder="digite se a etiqueta estiver apagada"></div>'+
+      '<div class="actions">'+
+        '<button class="btn" type="button" id="codUsar">Usar este número</button>'+
+        '<button class="btn mut" type="button" id="codFechar">Cancelar</button>'+
+      "</div></div>";
+    document.body.appendChild(d);
+    document.getElementById("codFechar").onclick=function(){fecharCodigo();};
+    document.getElementById("codUsar").onclick=function(){
+      var v=(document.getElementById("codManual").value||"").trim();
+      if(v)aplicarCodigo(v);
+      else fecharCodigo();
+    };
+  }
+
+  function fecharCodigo(){
+    try{if(codParar)codParar();}catch(e){}
+    codParar=null;
+    try{
+      if(codStream)codStream.getTracks().forEach(function(t){t.stop();});
+    }catch(e){}
+    codStream=null;
+    var m=document.getElementById("codModal");
+    if(m)m.hidden=true;
+  }
+
+  function aplicarCodigo(txt){
+    if(codAlvo){
+      codAlvo.value=txt;
+      codAlvo.__escolhido=txt;
+      try{
+        codAlvo.dispatchEvent(new Event("input",{bubbles:true}));
+        codAlvo.dispatchEvent(new Event("change",{bubbles:true}));
+      }catch(e){}
+    }
+    fecharCodigo();
+    try{toast("Código lido: "+txt);}catch(e){}
+  }
+
+  function lerCodigo(campo){
+    codAlvo=campo;
+    montarModalCodigo();
+    var m=document.getElementById("codModal"),av=document.getElementById("codAviso");
+    document.getElementById("codManual").value="";
+    m.hidden=false;
+    av.innerHTML='<div class="note">Abrindo a câmera…</div>';
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      av.innerHTML='<div class="note crit"><b>Este aparelho não dá acesso à câmera pelo navegador.</b> Digite o número abaixo.</div>';
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false})
+      .then(function(s){
+        codStream=s;
+        var v=document.getElementById("codVideo");
+        v.srcObject=s;
+        av.innerHTML='<div class="note">Enquadre a etiqueta dentro do retângulo.</div>';
+        if(window.BarcodeDetector){lerComNativo(v,av);}
+        else{carregarZXing(function(erro){
+          if(erro||!window.ZXing){
+            av.innerHTML='<div class="note warn"><b>Não consegui carregar o leitor.</b> Digite o número abaixo.</div>';
+            return;
+          }
+          lerComZXing(v,av);
+        });}
+      },function(e){
+        av.innerHTML='<div class="note crit"><b>'+
+          (e&&e.name==="NotAllowedError"?"Você não autorizou a câmera.":"Não consegui abrir a câmera.")+
+          "</b> Digite o número abaixo.</div>";
+      });
+  }
+
+  function lerComNativo(v,av){
+    var det;
+    try{
+      det=new window.BarcodeDetector({formats:["code_128","code_39","ean_13","ean_8","itf","codabar","upc_a","upc_e","qr_code"]});
+    }catch(e){
+      try{det=new window.BarcodeDetector();}catch(x){av.innerHTML='<div class="note warn">Leitor indisponível. Digite o número.</div>';return;}
+    }
+    var vivo=true;
+    codParar=function(){vivo=false;};
+    (function laco(){
+      if(!vivo)return;
+      det.detect(v).then(function(cods){
+        if(!vivo)return;
+        if(cods&&cods.length&&cods[0].rawValue){aplicarCodigo(String(cods[0].rawValue).trim());return;}
+        setTimeout(laco,250);
+      },function(){if(vivo)setTimeout(laco,400);});
+    })();
+  }
+
+  function lerComZXing(v,av){
+    try{
+      zxLeitor=new window.ZXing.BrowserMultiFormatReader();
+      var vivo=true;
+      codParar=function(){
+        vivo=false;
+        try{zxLeitor.reset();}catch(e){}
+      };
+      zxLeitor.decodeFromVideoElement(v,function(res){
+        if(!vivo||!res)return;
+        var t=res.getText?res.getText():res.text;
+        if(t)aplicarCodigo(String(t).trim());
+      });
+    }catch(e){
+      av.innerHTML='<div class="note warn"><b>Não consegui iniciar o leitor.</b> Digite o número abaixo.</div>';
+    }
+  }
+
+  /* botão "ler código" ao lado de cada campo de número de série */
+  function ligarLeitores(){
+    ["mp_serie","v_serie","os_serie","mn_serie"].forEach(function(id){
+      var campo=document.getElementById(id);
+      if(!campo||campo.__leitorLigado)return;
+      campo.__leitorLigado=true;
+      var lbl=campo.parentNode&&campo.parentNode.querySelector("label");
+      if(!lbl)return;
+      var b=document.createElement("button");
+      b.type="button";
+      b.className="btn sm ghost";
+      b.style.cssText="margin-left:8px;padding:2px 8px;font-size:11.5px;min-height:0";
+      b.textContent="ler código";
+      b.onclick=function(){lerCodigo(campo);};
+      lbl.appendChild(b);
+    });
+  }
+  ligarLeitores();
+  setTimeout(ligarLeitores,2500);
   window.addEventListener("resize",function(){posicionar();sincronizar();});
   montarBarra();
   posicionar();
