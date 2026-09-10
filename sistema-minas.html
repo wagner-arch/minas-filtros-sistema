@@ -630,10 +630,17 @@ img{max-width:100%}
   .login-logo{max-width:150px;height:40px;margin-bottom:18px}
 
   /* --- janelas viram folha de baixo para cima --- */
-  .modal{padding:0;align-items:flex-end}
+  .modal{padding:0;align-items:flex-end;z-index:170;overscroll-behavior:contain}
   .modal .box{width:100%!important;max-width:none;max-height:90vh;
-    max-height:calc(var(--vv, 90dvh) - 20px);
+    max-height:calc(var(--vv, 90dvh) - 20px);overflow-y:auto;-webkit-overflow-scrolling:touch;
+    overscroll-behavior:contain;
     padding:22px 16px calc(20px + env(safe-area-inset-bottom));border-radius:16px 16px 0 0}
+  /* os botões da janela ficam sempre à vista, mesmo com o conteúdo rolado */
+  .modal .box>.actions:last-child{position:sticky;bottom:0;z-index:2;background:var(--card);
+    padding:10px 0 4px;margin-top:12px;box-shadow:0 -12px 12px -12px rgba(0,0,0,.35)}
+  /* janela aberta: a página de trás não rola, e a barra de baixo e o + saem da frente */
+  html.com-modal,html.com-modal body{overflow:hidden}
+  html.com-modal .barra-inf,html.com-modal .novo{display:none!important}
   .actions{display:flex;flex-wrap:wrap;gap:8px}
   .actions>.btn{flex:1 1 auto;justify-content:center;min-height:42px}
   .btn{padding:9px 14px;font-size:14px;min-height:42px}
@@ -1122,7 +1129,8 @@ img{max-width:100%}
               <div class="fld"><label for="v_valor">Valor unitário</label><input id="v_valor" type="number" step="10"></div>
               <div class="fld"><label for="v_serie">Número de série</label><input id="v_serie" placeholder="—"></div>
               <div class="fld" id="v_localWrap" hidden><label for="v_local">Localização do produto <span class="req">*</span></label>
-                <input id="v_local" placeholder="Cozinha, refeitório, área externa…" autocomplete="off"></div>
+                <input id="v_local" placeholder="Cozinha, refeitório, área externa…" autocomplete="off">
+                <div class="help">Onde o aparelho vai ficar <b>no cliente</b>. Sem número de série, é o que diferencia um aparelho do outro na manutenção periódica.</div></div>
             </div>
             <div class="fld" id="v_equipWrap" hidden style="margin-top:14px">
               <label for="v_equip">Esta venda é manutenção de qual aparelho? <span class="req">*</span></label>
@@ -4298,9 +4306,10 @@ function ajustarLocalItem(){
     $("v_serie").disabled=false;
     $("v_serie").placeholder=(p.serie==="sim")?"leia o código ou digite":"série, se o aparelho tiver";
   }
-  var lbl=w.querySelector("label");
-  if(lbl)lbl.innerHTML="Localização do produto"+
-    (($("v_serie").value||"").trim()?"":' <span class="req">*</span>');
+  var lbl=w.querySelector("label"),temSerie=!!($("v_serie").value||"").trim();
+  if(lbl)lbl.innerHTML="Localização do produto"+(temSerie
+    ? ' <span style="font-weight:400;color:var(--ink-3)">(opcional — a série já identifica)</span>'
+    : ' <span class="req">*</span>');
 }
 function addItem(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];if(!p)return;
@@ -11752,6 +11761,8 @@ function ligar(){
   };
   $("v_prod").onchange=sincronizarValor;$("v_add").onclick=addItem;
   $("v_equip").onchange=ajustarLocalItem;
+  /* série digitada ou lida pela câmera: a localização passa a opcional na hora */
+  $("v_serie").addEventListener("input",ajustarLocalItem);
   $("v_gar").onchange=notaGarantia;$("v_imagem").onchange=calcular;
   ["v_valor","v_qtd"].forEach(function(id){$(id).oninput=calcular;$(id).onchange=calcular;});
   $("v_addForma").onclick=function(){formas.push({tipo:"Dinheiro",valor:0,parc:1});renderFormas();calcular();};
@@ -13501,12 +13512,19 @@ function erro(msg){
       av.innerHTML='<div class="note crit"><b>Este aparelho não dá acesso à câmera pelo navegador.</b> Digite o número abaixo.</div>';
       return;
     }
-    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false})
+    /* resolução alta: barra fina de etiqueta pequena some em vídeo de 640 px */
+    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},
+        width:{ideal:1920},height:{ideal:1080}},audio:false})
       .then(function(s){
         codStream=s;
+        try{
+          var trilha=s.getVideoTracks()[0];
+          if(trilha&&trilha.applyConstraints)
+            trilha.applyConstraints({advanced:[{focusMode:"continuous"}]}).then(null,function(){});
+        }catch(e){}
         var v=document.getElementById("codVideo");
         v.srcObject=s;
-        av.innerHTML='<div class="note">Enquadre a etiqueta dentro do retângulo.</div>';
+        av.innerHTML='<div class="note">Enquadre a etiqueta no retângulo, com as barras deitadas, a um palmo da câmera.</div>';
         if(window.BarcodeDetector){lerComNativo(v,av);}
         else{carregarZXing(function(erro){
           if(erro||!window.ZXing){
@@ -13541,22 +13559,63 @@ function erro(msg){
     })();
   }
 
+  /* iPhone: o leitor de vídeo da ZXing espera o evento "playing" para começar,
+     mas a câmera já está tocando quando a biblioteca chega — e a leitura nunca
+     começava. O laço agora é nosso: a cada volta copia o retângulo do vídeo
+     para um canvas e pede à ZXing só a decodificação daquela imagem. */
   function lerComZXing(v,av){
+    var Z=window.ZXing,leitor,dicas;
     try{
-      zxLeitor=new window.ZXing.BrowserMultiFormatReader();
-      var vivo=true;
-      codParar=function(){
-        vivo=false;
-        try{zxLeitor.reset();}catch(e){}
-      };
-      zxLeitor.decodeFromVideoElement(v,function(res){
-        if(!vivo||!res)return;
-        var t=res.getText?res.getText():res.text;
-        if(t)aplicarCodigo(String(t).trim());
-      });
+      dicas=new Map();
+      dicas.set(Z.DecodeHintType.TRY_HARDER,true);
+      dicas.set(Z.DecodeHintType.POSSIBLE_FORMATS,[Z.BarcodeFormat.CODE_128,Z.BarcodeFormat.CODE_39,
+        Z.BarcodeFormat.EAN_13,Z.BarcodeFormat.EAN_8,Z.BarcodeFormat.ITF,Z.BarcodeFormat.CODABAR,
+        Z.BarcodeFormat.UPC_A,Z.BarcodeFormat.UPC_E,Z.BarcodeFormat.QR_CODE]);
+      leitor=new Z.MultiFormatReader();
+      leitor.setHints(dicas);
     }catch(e){
       av.innerHTML='<div class="note warn"><b>Não consegui iniciar o leitor.</b> Digite o número abaixo.</div>';
+      return;
     }
+    var cv=document.createElement("canvas");
+    var ctx=cv.getContext("2d",{willReadFrequently:true})||cv.getContext("2d");
+    var vivo=true,volta=0,anterior="";
+    codParar=function(){vivo=false;};
+    function copiarQuadro(inteiro){
+      var vw=v.videoWidth,vh=v.videoHeight;
+      if(!vw||!vh)return false;
+      var cw=v.clientWidth||vw,ch=v.clientHeight||vh;
+      /* o vídeo aparece em "cover": converte o retângulo da tela para o vídeo */
+      var fat=Math.max(cw/vw,ch/vh),ox=(cw-vw*fat)/2,oy=(ch-vh*fat)/2;
+      var x0=inteiro?0:(cw*0.04-ox)/fat,x1=inteiro?vw:(cw*0.96-ox)/fat;
+      var y0=inteiro?0:(ch*0.30-oy)/fat,y1=inteiro?vh:(ch*0.70-oy)/fat;
+      x0=Math.max(0,x0);y0=Math.max(0,y0);x1=Math.min(vw,x1);y1=Math.min(vh,y1);
+      var sw=x1-x0,sh=y1-y0;
+      if(sw<10||sh<10)return false;
+      var k=Math.min(1,1280/sw);
+      cv.width=Math.round(sw*k);cv.height=Math.round(sh*k);
+      ctx.drawImage(v,x0,y0,sw,sh,0,0,cv.width,cv.height);
+      return true;
+    }
+    (function laco(){
+      if(!vivo)return;
+      volta++;
+      try{
+        /* três voltas no retângulo, uma no quadro inteiro */
+        if(copiarQuadro(volta%4===0)){
+          var bmp=new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(cv)));
+          var res=leitor.decodeWithState(bmp);
+          var t=res&&(res.getText?res.getText():res.text);
+          if(t){
+            t=String(t).trim();
+            /* a mesma leitura duas vezes seguidas: reflexo não vira número errado */
+            if(t===anterior){vivo=false;aplicarCodigo(t);return;}
+            anterior=t;
+          }
+        }
+      }catch(e){}
+      setTimeout(laco,120);
+    })();
   }
 
   /* botão "ler código" ao lado de cada campo de número de série */
@@ -13578,6 +13637,18 @@ function erro(msg){
   }
   ligarLeitores();
   setTimeout(ligarLeitores,2500);
+
+  /* janela aberta: a página de trás não rola, e a barra de baixo sai da frente */
+  function marcarModal(){
+    var aberto=Array.prototype.some.call(document.querySelectorAll(".modal"),function(m){
+      return !m.hidden&&window.getComputedStyle(m).display!=="none";});
+    document.documentElement.classList.toggle("com-modal",aberto);
+  }
+  try{
+    new MutationObserver(marcarModal).observe(document.body,
+      {subtree:true,attributes:true,attributeFilter:["hidden"]});
+  }catch(e){}
+  marcarModal();
   window.addEventListener("resize",function(){posicionar();sincronizar();});
   montarBarra();
   posicionar();
