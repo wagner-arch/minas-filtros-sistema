@@ -3888,12 +3888,15 @@ var CAMPOS_CLI=["nome","doc","apelido","nasc","tel","email","prof","cep","rua","
   "tipoend","ref","geo",
   "sexo","ie","respNome","respContato","respTel","comprasNome","comprasTel","comprasEmail",
   "conjnome","conjcpf","conjrg","conjnasc","conjtel","conjemail"];
-/* link para o Google Maps quando o endereço tem geolocalização gravada */
+/* links de rota do endereço: abrem já navegando, e o Waze fica ao lado
+   como saída quando o Google Maps não abre no aparelho */
 function mapaLink(geo){
-  var u=(window.linkMapaMF?window.linkMapaMF(geo):"");
-  if(!u)return "";
-  return '<br><a href="'+u+'" target="_blank" rel="noopener" '+
-    'onclick="event.stopPropagation()" style="font-size:12px">ver no mapa</a>';
+  var m=(window.linkMapaMF?window.linkMapaMF(geo):"");
+  if(!m)return "";
+  var w=(window.linkWazeMF?window.linkWazeMF(geo):"");
+  var estilo=' target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-size:12px"';
+  return '<br><a href="'+m+'"'+estilo+'>traçar rota</a>'+
+    (w?' · <a href="'+w+'"'+estilo+'>Waze</a>':"");
 }
 function faltamObrig(c,modo){
   var base=(modo==="cliente"?CO_CLI:CO_LEAD).slice();
@@ -7983,6 +7986,7 @@ function abrirDetalhes(a){
     (a.tel||c.tel?"<br>"+esc(a.tel||c.tel):"")+
     (c.rua?"<br>"+esc([c.rua,c.num,c.bairro].filter(Boolean).join(", ")):"")+
     (c.cidade?"<br>"+esc(c.cidade+(c.uf?"/"+c.uf:"")):"")+
+    mapaLink(c.geo)+
     (c.origem?'<br><span class="t-sub">veio por '+esc(c.origem)+"</span>":"");
   $("dt_quando").innerHTML="<b>"+esc(a.data)+(a.inicio?" às "+esc(a.inicio):"")+"</b>"+
     (a.fim?" – "+esc(a.fim):"")+
@@ -8719,7 +8723,7 @@ function renderManut(){
     tr.innerHTML='<td><div class="t-main">'+esc(e.cliente||c.nome||"—")+'</div><div class="t-sub">'+esc(c.tel||"")+"</div></td>"+
       '<td><div class="t-main">'+esc(e.produto||"—")+'</div><div class="t-sub"><code>'+esc(e.serie||"")+"</code></div></td>"+
       '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||"—")+
-        '</div><div class="t-sub">'+esc([c.bairro,c.cidade].filter(Boolean).join(" · ")||"—")+"</div></td>"+
+        '</div><div class="t-sub">'+esc([c.bairro,c.cidade].filter(Boolean).join(" · ")||"—")+mapaLink(c.geo)+"</div></td>"+
       "<td>"+esc(e.ultimaManut||e.instaladoEm||"—")+(e.ultimaManut?"":'<div class="t-sub">instalação</div>')+"</td>"+
       "<td><b>"+esc(px||"—")+"</b></td>"+
       "<td>"+((e.plano||"Bronze")==="Bronze"?'<span class="pill p-mut">Bronze</span>':'<span class="pill p-acc">'+esc(e.plano)+"</span>")+"</td>"+
@@ -8800,7 +8804,7 @@ function buscarClienteEq(){
   achados.forEach(function(c){
     var b=document.createElement("button");b.type="button";b.innerHTML=linhaSugestao(c);
     b.onclick=function(){eqCli=c;$("mp_nome").value=c.nome;box.hidden=true;
-      $("mp_achou").innerHTML='<div class="note ok"><b>Cliente vinculado.</b> '+esc([c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "))+"</div>";};
+      $("mp_achou").innerHTML='<div class="note ok"><b>Cliente vinculado.</b> '+esc([c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "))+mapaLink(c.geo)+"</div>";};
     box.appendChild(b);});
   box.hidden=false;
 }
@@ -9053,7 +9057,7 @@ function preencherClienteOS(c){
   var vs=vendasDe(c.id);
   $("os_achou").innerHTML='<div class="note ok"><b>'+(ehLead(c)?"Lead":"Cliente")+" "+esc(c.codigo||"")+
     ".</b> Dados trazidos do cadastro · "+vs.length+" venda(s) no histórico"+
-    (vs.length?" · última em "+esc(vs.sort(function(a,b){return (b.data||"").localeCompare(a.data||"");})[0].data):"")+".</div>";
+    (vs.length?" · última em "+esc(vs.sort(function(a,b){return (b.data||"").localeCompare(a.data||"");})[0].data):"")+"."+mapaLink(c.geo)+"</div>";
   /* se ele comprou um equipamento com série, sugere */
   var comSerie=[];
   vs.forEach(function(p){(p.itens||[]).forEach(function(i){if(i.serie)comSerie.push({s:i.serie,n:i.nome,pid:i.pid,d:p.data});});});
@@ -12411,11 +12415,20 @@ function erro(msg){
     if(isNaN(la)||isNaN(lo)||la<-34||la>6||lo<-74||lo>-33)return null;
     return la.toFixed(6)+","+lo.toFixed(6);
   }
+  /* Os dois links abrem NAVEGANDO, com a rota já traçada a partir de onde a
+     pessoa está: o Google Maps no modo direções e o Waze no modo navegar.
+     Ter os dois resolve o caso do Maps não abrir no aparelho. */
   function linkMapa(geo){
     var c=coordValida(geo);
-    return c?"https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(c):"";
+    return c?"https://www.google.com/maps/dir/?api=1&destination="+encodeURIComponent(c)+
+      "&travelmode=driving&dir_action=navigate":"";
+  }
+  function linkWaze(geo){
+    var c=coordValida(geo);
+    return c?"https://www.waze.com/ul?ll="+encodeURIComponent(c)+"&navigate=yes&zoom=17":"";
   }
   window.linkMapaMF=linkMapa;
+  window.linkWazeMF=linkWaze;
   /* ---- CEP geral da cidade ----
      Regra dos Correios: o CEP do município é o prefixo da cidade terminado
      em 000 (a rua 35660-045 pertence à cidade de CEP 35660-000). O sistema
@@ -12469,16 +12482,18 @@ function erro(msg){
       acoes.appendChild(b);return b;
     }
     function atualizarLink(){
-      var a=document.getElementById("c_geoLink");
-      var url=linkMapa(campo.value);
-      if(!a){
-        a=document.createElement("a");
-        a.id="c_geoLink";a.className="btn sm";a.target="_blank";a.rel="noopener";
-        a.textContent="Abrir no Google Maps";
-        acoes.appendChild(a);
-      }
-      a.hidden=!url;
-      if(url)a.href=url;
+      var url=linkMapa(campo.value),wz=linkWaze(campo.value);
+      [["c_geoLink","Traçar rota no Google Maps","btn sm",url],
+       ["c_geoWaze","Abrir no Waze","btn sm ghost",wz]].forEach(function(p){
+        var a=document.getElementById(p[0]);
+        if(!a){
+          a=document.createElement("a");
+          a.id=p[0];a.className=p[2];a.target="_blank";a.rel="noopener";a.textContent=p[1];
+          acoes.appendChild(a);
+        }
+        a.hidden=!p[3];
+        if(p[3])a.href=p[3];
+      });
     }
 
     var bLocal=botao("Pegar do meu aparelho",function(){
