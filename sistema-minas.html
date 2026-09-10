@@ -4332,26 +4332,12 @@ async function salvarPedido(){
     await lancarMov(it.pid,q,fonte,"venda","Pedido "+ped.numero,ped.cliente,ped.data,"");
   }
 
-  /* produto com série e intervalo de manutenção vira equipamento acompanhado */
-  var novosEq=await sincronizarEquipamentos();
-  /* venda de refil/peça para quem já tem equipamento: é a manutenção periódica? */
-  var eqsCli=cli?equipamentos.filter(function(e){return e.clienteId===cli.id&&e.ativo!==false;}):[];
-  var semSerie=ped.itens.filter(function(i){return !i.serie;});
-  if(eqsCli.length&&semSerie.length&&!novosEq){
-    var alvo=eqsCli.sort(function(a,b){return (proximaDe(a)||"9").localeCompare(proximaDe(b)||"9");})[0];
-    if(confirm("Este cliente tem o equipamento "+alvo.produto+" (série "+alvo.serie+")"+
-      (proximaDe(alvo)?" com manutenção prevista para "+proximaDe(alvo):"")+".\n\n"+
-      "Esta venda é a manutenção periódica dele? Se sim, a data avança e as peças entram no histórico do equipamento.")){
-      alvo.historico=alvo.historico||[];
-      alvo.historico.push({data:ped.data,tecnico:ped.instalador||ped.vendedor,cobranca:"cobrada",
-        pecas:semSerie.map(function(i){return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:i.qtd||1,valor:+i.valor||0};}),
-        obs:"Pela venda "+ped.numero,pedidoId:ped.id,por:usuarioAtual,em:hojeISO()});
-      alvo.ultimaManut=ped.data;
-      await grava("equipamentos",alvo);
-      var visita=atendimentos.filter(function(a){return a.equipId===alvo.id&&a.natureza==="atividade"&&a.status!=="finalizado";})[0];
-      if(visita)await concluirAtivPorAcao(visita,"Concluída pela venda "+ped.numero);
-      toast("Manutenção do "+alvo.produto+" registrada pela venda · próxima em "+proximaDe(alvo)+".");
-    }
+  /* Produto com intervalo de manutenção: a venda baixa a manutenção pendente
+     daquele produto e já agenda a próxima, contada a partir desta venda. */
+  var rman=await manutencaoPelaVenda(ped);
+  if(rman.baixadas||rman.agendadas){
+    toast((rman.baixadas?rman.baixadas+" manutenção(ões) baixada(s) pela venda. ":"")+
+      (rman.agendadas?rman.agendadas+" próxima(s) já agendada(s).":""));
   }
 
   if(eraLead&&cli){
@@ -8699,13 +8685,36 @@ function sitEq(e){
   if(d<=30)return {k:"mes",n:"Vence em "+d+" dias",cls:"p-acc",dias:d};
   return {k:"emdia",n:"Em dia · "+d+" dias",cls:"p-ok",dias:d};
 }
-/* toda venda de produto com intervalo de manutenção vira equipamento — com ou
-   sem número de série. Sem série, é identificado pelo pedido e pela posição do
-   item. Guarda junto o que a manutenção precisa mostrar depois: data e valor da
-   compra e como foi pago. */
-function chaveEquip(p,it,j){
-  return (it.serie&&String(it.serie).trim())?("s:"+String(it.serie).trim().toLowerCase())
-                                            :("p:"+p.id+"#"+j);
+/* Toda venda de produto com intervalo de manutenção alimenta a manutenção
+   periódica — com ou sem número de série.
+   Com série, cada aparelho é um registro próprio. Sem série, o cliente tem um
+   registro por produto: comprar de novo não cria outro, atualiza o que existe.
+   A localização, preenchida no cadastro do equipamento, é o que separa dois
+   aparelhos iguais do mesmo cliente. */
+function semAcento(s){
+  s=String(s||"").toLowerCase().trim();
+  var de="áàâãäéèêëíìîïóòôõöúùûüçñ",para="aaaaaeeeeiiiiooooouuuucn",out="",p;
+  for(var i=0;i<s.length;i++){p=de.indexOf(s.charAt(i));out+=(p>=0?para.charAt(p):s.charAt(i));}
+  return out.replace(/\s+/g," ");
+}
+function chaveEquip(p,it){
+  if(it.serie&&String(it.serie).trim())return "s:"+String(it.serie).trim().toLowerCase();
+  return "c:"+(p.clienteId||"")+"|"+(it.pid||"");
+}
+function equipDaVenda(p,it){
+  var meus=equipamentos.filter(function(e){return e.loja===p.loja;});
+  if(it.serie){
+    return meus.filter(function(e){return e.serie===it.serie;})[0]||
+           meus.filter(function(e){return e.chave==="s:"+String(it.serie).trim().toLowerCase();})[0]||null;
+  }
+  var doProduto=meus.filter(function(e){
+    return e.clienteId===p.clienteId&&e.produtoId===it.pid&&e.ativo!==false;});
+  if(!doProduto.length)return null;
+  if(doProduto.length===1)return doProduto[0];
+  /* o cliente tem mais de um aparelho igual, separados pela localização:
+     a venda vale para o que está mais perto de vencer */
+  return doProduto.sort(function(a,b){
+    return String(proximaDe(a)||"9999").localeCompare(String(proximaDe(b)||"9999"));})[0];
 }
 function resumoPgto(p){
   var f=(p.formas||[]).filter(function(x){return +x.valor>0;});
@@ -8723,34 +8732,59 @@ async function sincronizarEquipamentos(){
       var it=p.itens[j];
       var prod=produtos.filter(function(x){return x.id===it.pid;})[0];
       if(!prod||!(+prod.manut))continue;
-      var ch=chaveEquip(p,it,j);
-      var ja=equipamentos.filter(function(e){
-        if(e.loja!==p.loja)return false;
-        if(e.chave)return e.chave===ch;
-        return !!it.serie&&e.serie===it.serie;   /* equipamentos antigos, sem chave */
-      })[0];
+      var ch=chaveEquip(p,it);
+      var ja=equipDaVenda(p,it);
       if(ja){
         var mudou=false;
-        if(!ja.chave){ja.chave=ch;mudou=true;}
-        if(ja.valorCompra==null){ja.valorCompra=(+it.valor||0)*(+it.qtd||1);mudou=true;}
-        if(!ja.formaPgto){ja.formaPgto=resumoPgto(p);mudou=true;}
-        if(!ja.compradoEm){ja.compradoEm=p.data;mudou=true;}
+        if(ja.chave!==ch){ja.chave=ch;mudou=true;}
+        if(!ja.compradoEm||String(p.data||"")>=String(ja.compradoEm||"")){
+          ja.compradoEm=p.data;ja.compradoHora=p.hora||"";
+          ja.valorCompra=(+it.valor||0)*(+it.qtd||1);
+          ja.formaPgto=resumoPgto(p);
+          if(it.serie&&!ja.serie)ja.serie=it.serie;
+          mudou=true;
+        }
         if(mudou)await grava("equipamentos",ja);
         continue;
       }
       var e={id:uid(),loja:p.loja,chave:ch,clienteId:p.clienteId,cliente:p.cliente,
         produtoId:prod.id,produto:prod.nome,serie:it.serie||"",
-        compradoEm:p.data,valorCompra:(+it.valor||0)*(+it.qtd||1),formaPgto:resumoPgto(p),
+        compradoEm:p.data,compradoHora:p.hora||"",
+        valorCompra:(+it.valor||0)*(+it.qtd||1),formaPgto:resumoPgto(p),
         instaladoEm:(p.instalacao?String(p.instalacao).split(" ")[0]:p.data),
         manutDias:+prod.manut,ultimaManut:"",ultimaManutHora:"",
         ultimoValor:null,ultimaForma:"",plano:it.garantia||"Bronze",
         tecnico:p.instalador||p.vendedor||"",local:"",obs:"",
-        pedidoId:p.id,pedidoNumero:p.numero,itemIdx:j,historico:[],ativo:true,
+        pedidoId:p.id,pedidoNumero:p.numero,historico:[],ativo:true,
         demo:!!p.demo,criadoEm:hojeISO()};
       equipamentos.push(e);await grava("equipamentos",e);criados++;
     }
   }
   return criados;
+}
+/* A VENDA é que baixa a manutenção pendente daquele produto e gera a próxima,
+   contada a partir da data da venda. */
+async function manutencaoPelaVenda(ped){
+  var baixadas=0,agendadas=0,semLocal=0;
+  try{await sincronizarEquipamentos();}catch(err){console.warn(err);}
+  for(var j=0;j<(ped.itens||[]).length;j++){
+    var it=ped.itens[j];
+    var prod=produtos.filter(function(x){return x.id===it.pid;})[0];
+    if(!prod||!(+prod.manut))continue;
+    var e=equipDaVenda(ped,it);
+    if(!e)continue;
+    if(!e.serie&&!e.local)semLocal++;
+    var pend=atendimentos.filter(function(a){
+      return a.equipId===e.id&&a.natureza==="atividade"&&a.status!=="finalizado";});
+    for(var k=0;k<pend.length;k++){
+      await concluirAtivPorAcao(pend[k],
+        "Baixada pela venda "+ped.numero+" de "+ped.data+" — o produto foi trocado nesta venda.");
+      baixadas++;
+    }
+    var nova=await agendarProximaManut(e,{tecnico:ped.instalador||ped.vendedor||"",hora:ped.hora||""});
+    if(nova)agendadas++;
+  }
+  return {baixadas:baixadas,agendadas:agendadas,semLocal:semLocal};
 }
 function renderManut(){
   var base=equipamentos.filter(function(e){return e.loja===lojaAtual;});
