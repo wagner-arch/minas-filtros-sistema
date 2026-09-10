@@ -12132,6 +12132,7 @@ function erro(msg){
     campo.addEventListener("blur",function(){
       setTimeout(function(){
         fecharCaixa(campo);
+        if(window.enderecoLivreMF&&window.enderecoLivreMF(campo))return;
         var v=campo.value.trim();
         if(!v)return;
         if(campo.__escolhido&&normalizar(campo.__escolhido)===normalizar(v))return;
@@ -12165,6 +12166,7 @@ function erro(msg){
           confirmar(g.cidade,it.cidade);
           confirmar(g.uf,it.uf);
           avisoCEP(campo,"");
+          try{if(window.aplicarTipoEnderecoMF)window.aplicarTipoEnderecoMF();}catch(e){}
           var r=document.getElementById(g.rua);
           if(r)try{r.focus();}catch(e){}
         });
@@ -12414,6 +12416,39 @@ function erro(msg){
     return c?"https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(c):"";
   }
   window.linkMapaMF=linkMapa;
+  /* ---- CEP geral da cidade ----
+     Regra dos Correios: o CEP do município é o prefixo da cidade terminado
+     em 000 (a rua 35660-045 pertence à cidade de CEP 35660-000). O sistema
+     pega um CEP qualquer da cidade, reduz ao prefixo, monta o -000 e ainda
+     confere; se a conferência não responder, usa assim mesmo e avisa. */
+  var cacheCepCidade={};
+  function cepDaCidade(cidade,uf,cb){
+    var k=uf+"|"+normalizar(cidade);
+    if(cacheCepCidade[k]!==undefined){var g=cacheCepCidade[k];cb(g.cep,g.confirmado);return;}
+    function guardar(cep,confirmado){cacheCepCidade[k]={cep:cep,confirmado:confirmado};cb(cep,confirmado);}
+    fetch("https://viacep.com.br/ws/"+uf+"/"+encodeURIComponent(cidade)+"/Centro/json/")
+      .then(function(r){return r.json();})
+      .then(function(j){
+        if(!j||!j.length)throw new Error("vazio");
+        var pre=String(j[0].cep||"").replace(/\D/g,"").slice(0,5);
+        if(pre.length!==5)throw new Error("prefixo");
+        var cand=pre+"000";
+        fetch("https://brasilapi.com.br/api/cep/v2/"+cand)
+          .then(function(r){return r.json();})
+          .then(function(b){
+            var ok=!!(b&&b.city&&normalizar(b.city)===normalizar(cidade));
+            guardar(cand,ok);
+          },function(){guardar(cand,false);});
+      },function(){guardar("",false);});
+  }
+
+  /* no endereço rural a rua e o bairro são escritos à mão, sem lista obrigatória */
+  function enderecoLivre(campo){
+    var t=document.getElementById("c_tipoend");
+    if(!t||t.value!=="rural")return false;
+    return campo.id==="c_rua"||campo.id==="c_bairro";
+  }
+  window.enderecoLivreMF=enderecoLivre;
 
   function avisoGeo(texto,tipo){
     var d=document.getElementById("c_geoAviso");
@@ -12455,7 +12490,7 @@ function erro(msg){
         campo.__escolhido=campo.value;
         atualizarLink();
         avisoGeo("Ponto gravado com precisão de "+Math.round(pos.coords.accuracy||0)+
-          " m. Confira no mapa antes de salvar — o vendedor precisa estar NO endereço do cliente.","ok");
+          " m. Confira no mapa antes de salvar — é preciso estar NO endereço do cliente.","ok");
       },function(){
         bLocal.disabled=false;bLocal.textContent="Pegar do meu aparelho";
         avisoGeo("Você não autorizou a localização.","erro");
@@ -12472,12 +12507,12 @@ function erro(msg){
         .then(function(r){return r.json();})
         .then(function(j){
           bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
-          if(!j||!j.length){avisoGeo("Não achei este endereço no mapa. Use “Pegar do meu aparelho” estando no local.","erro");return;}
+          if(!j||!j.length){avisoGeo("Não achei este endereço no mapa. Estando no local, use “Pegar do meu aparelho”.","erro");return;}
           campo.value=(+j[0].lat).toFixed(6)+","+(+j[0].lon).toFixed(6);
           campo.__escolhido=campo.value;
           atualizarLink();
-          avisoGeo("Ponto encontrado pelo endereço: "+(j[0].display_name||"").slice(0,90)+
-            ". Confira no mapa — endereço aproximado.","");
+          avisoGeo("Ponto encontrado pelo endereço: "+String(j[0].display_name||"").slice(0,90)+
+            ". Confira no mapa — é aproximado.","");
         },function(){
           bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
           avisoGeo("Não consegui consultar o mapa agora.","erro");
@@ -12493,25 +12528,50 @@ function erro(msg){
     atualizarLink();
 
     /* ---- urbano x rural ---- */
+    function cepDoMunicipio(){
+      var cidade=valorDe("c_cidade"),uf=(valorDe("c_uf")||UF_PADRAO).toUpperCase();
+      var cep=document.getElementById("c_cep");
+      if(!cidade||!cep)return;
+      cep.value="";
+      cep.placeholder="procurando o CEP da cidade…";
+      cepDaCidade(cidade,uf,function(c,confirmado){
+        if(!cep)return;
+        if(c){
+          preenchendoCEP=true;
+          cep.value=formatarCEP(c);
+          cep.__escolhido=cep.value;
+          preenchendoCEP=false;
+          cep.placeholder="CEP da cidade";
+          avisoGeo("CEP "+formatarCEP(c)+" — é o CEP único de "+cidade+
+            (confirmado?"":" (prefixo da cidade terminado em 000)")+
+            ". Escreva a rua ou a estrada e o bairro do jeito que forem conhecidos, e marque a geolocalização.","");
+        }else{
+          cep.placeholder="sem CEP único conhecido";
+          avisoGeo("Não achei um CEP único para "+cidade+
+            ". Pode deixar o CEP em branco: no endereço rural o que vale é a geolocalização.","");
+        }
+      });
+    }
     function aplicarTipo(){
       var rural=(tipo&&tipo.value==="rural");
-      [["c_cep",!rural],["c_rua",!rural],["c_num",!rural],["c_comp",!rural]].forEach(function(p){
-        var e=document.getElementById(p[0]);
-        if(e&&e.parentNode)e.parentNode.hidden=!p[1];
-      });
       var lbl=document.getElementById("c_lblRef");
-      if(lbl)lbl.innerHTML=rural
-        ? 'Como chegar <span class="req">*</span>'
-        : "Ponto de referência";
+      if(lbl)lbl.innerHTML=rural?'Como chegar <span class="req">*</span>':"Ponto de referência";
       var lg=campo.parentNode&&campo.parentNode.querySelector("label");
       if(lg)lg.innerHTML=rural?'Geolocalização <span class="req">*</span>':"Geolocalização";
       var r=document.getElementById("c_ref");
       if(r)r.placeholder=rural
         ? "Ex.: estrada para Pitangui, km 7, fazenda Boa Vista, portão azul depois da ponte"
         : "Ex.: em frente à padaria";
-      if(rural&&!campo.value){
-        avisoGeo("Endereço rural: sem rua e sem CEP, é a geolocalização que leva o instalador até lá. "+
-          "Estando no local, use “Pegar do meu aparelho”.","");
+      var cep=document.getElementById("c_cep");
+      var rua=document.getElementById("c_rua"),bairro=document.getElementById("c_bairro");
+      if(rua)rua.placeholder=rural?"Estrada, córrego, sítio — escreva como é conhecido":"";
+      if(bairro)bairro.placeholder=rural?"Comunidade, distrito ou região":"";
+      if(rural){
+        if(cep){cep.readOnly=true;}
+        cepDoMunicipio();
+      }else{
+        if(cep){cep.readOnly=false;cep.placeholder="00000-000";}
+        avisoGeo("");
       }
     }
     if(tipo){tipo.addEventListener("change",aplicarTipo);}
