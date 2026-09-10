@@ -915,6 +915,19 @@ img{max-width:100%}
             <div class="fld"><label for="c_cidade">Cidade <span class="req end-req">*</span></label><input id="c_cidade"></div>
             <div class="fld"><label for="c_uf">UF <span class="req end-req">*</span></label><input id="c_uf" maxlength="2"></div>
           </div>
+          <div class="grid g4" style="margin-top:16px">
+            <div class="fld"><label for="c_tipoend">Tipo de endereço</label>
+              <select id="c_tipoend">
+                <option value="urbano">Urbano — tem rua e número</option>
+                <option value="rural">Rural, sítio, estrada — sem rua</option>
+              </select></div>
+            <div class="fld" style="grid-column:span 2"><label for="c_ref" id="c_lblRef">Ponto de referência</label>
+              <input id="c_ref" placeholder="Ex.: estrada para Pitangui, km 7, depois da ponte, portão azul"></div>
+            <div class="fld"><label for="c_geo">Geolocalização</label>
+              <input id="c_geo" placeholder="latitude, longitude" autocomplete="off"></div>
+          </div>
+          <div id="c_geoAcoes" class="chips" style="margin-top:10px"></div>
+          <div id="c_geoAviso"></div>
         </div>
 
         <div id="cliFalta"></div>
@@ -3856,8 +3869,9 @@ function renderClientes(){
         (ehLead(c)?' <span class="pill p-acc">lead</span>':"")+'</div>'+
         (c.apelido?'<div class="t-sub">'+esc(c.apelido)+'</div>':'')+'</td>'+
       "<td>"+esc(c.doc||"—")+"</td>"+
-      '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||"—")+
-        '</div><div class="t-sub">'+esc([c.bairro,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+"</div></td>"+
+      '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
+        '</div><div class="t-sub">'+esc([c.bairro,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
+        mapaLink(c.geo)+"</div></td>"+
       "<td>"+esc(c.origem||"—")+"</td>"+
       '<td class="num">'+(ind?'<span class="pill p-acc" title="indicações que viraram venda">★ '+ind+"</span>":(indTot?'<span class="pill p-mut">'+indTot+" indicado</span>":'<span class="pill p-mut">0</span>'))+"</td>"+
       "<td>"+(f.length?'<span class="pill p-warn">faltam '+f.length+'</span>':'<span class="pill p-ok">completo</span>')+"</td>";
@@ -3871,10 +3885,25 @@ var CO_LEAD=[["tipo","Tipo de contato"],["nome","Nome e sobrenome"],["sexo","Sex
 var CO_CLI=CO_LEAD.concat([["doc","CPF/CNPJ"],["nasc","Data de nascimento"],["cep","CEP"],
   ["rua","Rua"],["num","Número"],["comp","Complemento"],["bairro","Bairro"],["cidade","Cidade"]]);
 var CAMPOS_CLI=["nome","doc","apelido","nasc","tel","email","prof","cep","rua","num","comp","bairro","cidade","uf",
+  "tipoend","ref","geo",
   "sexo","ie","respNome","respContato","respTel","comprasNome","comprasTel","comprasEmail",
   "conjnome","conjcpf","conjrg","conjnasc","conjtel","conjemail"];
+/* link para o Google Maps quando o endereço tem geolocalização gravada */
+function mapaLink(geo){
+  var u=(window.linkMapaMF?window.linkMapaMF(geo):"");
+  if(!u)return "";
+  return '<br><a href="'+u+'" target="_blank" rel="noopener" '+
+    'onclick="event.stopPropagation()" style="font-size:12px">ver no mapa</a>';
+}
 function faltamObrig(c,modo){
-  return (modo==="cliente"?CO_CLI:CO_LEAD).filter(function(x){
+  var base=(modo==="cliente"?CO_CLI:CO_LEAD).slice();
+  /* endereço rural não tem rua, número nem CEP de rua: no lugar deles o
+     sistema exige a referência de como chegar e a geolocalização */
+  if(c&&c.tipoend==="rural"){
+    base=base.filter(function(x){return ["rua","num","comp","cep"].indexOf(x[0])<0;});
+    base=base.concat([["ref","Ponto de referência"],["geo","Geolocalização"]]);
+  }
+  return base.filter(function(x){
     return !String(c[x[0]]||"").trim();}).map(function(x){return x[1];});
 }
 function proxCodigo(){
@@ -12146,7 +12175,30 @@ function erro(msg){
     exigirEscolha(campo,"a cidade");
   }
 
-  /* ---- rua: base dos Correios, dentro da cidade escolhida ---- */
+  /* ---- rua: primeiro a base dos Correios; onde a cidade não tem CEP por
+     rua, o sistema busca as ruas da cidade no mapa aberto ---- */
+  function ruasDoMapa(cidade,uf,t,cb){
+    fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=25&q="+
+      encodeURIComponent(t+", "+cidade+", "+uf+", Brasil"))
+      .then(function(r){return r.json();})
+      .then(function(j){
+        var tipos={road:1,residential:1,unclassified:1,tertiary:1,secondary:1,
+                   primary:1,track:1,pedestrian:1,living_street:1,service:1};
+        var vistos={},saida=[];
+        (j||[]).forEach(function(x){
+          if(!tipos[x.addresstype])return;
+          var a=x.address||{};
+          var c=a.city||a.town||a.village||a.municipality||"";
+          if(normalizar(c)!==normalizar(cidade))return;
+          var nome=x.name||a.road||"";
+          if(!nome||vistos[normalizar(nome)])return;
+          vistos[normalizar(nome)]=1;
+          saida.push({logradouro:nome,bairro:a.suburb||a.neighbourhood||a.quarter||"",
+            cep:a.postcode||"",mapa:true});
+        });
+        cb(saida);
+      },function(){cb([]);});
+  }
   function ligarRua(g){
     var campo=g.rua?document.getElementById(g.rua):null;
     if(!campo||campo.__ruaLigada)return;
@@ -12155,20 +12207,27 @@ function erro(msg){
     var timer=null;
 
     function usarAssim(t){
-      return {titulo:"Usar assim mesmo: “"+t+"”",sub:"Só faça isso se a rua for nova e não estiver na base",livre:t};
+      return {titulo:"Usar assim mesmo: “"+t+"”",sub:"Endereço novo, estrada ou zona rural",livre:t};
     }
     function escolher(it){
-      if(it.livre){confirmar(g.rua,it.livre);avisoCEP(campo,"Rua escrita à mão — confira antes de salvar.","");return;}
+      if(it.livre){
+        confirmar(g.rua,it.livre);
+        avisoCEP(campo,"Rua escrita à mão — vale a pena marcar a geolocalização do endereço.","");
+        return;
+      }
       preenchendoCEP=true;
       confirmar(g.rua,it.rua);
       if(it.bairro){confirmar(g.bairro,it.bairro);guardarBairro(g,it.bairro);}
       if(it.cep)preencher(g.cep,it.cep,true);
       preenchendoCEP=false;
-      avisoCEP(campo,(it.bairro?it.bairro+" · ":"")+"CEP "+(it.cep||"—")+" preenchido. Falta só o número.","ok");
+      avisoCEP(campo,(it.bairro?it.bairro+" · ":"")+
+        (it.cep?"CEP "+it.cep+" preenchido. ":"Esta cidade não tem CEP por rua. ")+
+        "Falta só o número.",it.cep?"ok":"");
     }
-    function desenhar(lista,t){
+    function desenhar(lista,t,doMapa){
       var itens=lista.slice(0,25).map(function(e){
-        return {titulo:e.logradouro,sub:(e.bairro||"")+(e.cep?" · CEP "+e.cep:""),
+        return {titulo:e.logradouro,
+          sub:(e.bairro||"")+(e.cep?" · CEP "+e.cep:(doMapa?" · sem CEP de rua":"")),
           rua:e.logradouro,bairro:e.bairro,cep:e.cep};
       });
       itens.push(usarAssim(t));
@@ -12185,20 +12244,30 @@ function erro(msg){
         return;
       }
       var chave=uf+"|"+normalizar(cidade)+"|"+normalizar(t);
-      if(cacheRuas[chave]){desenhar(cacheRuas[chave],t);return;}
+      if(cacheRuas[chave]){desenhar(cacheRuas[chave],t,cacheRuas[chave].doMapa);return;}
       fetch("https://viacep.com.br/ws/"+uf+"/"+encodeURIComponent(cidade)+"/"+encodeURIComponent(t)+"/json/")
         .then(function(r){return r.json();})
         .then(function(j){
           var lista=(j&&j.length)?j:[];
-          cacheRuas[chave]=lista;
-          lista.forEach(function(e){if(e.bairro)guardarBairro(g,e.bairro);});
-          desenhar(lista,t);
-        },function(){mostrar(campo,[usarAssim(t)],escolher);});
+          if(lista.length){
+            cacheRuas[chave]=lista;
+            lista.forEach(function(e){if(e.bairro)guardarBairro(g,e.bairro);});
+            desenhar(lista,t,false);
+            return;
+          }
+          ruasDoMapa(cidade,uf,t,function(doMapa){
+            doMapa.doMapa=true;
+            cacheRuas[chave]=doMapa;
+            doMapa.forEach(function(e){if(e.bairro)guardarBairro(g,e.bairro);});
+            desenhar(doMapa,t,true);
+          });
+        },function(){
+          ruasDoMapa(cidade,uf,t,function(doMapa){desenhar(doMapa,t,true);});
+        });
     }
     campo.addEventListener("input",function(){clearTimeout(timer);timer=setTimeout(sugerir,350);});
     exigirEscolha(campo,"a rua");
   }
-
   /* ---- bairro ---- */
   function chaveCidade(g){
     return (valorDe(g.uf)||UF_PADRAO).toUpperCase()+"|"+normalizar(valorDe(g.cidade));
@@ -12327,6 +12396,130 @@ function erro(msg){
   }
   ligarEndereco();
   setTimeout(ligarEndereco,2500);
+
+  /* ================= GEOLOCALIZAÇÃO DO ENDEREÇO =================
+     Todo endereço pode guardar um ponto no mapa. É o que resolve os dois
+     casos que a base dos Correios não cobre: cidade sem CEP por rua e
+     zona rural sem rua nenhuma. O ponto vira link do Google Maps. */
+
+  function coordValida(v){
+    var m=/^\s*(-?\d{1,2}[.,]\d{3,})\s*[,;]\s*(-?\d{1,3}[.,]\d{3,})\s*$/.exec(String(v||""));
+    if(!m)return null;
+    var la=parseFloat(m[1].replace(",",".")),lo=parseFloat(m[2].replace(",","."));
+    if(isNaN(la)||isNaN(lo)||la<-34||la>6||lo<-74||lo>-33)return null;
+    return la.toFixed(6)+","+lo.toFixed(6);
+  }
+  function linkMapa(geo){
+    var c=coordValida(geo);
+    return c?"https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(c):"";
+  }
+  window.linkMapaMF=linkMapa;
+
+  function avisoGeo(texto,tipo){
+    var d=document.getElementById("c_geoAviso");
+    if(!d)return;
+    d.innerHTML=texto?'<div class="note '+(tipo==="erro"?"crit":(tipo==="ok"?"ok":"warn"))+'">'+escT(texto)+"</div>":"";
+  }
+
+  function ligarGeo(){
+    var campo=document.getElementById("c_geo");
+    var acoes=document.getElementById("c_geoAcoes");
+    var tipo=document.getElementById("c_tipoend");
+    if(!campo||!acoes||campo.__geoLigado)return;
+    campo.__geoLigado=true;
+
+    function botao(rot,fn){
+      var b=document.createElement("button");
+      b.type="button";b.className="btn sm ghost";b.textContent=rot;b.onclick=fn;
+      acoes.appendChild(b);return b;
+    }
+    function atualizarLink(){
+      var a=document.getElementById("c_geoLink");
+      var url=linkMapa(campo.value);
+      if(!a){
+        a=document.createElement("a");
+        a.id="c_geoLink";a.className="btn sm";a.target="_blank";a.rel="noopener";
+        a.textContent="Abrir no Google Maps";
+        acoes.appendChild(a);
+      }
+      a.hidden=!url;
+      if(url)a.href=url;
+    }
+
+    var bLocal=botao("Pegar do meu aparelho",function(){
+      if(!navigator.geolocation){avisoGeo("Este aparelho não informa localização.","erro");return;}
+      bLocal.disabled=true;bLocal.textContent="localizando…";
+      navigator.geolocation.getCurrentPosition(function(pos){
+        bLocal.disabled=false;bLocal.textContent="Pegar do meu aparelho";
+        campo.value=pos.coords.latitude.toFixed(6)+","+pos.coords.longitude.toFixed(6);
+        campo.__escolhido=campo.value;
+        atualizarLink();
+        avisoGeo("Ponto gravado com precisão de "+Math.round(pos.coords.accuracy||0)+
+          " m. Confira no mapa antes de salvar — o vendedor precisa estar NO endereço do cliente.","ok");
+      },function(){
+        bLocal.disabled=false;bLocal.textContent="Pegar do meu aparelho";
+        avisoGeo("Você não autorizou a localização.","erro");
+      },{enableHighAccuracy:true,timeout:10000,maximumAge:0});
+    });
+
+    var bEnd=botao("Buscar pelo endereço",function(){
+      var rua=valorDe("c_rua"),num=valorDe("c_num"),bairro=valorDe("c_bairro"),
+          cidade=valorDe("c_cidade"),uf=valorDe("c_uf")||UF_PADRAO,cep=valorDe("c_cep");
+      if(!cidade){avisoGeo("Escolha a cidade primeiro.","erro");return;}
+      var q=[rua&&num?rua+", "+num:rua,bairro,cidade,uf,cep,"Brasil"].filter(Boolean).join(", ");
+      bEnd.disabled=true;bEnd.textContent="procurando…";
+      fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q="+encodeURIComponent(q))
+        .then(function(r){return r.json();})
+        .then(function(j){
+          bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
+          if(!j||!j.length){avisoGeo("Não achei este endereço no mapa. Use “Pegar do meu aparelho” estando no local.","erro");return;}
+          campo.value=(+j[0].lat).toFixed(6)+","+(+j[0].lon).toFixed(6);
+          campo.__escolhido=campo.value;
+          atualizarLink();
+          avisoGeo("Ponto encontrado pelo endereço: "+(j[0].display_name||"").slice(0,90)+
+            ". Confira no mapa — endereço aproximado.","");
+        },function(){
+          bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
+          avisoGeo("Não consegui consultar o mapa agora.","erro");
+        });
+    });
+
+    campo.addEventListener("input",function(){
+      atualizarLink();
+      if(campo.value.trim()&&!coordValida(campo.value)){
+        avisoGeo("Escreva como latitude, longitude — por exemplo -19.859768, -44.608352. Ou use os botões acima.","erro");
+      }else{avisoGeo("");}
+    });
+    atualizarLink();
+
+    /* ---- urbano x rural ---- */
+    function aplicarTipo(){
+      var rural=(tipo&&tipo.value==="rural");
+      [["c_cep",!rural],["c_rua",!rural],["c_num",!rural],["c_comp",!rural]].forEach(function(p){
+        var e=document.getElementById(p[0]);
+        if(e&&e.parentNode)e.parentNode.hidden=!p[1];
+      });
+      var lbl=document.getElementById("c_lblRef");
+      if(lbl)lbl.innerHTML=rural
+        ? 'Como chegar <span class="req">*</span>'
+        : "Ponto de referência";
+      var lg=campo.parentNode&&campo.parentNode.querySelector("label");
+      if(lg)lg.innerHTML=rural?'Geolocalização <span class="req">*</span>':"Geolocalização";
+      var r=document.getElementById("c_ref");
+      if(r)r.placeholder=rural
+        ? "Ex.: estrada para Pitangui, km 7, fazenda Boa Vista, portão azul depois da ponte"
+        : "Ex.: em frente à padaria";
+      if(rural&&!campo.value){
+        avisoGeo("Endereço rural: sem rua e sem CEP, é a geolocalização que leva o instalador até lá. "+
+          "Estando no local, use “Pegar do meu aparelho”.","");
+      }
+    }
+    if(tipo){tipo.addEventListener("change",aplicarTipo);}
+    aplicarTipo();
+    window.aplicarTipoEnderecoMF=aplicarTipo;
+  }
+  ligarGeo();
+  setTimeout(ligarGeo,2500);
   window.addEventListener("resize",function(){posicionar();sincronizar();});
   montarBarra();
   posicionar();
