@@ -12279,11 +12279,45 @@ function erro(msg){
           if(!nome||vistos[normalizar(nome)])return;
           vistos[normalizar(nome)]=1;
           saida.push({logradouro:nome,bairro:a.suburb||a.neighbourhood||a.quarter||"",
-            cep:a.postcode||"",mapa:true});
+            cep:"",mapa:true});
         });
         cb(saida);
       },function(){cb([]);});
   }
+  /* ---- rua ----
+     A base dos Correios casa o texto letra a letra: quem escreve "rua dr
+     olavo vilaça" não acha "Rua Doutor Olavo Vilaça". Então o sistema tira
+     o tipo da via e o título abreviado antes de perguntar, e o CEP NUNCA
+     vem do mapa aberto — o mapa só sabe o nome da rua, e o CEP dele é
+     aproximado. CEP, só dos Correios. */
+  var TIPOS_VIA=["rua","r","av","avenida","alameda","al","travessa","tv","praca",
+    "pca","praça","rodovia","rod","estrada","est","viela","largo","beco","via","quadra"];
+  var TITULOS_VIA=["dr","dr.","dra","dra.","doutor","doutora","prof","prof.","profa",
+    "professor","professora","cel","coronel","sgt","pe","padre","eng","engenheiro",
+    "dom","dona","sr","sra","comendador","desembargador","des","mons","monsenhor"];
+  function nucleoRua(t){
+    var w=normalizar(t).split(/\s+/);
+    var out=[],i;
+    for(i=0;i<w.length;i++){
+      if(!w[i])continue;
+      if(i<3&&(TIPOS_VIA.indexOf(w[i])>=0||TITULOS_VIA.indexOf(w[i])>=0))continue;
+      out.push(w[i]);
+    }
+    return out.join(" ")||normalizar(t);
+  }
+  function maiorPalavra(t){
+    var w=nucleoRua(t).split(/\s+/),m="";
+    for(var i=0;i<w.length;i++)if(w[i].length>m.length)m=w[i];
+    return m;
+  }
+  function correiosRua(cidade,uf,termo,cb){
+    if(!termo||termo.length<3){cb([]);return;}
+    fetch("https://viacep.com.br/ws/"+uf+"/"+encodeURIComponent(cidade)+"/"+
+      encodeURIComponent(termo)+"/json/")
+      .then(function(r){return r.json();})
+      .then(function(j){cb(j&&j.length?j:[]);},function(){cb([]);});
+  }
+
   function ligarRua(g){
     var campo=g.rua?document.getElementById(g.rua):null;
     if(!campo||campo.__ruaLigada)return;
@@ -12294,26 +12328,43 @@ function erro(msg){
     function usarAssim(t){
       return {titulo:"Usar assim mesmo: “"+t+"”",sub:"Endereço novo, estrada ou zona rural",livre:t};
     }
-    function escolher(it){
-      if(it.livre){
-        confirmar(g.rua,it.livre);
-        avisoCEP(campo,"Rua escrita à mão — vale a pena marcar a geolocalização do endereço.","");
-        return;
-      }
+    function aplicar(it,cepConfirmado){
       preenchendoCEP=true;
       confirmar(g.rua,it.rua);
       if(it.bairro){confirmar(g.bairro,it.bairro);guardarBairro(g,it.bairro);}
-      if(it.cep)preencher(g.cep,it.cep,true);
+      if(cepConfirmado)preencher(g.cep,cepConfirmado,true);
       preenchendoCEP=false;
       irParaNumero(g);
       avisoCEP(campo,(it.bairro?it.bairro+" · ":"")+
-        (it.cep?"CEP "+it.cep+" preenchido. ":"Esta cidade não tem CEP por rua. ")+
-        "Falta o número da casa e o complemento.",it.cep?"ok":"");
+        (cepConfirmado
+          ? "CEP "+cepConfirmado+" preenchido pelos Correios. Falta o número da casa e o complemento."
+          : "Sem CEP nos Correios para esta rua — confira o CEP à mão. Falta o número da casa."),
+        cepConfirmado?"ok":"");
+    }
+    function escolher(it){
+      if(it.livre){
+        confirmar(g.rua,it.livre);
+        avisoCEP(campo,"Rua escrita à mão — confira o CEP e marque a geolocalização.","");
+        return;
+      }
+      if(it.cep){aplicar(it,it.cep);return;}
+      /* veio do mapa: o nome é confiável, o CEP não. Pergunta aos Correios. */
+      var cidade=valorDe(g.cidade),uf=(valorDe(g.uf)||UF_PADRAO).toUpperCase();
+      avisoCEP(campo,"Procurando o CEP desta rua nos Correios…");
+      correiosRua(cidade,uf,nucleoRua(it.rua),function(lista){
+        var alvo=null,n=normalizar(it.rua);
+        for(var i=0;i<lista.length;i++){
+          if(normalizar(lista[i].logradouro)===n){alvo=lista[i];break;}
+        }
+        if(!alvo&&lista.length===1)alvo=lista[0];
+        if(alvo)aplicar({rua:alvo.logradouro,bairro:alvo.bairro},alvo.cep);
+        else aplicar(it,"");
+      });
     }
     function desenhar(lista,t,doMapa){
       var itens=lista.slice(0,25).map(function(e){
         return {titulo:e.logradouro,
-          sub:(e.bairro||"")+(e.cep?" · CEP "+e.cep:(doMapa?" · sem CEP de rua":"")),
+          sub:(e.bairro||"")+(e.cep?" · CEP "+e.cep:(doMapa?" · CEP a confirmar":"")),
           rua:e.logradouro,bairro:e.bairro,cep:e.cep};
       });
       itens.push(usarAssim(t));
@@ -12331,25 +12382,24 @@ function erro(msg){
       }
       var chave=uf+"|"+normalizar(cidade)+"|"+normalizar(t);
       if(cacheRuas[chave]){desenhar(cacheRuas[chave],t,cacheRuas[chave].doMapa);return;}
-      fetch("https://viacep.com.br/ws/"+uf+"/"+encodeURIComponent(cidade)+"/"+encodeURIComponent(t)+"/json/")
-        .then(function(r){return r.json();})
-        .then(function(j){
-          var lista=(j&&j.length)?j:[];
-          if(lista.length){
-            cacheRuas[chave]=lista;
-            lista.forEach(function(e){if(e.bairro)guardarBairro(g,e.bairro);});
-            desenhar(lista,t,false);
-            return;
-          }
-          ruasDoMapa(cidade,uf,t,function(doMapa){
-            doMapa.doMapa=true;
-            cacheRuas[chave]=doMapa;
-            doMapa.forEach(function(e){if(e.bairro)guardarBairro(g,e.bairro);});
-            desenhar(doMapa,t,true);
-          });
-        },function(){
-          ruasDoMapa(cidade,uf,t,function(doMapa){desenhar(doMapa,t,true);});
+      /* 1ª tentativa: o texto sem o tipo da via e sem o título abreviado */
+      correiosRua(cidade,uf,nucleoRua(t),function(lista){
+        if(lista.length){guardar(lista,false);return;}
+        /* 2ª tentativa: só a palavra mais distintiva */
+        correiosRua(cidade,uf,maiorPalavra(t),function(l2){
+          var filtrado=l2.filter(function(e){
+            return normalizar(e.logradouro).indexOf(maiorPalavra(t))>=0;});
+          if(filtrado.length){guardar(filtrado,false);return;}
+          /* 3ª: o mapa aberto, só para achar o nome da rua */
+          ruasDoMapa(cidade,uf,t,function(doMapa){guardar(doMapa,true);});
         });
+      });
+      function guardar(lista,doMapa){
+        lista.doMapa=doMapa;
+        cacheRuas[chave]=lista;
+        lista.forEach(function(e){if(e.bairro)guardarBairro(g,e.bairro);});
+        desenhar(lista,t,doMapa);
+      }
     }
     campo.addEventListener("input",function(){clearTimeout(timer);timer=setTimeout(sugerir,350);});
     exigirEscolha(campo,"a rua");
@@ -12456,7 +12506,7 @@ function erro(msg){
             if(uf)confirmar(g.uf,uf);
             if(bairro){confirmar(g.bairro,bairro);guardarBairro(g,bairro);}
             if(a.road)confirmar(g.rua,a.road);
-            if(a.postcode)preencher(g.cep,a.postcode,true);
+            /* o CEP do mapa é aproximado: não entra no cadastro */
             preenchendoCEP=false;
             avisoCEP(campo,[a.road,bairro,cidade].filter(Boolean).join(", ")+(uf?"/"+uf:"")+
               " — confira e ponha o número.","ok");
@@ -12731,7 +12781,22 @@ function erro(msg){
           if(!rural){
             if(bairro)confirmar("c_bairro",bairro);
             if(a.road)confirmar("c_rua",a.road);
-            if(a.postcode)preencher("c_cep",a.postcode,true);
+            /* o CEP do mapa é aproximado: quem dá o CEP é a base dos Correios */
+            if(cidade&&uf&&a.road){
+              correiosRua(cidade,uf,nucleoRua(a.road),function(lista){
+                var n=normalizar(a.road),alvo=null;
+                for(var i=0;i<lista.length;i++){
+                  if(normalizar(lista[i].logradouro)===n){alvo=lista[i];break;}
+                }
+                if(!alvo&&lista.length===1)alvo=lista[0];
+                if(alvo){
+                  preenchendoCEP=true;
+                  preencher("c_cep",alvo.cep,true);
+                  if(alvo.bairro)confirmar("c_bairro",alvo.bairro);
+                  preenchendoCEP=false;
+                }
+              });
+            }
           }
           preenchendoCEP=false;
           if(rural&&cidade){try{if(window.aplicarTipoEnderecoMF)window.aplicarTipoEnderecoMF();}catch(e){}}
