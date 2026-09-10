@@ -1115,6 +1115,13 @@ img{max-width:100%}
               <div class="fld"><label for="v_qtd">Qtd</label><input id="v_qtd" type="number" step="1" min="1" value="1"></div>
               <div class="fld"><label for="v_valor">Valor unitário</label><input id="v_valor" type="number" step="10"></div>
               <div class="fld"><label for="v_serie">Número de série</label><input id="v_serie" placeholder="—"></div>
+            </div>
+            <div class="fld" id="v_equipWrap" hidden style="margin-top:14px">
+              <label for="v_equip">Esta venda é manutenção de qual aparelho? <span class="req">*</span></label>
+              <select id="v_equip"></select>
+              <p class="help" id="v_equipAjuda"></p>
+            </div>
+            <div class="grid g4">
               <div class="fld" style="justify-content:flex-end"><button class="btn ghost" type="button" id="v_add">Adicionar</button></div>
             </div>
             <div id="v_garNota"></div>
@@ -4196,7 +4203,55 @@ function opcoesProduto(){
 function sincronizarValor(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if(p){$("v_valor").value=p.cheia;$("v_serie").disabled=(p.serie!=="sim");$("v_serie").placeholder=(p.serie==="sim"?"obrigatório":"não se aplica");}
+  ajustarEquipItem();
   notaGarantia();
+}
+/* Refil ou peça de manutenção: o sistema pergunta em qual aparelho do cliente
+   é a troca, listando os que ele tem — pelo número de série ou pela
+   localização cadastrada. É essa resposta que diz qual manutenção baixar. */
+function rotuloEquip(e){
+  var partes=[e.produto||""];
+  if(e.serie)partes.push("série "+e.serie);
+  else if(e.local)partes.push(e.local);
+  else partes.push("sem série e sem localização");
+  var px=proximaDe(e);
+  if(px)partes.push("vence "+px);
+  return partes.join(" · ");
+}
+function equipsDoCliente(){
+  var cid=$("v_cliente").value;
+  if(!cid)return [];
+  return equipamentos.filter(function(e){
+    return e.loja===lojaAtual&&e.clienteId===cid&&e.ativo!==false;
+  }).sort(function(a,b){
+    return String(proximaDe(a)||"9999").localeCompare(String(proximaDe(b)||"9999"));});
+}
+function ajustarEquipItem(){
+  var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
+  var w=$("v_equipWrap"),sel=$("v_equip"),ajuda=$("v_equipAjuda");
+  if(!w||!sel)return;
+  var lista=equipsDoCliente();
+  /* só faz sentido perguntar quando o cliente já tem aparelho acompanhado */
+  if(!p||!lista.length){w.hidden=true;sel.innerHTML="";return;}
+  w.hidden=false;
+  sel.innerHTML="";
+  var oNovo=document.createElement("option");
+  oNovo.value="";
+  oNovo.textContent=(+p.manut)?"— é um aparelho novo, não é manutenção —":"— não é manutenção de nenhum aparelho —";
+  sel.appendChild(oNovo);
+  lista.forEach(function(e){
+    var o=document.createElement("option");
+    o.value=e.id;o.textContent=rotuloEquip(e);
+    sel.appendChild(o);
+  });
+  /* o aparelho mais perto de vencer já vem escolhido, para o vendedor só confirmar */
+  var vencido=lista.filter(function(e){var px=proximaDe(e);return px&&px<=hojeISO();})[0];
+  sel.value=vencido?vencido.id:"";
+  if(ajuda){
+    ajuda.textContent=vencido
+      ? "O aparelho mais atrasado já veio marcado — troque se não for esse."
+      : "Se esta venda for a troca do refil ou uma peça de manutenção, escolha o aparelho.";
+  }
 }
 function notaGarantia(){
   var g=$("v_gar").value;
@@ -4207,11 +4262,13 @@ function notaGarantia(){
 function addItem(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];if(!p)return;
   var gar=$("v_gar").value, serie=$("v_serie").value.trim(), qtd=Math.max(1,parseInt($("v_qtd").value,10)||1);
+  var equipId=($("v_equip")&&!$("v_equipWrap").hidden)?$("v_equip").value:"";
   if(p.serie==="sim"&&!serie){toast("Número de série é obrigatório neste produto.");return;}
   if(gar!=="Bronze"&&!serie){toast("Plano "+gar+" exige o número de série do equipamento.");return;}
   itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd,valor:parseFloat($("v_valor").value)||0,
-    serie:serie,pontos:+p.pontos||0,garantia:gar});
+    serie:serie,equipId:equipId,pontos:+p.pontos||0,garantia:gar});
   $("v_serie").value="";$("v_qtd").value=1;render();
+  ajustarEquipItem();
 }
 
 /* formas de pagamento */
@@ -8703,6 +8760,11 @@ function chaveEquip(p,it){
 }
 function equipDaVenda(p,it){
   var meus=equipamentos.filter(function(e){return e.loja===p.loja;});
+  /* o vendedor disse na venda em qual aparelho é a manutenção */
+  if(it.equipId){
+    var escolhido=meus.filter(function(e){return e.id===it.equipId;})[0];
+    if(escolhido)return escolhido;
+  }
   if(it.serie){
     return meus.filter(function(e){return e.serie===it.serie;})[0]||
            meus.filter(function(e){return e.chave==="s:"+String(it.serie).trim().toLowerCase();})[0]||null;
@@ -8711,8 +8773,6 @@ function equipDaVenda(p,it){
     return e.clienteId===p.clienteId&&e.produtoId===it.pid&&e.ativo!==false;});
   if(!doProduto.length)return null;
   if(doProduto.length===1)return doProduto[0];
-  /* o cliente tem mais de um aparelho igual, separados pela localização:
-     a venda vale para o que está mais perto de vencer */
   return doProduto.sort(function(a,b){
     return String(proximaDe(a)||"9999").localeCompare(String(proximaDe(b)||"9999"));})[0];
 }
@@ -8736,13 +8796,17 @@ async function sincronizarEquipamentos(){
       var ja=equipDaVenda(p,it);
       if(ja){
         var mudou=false;
-        if(ja.chave!==ch){ja.chave=ch;mudou=true;}
-        if(!ja.compradoEm||String(p.data||"")>=String(ja.compradoEm||"")){
-          ja.compradoEm=p.data;ja.compradoHora=p.hora||"";
-          ja.valorCompra=(+it.valor||0)*(+it.qtd||1);
-          ja.formaPgto=resumoPgto(p);
-          if(it.serie&&!ja.serie)ja.serie=it.serie;
-          mudou=true;
+        /* item que aponta para OUTRO aparelho (refil trocado num purificador)
+           não sobrescreve os dados de compra daquele aparelho */
+        if(ja.produtoId===it.pid){
+          if(ja.chave!==ch){ja.chave=ch;mudou=true;}
+          if(!ja.compradoEm||String(p.data||"")>=String(ja.compradoEm||"")){
+            ja.compradoEm=p.data;ja.compradoHora=p.hora||"";
+            ja.valorCompra=(+it.valor||0)*(+it.qtd||1);
+            ja.formaPgto=resumoPgto(p);
+            if(it.serie&&!ja.serie)ja.serie=it.serie;
+            mudou=true;
+          }
         }
         if(mudou)await grava("equipamentos",ja);
         continue;
@@ -8762,18 +8826,33 @@ async function sincronizarEquipamentos(){
   }
   return criados;
 }
-/* A VENDA é que baixa a manutenção pendente daquele produto e gera a próxima,
-   contada a partir da data da venda. */
+/* A VENDA baixa a manutenção pendente do aparelho e gera a próxima, contada a
+   partir da data da venda. O aparelho é o que o vendedor escolheu na hora de
+   incluir o item — por série ou por localização. Aparelho que só nasceu nesta
+   venda é compra, não manutenção. */
 async function manutencaoPelaVenda(ped){
-  var baixadas=0,agendadas=0,semLocal=0;
+  var alvos=[],j,it,prod,ja;
+  for(j=0;j<(ped.itens||[]).length;j++){
+    it=ped.itens[j];
+    prod=produtos.filter(function(x){return x.id===it.pid;})[0];
+    ja=equipDaVenda(ped,it);            /* antes de sincronizar: já existia? */
+    if(!ja)continue;
+    if(it.equipId||(prod&&(+prod.manut)))alvos.push({it:it,e:ja});
+  }
   try{await sincronizarEquipamentos();}catch(err){console.warn(err);}
-  for(var j=0;j<(ped.itens||[]).length;j++){
-    var it=ped.itens[j];
-    var prod=produtos.filter(function(x){return x.id===it.pid;})[0];
-    if(!prod||!(+prod.manut))continue;
-    var e=equipDaVenda(ped,it);
-    if(!e)continue;
-    if(!e.serie&&!e.local)semLocal++;
+  var baixadas=0,agendadas=0,trocas=0;
+  for(var i=0;i<alvos.length;i++){
+    var e=alvos[i].e,item=alvos[i].it;
+    e.historico=e.historico||[];
+    e.historico.push({data:ped.data,hora:ped.hora||"",tecnico:ped.instalador||ped.vendedor||"",
+      cobranca:"cobrada",forma:resumoPgto(ped),valor:(+item.valor||0)*(+item.qtd||1),
+      pecas:[{pid:item.pid,nome:item.nome,cod:item.cod,qtd:item.qtd||1,valor:+item.valor||0}],
+      obs:"Trocado na venda "+ped.numero,pedidoId:ped.id,por:usuarioAtual,em:hojeISO()});
+    e.ultimaManut=ped.data;e.ultimaManutHora=ped.hora||"";
+    e.ultimoValor=(+item.valor||0)*(+item.qtd||1);
+    e.ultimaForma=resumoPgto(ped);
+    await grava("equipamentos",e);
+    trocas++;
     var pend=atendimentos.filter(function(a){
       return a.equipId===e.id&&a.natureza==="atividade"&&a.status!=="finalizado";});
     for(var k=0;k<pend.length;k++){
@@ -8784,7 +8863,7 @@ async function manutencaoPelaVenda(ped){
     var nova=await agendarProximaManut(e,{tecnico:ped.instalador||ped.vendedor||"",hora:ped.hora||""});
     if(nova)agendadas++;
   }
-  return {baixadas:baixadas,agendadas:agendadas,semLocal:semLocal};
+  return {baixadas:baixadas,agendadas:agendadas,trocas:trocas};
 }
 function renderManut(){
   var base=equipamentos.filter(function(e){return e.loja===lojaAtual;});
@@ -11712,6 +11791,7 @@ function irEtapa(n){
 function atualizarEtapas(){
   Array.prototype.forEach.call(document.querySelectorAll("#v_steps button"),function(b){
     var s=+b.dataset.step;b.classList.toggle("feito",s!==etapa&&feitaEtapa(s));});
+  try{ajustarEquipItem();}catch(e){}
 }
 
 /* A arte oficial vem em azul sobre fundo branco e com muita margem sobrando.
