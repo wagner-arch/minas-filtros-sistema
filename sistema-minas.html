@@ -12014,6 +12014,219 @@ function erro(msg){
   }
   ligarCEP();
   setTimeout(ligarCEP,2500);
+
+  /* ================= ENDEREÇO GUIADO =================
+     Três caminhos, todos evitando digitação livre:
+     1. CEP  -> preenche rua, bairro, cidade e UF (já existente acima)
+     2. Cidade -> escolhe numa lista do IBGE, em ordem alfabética
+     3. Rua -> escolhe numa lista dos Correios, dentro da cidade escolhida
+     Mais o botão de localização, que descobre onde a pessoa está. */
+
+  var UF_PADRAO="MG",cacheCidades={},cacheRuas={};
+  function escT(s){return String(s==null?"":s).replace(/[&<>"]/g,function(m){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m];});}
+
+  var ACENTOS="áàâãäéèêëíìîïóòôõöúùûüçñ",SEM="aaaaaeeeeiiiiooooouuuucn";
+  function normalizar(s){
+    s=String(s||"").toLowerCase();
+    var out="",p;
+    for(var i=0;i<s.length;i++){
+      p=ACENTOS.indexOf(s.charAt(i));
+      out+=(p>=0?SEM.charAt(p):s.charAt(i));
+    }
+    return out;
+  }
+  function valorDe(id){var e=id?document.getElementById(id):null;return e?e.value.trim():"";}
+
+  /* ---- lista de cidades do IBGE, guardada no aparelho ---- */
+  function cidadesDaUF(uf){
+    uf=(uf||UF_PADRAO).toUpperCase();
+    if(cacheCidades[uf])return Promise.resolve(cacheCidades[uf]);
+    var chave="cidades_"+uf;
+    try{
+      var guardado=localStorage.getItem(chave);
+      if(guardado){
+        var lista=JSON.parse(guardado);
+        if(lista&&lista.length){cacheCidades[uf]=lista;return Promise.resolve(lista);}
+      }
+    }catch(e){}
+    return fetch("https://servicodados.ibge.gov.br/api/v1/localidades/estados/"+uf+"/municipios?orderBy=nome")
+      .then(function(r){return r.json();})
+      .then(function(j){
+        var lista=(j||[]).map(function(m){return m.nome;}).sort(function(a,b){
+          return normalizar(a)<normalizar(b)?-1:1;});
+        cacheCidades[uf]=lista;
+        try{localStorage.setItem(chave,JSON.stringify(lista));}catch(e){}
+        return lista;
+      });
+  }
+
+  /* ---- caixa de sugestões ---- */
+  function caixaDe(campo){
+    var fld=campo.parentNode;
+    if(!fld)return null;
+    if(getComputedStyle(fld).position==="static")fld.style.position="relative";
+    var cx=fld.querySelector(".auto-end");
+    if(!cx){
+      cx=document.createElement("div");
+      cx.className="auto auto-end";
+      cx.hidden=true;
+      fld.appendChild(cx);
+    }
+    return cx;
+  }
+  function fecharCaixa(campo){var cx=campo.parentNode&&campo.parentNode.querySelector(".auto-end");if(cx)cx.hidden=true;}
+  function mostrar(campo,itens,aoEscolher){
+    var cx=caixaDe(campo);
+    if(!cx)return;
+    cx.innerHTML="";
+    if(!itens.length){cx.hidden=true;return;}
+    itens.forEach(function(it){
+      var b=document.createElement("button");
+      b.type="button";
+      b.innerHTML="<b>"+escT(it.titulo)+"</b>"+(it.sub?"<span>"+escT(it.sub)+"</span>":"");
+      b.onmousedown=function(ev){ev.preventDefault();};
+      b.onclick=function(){cx.hidden=true;aoEscolher(it);};
+      cx.appendChild(b);
+    });
+    cx.hidden=false;
+  }
+
+  /* ---- cidade ---- */
+  function ligarCidade(g){
+    var campo=document.getElementById(g.cidade);
+    if(!campo||campo.__cidadeLigada)return;
+    campo.__cidadeLigada=true;
+    campo.setAttribute("autocomplete","off");
+
+    function sugerir(){
+      var t=campo.value.trim();
+      if(soDigitos(t).length>=5){fecharCaixa(campo);return;}   /* é CEP, o outro módulo cuida */
+      if(t.length<2){fecharCaixa(campo);return;}
+      var uf=(valorDe(g.uf)||UF_PADRAO).toUpperCase();
+      cidadesDaUF(uf).then(function(lista){
+        var n=normalizar(t);
+        var achou=lista.filter(function(c){return normalizar(c).indexOf(n)===0;});
+        if(!achou.length)achou=lista.filter(function(c){return normalizar(c).indexOf(n)>=0;});
+        if(!achou.length){
+          mostrar(campo,[{titulo:"Nenhuma cidade de "+uf+" começa com “"+t+"”",sub:"Confira a UF ao lado",vazio:true}],function(){});
+          return;
+        }
+        mostrar(campo,achou.slice(0,40).map(function(c){return {titulo:c,sub:uf,cidade:c,uf:uf};}),function(it){
+          preencher(g.cidade,it.cidade);
+          preencher(g.uf,it.uf);
+          var r=document.getElementById(g.rua);
+          if(r)try{r.focus();}catch(e){}
+        });
+      },function(){fecharCaixa(campo);});
+    }
+    campo.addEventListener("input",sugerir);
+    campo.addEventListener("focus",sugerir);
+    campo.addEventListener("blur",function(){setTimeout(function(){fecharCaixa(campo);},180);});
+  }
+
+  /* ---- rua, dentro da cidade escolhida (base dos Correios) ---- */
+  function ligarRua(g){
+    var campo=g.rua?document.getElementById(g.rua):null;
+    if(!campo||campo.__ruaLigada)return;
+    campo.__ruaLigada=true;
+    campo.setAttribute("autocomplete","off");
+    var timer=null;
+
+    function sugerir(){
+      var t=campo.value.trim();
+      if(t.length<3){fecharCaixa(campo);return;}
+      var cidade=valorDe(g.cidade),uf=(valorDe(g.uf)||UF_PADRAO).toUpperCase();
+      if(!cidade){
+        mostrar(campo,[{titulo:"Escolha a cidade primeiro",sub:"A busca de ruas é feita dentro da cidade"}],function(){
+          var c=document.getElementById(g.cidade);if(c)try{c.focus();}catch(e){}
+        });
+        return;
+      }
+      var chave=uf+"|"+normalizar(cidade)+"|"+normalizar(t);
+      if(cacheRuas[chave]){desenhar(cacheRuas[chave]);return;}
+      fetch("https://viacep.com.br/ws/"+uf+"/"+encodeURIComponent(cidade)+"/"+encodeURIComponent(t)+"/json/")
+        .then(function(r){return r.json();})
+        .then(function(j){
+          var lista=(j&&j.length)?j:[];
+          cacheRuas[chave]=lista;
+          desenhar(lista);
+        },function(){fecharCaixa(campo);});
+    }
+    function desenhar(lista){
+      if(!lista.length){
+        mostrar(campo,[{titulo:"Nenhuma rua encontrada com esse trecho",sub:"Pode escrever à mão e seguir"}],function(){});
+        return;
+      }
+      mostrar(campo,lista.slice(0,30).map(function(e){
+        return {titulo:e.logradouro,sub:(e.bairro||"")+" · CEP "+e.cep,
+          rua:e.logradouro,bairro:e.bairro,cep:e.cep};
+      }),function(it){
+        preenchendoCEP=true;
+        preencher(g.rua,it.rua);
+        if(it.bairro)preencher(g.bairro,it.bairro);
+        if(it.cep)preencher(g.cep,it.cep,true);
+        preenchendoCEP=false;
+        avisoCEP(campo,"CEP "+it.cep+" preenchido. Falta só o número.","ok");
+      });
+    }
+    campo.addEventListener("input",function(){
+      clearTimeout(timer);timer=setTimeout(sugerir,350);
+    });
+    campo.addEventListener("blur",function(){setTimeout(function(){fecharCaixa(campo);},180);});
+  }
+
+  /* ---- botão da localização ---- */
+  function ligarLocal(g){
+    var campo=document.getElementById(g.cidade);
+    if(!campo||campo.__localLigado)return;
+    campo.__localLigado=true;
+    var lbl=campo.parentNode&&campo.parentNode.querySelector("label");
+    if(!lbl||!navigator.geolocation)return;
+    var b=document.createElement("button");
+    b.type="button";
+    b.className="btn sm ghost";
+    b.style.cssText="margin-left:8px;padding:2px 8px;font-size:11.5px;min-height:0";
+    b.textContent="onde estou";
+    b.onclick=function(){
+      b.disabled=true;b.textContent="localizando…";
+      navigator.geolocation.getCurrentPosition(function(pos){
+        var la=pos.coords.latitude,lo=pos.coords.longitude;
+        fetch("https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&addressdetails=1&lat="+la+"&lon="+lo)
+          .then(function(r){return r.json();})
+          .then(function(j){
+            b.disabled=false;b.textContent="onde estou";
+            var a=(j&&j.address)||{};
+            var cidade=a.city||a.town||a.village||a.municipality||"";
+            var uf=(a["ISO3166-2-lvl4"]||"").replace("BR-","")||"";
+            preenchendoCEP=true;
+            if(cidade)preencher(g.cidade,cidade);
+            if(uf)preencher(g.uf,uf);
+            if(a.suburb||a.neighbourhood)preencher(g.bairro,a.suburb||a.neighbourhood);
+            if(a.road)preencher(g.rua,a.road);
+            if(a.postcode)preencher(g.cep,a.postcode,true);
+            preenchendoCEP=false;
+            avisoCEP(campo,[a.road,a.suburb||a.neighbourhood,cidade].filter(Boolean).join(", ")+
+              (uf?"/"+uf:"")+" — confira e ajuste o número.","ok");
+          },function(){b.disabled=false;b.textContent="onde estou";
+            avisoCEP(campo,"Não consegui descobrir o endereço pela localização.","erro");});
+      },function(){
+        b.disabled=false;b.textContent="onde estou";
+        avisoCEP(campo,"Você não autorizou a localização.","erro");
+      },{enableHighAccuracy:true,timeout:8000,maximumAge:60000});
+    };
+    lbl.appendChild(b);
+  }
+
+  function ligarEndereco(){
+    GRUPOS_END.forEach(function(g){
+      if(g.cidade)ligarCidade(g);
+      if(g.rua)ligarRua(g);
+      if(g.cidade&&g.rua)ligarLocal(g);
+    });
+  }
+  ligarEndereco();
+  setTimeout(ligarEndereco,2500);
   window.addEventListener("resize",function(){posicionar();sincronizar();});
   montarBarra();
   posicionar();
