@@ -1,4 +1,5 @@
-<meta charset="utf-8">
+  $("at_cidade").value=c.cidade||"";$("at_sexo").value=c.sexo||"";
+  if($("at_uf"))$("at_uf").value=c.uf||"";<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#2E4FD6">
 <meta name="mobile-web-app-capable" content="yes">
@@ -1799,8 +1800,13 @@ img{max-width:100%}
             <div class="fld"><label for="at_sexo">Sexo <span class="req">*</span></label>
               <select id="at_sexo"><option value="">—</option><option>Feminino</option><option>Masculino</option><option>Outro</option><option>Prefere não informar</option></select></div>
             <div class="fld"><label for="at_doc">CPF / CNPJ</label><input id="at_doc"></div>
-            <div class="fld"><label for="at_cidade">Cidade</label><input id="at_cidade"></div>
+            <div class="fld"><label for="at_cidade">Cidade <span class="req">*</span></label><input id="at_cidade" placeholder="Cidade ou CEP"></div>
+            <div class="fld"><label for="at_uf">Estado <span class="req">*</span></label><input id="at_uf" maxlength="2" placeholder="MG"></div>
             <div class="fld"><label for="at_colab">Atendido por</label><select id="at_colab"></select></div>
+          </div>
+          <div class="chips" style="margin-top:12px">
+            <button class="btn sm ghost" type="button" id="at_leadCompleto">Abrir cadastro completo do lead</button>
+            <span class="help">Todos os campos do cliente. Para o lead, só nome, telefone, cidade e estado são obrigatórios.</span>
           </div>
           <div id="at_achou"></div>
         </div>
@@ -3883,11 +3889,11 @@ function renderClientes(){
 }
 /* obrigatórios do LEAD — o mínimo para o contato existir */
 var CO_LEAD=[["tipo","Tipo de contato"],["nome","Nome e sobrenome"],["sexo","Sexo"],
-  ["origem","Origem do contato"],["tel","Telefone"]];
+  ["origem","Origem do contato"],["tel","Telefone"],["cidade","Cidade"],["uf","Estado"]];
 /* obrigatórios do CLIENTE — exigidos para vender */
 var CO_CLI=CO_LEAD.concat([["doc","CPF/CNPJ"],["nasc","Data de nascimento"],["cep","CEP"],
-  ["rua","Rua"],["num","Número"],["comp","Complemento"],["bairro","Bairro"],["cidade","Cidade"],
-  ["uf","Estado"],["geo","Geolocalização"]]);
+  ["rua","Rua"],["num","Número"],["comp","Complemento"],["bairro","Bairro"],
+  ["geo","Geolocalização"]]);
 var CAMPOS_CLI=["nome","doc","apelido","nasc","tel","email","prof","cep","rua","num","comp","bairro","cidade","uf",
   "tipoend","ref","geo",
   "sexo","ie","respNome","respContato","respTel","comprasNome","comprasTel","comprasEmail",
@@ -10205,12 +10211,50 @@ function preencherCliente(c){
   clienteVinc=c;
   $("at_nome").value=c.nome||"";$("at_tel").value=c.tel||"";$("at_doc").value=c.doc||"";
   $("at_cidade").value=c.cidade||"";$("at_sexo").value=c.sexo||"";
+  if($("at_uf"))$("at_uf").value=c.uf||"";
   if(c.origem)$("at_origem").value=c.origem;
   var vendas=vendasDe(c.id).length,lead=ehLead(c);
   $("at_achou").innerHTML='<div class="note ok"><b>'+(lead?"Lead":"Cliente")+" já cadastrado · "+esc(c.codigo||"")+
     ".</b> Campos preenchidos automaticamente · "+
     (lead?"nenhuma venda ainda":vendas+" pedido"+(vendas===1?"":"s")+" no histórico")+
     (c.cidade?" · "+esc(c.cidade):"")+".</div>";
+}
+/* ---------- do atendimento para o cadastro completo do lead ----------
+   O atendimento captura o essencial. Quando o vendedor quer registrar tudo,
+   este caminho abre a ficha completa do cliente já preenchida com o que foi
+   digitado; salvando, o sistema volta ao atendimento com o lead vinculado. */
+var voltaAtend=false;
+function abrirLeadCompleto(){
+  var d={nome:$("at_nome").value.trim(),tel:$("at_tel").value.trim(),
+    doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
+    uf:$("at_uf").value.trim().toUpperCase(),sexo:$("at_sexo").value,
+    origem:$("at_origem").value};
+  if(!d.nome){
+    $("at_alerta").innerHTML='<div class="note crit"><b>Escreva o nome antes.</b> O cadastro completo abre com o que você já digitou.</div>';
+    return;
+  }
+  if(clienteVinc){
+    voltaAtend=true;ir("clientes");abrirCliente(clienteVinc);
+    toast("Cadastro de "+clienteVinc.nome+" aberto. Salve para voltar ao atendimento.");
+    return;
+  }
+  voltaAtend=true;
+  ir("clientes");
+  abrirCliente(null);
+  ["nome","tel","doc","cidade","uf"].forEach(function(k){
+    var e=$("c_"+k);
+    if(e&&d[k]){e.value=d[k];e.__escolhido=d[k];}
+  });
+  if(d.sexo)$("c_sexo").value=d.sexo;
+  if(d.origem)$("c_origem").value=d.origem;
+  try{mostrarFaltantes();}catch(e){}
+  toast("Complete o que souber e salve — o atendimento continua depois.");
+}
+function voltarDoLead(c){
+  voltaAtend=false;
+  ir("atend");
+  try{preencherCliente(c);}catch(e){}
+  toast("Lead "+(c.codigo||"")+" vinculado ao atendimento.");
 }
 function renderAtend(){
   var q=($("atendBusca").value||"").toLowerCase(),f=$("atendFiltro").value;
@@ -10264,12 +10308,22 @@ async function salvarAtend(){
      Ele vira CLIENTE sozinho na hora em que a primeira venda for lançada. */
   var leadNovo=null;
   if(!clienteVinc){
-    if(!$("at_sexo").value){
-      $("at_alerta").innerHTML='<div class="note crit"><b>Informe o sexo.</b> Este contato não tem cadastro e vai virar um lead — sexo é obrigatório no cadastro de lead.</div>';
+    /* obrigatórios do lead: nome, telefone, sexo, cidade e estado.
+       CPF, nascimento e endereço de rua ficam para quando virar cliente. */
+    var faltaLead=[];
+    if(!$("at_sexo").value)faltaLead.push("sexo");
+    if(!$("at_cidade").value.trim())faltaLead.push("cidade");
+    if(!$("at_uf").value.trim())faltaLead.push("estado");
+    if(faltaLead.length){
+      $("at_alerta").innerHTML='<div class="note crit"><b>Falta preencher: '+faltaLead.join(" · ")+
+        ".</b> Este contato não tem cadastro e vai nascer como lead — nome, telefone, sexo, cidade e estado "+
+        "são o mínimo para alguém conseguir voltar a falar com ele. "+
+        'Se quiser registrar tudo agora, use <b>Abrir cadastro completo do lead</b>.</div>';
       return;}
     var c={id:uid(),loja:lojaAtual,codigo:proxCodigo(),tipo:"Pessoa Física",
       nome:nome,sexo:$("at_sexo").value,tel:tel,
-      doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),origem:$("at_origem").value,
+      doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
+      uf:$("at_uf").value.trim().toUpperCase(),origem:$("at_origem").value,
       criadoEm:iso(new Date()),criadoPor:usuarioAtual,criadoVia:"atendimento"};
     clientes.push(c);clienteVinc=c;leadNovo=c;
     if(db){try{await col("clientes").doc(c.id).set(c);}catch(e){console.warn(e);}}
@@ -10278,7 +10332,8 @@ async function salvarAtend(){
   var a=editandoAt||{id:uid(),loja:lojaAtual};
   var veioDeAtividade=(a.natureza==="atividade");
   a.natureza="atendimento";a.clienteId=clienteVinc.id;a.cliente=clienteVinc.nome;
-  a.tel=tel;a.doc=$("at_doc").value.trim();a.cidade=$("at_cidade").value.trim();a.origem=$("at_origem").value;
+  a.tel=tel;a.doc=$("at_doc").value.trim();a.cidade=$("at_cidade").value.trim();
+  a.uf=$("at_uf").value.trim().toUpperCase();a.origem=$("at_origem").value;
   a.colaborador=$("at_colab").value;a.tipos=tiposSel.slice();a.tipo=tiposSel.join(" · ");
   a.data=$("at_data").value;a.inicio=ini;a.fim=fim;a.obs=$("at_obs").value.trim();
   a.status="aberto";a.iniciativa=iniSel;
@@ -11169,6 +11224,7 @@ function ligar(){
     var eraLead=lead;
     editandoCli=null;$("cliForm").hidden=true;$("cliLista").hidden=false;
     toast((eraLead?"Lead ":"Cliente ")+c.codigo+" salvo.");render();
+    if(voltaAtend){voltarDoLead(c);}
   };
 
   $("prodCancelar").onclick=function(){$("prodForm").hidden=true;$("prodLista").hidden=false;};
@@ -11320,6 +11376,7 @@ function ligar(){
   $("atendBusca").oninput=renderAtend;$("atendFiltro").onchange=renderAtend;
 
   $("at_nome").oninput=function(){clienteVinc=null;$("at_achou").innerHTML="";buscarCliente();};
+  $("at_leadCompleto").onclick=abrirLeadCompleto;
   $("at_nome").onblur=function(){setTimeout(function(){$("at_sug").hidden=true;},180);};
   Array.prototype.forEach.call($("at_completo").querySelectorAll("button"),function(b){
     b.onclick=function(){
