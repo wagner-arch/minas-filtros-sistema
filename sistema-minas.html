@@ -1900,7 +1900,7 @@ img{max-width:100%}
             <button class="btn ghost" type="button" id="mpNovo">Cadastrar equipamento</button>
           </div>
           <div class="tw"><table>
-            <thead><tr><th>Cliente</th><th>Equipamento</th><th>Endereço</th><th>Última</th><th>Próxima</th><th>Plano</th><th>Situação</th><th></th></tr></thead>
+            <thead><tr><th>Cliente</th><th>Equipamento</th><th>Endereço</th><th>Compra</th><th class="num">Valor pago</th><th>Pagamento</th><th>Última troca</th><th>Próxima troca</th><th>Situação</th><th></th></tr></thead>
             <tbody id="mpBody"></tbody>
           </table></div>
         </div>
@@ -3262,6 +3262,8 @@ img{max-width:100%}
       <div class="fld"><label for="mn_tecnico">Técnico</label><select id="mn_tecnico"></select></div>
       <div class="fld"><label for="mn_cobranca">Cobrança</label>
         <select id="mn_cobranca"><option value="plano">Coberta pelo plano</option><option value="cobrada">Cobrada do cliente</option><option value="garantia">Garantia de fábrica</option></select></div>
+      <div class="fld"><label for="mn_hora">Horário</label><input id="mn_hora" type="time"></div>
+      <div class="fld"><label for="mn_forma">Forma de pagamento</label><select id="mn_forma"></select></div>
     </div>
     <div class="sect" style="margin-top:8px">
       <p class="sect-t">Peças trocadas</p>
@@ -8646,8 +8648,30 @@ function eqPor(termo){
   var porNome=meus.filter(function(e){return (e.cliente||"").toLowerCase()===s;});
   return porNome.length===1?porNome[0]:null;
 }
+/* Vencimento da manutenção = data da ÚLTIMA VENDA daquele produto para aquele
+   cliente + o intervalo do produto. Comprou o refil de novo, o relógio
+   reinicia na data da compra. Uma troca registrada depois da última venda
+   também reinicia — senão o sistema cobraria uma visita que já foi feita. */
+function ultimaVendaDe(e){
+  var d="";
+  for(var i=0;i<pedidos.length;i++){
+    var p=pedidos[i];
+    if(p.status==="Cancelada")continue;
+    if(e.clienteId&&p.clienteId!==e.clienteId)continue;
+    for(var j=0;j<(p.itens||[]).length;j++){
+      if(p.itens[j].pid!==e.produtoId)continue;
+      if(!d||String(p.data||"")>d)d=String(p.data||"");
+    }
+  }
+  return d;
+}
+function baseManut(e){
+  var b=ultimaVendaDe(e)||e.compradoEm||e.instaladoEm||"";
+  if(e.ultimaManut&&e.ultimaManut>b)b=e.ultimaManut;
+  return b;
+}
 function proximaDe(e){
-  var base=e.ultimaManut||e.instaladoEm;
+  var base=baseManut(e);
   if(!base||!e.manutDias)return "";
   return somaDias(base,+e.manutDias);
 }
@@ -8662,11 +8686,19 @@ function sitEq(e){
   return {k:"emdia",n:"Em dia · "+d+" dias",cls:"p-ok",dias:d};
 }
 /* toda venda de produto com intervalo de manutenção vira equipamento — com ou
-   sem número de série (bebedouro e boa parte das instalações saem sem série).
-   Sem série, o equipamento é identificado pelo pedido e pela posição do item. */
+   sem número de série. Sem série, é identificado pelo pedido e pela posição do
+   item. Guarda junto o que a manutenção precisa mostrar depois: data e valor da
+   compra e como foi pago. */
 function chaveEquip(p,it,j){
   return (it.serie&&String(it.serie).trim())?("s:"+String(it.serie).trim().toLowerCase())
                                             :("p:"+p.id+"#"+j);
+}
+function resumoPgto(p){
+  var f=(p.formas||[]).filter(function(x){return +x.valor>0;});
+  if(!f.length)return "";
+  return f.map(function(x){
+    return (x.parc>1?x.parc+"× ":"")+String(x.tipo||"").split(" ")[0];
+  }).join(" + ");
 }
 async function sincronizarEquipamentos(){
   var criados=0;
@@ -8684,13 +8716,20 @@ async function sincronizarEquipamentos(){
         return !!it.serie&&e.serie===it.serie;   /* equipamentos antigos, sem chave */
       })[0];
       if(ja){
-        if(!ja.chave){ja.chave=ch;await grava("equipamentos",ja);}
+        var mudou=false;
+        if(!ja.chave){ja.chave=ch;mudou=true;}
+        if(ja.valorCompra==null){ja.valorCompra=(+it.valor||0)*(+it.qtd||1);mudou=true;}
+        if(!ja.formaPgto){ja.formaPgto=resumoPgto(p);mudou=true;}
+        if(!ja.compradoEm){ja.compradoEm=p.data;mudou=true;}
+        if(mudou)await grava("equipamentos",ja);
         continue;
       }
       var e={id:uid(),loja:p.loja,chave:ch,clienteId:p.clienteId,cliente:p.cliente,
         produtoId:prod.id,produto:prod.nome,serie:it.serie||"",
+        compradoEm:p.data,valorCompra:(+it.valor||0)*(+it.qtd||1),formaPgto:resumoPgto(p),
         instaladoEm:(p.instalacao?String(p.instalacao).split(" ")[0]:p.data),
-        manutDias:+prod.manut,ultimaManut:"",plano:it.garantia||"Bronze",
+        manutDias:+prod.manut,ultimaManut:"",ultimaManutHora:"",
+        ultimoValor:null,ultimaForma:"",plano:it.garantia||"Bronze",
         tecnico:p.instalador||p.vendedor||"",local:"",obs:"",
         pedidoId:p.id,pedidoNumero:p.numero,itemIdx:j,historico:[],ativo:true,
         demo:!!p.demo,criadoEm:hojeISO()};
@@ -8748,17 +8787,29 @@ function renderManut(){
     '<div class="kpi"><div class="l">Plano Premium</div><div class="v">'+prem.length+"</div></div>";
   $("mpCount").textContent=lista.length+(lista.length===1?" equipamento":" equipamentos");
   var b=$("mpBody");b.innerHTML="";
-  if(!lista.length){b.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Nenhum equipamento nesta visão</div>Vendas de produto com número de série e intervalo de manutenção entram aqui sozinhas.</div></td></tr>';return;}
+  if(!lista.length){b.innerHTML='<tr><td colspan="10"><div class="empty"><div class="big">Nenhum equipamento nesta visão</div>Vendas de produto com número de série e intervalo de manutenção entram aqui sozinhas.</div></td></tr>';return;}
   lista.forEach(function(e){
     var s=sitEq(e),c=e._c,px=proximaDe(e);
     var tr=document.createElement("tr");tr.className="clickable";
-    tr.innerHTML='<td><div class="t-main">'+esc(e.cliente||c.nome||"—")+'</div><div class="t-sub">'+esc(c.tel||"")+"</div></td>"+
-      '<td><div class="t-main">'+esc(e.produto||"—")+'</div><div class="t-sub"><code>'+esc(e.serie||"sem série")+"</code></div></td>"+
-      '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||"—")+
-        '</div><div class="t-sub">'+esc([c.bairro,c.cidade].filter(Boolean).join(" · ")||"—")+mapaLink(c.geo)+"</div></td>"+
-      "<td>"+esc(e.ultimaManut||e.instaladoEm||"—")+(e.ultimaManut?"":'<div class="t-sub">instalação</div>')+"</td>"+
-      "<td><b>"+esc(px||"—")+"</b></td>"+
-      "<td>"+((e.plano||"Bronze")==="Bronze"?'<span class="pill p-mut">Bronze</span>':'<span class="pill p-acc">'+esc(e.plano)+"</span>")+"</td>"+
+    var idade=idadeDe(c.nasc);
+    tr.innerHTML='<td><div class="t-main">'+esc(e.cliente||c.nome||"—")+'</div><div class="t-sub">'+
+        esc(c.tel||"")+(idade!=null?" · "+idade+" anos":"")+"</div></td>"+
+      '<td><div class="t-main">'+esc(e.produto||"—")+'</div><div class="t-sub"><code>'+
+        esc(e.serie||"sem série")+"</code>"+
+        ((e.plano&&e.plano!=="Bronze")?' <span class="pill p-acc">'+esc(e.plano)+"</span>":"")+"</div></td>"+
+      '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
+        '</div><div class="t-sub">'+esc([c.bairro,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
+        mapaLink(c.geo)+"</div></td>"+
+      '<td><div class="t-main">'+esc(e.compradoEm||e.instaladoEm||"—")+'</div><div class="t-sub">'+
+        (e.pedidoNumero?"pedido "+esc(String(e.pedidoNumero)):"")+"</div></td>"+
+      '<td class="num">'+(e.valorCompra!=null?BRL(e.valorCompra):"—")+"</td>"+
+      "<td>"+esc(e.formaPgto||"—")+"</td>"+
+      '<td><div class="t-main">'+esc(e.ultimaManut||e.instaladoEm||"—")+'</div><div class="t-sub">'+
+        (e.ultimaManut
+          ? esc(e.ultimaManutHora||"")+(e.ultimoValor?" · "+BRL(e.ultimoValor):"")+
+            (e.ultimaForma?" · "+esc(e.ultimaForma):"")
+          : "instalação")+"</div></td>"+
+      "<td><b>"+esc(px||"—")+"</b>"+(e.manutDias?'<div class="t-sub">a cada '+e.manutDias+" dias</div>":"")+"</td>"+
       '<td><span class="pill '+s.cls+'">'+s.n+"</span></td>"+
       '<td class="num"><button class="btn ghost sm" type="button" data-mpb="'+e.id+'">Manutenção</button> '+
         '<button class="btn mut sm" type="button" data-mpa="'+e.id+'">Agendar</button></td>';
@@ -8865,6 +8916,13 @@ function abrirManut(e){
   opcoes("mn_peca",produtos.filter(function(p){return (p.status||"ativo")==="ativo";}),
     function(p){return p.id;},function(p){return p.cod+" · "+p.nome;},null);
   $("mn_serie").value=e?(e.serie||e.cliente||""):"";$("mn_data").value=hojeISO();
+  $("mn_hora").value=agoraHM();
+  var sf=$("mn_forma");
+  if(!sf.options.length){
+    var o0=document.createElement("option");o0.value="";o0.textContent="—";sf.appendChild(o0);
+    formasPgto.forEach(function(f){var o=document.createElement("option");o.textContent=(f&&f.nome)?f.nome:f;sf.appendChild(o);});
+  }
+  sf.value="";
   $("mn_tecnico").value=(e&&e.tecnico)||usuarioAtual;
   $("mn_cobranca").value=(e&&(e.plano||"").indexOf("Premium")===0)?"plano":"cobrada";
   $("mn_obs").value="";$("mn_alerta").innerHTML="";$("mn_sug").hidden=true;
@@ -8914,10 +8972,15 @@ async function registrarManut(){
   if(!e){$("mn_alerta").innerHTML='<div class="note crit"><b>Escolha o equipamento na lista.</b> Procure pela série, pelo nome do cliente ou pelo número do pedido.</div>';return;}
   var data=$("mn_data").value;
   if(!data){$("mn_alerta").innerHTML='<div class="note crit"><b>Informe a data.</b></div>';return;}
-  var reg={data:data,tecnico:$("mn_tecnico").value,cobranca:$("mn_cobranca").value,
+  var valorTroca=mnPecas.reduce(function(a,i){return a+i.valor*i.qtd;},0);
+  var reg={data:data,hora:$("mn_hora").value||agoraHM(),tecnico:$("mn_tecnico").value,
+    cobranca:$("mn_cobranca").value,forma:$("mn_forma").value||"",valor:valorTroca,
     pecas:mnPecas.slice(),obs:$("mn_obs").value.trim(),por:usuarioAtual,em:hojeISO()};
   e.historico=e.historico||[];e.historico.push(reg);
-  e.ultimaManut=data;e.tecnico=reg.tecnico||e.tecnico;
+  e.ultimaManut=data;e.ultimaManutHora=reg.hora;
+  e.ultimoValor=(reg.cobranca==="cobrada"?valorTroca:0);
+  e.ultimaForma=(reg.cobranca==="cobrada"?reg.forma:({plano:"Coberta pelo plano",garantia:"Garantia de fábrica"}[reg.cobranca]||""));
+  e.tecnico=reg.tecnico||e.tecnico;
   await grava("equipamentos",e);
   /* peças saem do estoque de quem fez o serviço; se ele não tem, do almoxarifado */
   for(var i=0;i<mnPecas.length;i++){
@@ -8926,7 +8989,7 @@ async function registrarManut(){
     await lancarMov(mnPecas[i].pid,mnPecas[i].qtd,fonte,"venda","Manutenção · "+(e.serie||e.produto||""),e.cliente||"",data,"");
   }
   /* manutenção cobrada vira título a receber */
-  var valor=mnPecas.reduce(function(a,i){return a+i.valor*i.qtd;},0);
+  var valor=valorTroca;
   var msg="Manutenção registrada · próxima em "+proximaDe(e)+".";
   if(reg.cobranca==="cobrada"&&valor>0){
     var t={id:uid(),loja:lojaAtual,especie:"receber",origem:"manutencao",equipId:e.id,
