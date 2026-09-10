@@ -4465,12 +4465,25 @@ async function salvarPedido(){
       if(db){try{await col("clientes").doc(padrinho.id).set(padrinho);}catch(e){console.warn(e);}}
     }
   }
-  var fechouAtiv=false;
+  var fechouAtiv=false,retornoPosVenda=null;
   if(pedOrigemAtiv){
     ped.origemAtiv=pedOrigemAtiv.id;
     if(db){try{await col("pedidos").doc(ped.id).set(ped);}catch(e){}}
+    /* quem marcou Vendido deixou o fecho guardado: com o pedido salvo, ele vale */
+    var fp=pedOrigemAtiv.fechoPendente,fechoTxt="";
+    if(fp){
+      pedOrigemAtiv.motivos=fp.motivos;
+      if(fp.completo)pedOrigemAtiv.completo=fp.completo;
+      if(fp.texto){
+        pedOrigemAtiv.resultado=fp.texto;
+        pedOrigemAtiv.obs=(pedOrigemAtiv.obs?pedOrigemAtiv.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): "+fp.texto;
+        fechoTxt=" · "+fp.motivos.join(", ")+" — "+fp.texto;
+      }
+      if(fp.retorno==="sim")retornoPosVenda=pedOrigemAtiv;
+      delete pedOrigemAtiv.fechoPendente;
+    }
     await registrarAcaoAtiv(pedOrigemAtiv,"pedido",ped.id,ped.numero,"Pedido "+ped.numero+" criado · "+BRL(ped.total));
-    fechouAtiv=await concluirAtivPorAcao(pedOrigemAtiv,"Concluída pelo pedido "+ped.numero);
+    fechouAtiv=await concluirAtivPorAcao(pedOrigemAtiv,"Concluída pelo pedido "+ped.numero+fechoTxt);
     pedOrigemAtiv=null;
   }
   limparPedido();
@@ -4480,6 +4493,15 @@ async function salvarPedido(){
       ? cli.nome+" saiu de Leads e virou cliente. Pedido "+ped.numero+" registrado."
       : "Pedido "+ped.numero+" registrado · "+recs.length+" parcela(s) em Contas a Receber."));
   render();ir("pedidos");
+  /* ao marcar Vendido o vendedor também pediu novo contato: agenda agora */
+  if(retornoPosVenda){
+    var ra=retornoPosVenda,rc=cli||{};
+    setTimeout(function(){
+      abrirNovaAtividade({clienteId:ra.clienteId||"",cliente:ra.cliente,tel:ra.tel||rc.tel,
+        doc:ra.doc||rc.doc,cidade:ra.cidade||rc.cidade,origem:rc.origem,
+        colaborador:ra.colaborador||usuarioAtual,dias:3,obs:"",
+        nota:"<b>Pedido "+ped.numero+" salvo.</b> Agende o novo contato que ficou combinado."});},450);
+  }
 }
 function limparPedido(){
   itens=[];formas=[{tipo:"Cartão de Crédito Sipag",valor:0,parc:12}];try{irEtapa(1);}catch(e){}
@@ -8200,6 +8222,34 @@ function situacaoDe(a){
   if(d&&d<new Date())return {k:"pendente",n:"Atrasada",cls:"p-crit"};
   return SITUACOES[0];
 }
+/* "Vendido" só vale com o pedido lançado — sem pedido não há parcela, baixa de
+   estoque, manutenção futura, e o lead nunca vira cliente */
+function ehVendido(lista){return (lista||[]).some(function(m){return /^vend/i.test(m);});}
+function pedidoDaAtividade(a){
+  if(!a)return null;
+  var desde=[a.data||"",(a.criadoEm||"").slice(0,10)].filter(Boolean).sort()[0]||"";
+  return pedidos.filter(function(p){
+    if(p.origemAtiv&&p.origemAtiv===a.id)return true;
+    return !!a.clienteId&&p.clienteId===a.clienteId&&(p.data||"")>=desde;
+  }).sort(function(x,y){return ((y.data||"")+(y.hora||"")).localeCompare((x.data||"")+(x.hora||""));})[0]||null;
+}
+/* abre a venda com o cliente e o vendedor já escolhidos; o pedido salvo fecha a origem */
+async function abrirPedidoPelaVenda(a,texto){
+  var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
+  ir("venda");
+  try{if(c.id){$("v_cliente").value=c.id;atualizarEtapas();}
+    if(a.colaborador)$("v_vend").value=a.colaborador;calcular();}catch(e){}
+  pedOrigemAtiv=a;
+  await registrarAcaoAtiv(a,"pedido","","",texto);
+  toast("Lance o pedido de "+(a.cliente||"o cliente")+". A venda só conta quando o pedido for salvo.");
+}
+function fmAjustarVendido(){
+  var precisa=!!(fmReg&&ehVendido(fmMotivos)&&!pedidoDaAtividade(fmReg));
+  $("fm_ok").textContent=precisa?"Lançar o pedido":"Concluir atividade";
+  $("fm_alerta").innerHTML=precisa
+    ? '<div class="note warn"><b>Vendido pede o pedido lançado.</b> Tocando em Lançar o pedido, a venda abre com o cliente já escolhido. A atividade conclui sozinha quando o pedido for salvo.</div>'
+    : "";
+}
 /* finalizar a atividade sempre pergunta o que aconteceu — sem isso o histórico morre */
 var fmReg=null,fmMotivos=[],fmRetorno="nao";
 function abrirFinalizar(a){
@@ -8220,8 +8270,9 @@ function abrirFinalizar(a){
       var i=fmMotivos.indexOf(m);
       if(i>=0)fmMotivos.splice(i,1);else fmMotivos.push(m);
       b.setAttribute("aria-pressed",String(fmMotivos.indexOf(m)>=0));
-      $("fm_alerta").innerHTML="";};
+      fmAjustarVendido();};
     w.appendChild(b);});
+  fmAjustarVendido();
   $("fimModal").hidden=false;
   setTimeout(function(){$("fm_texto").focus();},80);
 }
@@ -8232,6 +8283,20 @@ async function confirmarFinalizar(){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Marque o que aconteceu.</b> É esse motivo que alimenta o Dashboard e as metas.</div>';return;}
   if(!txt){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Escreva como foi.</b> Sem isso, quem pegar este cliente amanhã não sabe o que já foi conversado.</div>';return;}
+  if(ehVendido(fmMotivos)){
+    var pedV=pedidoDaAtividade(a);
+    if(!pedV){
+      /* guarda o que foi escrito: o pedido salvo conclui a atividade com isso */
+      a.fechoPendente={motivos:fmMotivos.slice(),texto:txt,retorno:fmRetorno};
+      $("fimModal").hidden=true;fmReg=null;
+      await abrirPedidoPelaVenda(a,"Pedido iniciado ao concluir como Vendido");
+      return;
+    }
+    a.acoes=a.acoes||[];
+    a.acoes.push({tipo:"pedido",id:pedV.id,numero:pedV.numero,quando:hojeISO(),por:usuarioAtual,
+      texto:"Venda confirmada pelo pedido "+pedV.numero});
+  }
+  delete a.fechoPendente;
   a.status="finalizado";a.situacao="concluida";
   a.concluidaSemAtendimento=true;a.concluidaPor=usuarioAtual;a.concluidaEm=hojeISO();
   a.motivos=fmMotivos.slice();
@@ -8425,13 +8490,17 @@ function atendsDe(id){return atendimentos.filter(function(a){return a.clienteId=
 function ehLead(c){return vendasDe(c.id).length===0;}
 function retratoLead(c){
   var ats=atendsDe(c.id);
-  var feitos=ats.filter(function(a){return a.natureza==="atendimento";})
-    .sort(function(x,y){return (y.data||"").localeCompare(x.data||"");});
+  /* contato feito = atendimento registrado OU atividade concluída (a data é a da conclusão) */
+  function quandoContato(a){return a.natureza==="atividade"?(a.concluidaEm||a.data||""):(a.data||"");}
+  var feitos=ats.filter(function(a){
+      return a.natureza==="atendimento"||
+        (a.natureza==="atividade"&&a.status==="finalizado"&&a.situacao!=="cancelada");})
+    .sort(function(x,y){return quandoContato(y).localeCompare(quandoContato(x));});
   var proximos=ats.filter(function(a){return a.natureza==="atividade"&&a.status!=="finalizado";})
     .sort(function(x,y){return (x.data||"").localeCompare(y.data||"");});
   var orcs=orcsDe(c.id);
   var abertos=orcs.filter(function(o){return orcSituacao(o).n==="Em aberto";});
-  var ultimo=feitos.length?feitos[0].data:"";
+  var ultimo=feitos.length?quandoContato(feitos[0]):"";
   var dias=diasDe(ultimo);
   var sit,cls;
   if(abertos.length){sit="Orçamento em aberto";cls="p-ok";}
@@ -10773,14 +10842,30 @@ function renderChipsMotivos(){
     b.onclick=function(){
       var i=motivosSel.indexOf(m);
       if(i>=0)motivosSel.splice(i,1);else motivosSel.push(m);
-      b.setAttribute("aria-pressed",String(motivosSel.indexOf(m)>=0));};
+      b.setAttribute("aria-pressed",String(motivosSel.indexOf(m)>=0));atAjustarVendido();};
     w.appendChild(b);
   });
+}
+function atAjustarVendido(){
+  var precisa=!!(atendPend&&ehVendido(motivosSel)&&!pedidoDaAtividade(atendPend));
+  $("at_fechaAlerta").innerHTML=precisa
+    ? '<div class="note warn"><b>Vendido pede o pedido lançado.</b> Ao finalizar, a venda abre com o cliente já escolhido. O atendimento fecha sozinho quando o pedido for salvo.</div>'
+    : "";
 }
 function validaFecho(){
   if(!completoSel){$("at_fechaAlerta").innerHTML='<div class="note warn"><b>Responda se o atendimento foi completo.</b></div>';return false;}
   if(!motivosSel.length){$("at_fechaAlerta").innerHTML='<div class="note warn"><b>Marque ao menos um motivo</b> de encerramento.</div>';return false;}
   return true;
+}
+/* a atividade futura combinada no fecho do atendimento */
+async function agendarFuturaDoAtend(at){
+  var f={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:at.clienteId,cliente:at.cliente,
+    colaborador:$("af_resp").value,tipos:(at.tipos||[]).slice(),tipo:at.tipo,
+    data:$("af_data").value,inicio:$("af_ini").value,fim:"",obs:$("af_obs").value.trim(),
+    origemAtend:at.id,status:"aberto"};
+  atendimentos.push(f);
+  if(db){try{await col("atendimentos").doc(f.id).set(f);}catch(e){console.warn(e);}}
+  return f;
 }
 async function fecharAtend(comFutura){
   if(!atendPend)return;
@@ -10788,15 +10873,20 @@ async function fecharAtend(comFutura){
   if(comFutura&&!$("af_data").value){
     $("at_fechaAlerta").innerHTML='<div class="note crit"><b>Informe a data da atividade futura.</b></div>';
     $("at_futuraBloco").hidden=false;return;}
+  /* Vendido sem pedido não fecha: abre a venda, e o pedido salvo fecha o atendimento */
+  if(ehVendido(motivosSel)&&!pedidoDaAtividade(atendPend)){
+    var pend=atendPend;
+    pend.fechoPendente={motivos:motivosSel.slice(),completo:completoSel,texto:""};
+    if(comFutura)await agendarFuturaDoAtend(pend);
+    atendPend=null;$("atendFecha").hidden=true;$("atendLista").hidden=false;render();
+    await abrirPedidoPelaVenda(pend,"Pedido iniciado ao finalizar o atendimento como Vendido");
+    return;
+  }
   atendPend.completo=completoSel;atendPend.motivos=motivosSel.slice();atendPend.status="finalizado";
+  delete atendPend.fechoPendente;
   if(db){try{await col("atendimentos").doc(atendPend.id).set(atendPend);}catch(e){console.warn(e);}}
   if(comFutura){
-    var f={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:atendPend.clienteId,cliente:atendPend.cliente,
-      colaborador:$("af_resp").value,tipos:atendPend.tipos.slice(),tipo:atendPend.tipo,
-      data:$("af_data").value,inicio:$("af_ini").value,fim:"",obs:$("af_obs").value.trim(),
-      origemAtend:atendPend.id,status:"aberto"};
-    atendimentos.push(f);
-    if(db){try{await col("atendimentos").doc(f.id).set(f);}catch(e){console.warn(e);}}
+    var f=await agendarFuturaDoAtend(atendPend);
     toast("Atendimento finalizado e atividade agendada para "+f.data+".");
   } else {
     toast("Atendimento finalizado.");
