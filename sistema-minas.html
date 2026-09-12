@@ -3244,17 +3244,17 @@ img{max-width:100%}
       <p class="sect-t">Venda</p>
       <div id="in_venda"></div>
     </div>
-    <div class="sect">
-      <p class="sect-t">Produtos usados na instalação</p>
-      <p class="help">O que foi preciso além do vendido (conexão, mangueira, registro…). Não é cobrado do cliente: sai do estoque de quem instala na aprovação financeira e volta para ele na requisição de reposição.</p>
+    <div class="sect" id="in_incluirSect">
+      <p class="sect-t">Incluir produto na venda</p>
+      <p class="help">O que foi preciso na instalação (conexão, mangueira, registro…) entra na venda pelo preço de tabela e é cobrado do cliente. Depois informe como o cliente paga a diferença.</p>
       <div class="grid g3" id="in_addBox">
         <div class="fld"><label for="in_prod">Produto</label><select id="in_prod"></select></div>
         <div class="fld"><label for="in_qtd">Quantidade</label><input id="in_qtd" type="number" min="1" step="1" value="1"></div>
-        <div class="fld" style="align-self:end"><button class="btn ghost" type="button" id="in_add">Incluir</button></div>
+        <div class="fld" style="align-self:end"><button class="btn ghost" type="button" id="in_add">Incluir na venda</button></div>
       </div>
-      <div id="in_mats" style="margin-top:10px"></div>
+      <div id="in_pagBox" style="margin-top:12px"></div>
     </div>
-    <div class="fld" style="margin-top:12px"><label for="in_obs">Observações da instalação <span class="req">*</span></label>
+    <div class="fld" id="in_obsWrap" style="margin-top:12px"><label for="in_obs">Observações da instalação <span class="req">*</span></label>
       <textarea id="in_obs" rows="3" placeholder="Como ficou a instalação, onde o aparelho ficou, pressão da água, pendências…"></textarea></div>
     <div id="in_alerta"></div>
     <div class="actions">
@@ -5251,7 +5251,8 @@ async function confirmarRecebimento(id){
       LOC_EMPRESA,locColab(r.colaborador),"Requisição",r.obs,hojeISO(),"");
   r.status="concluida";r.recebidaPor=usuarioAtual;r.recebidaEm=hojeISO();
   await grava("requisicoes",r);
-  toast("Recebimento confirmado — os produtos agora são responsabilidade de "+r.colaborador+".");
+  toast((r.origem==="reposicao"?"Reposição aceita":"Recebimento confirmado")+
+    " — os produtos entraram no estoque de "+r.colaborador+" e agora são responsabilidade dele.");
   renderEstEmpresa();renderEstColab();renderProdutos();
 }
 
@@ -5315,14 +5316,16 @@ function renderEstColab(){
     $("ecCount").textContent=receber.length+(receber.length===1?" requisição":" requisições");
     if(!receber.length){b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nada a receber</div>Quando o almoxarifado separar um pedido seu, ele aparece aqui para você confirmar.</div></td></tr>';return;}
     receber.forEach(function(r){
-      /* a observação diz de onde veio: "Reposição automática · Pedido N (vendidos e usados na instalação)" */
+      /* a observação diz de onde veio: "Reposição · Pedido N (vendidos e usados na instalação)".
+         Regra do Wagner (12/09): reposição nunca é automática — o estoque só entra no
+         colaborador quando o almoxarifado separa/entrega e ele aceita aqui. */
       b.innerHTML+="<tr><td>"+esc(r.data)+(r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+"</td>"+
         "<td>"+r.itens.map(function(i){return i.qtd+"× "+esc(i.nome);}).join("<br>")+"</td>"+
         "<td>"+(r.status==="pendente"?'<span class="pill p-warn">o almoxarifado ainda não separou</span>':
           '<span class="pill p-acc">separada — confira e confirme</span>')+"</td>"+
         "<td>"+esc(r.separadaPor||"—")+"</td>"+
         '<td class="num">'+(r.status==="separada"
-          ? '<button class="btn sm" type="button" data-ecr="'+r.id+'">Recebi os produtos</button>'
+          ? '<button class="btn sm" type="button" data-ecr="'+r.id+'">'+(r.origem==="reposicao"?"Aceitar a reposição":"Recebi os produtos")+"</button>"
           : "")+"</td></tr>";
     });
     Array.prototype.forEach.call(b.querySelectorAll("[data-ecr]"),function(bt){
@@ -10636,7 +10639,7 @@ function renderPedDet(){
   if(!pedRasc.itens.length)ti.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum item</div></div></td></tr>';
   pedRasc.itens.forEach(function(i,idx){
     ti.innerHTML+="<tr><td><div class=\"t-main\">"+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+"</code>"+
-      (i.serie?" · série "+esc(i.serie):"")+(i.garantia?" · "+esc(i.garantia):"")+"</div></td>"+
+      (i.serie?" · série "+esc(i.serie):"")+(i.garantia?" · "+esc(i.garantia):"")+(i.daInstalacao?" · incluído na instalação":"")+"</div></td>"+
       '<td class="num">'+(ed?'<input type="number" min="1" style="max-width:80px" data-pi="qtd" data-i="'+idx+'" value="'+(i.qtd||1)+'">':(i.qtd||1))+"</td>"+
       '<td class="num">'+(ed?'<input type="number" step="0.01" style="max-width:120px" data-pi="valor" data-i="'+idx+'" value="'+(+i.valor||0)+'">':BRL(i.valor))+"</td>"+
       '<td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
@@ -10724,10 +10727,10 @@ function renderPedDet(){
       ac+='<button class="btn mut" type="button" id="pd_cancelar">Cancelar venda</button>';
   }
   if(p.instalacao){
-    var msI=p.materiaisInstalacao||[];
+    var msI=(p.itens||[]).filter(function(i){return i.daInstalacao;});
     av+='<div class="note'+(p.instaladoEm?" ok":"")+'"><b>Instalação</b> '+esc(String(p.instalacao))+" · "+esc(respInstalacao(p)||"—")+
       (p.instaladoEm?" · finalizada em "+esc(p.instaladoEm)+" por "+esc(p.instaladoPor||"—"):" · pendente")+
-      (msI.length?"<br>Usados a mais: "+esc(msI.map(function(m){return m.qtd+"× "+m.nome;}).join(", ")):"")+
+      (msI.length?"<br>Incluídos na venda na instalação: "+esc(msI.map(function(m){return (m.qtd||1)+"× "+m.nome;}).join(", ")):"")+
       (p.obsInstalacao?"<br>Observações: "+esc(p.obsInstalacao):"")+"</div>";
   }
   $("pd_aviso").innerHTML=avisoAjuste+av;avisoAjuste="";
@@ -10846,8 +10849,9 @@ async function gravarPedido(p){if(db){try{await col("pedidos").doc(p.id).set(p);
 
 /* ================= APROVAÇÃO FINANCEIRA =================
    O financeiro não aprova "a venda": confirma que os valores e comprovantes chegaram.
-   Esse clique dispara, de uma vez: baixa de estoque de quem entregou · reposição
-   automática para ele · parcelas no Contas a Receber com o caixa de destino ·
+   Esse clique dispara, de uma vez: baixa de estoque de quem entregou · requisição
+   de reposição para ele (pendente: o estoque só entra quando o almoxarifado separa
+   e ele aceita — nunca automático) · parcelas no Contas a Receber com o caixa de destino ·
    entrada na comissão do mês. Antes disso o estoque fica só reservado. */
 function registrarEvento(p,texto){
   p.eventos=p.eventos||[];
@@ -10870,7 +10874,8 @@ async function aprovarVenda(p,caixaId){
         itens:baixou.map(function(b){
           var pr=produtos.filter(function(x){return x.id===b.pid;})[0]||{};
           return {pid:b.pid,nome:pr.nome||"",cod:pr.cod||"",qtd:b.qtd,atendida:b.qtd};}),
-        obs:"Reposição automática · Pedido "+p.numero+((p.materiaisInstalacao||[]).length?" (vendidos e usados na instalação)":""),
+        obs:"Reposição · Pedido "+p.numero+((p.itens||[]).some(function(i){return i.daInstalacao;})
+          ?" (produtos vendidos, com os incluídos na instalação)":" (produtos vendidos)"),
         data:hojeISO(),status:"pendente",
         criadoEm:hojeISO(),criadoPor:usuarioAtual,origem:"reposicao",pedidoId:p.id};
       requisicoes.push(rq);await grava("requisicoes",rq);
@@ -10928,9 +10933,18 @@ function podeInstalar(p){
   return ehGestor()||usuarioAtual===respInstalacao(p)||usuarioAtual===p.instalador||usuarioAtual===p.vendedor;
 }
 async function concluirInstalacao(p){abrirInstalacao(p);return false;}
-var instAberta=null;
-function abrirInstalacao(p){
-  instAberta=p;
+var instAberta=null,instPag={tipo:""},instModo="";
+/* produto incluído na instalação faz parte da venda (regra do Wagner, 12/09): total,
+   depreciação, base de comissão e pontos são recalculados */
+function atualizarTotaisPedido(p){
+  var r=recalcPedido(p.itens||[],p.formas||[]);
+  p.total=r.total;p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
+  return r;
+}
+/* modo "venda": a mesma janela, só leitura — o financeiro vê a venda completa para aprovar
+   (pedido do Wagner, 12/09), sem depender de acesso à tela de Pedidos */
+function abrirInstalacao(p,modo){
+  instAberta=p;instModo=modo||"instalacao";
   if(!Array.isArray(p.materiaisInstalacao))p.materiaisInstalacao=[];
   var sp=$("in_prod");sp.innerHTML="";
   produtos.filter(function(x){return (x.status||"ativo")==="ativo";}).forEach(function(x){
@@ -10945,15 +10959,24 @@ function renderInstalacao(){
   var p=instAberta;if(!p)return;
   var pr=String(p.instalacao||"").split(" "),quem=respInstalacao(p);
   var feita=!!p.instaladoEm,pend=(p.status||"").indexOf("instalação")>=0&&!feita;
-  var edita=pend&&podeInstalar(p);
-  $("in_titulo").textContent="Instalação · pedido "+p.numero;
-  $("in_sub").textContent=(pr[0]||"sem data")+(pr[1]?" às "+pr[1]:"")+" · responsável: "+(quem||"—");
+  var modoVenda=(instModo==="venda"),edita=pend&&podeInstalar(p)&&!modoVenda;
+  $("in_titulo").textContent=(modoVenda?"Venda completa":"Instalação")+" · pedido "+p.numero;
+  $("in_sub").textContent=modoVenda
+    ? "Venda de "+(p.data||"—")+" · "+(p.status||"")
+    : (pr[0]||"sem data")+(pr[1]?" às "+pr[1]:"")+" · responsável: "+(quem||"—");
   $("in_estado").innerHTML=feita
     ? '<div class="note ok"><b>Instalação finalizada</b> por '+esc(p.instaladoPor||"—")+" em "+esc(p.instaladoEm)+". Agora: "+esc(p.status||"")+".</div>"
     : p.status==="Cancelada" ? '<div class="note crit"><b>Venda cancelada.</b></div>'
     : !pend ? '<div class="note warn"><b>'+esc(p.status||"")+".</b> A instalação só pode ser finalizada depois dessa etapa.</div>"
-    : edita ? '<div class="note">Confira a venda, inclua o que usou a mais, escreva as observações e finalize — a venda vai para a Aprovação Financeira.</div>'
+    : edita ? '<div class="note">Confira a venda, inclua na venda o que foi preciso na instalação (com a forma de pagamento), escreva as observações e finalize — a venda vai para a Aprovação Financeira.</div>'
     : '<div class="note warn"><b>Só '+esc(quem||"o responsável")+", o vendedor ou a gestão finalizam esta instalação.</b></div>";
+  if(modoVenda){
+    $("in_estado").innerHTML=p.instalacao
+      ? '<div class="note'+(feita?" ok":" warn")+'"><b>Instalação</b> '+esc(String(p.instalacao))+" · "+esc(quem||"—")+
+        (feita?" · finalizada em "+esc(p.instaladoEm)+" por "+esc(p.instaladoPor||"—"):" · ainda não finalizada")+
+        (p.obsInstalacao?"<br>Observações do instalador: "+esc(p.obsInstalacao):"")+"</div>"
+      : '<div class="note">Venda sem instalação.</div>';
+  }
   var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
   var tel=String(c.tel||"").replace(/\D/g,"");
   var end=[[c.rua,c.num].filter(Boolean).join(", "),c.comp,c.bairro,[c.cidade,c.uf].filter(Boolean).join("/"),c.cep].filter(Boolean).join(" · ");
@@ -10961,7 +10984,8 @@ function renderInstalacao(){
   var wz=(c.geo&&window.linkWazeMF)?window.linkWazeMF(c.geo):"";
   $("in_cliente").innerHTML="<div><b>"+esc(p.cliente||"—")+"</b>"+
     (tel?' · <a href="tel:+55'+tel+'">'+esc(c.tel)+'</a> · <a href="https://wa.me/55'+tel+'" target="_blank" rel="noopener">WhatsApp</a>':"")+"</div>"+
-    '<div class="t-sub" style="margin-top:4px">'+esc(end||"endereço não cadastrado")+(c.ref?"<br>Referência: "+esc(c.ref):"")+"</div>"+
+    '<div class="t-sub" style="margin-top:4px">'+(c.doc?"CPF/CNPJ "+esc(c.doc)+"<br>":"")+
+      esc(end||"endereço não cadastrado")+(c.ref?"<br>Referência: "+esc(c.ref):"")+"</div>"+
     '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">'+
       (gm?'<a class="btn sm" target="_blank" rel="noopener" href="'+esc(gm)+'">📍 Rota no Google Maps</a>':"")+
       (wz?'<a class="btn sm ghost" target="_blank" rel="noopener" href="'+esc(wz)+'">🚗 Rota no Waze</a>':"")+"</div>";
@@ -10969,27 +10993,81 @@ function renderInstalacao(){
   $("in_venda").innerHTML=
     '<div class="t-sub">Pedido '+p.numero+" de "+esc(p.data||"")+" · vendedor "+esc(p.vendedor||"—")+
       (p.prospector?" · prospector "+esc(p.prospector):"")+" · "+esc(p.status||"")+"</div>"+
-    '<div class="tw" style="margin-top:8px"><table><thead><tr><th>Produto vendido</th><th class="num">Qtd</th><th class="num">Valor</th></tr></thead><tbody>'+
-    (p.itens||[]).map(function(i){
+    '<div class="tw" style="margin-top:8px"><table><thead><tr><th>Produto</th><th class="num">Qtd</th><th class="num">Valor</th><th></th></tr></thead><tbody>'+
+    (p.itens||[]).map(function(i,ix){
       var det=[i.serie?"série "+i.serie:"",i.local?"fica em: "+i.local:"",i.garantia?"garantia "+i.garantia:""].filter(Boolean).join(" · ");
-      return "<tr><td>"+esc((i.cod?i.cod+" · ":"")+(i.nome||""))+(det?'<div class="t-sub">'+esc(det)+"</div>":"")+
-        '</td><td class="num">'+(i.qtd||1)+'</td><td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td></tr>";
+      return "<tr><td>"+esc((i.cod?i.cod+" · ":"")+(i.nome||""))+
+        (i.daInstalacao?' <span class="pill p-acc">incluído na instalação</span>':"")+
+        (det?'<div class="t-sub">'+esc(det)+"</div>":"")+
+        '</td><td class="num">'+(i.qtd||1)+'</td><td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+'</td><td class="num">'+
+        (edita&&i.daInstalacao?'<button class="btn mut sm" type="button" data-initrm="'+ix+'">Remover</button>':"")+"</td></tr>";
     }).join("")+"</tbody></table></div>"+
     '<div style="margin-top:8px"><b>Total '+BRL(p.total)+"</b> · "+
       (formas.map(function(f){return esc(f.tipo)+" "+(f.parc||1)+"× "+BRL(f.valor);}).join(" · ")||"sem forma de pagamento")+"</div>"+
     (p.obs?'<div class="note" style="margin-top:8px"><b>Observações da venda:</b> '+esc(p.obs)+"</div>":"");
+  if(modoVenda){
+    $("in_venda").innerHTML+=
+      '<div class="t-sub" style="margin-top:8px">Documentos: '+esc((p.anexos||[]).join(", ")||"nenhum anexo")+
+        " · assinatura do cliente: "+(p.assinado?"sim":"não")+(p.usoImagem?" · uso de imagem: "+esc(p.usoImagem):"")+"</div>"+
+      ((p.eventos||[]).length?'<div style="margin-top:8px"><div class="t-sub"><b>Histórico</b></div>'+
+        p.eventos.slice(-12).map(function(e){
+          return '<div class="t-sub">'+esc(String(e.quando||"").replace("T"," ").slice(0,16))+" · "+esc(e.por||"")+" · "+esc(e.texto||"")+"</div>";
+        }).join("")+"</div>":"");
+  }
+  $("in_incluirSect").hidden=modoVenda;
+  $("in_obsWrap").hidden=modoVenda;
+  $("in_pedido").hidden=!veTela("pedidos");
   $("in_addBox").hidden=!edita;
-  var ms=p.materiaisInstalacao||[];
-  $("in_mats").innerHTML=ms.length
-    ? '<div class="tw"><table><thead><tr><th>Usado a mais</th><th class="num">Qtd</th><th></th></tr></thead><tbody>'+
-      ms.map(function(m,ix){return "<tr><td>"+esc((m.cod?m.cod+" · ":"")+m.nome)+'</td><td class="num">'+m.qtd+'</td><td class="num">'+
-        (edita?'<button class="btn mut sm" type="button" data-inrm="'+ix+'">Remover</button>':"")+"</td></tr>";}).join("")+"</tbody></table></div>"
-    : '<div class="t-sub">'+(edita?"Nenhum produto a mais até agora.":"Nenhum produto a mais foi usado.")+"</div>";
-  Array.prototype.forEach.call($("in_mats").querySelectorAll("[data-inrm]"),function(b){
+  Array.prototype.forEach.call($("in_venda").querySelectorAll("[data-initrm]"),function(b){
     b.onclick=async function(){
       if(!podeInstalar(p))return;
-      p.materiaisInstalacao.splice(+b.getAttribute("data-inrm"),1);
-      await gravarPedido(p);renderInstalacao();};});
+      var it=p.itens[+b.getAttribute("data-initrm")];
+      if(!it||!it.daInstalacao)return;
+      p.itens.splice(+b.getAttribute("data-initrm"),1);
+      atualizarTotaisPedido(p);await gravarPedido(p);renderInstalacao();
+      toast(it.nome+" saiu da venda.");};});
+  /* cobrança: o que entrou na instalação precisa de forma de pagamento — o financeiro
+     só aprova com as formas somando o total */
+  var r=recalcPedido(p.itens||[],p.formas||[]),falta=r.dif;
+  var pagInst=(p.formas||[]).map(function(f,ix){return {f:f,ix:ix};}).filter(function(x){return x.f.daInstalacao;});
+  var pag='<div class="calc">'+
+    '<div class="r"><span>Total da venda</span><span>'+BRL(r.total)+"</span></div>"+
+    '<div class="r"><span>Formas de pagamento somam</span><span>'+BRL(r.soma)+"</span></div>"+
+    '<div class="r sep"><span>'+(falta<0?"Sobra":"Falta receber")+"</span><span>"+BRL(Math.abs(falta))+"</span></div></div>";
+  if(pagInst.length)pag+='<div style="margin-top:8px">'+pagInst.map(function(x){
+    return '<div style="display:flex;gap:8px;align-items:center;margin-top:4px">Pago na instalação: <b>'+esc(x.f.tipo)+" "+(x.f.parc||1)+"× "+BRL(x.f.valor)+"</b>"+
+      (edita?'<button class="btn mut sm" type="button" data-infrm="'+x.ix+'">Remover</button>':"")+"</div>";}).join("")+"</div>";
+  if(edita&&(falta!==0||pagInst.length)){
+    var tipos=formasPgto.map(function(t){return t.nome;});
+    var tipoSel=tipos.indexOf(instPag.tipo)>=0?instPag.tipo:(tipos[0]||"");
+    var ps=tipoSel?parcelasDe(tipoSel):[1];
+    pag+='<div class="grid g4" style="margin-top:10px">'+
+      '<div class="fld"><label for="in_forma">Forma de pagamento</label><select id="in_forma">'+
+        tipos.map(function(t){return "<option"+(t===tipoSel?" selected":"")+">"+esc(t)+"</option>";}).join("")+"</select></div>"+
+      '<div class="fld"><label for="in_parc">Parcelas</label><select id="in_parc">'+
+        ps.map(function(n){return '<option value="'+n+'">'+n+"×</option>";}).join("")+"</select></div>"+
+      '<div class="fld"><label for="in_valor">Valor</label><input id="in_valor" type="number" step="0.01" value="'+(falta>0?falta.toFixed(2):"0")+'"></div>'+
+      '<div class="fld" style="align-self:end"><button class="btn ghost" type="button" id="in_addPag">Incluir pagamento</button></div></div>';
+  }
+  $("in_pagBox").innerHTML=pag;
+  var bf=$("in_forma");if(bf)bf.onchange=function(){instPag.tipo=bf.value;renderInstalacao();};
+  var bp=$("in_addPag");
+  if(bp)bp.onclick=async function(){
+    if(!podeInstalar(p))return;
+    var tipo=$("in_forma").value,parc=parseInt($("in_parc").value,10)||1;
+    var v=Math.round((parseFloat($("in_valor").value)||0)*100)/100;
+    if(!tipo||v<=0){toast("Escolha a forma e informe o valor do pagamento.");return;}
+    p.formas=p.formas||[];
+    p.formas.push({tipo:tipo,parc:parc,valor:v,daInstalacao:true});
+    atualizarTotaisPedido(p);await gravarPedido(p);renderInstalacao();
+    toast("Pagamento incluído: "+tipo+" "+parc+"× "+BRL(v)+".");};
+  Array.prototype.forEach.call($("in_pagBox").querySelectorAll("[data-infrm]"),function(b){
+    b.onclick=async function(){
+      if(!podeInstalar(p))return;
+      var f=p.formas[+b.getAttribute("data-infrm")];
+      if(!f||!f.daInstalacao)return;
+      p.formas.splice(+b.getAttribute("data-infrm"),1);
+      atualizarTotaisPedido(p);await gravarPedido(p);renderInstalacao();};});
   $("in_obs").readOnly=!edita;
   $("in_finalizar").hidden=!edita;$("in_salvar").hidden=!edita;
 }
@@ -11002,14 +11080,21 @@ async function finalizarInstalacao(p,obs){
     try{$("in_obs").focus();}catch(e){}
     return false;
   }
-  var ms=p.materiaisInstalacao||[],usados=ms.map(function(m){return m.qtd+"× "+m.nome;}).join(", ");
+  var r=atualizarTotaisPedido(p);
+  if(r.dif!==0){
+    $("in_alerta").innerHTML='<div class="note crit"><b>'+(r.dif>0?"Falta receber "+BRL(r.dif):"As formas passam do total em "+BRL(-r.dif))+
+      ".</b> "+(r.dif>0?"Inclua a forma de pagamento dos produtos incluídos na instalação.":"Remova ou ajuste o pagamento incluído.")+"</div>";
+    return false;
+  }
+  var ms=(p.itens||[]).filter(function(i){return i.daInstalacao;}),
+      usados=ms.map(function(m){return (m.qtd||1)+"× "+m.nome;}).join(", ");
   if(!confirm("Finalizar a instalação do pedido "+p.numero+" na casa de "+p.cliente+"?\n\n"+
-    (ms.length?"Usados a mais: "+usados+"\n\n":"")+"A venda vai para a Aprovação Financeira."))return false;
+    (ms.length?"Incluídos na venda: "+usados+" · novo total "+BRL(p.total)+"\n\n":"")+"A venda vai para a Aprovação Financeira."))return false;
   p.obsInstalacao=obs;
   p.instaladoEm=hojeISO();p.instaladoPor=usuarioAtual;
   if(!p.instalacao)p.instalacao=hojeISO();
   p.status=etapaVenda(p);
-  registrarEvento(p,"Instalação finalizada"+(ms.length?" · usados a mais: "+usados:"")+" · "+obs);
+  registrarEvento(p,"Instalação finalizada"+(ms.length?" · incluídos na venda: "+usados+" · total "+BRL(p.total):"")+" · "+obs);
   await gravarPedido(p);
   $("in_alerta").innerHTML="";
   toast("Instalação finalizada · pedido "+p.numero+" foi para a Aprovação Financeira.");
@@ -11025,15 +11110,15 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
       '<span style="margin-left:auto"><b>'+BRL(p.total)+"</b></span></div>"+
     '<div class="t-sub" style="margin:4px 0 8px">'+esc(p.cliente)+" · vendedor "+esc(p.vendedor||"—")+
       (p.instalacao?" · instalação "+esc(respInstalacao(p)||"—")+(p.instaladoEm?" em "+esc(p.instaladoEm):""):" · sem instalação")+"</div>"+
+    '<div style="margin:0 0 8px"><button class="btn ghost sm" type="button" data-finver="'+p.id+'">Ver a venda completa</button></div>'+
     (p.devolucaoFin?'<div class="note warn"><b>Devolvida</b> por '+esc(p.devolucaoFin.por)+" em "+
       esc(p.devolucaoFin.quando)+": "+esc(p.devolucaoFin.motivo)+"</div>":"")+
     (p.obsInstalacao?'<div class="note" style="margin:6px 0"><b>Instalação</b> ('+esc(p.instaladoPor||"—")+", "+
       esc(p.instaladoEm||"")+"): "+esc(p.obsInstalacao)+"</div>":"")+
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">'+
       '<div><div class="t-sub" style="margin-bottom:4px">Produtos · baixa do estoque de <b>'+esc(nomeLocal(localDaVenda(p)))+"</b></div>"+
-        ((p.itens||[]).map(function(i){return (i.qtd||1)+"× "+esc(i.nome)+(i.serie?' <span class="t-sub">série '+esc(i.serie)+"</span>":"");}).join("<br>")||"—")+
-        ((p.materiaisInstalacao||[]).length?'<div class="t-sub" style="margin:6px 0 2px">Usados na instalação (não cobrados)</div>'+
-          p.materiaisInstalacao.map(function(m){return m.qtd+"× "+esc(m.nome);}).join("<br>"):"")+"</div>"+
+        ((p.itens||[]).map(function(i){return (i.qtd||1)+"× "+esc(i.nome)+(i.serie?' <span class="t-sub">série '+esc(i.serie)+"</span>":"")+
+          (i.daInstalacao?' <span class="pill p-acc">incluído na instalação</span>':"");}).join("<br>")||"—")+"</div>"+
       '<div><div class="t-sub" style="margin-bottom:4px">Valores a conferir</div>'+
         (formas.map(function(f){return esc(f.tipo)+" · "+f.parc+"× · <b>"+BRL(f.valor)+"</b>";}).join("<br>")||"—")+
         ((p.anexos&&p.anexos.length)?'<div class="t-sub" style="margin-top:6px">Anexos: '+esc(p.anexos.join(", "))+"</div>":"")+"</div>"+
@@ -11113,6 +11198,8 @@ function renderFin(){
     };});
   Array.prototype.forEach.call(tela.querySelectorAll("[data-findev]"),function(bt){
     bt.onclick=function(){var p=porId(bt.getAttribute("data-findev"));if(p)devolverVenda(p);};});
+  Array.prototype.forEach.call(tela.querySelectorAll("[data-finver]"),function(bt){
+    bt.onclick=function(){var p=porId(bt.getAttribute("data-finver"));if(p)abrirInstalacao(p,"venda");};});
   if(finFoco){
     var alvo=tela.querySelector('[data-finp="'+finFoco+'"]');
     if(alvo)try{alvo.scrollIntoView({block:"center"});}catch(e){}
@@ -11149,7 +11236,8 @@ function renderFin(){
       }).join("")+"</tbody></table></div>"
     : '<div class="empty"><div class="big">Nenhuma aprovação nos últimos 30 dias</div></div>';
   Array.prototype.forEach.call($("finFeitas").querySelectorAll("[data-finabre]"),function(tr){
-    tr.onclick=function(){var p=porId(tr.getAttribute("data-finabre"));if(p){ir("pedidos");abrirPedido(p);}};});
+    tr.onclick=function(){var p=porId(tr.getAttribute("data-finabre"));
+      if(p){if(veTela("pedidos")){ir("pedidos");abrirPedido(p);}else abrirInstalacao(p,"venda");}};});
 }
 function abrirReabertura(p){
   var lst=precisaAutorizar(p);
@@ -12081,12 +12169,16 @@ function ligar(){
     var pr=produtos.filter(function(x){return x.id===$("in_prod").value;})[0];
     if(!pr){toast("Escolha o produto.");return;}
     var q=Math.max(1,parseInt($("in_qtd").value,10)||1);
-    p.materiaisInstalacao=p.materiaisInstalacao||[];
-    var ja=p.materiaisInstalacao.filter(function(m){return m.pid===pr.id;})[0];
-    if(ja)ja.qtd+=q;else p.materiaisInstalacao.push({pid:pr.id,nome:pr.nome,cod:pr.cod,qtd:q});
+    /* entra na venda pelo preço de tabela, cobrado do cliente */
+    p.itens=p.itens||[];
+    var ja=p.itens.filter(function(i){return i.daInstalacao&&i.pid===pr.id;})[0];
+    if(ja)ja.qtd=(ja.qtd||1)+q;
+    else p.itens.push({pid:pr.id,nome:pr.nome,cod:pr.cod,qtd:q,valor:+pr.cheia||0,serie:"",
+      pontos:+pr.pontos||0,garantia:"Bronze",daInstalacao:true});
+    var r=atualizarTotaisPedido(p);
     $("in_qtd").value=1;
     await gravarPedido(p);renderInstalacao();
-    toast(q+"× "+pr.nome+" incluído na instalação.");};
+    toast(q+"× "+pr.nome+" incluído na venda ("+BRL((+pr.cheia||0)*q)+") · falta receber "+BRL(Math.max(0,r.dif))+".");};
   $("in_salvar").onclick=async function(){
     var p=instAberta;if(!p||!podeInstalar(p))return;
     p.obsInstalacao=$("in_obs").value.trim();
