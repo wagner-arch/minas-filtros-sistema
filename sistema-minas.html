@@ -4085,17 +4085,22 @@ function abrirCliente(c){
    Lead continua editável: é nele que CPF e RG são preenchidos para a primeira venda. */
 var DADOS_TRAVADOS=[["c_nome","nome"],["c_doc","doc"],["c_rg","rg"]];
 function clienteTravado(c){return !!(c&&c.id&&!ehLead(c));}
+/* só o Administrador corrige nome, CPF/CNPJ e RG de cliente (regra de 12/09) */
+function ehAdministrador(){return perfilDe(usuarioAtual)==="Administrador";}
 function travarDadosPessoais(c){
-  var cli=clienteTravado(c);
+  var cli=clienteTravado(c),adm=ehAdministrador(),bloq=cli&&!adm;
   DADOS_TRAVADOS.forEach(function(x){
     var e=$(x[0]);if(!e)return;
-    var trava=cli&&!!String(c[x[1]]||"").trim();
+    var trava=bloq&&!!String(c[x[1]]||"").trim();
     e.readOnly=trava;
     e.style.opacity=trava?".72":"";
-    e.title=trava?"Dado pessoal de cliente — não se altera":"";
+    e.title=trava?"Dado pessoal de cliente — só o Administrador altera":"";
   });
-  $("c_tipo").disabled=cli;
+  $("c_tipo").disabled=bloq;
   $("c_travaNota").hidden=!cli;
+  $("c_travaNota").innerHTML=adm
+    ? "<b>Administrador: você pode corrigir nome, CPF/CNPJ e RG deste cliente.</b> Os demais usuários não. A alteração fica registrada na ficha."
+    : "<b>Cliente: nome, CPF/CNPJ e RG só o Administrador altera.</b> Endereço, geolocalização e contato podem ser atualizados.";
 }
 /* ---------- indicações ---------- */
 function indicadosPor(id){
@@ -12260,11 +12265,22 @@ function ligar(){
     if(dados.__pedeTipoAt&&dados.tipoAt&&!c.tipoPrimeiroAtend){
       c.tipoPrimeiroAtend=dados.tipoAt;c.primeiroAtendEm=iso(new Date());}
     /* cliente: nome, CPF/CNPJ, RG e tipo que já existem ficam como estavam */
-    var fixos={};
+    var fixos={},antes={};
     if(clienteTravado(editandoCli))["nome","doc","rg","tipo"].forEach(function(k){
-      if(String(editandoCli[k]||"").trim())fixos[k]=editandoCli[k];});
+      antes[k]=editandoCli[k]||"";
+      if(!ehAdministrador()&&String(editandoCli[k]||"").trim())fixos[k]=editandoCli[k];});
     CAMPOS_CLI.forEach(function(k){if(k!=="uf")c[k]=dados[k]||"";});
     Object.keys(fixos).forEach(function(k){c[k]=fixos[k];});
+    /* o Administrador corrigiu dado pessoal de cliente: fica registrado na ficha */
+    if(clienteTravado(editandoCli)&&ehAdministrador()){
+      var ROT={nome:"Nome",doc:"CPF/CNPJ",rg:"RG",tipo:"Tipo"};
+      Object.keys(antes).forEach(function(k){
+        if(String(antes[k]||"")!==String(c[k]||"")&&String(antes[k]||"").trim()){
+          c.alteracoes=c.alteracoes||[];
+          c.alteracoes.push({quando:iso(new Date()),por:usuarioAtual,campo:ROT[k],de:antes[k],para:c[k]||""});
+        }
+      });
+    }
     c.uf=$("c_uf").value.trim().toUpperCase();c.temconj=$("c_temconj").value;
     if(!editandoCli)clientes.push(c);
     if(db){try{await col("clientes").doc(c.id).set(c);}catch(e){console.warn(e);}}
