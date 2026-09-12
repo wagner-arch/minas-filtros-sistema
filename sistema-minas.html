@@ -4359,6 +4359,12 @@ function opcoesProduto(){
   if(atual&&ativos.some(function(p){return p.id===atual;}))s.value=atual;
   sincronizarValor();
 }
+/* código de barras de cada produto (só dígitos), para a busca de produto do módulo de celular */
+window.barrasProdutosMF=function(){
+  var m={};
+  produtos.forEach(function(p){var d=String(p.barras||"").replace(/\D/g,"");if(d)m[p.id]=d;});
+  return m;
+};
 function sincronizarValor(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if(p){$("v_valor").value=p.cheia;$("v_serie").disabled=(p.serie!=="sim");$("v_serie").placeholder=(p.serie==="sim"?"obrigatório":"não se aplica");}
@@ -13401,6 +13407,94 @@ function erro(msg){
     cx.hidden=false;
   }
 
+  /* ---- busca de produto por nome ou código (pedido do Wagner, 12/09) ----
+     A lista tem mais de 200 produtos e, no celular, vira uma roda sem busca. Acima
+     de cada lista de produto entra um campo de busca: digitou parte do nome ou do
+     código (em qualquer ordem, sem acento), aparecem os que batem — código que
+     começa com o que foi digitado vem primeiro; tocou (ou Enter no primeiro), a
+     lista fica com o escolhido e dispara o "change" que já preenche valor, série e
+     garantia. A lista continua ali, mostrando o produto escolhido. */
+  var CAMPOS_PRODUTO=["v_prod","or_prod","os_prod","pd_prod","mp_prod","nf_prod","es_prod"];
+  function ligarBuscaProduto(){
+    CAMPOS_PRODUTO.forEach(function(id){
+      var sel=document.getElementById(id);
+      if(!sel||sel.__buscaLigada||!sel.parentNode)return;
+      sel.__buscaLigada=true;
+      var envolt=document.createElement("div");
+      envolt.style.cssText="position:relative;margin-bottom:6px";
+      var bx=document.createElement("input");
+      bx.type="search";bx.id=id+"_busca";
+      bx.placeholder="Buscar: nome, código ou código de barras";
+      bx.setAttribute("autocomplete","off");
+      bx.setAttribute("enterkeyhint","search");
+      bx.setAttribute("aria-label","Buscar produto por nome, código ou código de barras");
+      envolt.appendChild(bx);
+      sel.parentNode.insertBefore(envolt,sel);
+      /* "ler código de barras" pela câmera: o número lido cai na busca */
+      var lbl=sel.parentNode.querySelector("label");
+      if(lbl){
+        var bl=document.createElement("button");
+        bl.type="button";bl.className="btn sm ghost";bl.id=id+"_ler";
+        bl.style.cssText="margin-left:8px;padding:2px 8px;font-size:11.5px;min-height:0";
+        bl.textContent="ler código de barras";
+        bl.onclick=function(){lerCodigo(bx);};
+        lbl.appendChild(bl);
+      }
+      var achados=[];
+      function escolher(it){
+        if(!it||!it.o)return;
+        sel.value=it.o.value;
+        sel.dispatchEvent(new Event("change",{bubbles:true}));
+        bx.value="";achados=[];
+        fecharCaixa(bx);
+        try{bx.blur();}catch(e){}
+      }
+      function procurar(){
+        var q=ibgeTexto(bx.value);
+        if(!q){achados=[];fecharCaixa(bx);return;}
+        var termos=q.split(" "),lista=[],digitos=/^\d+$/.test(q)?q:"",exatos=[],barras={};
+        try{if(window.barrasProdutosMF)barras=window.barrasProdutosMF()||{};}catch(e){}
+        Array.prototype.forEach.call(sel.options,function(o){
+          if(!o.value||o.disabled)return;
+          var cb=barras[o.value]||"";
+          var t=ibgeTexto(o.textContent)+(cb?" "+cb:"");
+          for(var i=0;i<termos.length;i++)if(t.indexOf(termos[i])<0)return;
+          var cod=ibgeTexto(String(o.textContent).split("·")[0]);
+          var nota=(digitos&&cb===digitos)?-1:(cod.indexOf(termos[0])===0?0:(t.indexOf(termos[0])===0?1:2));
+          if(nota===-1)exatos.push(o);
+          lista.push({o:o,nota:nota});
+        });
+        /* código de barras completo (câmera, leitor USB ou digitado) de um produto só:
+           escolhe direto */
+        if(digitos.length>=8&&exatos.length===1){
+          escolher({o:exatos[0]});
+          try{toast("Produto pelo código de barras: "+exatos[0].textContent.replace(/\s+/g," ").trim());}catch(e){}
+          return;
+        }
+        lista.sort(function(a,b){return a.nota-b.nota;});
+        achados=lista.slice(0,40);
+        if(!achados.length){
+          mostrar(bx,[digitos.length>=8
+            ? {titulo:"Nenhum produto com o código de barras "+digitos,sub:"cadastre o código de barras em Produtos"}
+            : {titulo:"Nenhum produto com “"+bx.value.trim()+"”",sub:"confira o nome ou o código"}],function(){});
+          return;
+        }
+        mostrar(bx,achados.map(function(x){
+          var partes=String(x.o.textContent).split("·");
+          return {titulo:partes.length>1?partes.slice(1).join("·").trim():x.o.textContent,
+            sub:partes.length>1?partes[0].trim():"",o:x.o};
+        }),escolher);
+      }
+      bx.addEventListener("input",procurar);
+      bx.addEventListener("focus",function(){if(bx.value)procurar();});
+      bx.addEventListener("keydown",function(ev){
+        if(ev.key==="Enter"){ev.preventDefault();if(achados.length)escolher({o:achados[0].o});}
+        else if(ev.key==="Escape")fecharCaixa(bx);
+      });
+      bx.addEventListener("blur",function(){setTimeout(function(){fecharCaixa(bx);},200);});
+    });
+  }
+
   /* ---- a regra: saiu do campo sem escolher, o campo se limpa ---- */
   function exigirEscolha(campo,rotulo){
     campo.addEventListener("blur",function(){
@@ -14781,6 +14875,8 @@ function erro(msg){
   }
   ligarLeitores();
   setTimeout(ligarLeitores,2500);
+  ligarBuscaProduto();
+  setTimeout(ligarBuscaProduto,2500);
 
   /* janela aberta: a página de trás não rola, e a barra de baixo sai da frente */
   function marcarModal(){
