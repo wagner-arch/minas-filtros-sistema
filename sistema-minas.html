@@ -380,11 +380,19 @@
   /* documento da venda para o cliente — mesmo modelo do pedido que a empresa usa (Pedido 20882) */
   .doc-venda{position:fixed;inset:0;z-index:400;background:#3E4B57;overflow:auto;padding:14px 10px 40px}
   .doc-venda .doc-barra{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:0 auto 14px;max-width:794px}
+  /* coletar a assinatura no próprio documento (venda sem assinatura guardada) */
+  .doc-venda .doc-assina{max-width:794px;margin:0 auto 14px;background:#fff;border-radius:10px;padding:14px;color:#16202B}
+  .doc-venda .doc-assina p{margin:4px 0 10px;font-size:13px;color:#4A5663}
+  .doc-venda .doc-assina canvas{display:block;width:100%;height:210px;background:#fff;border:2px dashed #8FA3B8;
+    border-radius:8px;touch-action:none;cursor:crosshair}
+  .doc-venda .doc-assina-acoes{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
   .docm{background:#fff;color:#111;width:794px;max-width:none;margin:0 auto 18px;box-sizing:border-box;padding:38px 42px 46px;
     font-family:"Times New Roman",Times,serif;font-size:12.5px;line-height:1.35;
     -webkit-box-decoration-break:clone;box-decoration-break:clone}
-  .docm table{width:calc(100% - 2px);border-collapse:collapse;margin:0 0 14px;break-inside:avoid}
-  .docm td{border:1px solid #4A6CB0;padding:4px 7px;vertical-align:middle;text-align:left}
+  /* bordas separadas: com border-collapse o Chrome perdia a última linha e a borda da direita na impressão */
+  .docm table{width:100%;border-collapse:separate;border-spacing:0;border-top:1px solid #4A6CB0;border-left:1px solid #4A6CB0;
+    margin:0 0 14px;break-inside:avoid}
+  .docm td{border:0;border-right:1px solid #4A6CB0;border-bottom:1px solid #4A6CB0;padding:4px 7px;vertical-align:middle;text-align:left}
   .docm tr.faixa-m td{background:#C9D5F3;text-align:center;font-weight:700}
   .docm .lb{font-weight:700}
   .docm .num{text-align:right}
@@ -397,6 +405,7 @@
   .docm .assin{margin:22px 0 8px;text-align:center;break-inside:avoid}
   .docm .assin img{display:block;max-height:64px;max-width:240px;margin:0 auto -2px}
   .docm .assin .sem{font-size:11px;color:#555;margin-bottom:4px}
+  .docm .assin .branco{height:62px}
   .docm .assin .linha{border-top:1.5px solid #2E4DA7;padding-top:6px;font-weight:700}
   .docm p{margin:0 0 9px;text-align:justify}
   .docm ol{margin:0 0 9px 34px;padding:0}
@@ -428,7 +437,7 @@
     .folha{box-shadow:none;max-width:none;width:210mm;min-height:297mm;margin:0}
     body.doc-aberta .app{display:none!important}
     body.doc-aberta #docVenda{display:block!important;position:static;padding:0;background:#fff;overflow:visible}
-    #docVenda .doc-barra{display:none!important}
+    #docVenda .doc-barra,#docVenda .doc-assina{display:none!important}
     #docVenda .docm{margin:0;page-break-after:always;break-after:page;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     #docVenda .docm:last-child{page-break-after:auto;break-after:auto}
   }
@@ -3306,8 +3315,19 @@ img{max-width:100%}
 <!-- DOCUMENTO DA VENDA PARA O CLIENTE: vira PDF pela impressão do navegador -->
 <div class="doc-venda" id="docVenda" hidden>
   <div class="doc-barra">
+    <button class="btn ghost" type="button" id="docv_assinar" hidden>Coletar assinatura do cliente</button>
     <button class="btn" type="button" id="docv_imprimir">Salvar em PDF / imprimir</button>
     <button class="btn mut" type="button" id="docv_fechar">Fechar</button>
+  </div>
+  <div class="doc-assina" id="docv_assinaBox" hidden>
+    <b>Assinatura do cliente</b>
+    <p>O cliente assina com o dedo no espaço em branco. A assinatura vai para todos os "De Acordo" do documento.</p>
+    <canvas id="docv_sig" width="900" height="280"></canvas>
+    <div class="doc-assina-acoes">
+      <button class="btn mut sm" type="button" id="docv_sigLimpar">Limpar</button>
+      <button class="btn sm" type="button" id="docv_sigSalvar">Salvar assinatura</button>
+      <button class="btn ghost sm" type="button" id="docv_sigCancelar">Cancelar</button>
+    </div>
   </div>
   <div id="docv_folhas"></div>
 </div>
@@ -4822,9 +4842,9 @@ function renderAnexos(){
 var assinaturaFeita=false;
 /* a assinatura vai para os documentos da venda: traço escuro sobre fundo transparente
    (no tema escuro o traço sai claro e sumiria no papel) */
-function assinaturaParaDoc(){
+function assinaturaParaDoc(canvasId,feita){
   try{
-    var cv=$("v_sig");if(!cv||!assinaturaFeita)return "";
+    var cv=$(canvasId||"v_sig");if(!cv||!(canvasId?feita:assinaturaFeita))return "";
     var t=document.createElement("canvas");t.width=cv.width;t.height=cv.height;
     var x=t.getContext("2d");x.drawImage(cv,0,0);
     var d=x.getImageData(0,0,t.width,t.height),a=d.data;
@@ -11266,7 +11286,7 @@ function docAssinatura(p){
   return '<div class="assin">'+
     (p.assinaturaImg
       ? '<img src="'+p.assinaturaImg+'" alt="Assinatura do cliente">'
-      : '<div class="sem">'+(p.assinado?"Assinado eletronicamente pelo cliente na finalização da venda.":"Sem assinatura registrada.")+"</div>")+
+      : '<div class="branco"></div>')+   /* sem assinatura guardada: espaço em branco para assinar */
     '<div class="linha">'+docMaiusc(p.cliente)+"</div></div>";
 }
 /* parcelas como no pedido: à vista = ENTRADA com a data; parcelado = FATURA, a 1ª leva o arredondamento */
@@ -11461,10 +11481,31 @@ function abrirDocVenda(p){
   var imagem=p.usoImagem==="sim"?'<div class="dupla"></div>'+docImagem(p,c):"";
   var contrato=cobertos.length?docContratoPremium(p,c,cobertos):"";
   $("docv_folhas").innerHTML=docPedido(p,c)+docTermos(p,imagem)+(contrato?'<div class="docm">'+contrato+"</div>":"");
+  docVendaAberta=p;
+  $("docv_assinar").hidden=!!p.assinaturaImg;
+  $("docv_assinaBox").hidden=true;
   document.body.classList.add("doc-aberta");
   $("docVenda").hidden=false;
   $("docVenda").scrollTop=0;
 }
+/* venda sem assinatura guardada (antiga, ou o cliente não assinou na hora): coleta no documento */
+var docVendaAberta=null,docSigFeita=false;
+function ligarAssinaturaDoc(){
+  var c=$("docv_sig");if(!c||c.__ligado)return;c.__ligado=true;
+  var x=c.getContext("2d"),desenhando=false;
+  x.lineWidth=3;x.lineCap="round";x.lineJoin="round";x.strokeStyle="#16202B";
+  function pos(e){
+    var r=c.getBoundingClientRect(),t=e.touches?e.touches[0]:e;
+    return {x:(t.clientX-r.left)*(c.width/r.width),y:(t.clientY-r.top)*(c.height/r.height)};
+  }
+  function ini(e){e.preventDefault();desenhando=true;var q=pos(e);x.beginPath();x.moveTo(q.x,q.y);}
+  function mov(e){if(!desenhando)return;e.preventDefault();var q=pos(e);x.lineTo(q.x,q.y);x.stroke();docSigFeita=true;}
+  function fim(){desenhando=false;}
+  c.addEventListener("mousedown",ini);c.addEventListener("mousemove",mov);window.addEventListener("mouseup",fim);
+  c.addEventListener("touchstart",ini,{passive:false});c.addEventListener("touchmove",mov,{passive:false});
+  c.addEventListener("touchend",fim);
+}
+function limparAssinaturaDoc(){var c=$("docv_sig");if(c)c.getContext("2d").clearRect(0,0,c.width,c.height);docSigFeita=false;}
 function fecharDocVenda(){$("docVenda").hidden=true;document.body.classList.remove("doc-aberta");}
 var finFoco="";
 function cartaoFin(p,podeAprovar,cxs,cxPadrao){
@@ -12558,6 +12599,19 @@ function ligar(){
   $("ins_fechar").onclick=function(){$("instModal").hidden=true;instAberta=null;render();};
   $("ins_pdf").onclick=function(){if(instAberta)abrirDocVenda(instAberta);};
   $("docv_imprimir").onclick=function(){window.print();};
+  $("docv_assinar").onclick=function(){
+    ligarAssinaturaDoc();limparAssinaturaDoc();
+    $("docv_assinaBox").hidden=false;$("docVenda").scrollTop=0;};
+  $("docv_sigLimpar").onclick=limparAssinaturaDoc;
+  $("docv_sigCancelar").onclick=function(){$("docv_assinaBox").hidden=true;};
+  $("docv_sigSalvar").onclick=async function(){
+    var p=docVendaAberta;if(!p)return;
+    if(!docSigFeita){toast("O cliente precisa assinar no espaço em branco.");return;}
+    p.assinaturaImg=assinaturaParaDoc("docv_sig",true);p.assinado=true;
+    registrarEvento(p,"Assinatura do cliente coletada no documento da venda");
+    await gravarPedido(p);
+    abrirDocVenda(p);
+    toast("Assinatura salva — já aparece em todos os De Acordo do documento.");};
   $("docv_fechar").onclick=fecharDocVenda;
 
   /* ---- Gestão Administrativa ---- */
