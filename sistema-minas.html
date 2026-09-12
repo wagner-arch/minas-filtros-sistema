@@ -398,6 +398,18 @@
   .folha.doc-termos .assina{margin-top:4px;margin-bottom:6px;font-size:11.5px}
   .folha.doc-termos .sig-img{max-height:52px;margin:2px 0 0}
   .folha.doc-termos .sig-linha{margin-top:3px;font-size:11px}
+  /* contrato do Plano Premium: texto corrido em várias páginas, sem timbrado (como o original);
+     o recuo se repete em cada página impressa */
+  .folha.doc-contrato{min-height:0;background-image:none!important;padding:56px 70px 60px;font-size:11px;line-height:1.45;
+    -webkit-box-decoration-break:clone;box-decoration-break:clone}
+  .folha.doc-contrato .ctit{text-align:center;font-weight:700;font-size:13px;color:#0B3C5D;margin-bottom:4px}
+  .folha.doc-contrato .csub{text-align:center;font-weight:700;font-size:12px;margin-bottom:12px}
+  .folha.doc-contrato h4{font-size:11.5px;margin:12px 0 5px;color:#0B3C5D;letter-spacing:.02em;break-after:avoid}
+  .folha.doc-contrato p{margin:0 0 6px;text-align:justify}
+  .folha.doc-contrato ol{margin:0 0 6px 20px;padding:0}
+  .folha.doc-contrato li{margin:0 0 2px}
+  .folha.doc-contrato u{text-underline-offset:2px}
+  .folha.doc-contrato .assina{break-inside:avoid}
   .folha .rod-emp{position:absolute;left:74px;right:74px;bottom:44px;display:flex;
     justify-content:space-between;align-items:flex-end;gap:24px;
     border-top:1px solid #9FD3F0;padding-top:12px;font-size:10.5px;color:#3A5568;line-height:1.45}
@@ -11156,6 +11168,136 @@ async function finalizarInstalacao(p,obs){
    Garantia Fiduciária + Declaração na mesma folha (textos oficiais de modelos-documentos-venda.md). "Salvar
    em PDF" usa a impressão do navegador. A assinatura da venda é replicada nas três folhas. */
 function dataCurta(s){var m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(s||""));return m?m[3]+"/"+m[2]+"/"+m[1]:String(s||"");}
+/* valor em reais por extenso: 622,12 → "Seiscentos e vinte e dois reais e doze centavos" */
+function valorPorExtenso(v){
+  var U=["zero","um","dois","três","quatro","cinco","seis","sete","oito","nove","dez","onze","doze","treze","quatorze",
+    "quinze","dezesseis","dezessete","dezoito","dezenove"];
+  var D=["","","vinte","trinta","quarenta","cinquenta","sessenta","setenta","oitenta","noventa"];
+  var C=["","cento","duzentos","trezentos","quatrocentos","quinhentos","seiscentos","setecentos","oitocentos","novecentos"];
+  function ate999(n){
+    if(!n)return "";
+    if(n===100)return "cem";
+    var s=[],ce=Math.floor(n/100),r=n%100;
+    if(ce)s.push(C[ce]);
+    if(r)s.push(r<20?U[r]:D[Math.floor(r/10)]+(r%10?" e "+U[r%10]:""));
+    return s.join(" e ");
+  }
+  function inteiro(n){
+    var mi=Math.floor(n/1e6),mil=Math.floor((n%1e6)/1000),resto=n%1000,partes=[];
+    if(mi)partes.push(ate999(mi)+(mi===1?" milhão":" milhões"));
+    if(mil)partes.push(mil===1?"mil":ate999(mil)+" mil");
+    if(resto)partes.push(ate999(resto));
+    var out=partes[0]||"zero";
+    for(var i=1;i<partes.length;i++){
+      var eUltimo=(i===partes.length-1)&&resto&&(resto<100||resto%100===0);
+      out+=(eUltimo?" e ":" ")+partes[i];
+    }
+    return out;
+  }
+  var cent=Math.round((+v||0)*100),re=Math.floor(cent/100),ct=cent%100,t=[];
+  if(re)t.push(inteiro(re)+(re===1?" real":(re%1e6===0?" de reais":" reais")));
+  if(ct)t.push(ate999(ct)+(ct===1?" centavo":" centavos"));
+  var s=t.join(" e ")||"zero real";
+  return s.charAt(0).toUpperCase()+s.slice(1);
+}
+/* Contrato de Prestação de Serviços de Assistência Técnica do Plano Premium I — texto do
+   contrato oficial (Pedido 20680), com os dados da venda no lugar dos da cliente. Sai só
+   quando algum item foi vendido com garantia Premium I (matriz de documentos de 31/08). */
+function contratoPremium(p,c,cobertos){
+  var cnpj=EMPRESA.cnpj||"10.408.272/0001-89";
+  var cidadeEmp=esc(EMPRESA.cidade||"Pará de Minas");
+  var dataV=String(p.data||hojeISO()).slice(0,10);
+  var itemPlano=(p.itens||[]).filter(function(i){return /plano\s*premium/i.test(i.nome||"")&&(+i.valor||0)>0;})[0];
+  var valorPlano=itemPlano?(+itemPlano.valor||0)*(itemPlano.qtd||1):0;
+  var endCli=[
+    (c.rua||c.num)?"ENDEREÇO <b>"+esc([c.rua,c.num].filter(Boolean).join(" - "))+"</b>":"",
+    c.bairro?"BAIRRO <b>"+esc(c.bairro)+"</b>":"",
+    c.cidade?"CIDADE <b>"+esc(c.cidade)+(c.uf?", "+esc(c.uf):"")+"</b>":""].filter(Boolean).join(", ");
+  var produtosCobertos=cobertos.map(function(i){
+    var pr=produtos.filter(function(x){return x.id===i.pid;})[0]||{};
+    return "<li>"+(i.qtd||1)+" - <b>"+esc(i.nome||"")+"</b>"+(pr.marca?" da Marca: <b>"+esc(pr.marca)+"</b>":"")+
+      " com Número de Série: <b>"+esc(i.serie||"—")+"</b></li>";
+  }).join("");
+  var sig=p.assinaturaImg
+    ? '<img class="sig-img" src="'+p.assinaturaImg+'" alt="Assinatura do cliente">'
+    : '<div style="font-size:11px;color:#5A6875;margin-top:8px">'+(p.assinado?"Assinado eletronicamente pelo cliente na finalização da venda.":"Sem assinatura registrada.")+"</div>";
+  return '<div class="folha doc-contrato">'+
+    '<div class="ctit">CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE ASSISTÊNCIA TÉCNICA PREVENTIVA E CORRETIVA</div>'+
+    '<div class="csub">PLANO PREMIUM I</div>'+
+    "<p>Pelo presente instrumento particular de contrato, de um lado a empresa <b>Minas Filtros LTDA</b>, CNPJ: "+esc(cnpj)+
+      " com sede na Rua do Rosário, bairro Centro na cidade de Pará de Minas - MG, doravante simplesmente denominada <b>CONTRATADA</b> e de outro lado "+
+      "<b>CONTRATANTE</b>, qualificado(a) <b>"+esc(p.cliente||"")+"</b>"+(c.doc?", CPF <b>"+esc(c.doc)+"</b>":"")+(endCli?", "+endCli:"")+
+      ", têm entre si, como justo e pactuado, a contratação dos serviços de Assistência Técnica, mediante as cláusulas e condições seguintes:</p>"+
+    "<h4>I - OBJETO</h4>"+
+    "<p><u>Cláusula primeira</u> - A <b>CONTRATADA</b> se obriga a prestar serviços de manutenção preventiva e corretiva ao(a) <b>CONTRATANTE</b>, nos seguintes produtos:</p>"+
+    "<ol style=\"list-style:none;margin-left:10px\">"+produtosCobertos+"</ol>"+
+    "<h4>II - DA MANUTENÇÃO</h4>"+
+    "<p><u>Cláusula segunda</u> - Para os efeitos deste contrato, considera-se manutenção preventiva aquela que visa manter os equipamentos dentro de condições normais de funcionamento com o objetivo de reduzir a ocorrência de defeitos por desgastes ou envelhecimento de seus componentes, constituindo tais serviços em ajustes, verificações, regulagem, trocas de peças internas e externas, limpeza dos componentes e equipamentos.</p>"+
+    "<p><u>Parágrafo primeiro</u> - Entende-se como manutenção corretiva os serviços de reparos para eliminar defeitos ocorridos sob condições de utilização adequada dos equipamentos, a ser realizada em todos os pontos identificados após ter sido diagnosticado, bem como testes após reparo, para promover o perfeito funcionamento dos mesmos.</p>"+
+    "<p><u>Parágrafo segundo</u> - A modalidade deste contrato é a de cobertura parcial, que engloba toda mão-de-obra e visitas necessárias à realização das manutenções preventivas e/ou corretivas dos equipamentos e componentes.</p>"+
+    "<p><u>Parágrafo terceiro</u> - O custo das peças que necessitarem ser substituídas será de responsabilidade da <b>CONTRATADA PEÇAS QUE NÃO SEJAM DANIFICADAS POR MÁ FÉ E SIM POR DESGASTE OU ACIDENTE.</b></p>"+
+    "<p><u>Parágrafo quarto</u> - Durante o período de vigência do presente Contrato, o <b>CONTRATANTE</b> terá direito:</p>"+
+    "<ol><li>01 (uma) troca de elemento filtrante anual;</li>"+
+      "<li>Visita técnica mensal sem custo adicional, totalizando 12 visitas durante a vigência do contrato caso o contrato seja de 12 meses.</li>"+
+      "<li>01 (uma) troca de compressor hermético;</li><li>02 (dois) registro de água natural e gelada;</li>"+
+      "<li>02 (dois) volantes do registro;</li><li>01 (um) serviço de carga de gás;</li><li>01 (um) reservatório de água gelada;</li>"+
+      "<li>01 (um) gerador de ozônio;</li><li>01 (uma) botoeira do gerador de ozônio;</li><li>01 (um) termostato.</li>"+
+      "<li>Qualquer outra troca de elemento filtrante ou visita técnica ou peças que exceder ao número relacionado acima durante a vigência do Contrato será custeado pelo <b>CONTRATANTE a parte.</b></li></ol>"+
+    "<p><u>Cláusula terceira</u> - Para a execução de manutenção corretiva, o(a) <b>CONTRATANTE</b> terá direito uma visita por mês, e número de visitas totais conforme o número de meses vigentes no contrato, ex.: contrato de 6 (seis) meses, direito de 6 (seis) visitas no período do contrato desde que sejam comprovadamente oriundas de defeitos técnicos.</p>"+
+    "<p><u>Parágrafo primeiro</u> - As visitas estabelecidas na presente cláusula far-se-ão no horário comercial de segunda-feira à sexta-feira, exceto feriados.</p>"+
+    "<p><u>Parágrafo segundo</u> - Para a execução dos serviços de manutenção, a <b>CONTRATADA</b> enviará técnicos habilitados, munidos das ferramentas necessárias à limpeza, ajustes e trocas de todos os componentes e peças necessários.</p>"+
+    "<p><u>Cláusula quarta</u> - Sempre que necessário, a <b>CONTRATADA</b> fornecerá ao(a) <b>CONTRATANTE</b>, recomendações técnicas e instruções de operação, inclusive breve treinamento verbal de operação dos equipamentos, advertindo ainda, sobre a necessidade de substituição de partes e componentes afetados pelo uso, ou que se destinem a uma substituição periódica, cujas responsabilidades e custos serão por conta do <b>CONTRATANTE,</b> estando isento do pagamento de mão-de-obra e visitas técnicas.</p>"+
+    "<p><u>Cláusula quinta</u> - Não estarão cobertas pelo presente contrato, as chamadas técnicas oriundas de defeitos provocados por:</p>"+
+    "<ol><li>No caso de uso indevido, inadequado do produto, que não seja o refil, será reposto uma única vez o reparo e a peça danificada e o mesmo será orientado para que não ocorra mais;</li>"+
+      "<li>Utilização de acessórios de qualidade duvidosa, que comprovadamente causem danos ao equipamento;</li>"+
+      "<li>Imperícia ou desconhecimento das normas básicas de operação e funcionamento;</li>"+
+      "<li>Intervenção nos equipamentos efetuados por pessoas não autorizadas pela CONTRATADA;</li>"+
+      "<li>Troca do produto completo segurado;</li>"+
+      "<li>Danos causados ao equipamento em virtude de caso fortuito ou força maior;</li>"+
+      "<li>Furto ou roubo do equipamento, peça e/ou componentes internos e externos.</li>"+
+      "<li>Acessórios para proteção ou para melhoria do funcionamento do produto segurado;</li>"+
+      "<li>Serviço elétrico da tomada de energia que alimenta o produto;</li>"+
+      "<li>Serviço hidráulico da torneira ou ponto de água que alimenta o produto;</li>"+
+      "<li>Instalação do produto em tomada de energia fora da tensão do produto;</li></ol>"+
+    "<p>Instalação do produto em ponto de água onde a pressão seja maior que 30mca, como apartamento com mais de 10 andares acima, ou ligação direto da rede hidráulica sem uma válvula de pressão.</p>"+
+    "<h4>III - RESPONSABILIDADES DO(A) CONTRATANTE</h4>"+
+    "<p><u>Cláusula sexta</u> - A fim de possibilitar a execução dos serviços objeto do presente contrato, caberá ao(a) <b>CONTRATANTE</b>:</p>"+
+    "<ol><li>Assegurar às pessoas credenciadas pela <b>CONTRATADA</b>, livre acesso aos equipamentos;</li>"+
+      "<li>Prestar esclarecimentos sobre as circunstâncias em que foram observadas as irregularidades e/ou defeitos, no funcionamento do equipamento;</li>"+
+      "<li>Programar dia e hora da visita para a execução das manutenções;</li>"+
+      "<li>Comunicar imediatamente a <b>CONTRATADA</b> a ocorrência de qualquer defeito ou deficiência que venha constatar nos equipamentos;</li>"+
+      "<li>Manter os equipamentos em local apropriado ao seu bom funcionamento de acordo com as especificações técnicas;</li>"+
+      "<li>Comunicar a <b>CONTRATADA</b>, com antecedência mínima de 48 (quarenta e oito) horas, a eventual necessidade de mudança de local dos equipamentos ou de algum reparo necessário.</li></ol>"+
+    "<h4>IV - RESPONSABILIDADES DA CONTRATADA</h4>"+
+    "<p><u>Cláusula sétima</u> - São responsabilidades da <b>CONTRATADA</b>:</p>"+
+    "<ol><li>Executar os reparos independente do número de horas que forem necessárias;</li>"+
+      "<li>Enviar pessoal tecnicamente treinado para a execução da manutenção preventiva e corretiva, em número suficiente e devidamente identificados, que não terão nenhum vínculo empregatício com o(a) <b>CONTRATANTE</b>, em nenhuma hipótese.</li>"+
+      "<li>Comunicar ao(a) <b>CONTRATANTE</b> toda e qualquer irregularidade encontrada, proveniente de utilização indevida e manipulação incorreta do equipamento;</li>"+
+      "<li>Fornecer OS (Ordem de Serviço) em todo atendimento realizado.</li></ol>"+
+    "<h4>V – PREÇO E CONDIÇÕES</h4>"+
+    "<p><u>Cláusula oitava</u> - Pelos serviços objeto deste contrato o(a) <b>CONTRATANTE</b> pagará à <b>CONTRATADA</b> "+
+      (valorPlano
+        ? "a importância de <b>"+BRL(valorPlano)+" ("+esc(valorPorExtenso(valorPlano))+")</b>, parcelados conforme o <b>Pedido Nº "+p.numero+"</b> (Em Anexo)."
+        : "a importância do plano prevista no <b>Pedido Nº "+p.numero+"</b> (Em Anexo), parcelada conforme o mesmo pedido.")+"</p>"+
+    "<h4>VI - VIGÊNCIA</h4>"+
+    "<p><u>Cláusula Nona</u> - O presente contrato entra em vigor na data de sua assinatura pelas partes e <b>vigora pelo prazo de 12 (Doze) meses</b>.</p>"+
+    "<h4>VII - DA RESCISÃO</h4>"+
+    "<p><u>Cláusula décima</u> - O presente contrato poderá ser rescindido:</p>"+
+    "<ol><li>No caso de descumprimento de qualquer cláusula ou condição ora estabelecida;</li>"+
+      "<li>No caso de inadimplemento do pagamento pelo(a) CONTRATANTE superior a 30 (trinta) dias;</li>"+
+      "<li>No caso do(a) <b>CONTRATANTE</b> transferir o equipamento para local impróprio ao seu funcionamento, ou por pessoas não autorizadas pela <b>CONTRATADA</b>.</li></ol>"+
+    "<p><u>Cláusula décima primeira</u> - O presente contrato poderá ainda ser rescindido à qualquer tempo por decisão de qualquer das partes, mediante notificação escrita, sem qualquer ônus para as partes, ressalvada hipótese constante da Cláusula Décima Segunda.</p>"+
+    "<h4>VIII - DA MULTA</h4>"+
+    "<p><u>Cláusula décima segunda</u> - Na hipótese de rescisão antecipada do presente contrato, caso tenha ocorrido alguma manutenção, reparo e/ou troca de qualquer peça ou do elemento filtrante antes do termino do contrato, o <b>CONTRATANTE</b> estará obrigado ao pagamento dos valores especificados na Cláusula Oitava, somadas as parcelas vincendas, a título de multa por rescisão antecipada do contrato.</p>"+
+    "<h4>IX - DAS DISPOSIÇÕES FINAIS</h4>"+
+    "<p><u>Cláusula décima terceira</u> - Todas as comunicações entre as partes contratantes deverão ser efetuadas por escrito, mediante protocolo de recebimento. Mensagens de Correio Eletrônico ou WhatsApp serão consideradas válidas para os fins desta cláusula.</p>"+
+    "<p><u>Cláusula décima quarta</u> - É vedada a cessão ou transferência total ou parcial de quaisquer direitos e obrigações inerentes ao presente contrato por qualquer das partes sem prévia e expressa autorização da outra.</p>"+
+    "<p><u>Cláusula décima quinta</u> - As partes elegem o Foro da Comarca de Pará de Minas - MG, para dirimir qualquer dúvida oriunda da execução deste contrato, desistindo de qualquer outro por mais privilegiado que seja.</p>"+
+    "<p>E por estarem assim justas e contratadas, assinam o presente contrato em duas vias de igual teor e para um só fim, na presença das testemunhas abaixo firmadas.</p>"+
+    "<p>"+cidadeEmp+", "+dataExtenso(dataV)+".</p>"+
+    '<div class="assina"><b>De acordo:</b>'+sig+'<div class="sig-linha">'+esc(p.cliente||"")+(c.doc?" · CPF "+esc(c.doc):"")+"</div></div>"+
+  "</div>";
+}
 function abrirDocVenda(p){
   var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
   var end=[[c.rua,c.num].filter(Boolean).join(", "),c.comp,c.bairro,[c.cidade,c.uf].filter(Boolean).join("/"),c.cep?"CEP "+c.cep:""].filter(Boolean).join(" · ");
@@ -11176,6 +11318,8 @@ function abrirDocVenda(p){
   }
   var formas=(p.formas||[]).filter(function(f){return +f.valor>0;});
   var pr=String(p.instalacao||"").split(" ");
+  /* itens com garantia Premium I levam o contrato de assistência técnica */
+  var cobertos=(p.itens||[]).filter(function(i){return String(i.garantia||"").trim().toLowerCase()==="premium i";});
   var pedido='<div class="folha doc-pedido">'+cabeca("Pedido de venda")+
     '<div class="bloco-cli">'+
       '<div class="lin"><span>CLIENTE</span><b>'+esc(p.cliente||"—")+"</b></div>"+
@@ -11198,6 +11342,9 @@ function abrirDocVenda(p){
       var n=f.parc||1;
       return esc(f.tipo)+" · "+(n>1?n+"× de "+BRL((+f.valor||0)/n)+" ("+BRL(f.valor)+")":BRL(f.valor));
     }).join("; ")||"—")+"</div>"+
+    (cobertos.length?'<div class="cond"><b>Garantia:</b> Plano Premium I para '+
+      esc(cobertos.map(function(i){return i.nome+(i.serie?" (série "+i.serie+")":"");}).join("; "))+
+      " — Contrato de Prestação de Serviços de Assistência Técnica em anexo.</div>":"")+
     (p.obs?'<div class="cond"><b>Observação:</b> '+esc(p.obs)+"</div>":"")+
     (p.obsInstalacao?'<div class="cond"><b>Instalação:</b> '+esc(p.obsInstalacao)+"</div>":"")+
     '<div class="cond">'+cidadeEmp+", "+dataExtenso(dataV)+".</div>"+
@@ -11218,8 +11365,9 @@ function abrirDocVenda(p){
     "</div>"+deAcordo();
   /* Garantia Fiduciária e Declaração dividem a segunda folha */
   $("docv_folhas").innerHTML=pedido+
-    '<div class="folha doc-termos">'+cabeca("Garantia e Declaração")+garantia+declaracao+rodape("")+"</div>";
-  Array.prototype.forEach.call($("docv_folhas").querySelectorAll(".folha"),function(f){
+    '<div class="folha doc-termos">'+cabeca("Garantia e Declaração")+garantia+declaracao+rodape("")+"</div>"+
+    (cobertos.length?contratoPremium(p,c,cobertos):"");
+  Array.prototype.forEach.call($("docv_folhas").querySelectorAll(".folha:not(.doc-contrato)"),function(f){
     try{f.style.backgroundImage="url("+TIMBRADO+")";}catch(e){}});
   document.body.classList.add("doc-aberta");
   $("docVenda").hidden=false;
