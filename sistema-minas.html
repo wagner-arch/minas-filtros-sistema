@@ -14060,6 +14060,164 @@ function erro(msg){
     },function(e){return {ok:false,texto:motivoGoogle(e)};});
   };
 
+  /* ---- Base de endereços do IBGE (CNEFE, Censo 2022) — pedido do Wagner, 12/09 ----
+     Geolocalização exata pelo número sem depender do Google. A pasta geo/, publicada
+     com o sistema e gerada por ferramentas/cnefe-gerar.ps1, tem os endereços com
+     número e coordenada de 781 municípios no raio de 350 km de Pará de Minas. O
+     celular baixa só o pedaço da cidade (nas grandes, só o da inicial da última
+     palavra da rua) na hora da busca.
+     Ordem da busca pelo endereço: IBGE no número → Google no número (com chave) →
+     IBGE pelos vizinhos da mesma rua → mapa aberto (Nominatim). */
+  var ibgeIndice=null,ibgeArquivos={};
+  var IBGE_TIPOS=["rua","avenida","alameda","travessa","praca","beco","rodovia","estrada","largo","via","viela",
+    "vila","ladeira","passagem","servidao","caminho","acesso","anel","contorno","marginal","parque","quadra",
+    "conjunto","condominio","chacara","sitio","fazenda","corrego","trevo","galeria","escadaria","jardim",
+    "residencial","loteamento","ramal","linha","area","setor","trecho","viaduto","ponte","calcadao","patio",
+    "esplanada","rotatoria","boulevard"];
+  var IBGE_ABREV_TIPO={r:"rua",av:"avenida",avda:"avenida",al:"alameda",tv:"travessa",trav:"travessa",
+    pc:"praca",pca:"praca",rod:"rodovia",est:"estrada",estr:"estrada",lg:"largo",bc:"beco",lad:"ladeira"};
+  var IBGE_TITULOS=["doutor","doutora","professor","professora","padre","santo","santa","sao","coronel",
+    "general","tenente","capitao","major","sargento","deputado","vereador","presidente","governador",
+    "engenheiro","dom","dona","monsenhor","comendador","senhor","senador","prefeito","papa","frei","irma",
+    "irmao","madre","marechal","almirante","brigadeiro","ministro","desembargador","maestro","pastor",
+    "conego","barao","visconde","conde","princesa","mestre","cabo","soldado","juiz","bispo","cardeal",
+    "nossa","senhora"];
+  var IBGE_ABREV_TIT={dr:"doutor",dra:"doutora",prof:"professor",profa:"professora",pe:"padre",sto:"santo",
+    sta:"santa",cel:"coronel",gal:"general",gen:"general",ten:"tenente",cap:"capitao",maj:"major",
+    sgt:"sargento",dep:"deputado",ver:"vereador",pres:"presidente",gov:"governador",eng:"engenheiro",
+    mons:"monsenhor",comend:"comendador",sen:"senador",pref:"prefeito",dna:"dona",sr:"senhor",
+    min:"ministro",des:"desembargador",mal:"marechal",alm:"almirante",brig:"brigadeiro"};
+  /* mesmo texto que o gerador grava: minúsculas, sem acento, só letras, números e espaço */
+  function ibgeTexto(s){return normalizar(s).replace(/[^a-z0-9]+/g," ").replace(/^\s+|\s+$/g,"");}
+  function ibgeRuaDigitada(rua){
+    var w=ibgeTexto(rua).split(" "),i,tipo="";
+    if(w.length===1&&w[0]==="")w=[];
+    if(w.length&&IBGE_ABREV_TIPO.hasOwnProperty(w[0]))w[0]=IBGE_ABREV_TIPO[w[0]];
+    if(w.length>1&&IBGE_TIPOS.indexOf(w[0])>=0)tipo=w[0];
+    for(i=tipo?1:0;i<w.length&&i<4;i++)if(IBGE_ABREV_TIT.hasOwnProperty(w[i]))w[i]=IBGE_ABREV_TIT[w[i]];
+    var resto=tipo?w.slice(1):w.slice(0),nuc=resto.slice(0),k=0;
+    while(k<3&&nuc.length>1&&IBGE_TITULOS.indexOf(nuc[0])>=0){nuc=nuc.slice(1);k++;}
+    var ult=w.length?w[w.length-1]:"",b=ult.charAt(0);
+    return {full:w.join(" "),tipo:tipo,semTipo:resto.join(" "),nucleo:nuc.join(" "),ult:ult,
+      balde:(b>="a"&&b<="z")?b:"0"};
+  }
+  /* quanto o logradouro da base casa com o que foi digitado: 4 igual; 3 igual sem o
+     tipo; 2 igual sem tipo e título; tipo diferente (beco × rua) perde 1,5 */
+  function ibgeNota(u,t,ti,no){
+    var tn=ti?ti+" "+no:no,full=t?t+" "+tn:tn,s;
+    if(u.full===full)return 4;
+    if(u.semTipo===tn)s=3;
+    else if(u.nucleo===no||u.nucleo===tn)s=2;
+    else return 0;
+    if(u.tipo&&t&&u.tipo!==t)s-=1.5;
+    return s;
+  }
+  function ibgeBase(){return window.IBGE_BASE_MF||"geo/";}
+  function ibgeGet(nome,comoJson){
+    return fetch(ibgeBase()+nome).then(function(r){
+      if(r.status===404)return null;
+      if(!r.ok)throw new Error("http "+r.status);
+      return comoJson?r.json():r.text();
+    });
+  }
+  function ibgeIndiceP(){
+    if(!ibgeIndice)ibgeIndice=ibgeGet("indice.json",true).then(null,function(e){ibgeIndice=null;throw e;});
+    return ibgeIndice;
+  }
+  function ibgeArquivoP(nome){
+    if(!ibgeArquivos[nome])ibgeArquivos[nome]=ibgeGet(nome,false).then(null,function(e){delete ibgeArquivos[nome];throw e;});
+    return ibgeArquivos[nome];
+  }
+  /* num,lat,lng;num,dlat,dlng;... (inteiros de 1e-5 grau; a 1ª é absoluta) */
+  function ibgeDecodificar(dados){
+    var p=String(dados||"").split(";"),lista=[],la=0,lo=0,i,e;
+    for(i=0;i<p.length;i++){
+      e=p[i].split(",");
+      if(e.length<3)continue;
+      if(i===0){la=+e[1];lo=+e[2];}else{la+=+e[1];lo+=+e[2];}
+      lista.push({n:+e[0],la:la,lo:lo});
+    }
+    return lista;
+  }
+  function ibgeProcurar(texto,u,cep,bairro){
+    var linhas=texto.split("\n"),cands=[],melhor=0,i,l,p,nota,f;
+    for(i=0;i<linhas.length;i++){
+      l=linhas[i];
+      if(!l||l.indexOf(u.ult)<0)continue;
+      p=l.split("|");
+      if(p.length<6)continue;
+      nota=ibgeNota(u,p[0],p[1],p[2]);
+      if(nota<1.5)continue;
+      if(nota>melhor){melhor=nota;cands=[];}
+      if(nota===melhor)cands.push(p);
+    }
+    if(!cands.length)return null;
+    /* mesmo nome em trechos de CEP ou bairros diferentes: o CEP e o bairro desempatam */
+    cep=String(cep||"").replace(/\D/g,"");
+    if(cep.length===8){f=cands.filter(function(x){return x[4]===cep;});if(f.length)cands=f;}
+    var bn=ibgeTexto(bairro);
+    if(bn){f=cands.filter(function(x){return x[3]===bn;});if(f.length)cands=f;}
+    var ref=cands[0][0]+"|"+cands[0][1]+"|"+cands[0][2],locais={},lista=[];
+    cands.forEach(function(x){
+      if(x[0]+"|"+x[1]+"|"+x[2]!==ref)return;
+      locais[x[3]]=1;
+      lista=lista.concat(ibgeDecodificar(x[5]));
+    });
+    lista.sort(function(a,b){return a.n-b.n;});
+    return {lista:lista,locais:Object.keys(locais)};
+  }
+  /* o número na base; senão, entre os vizinhos do mesmo lado (mesma paridade) */
+  function ibgePonto(lista,num){
+    var n=parseInt(String(num||"").replace(/\D/g,""),10),i,x,y,sla=0,slo=0,k=0,ant=null,dep=null;
+    if(!n){x=lista[Math.floor(lista.length/2)];return {la:x.la,lo:x.lo,nivel:"rua"};}
+    for(i=0;i<lista.length;i++){x=lista[i];if(x.n===n){sla+=x.la;slo+=x.lo;k++;}}
+    if(k)return {la:sla/k,lo:slo/k,nivel:"numero"};
+    for(i=0;i<lista.length;i++){
+      x=lista[i];
+      if(x.n%2!==n%2)continue;
+      if(x.n<n&&(!ant||x.n>ant.n))ant=x;
+      if(x.n>n&&(!dep||x.n<dep.n))dep=x;
+    }
+    if(ant&&dep){
+      var t=(n-ant.n)/(dep.n-ant.n);
+      return {la:ant.la+(dep.la-ant.la)*t,lo:ant.lo+(dep.lo-ant.lo)*t,nivel:"vizinhos",ant:ant.n,dep:dep.n};
+    }
+    x=ant||dep;
+    if(!x)for(i=0;i<lista.length;i++){y=lista[i];if(!x||Math.abs(y.n-n)<Math.abs(x.n-n))x=y;}
+    return {la:x.la,lo:x.lo,nivel:"proximo",ref:x.n};
+  }
+  function buscarIBGE(o){
+    var u=ibgeRuaDigitada(o.rua);
+    if(!u.ult||!o.cidade)return Promise.resolve(null);
+    return ibgeIndiceP().then(function(ind){
+      var c=ind&&ind.cidades&&ind.cidades[String(o.uf||UF_PADRAO).toUpperCase()+"|"+ibgeTexto(o.cidade)];
+      if(!c)return {fora:true};
+      return ibgeArquivoP(c[0]+(c[1]?"-"+u.balde:"")+".txt").then(function(txt){
+        var r=txt?ibgeProcurar(txt,u,o.cep,o.bairro):null;
+        if(!r||!r.lista.length)return {semRua:true};
+        var p=ibgePonto(r.lista,o.num),n=String(o.num||"").replace(/\D/g,"");
+        var dup=r.locais.length>1?" Há mais de uma rua com esse nome na cidade — confira o bairro.":"";
+        p.la=p.la/1e5;p.lo=p.lo/1e5;
+        if(p.nivel==="numero"){
+          p.tipo=dup?"":"ok";
+          p.texto="Geolocalização exata no número "+n+" (base de endereços do IBGE): "+o.rua+", "+o.cidade+"."+dup;
+        }else if(p.nivel==="vizinhos"){
+          p.tipo=(p.dep-p.ant<=40&&!dup)?"ok":"";
+          p.texto="O número "+n+" não está na base do IBGE; ponto calculado entre o nº "+p.ant+" e o nº "+p.dep+
+            " desta rua."+(p.dep-p.ant>40?" Confira no mapa.":"")+dup;
+        }else if(p.nivel==="proximo"){
+          p.tipo="";
+          p.texto="O número "+n+" não está na base do IBGE; ponto no nº "+p.ref+", o mais próximo desta rua. Confira no mapa."+dup;
+        }else{
+          p.tipo="";
+          p.texto="Ponto na rua (falta o número) — base de endereços do IBGE."+dup;
+        }
+        return p;
+      });
+    });
+  }
+  window.buscarIBGEMF=buscarIBGE;
+
   /* P = prefixo do formulário: "c" (cadastro do cliente/lead) ou "at" (atendimento) */
   function ligarGeo(P){
     P=P||"c";
@@ -14272,26 +14430,44 @@ function erro(msg){
       else aviso("Procurando a geolocalização pelo endereço…");
       /* com a chave do Google: primeiro o Google, que tem o número da casa; sem
          chave, sem a rua no Google ou com erro, o mapa aberto (Nominatim) */
-      var obsGoogle="";
-      if(chaveGoogle()&&rua){
+      var obsGoogle="",ibgeRes=null;
+      function gravarPonto(la,lo,nivel,texto,tipoAviso){
+        bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
+        campo.value=(+la).toFixed(6)+","+(+lo).toFixed(6);
+        campo.__escolhido=campo.value;
+        campo.__geoExato="";
+        campo.__geoNivel=nivel;
+        atualizarLink();
+        aviso(texto,tipoAviso);
+      }
+      function usarIBGE(){gravarPonto(ibgeRes.la,ibgeRes.lo,"ibge-"+ibgeRes.nivel,ibgeRes.texto,ibgeRes.tipo);}
+      /* 2º: Google, se houver chave — só passa na frente do IBGE quando acha o número */
+      function viaGoogle(){
+        if(!(chaveGoogle()&&rua)){if(ibgeRes)usarIBGE();else tentar(0,false);return;}
         var textoEnd=rua+(num?", "+num:"")+(bairro?" - "+bairro:"")+", "+cidade+" - "+uf+", Brasil";
         geocodificarGoogle(textoEnd).then(function(r){
           if(minha!==geoBusca)return;
           var q=r&&qualidadeGoogle(r,num,cidade);
-          if(!q){obsGoogle="O Google não achou esta rua. ";tentar(0,false);return;}
-          bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
-          campo.value=q.lat.toFixed(6)+","+q.lng.toFixed(6);
-          campo.__escolhido=campo.value;
-          campo.__geoExato="";
-          campo.__geoNivel=q.nivel;
-          atualizarLink();
-          aviso(q.texto,q.tipo);
+          if(q&&(q.nivel==="numero"||!ibgeRes)){gravarPonto(q.lat,q.lng,q.nivel,q.texto,q.tipo);return;}
+          if(ibgeRes){usarIBGE();return;}
+          obsGoogle+="O Google não achou esta rua. ";
+          tentar(0,false);
         },function(e){
           if(minha!==geoBusca)return;
-          obsGoogle=motivoGoogle(e)+" ";
+          if(ibgeRes){usarIBGE();return;}
+          obsGoogle+=motivoGoogle(e)+" ";
           tentar(0,false);
         });
-      }else tentar(0,false);
+      }
+      /* 1º: base de endereços do IBGE */
+      if(rua){
+        buscarIBGE({rua:rua,num:num,bairro:bairro,cidade:cidade,uf:uf,cep:valorDe(P+"_cep")}).then(function(res){
+          if(minha!==geoBusca)return;
+          if(res&&res.la!=null){ibgeRes=res;if(res.nivel==="numero"){usarIBGE();return;}}
+          else if(res&&res.semRua)obsGoogle="Esta rua não está na base de endereços do IBGE. ";
+          viaGoogle();
+        },function(){if(minha!==geoBusca)return;viaGoogle();});
+      }else viaGoogle();
       function tentar(i,falhouRede){
         if(minha!==geoBusca)return;
         if(i>=tentativas.length){
