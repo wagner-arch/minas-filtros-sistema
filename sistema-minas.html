@@ -1840,6 +1840,22 @@ img{max-width:100%}
             <div class="fld"><label for="at_num">Número</label><input id="at_num" inputmode="numeric"></div>
             <div class="fld"><label for="at_bairro">Bairro</label><input id="at_bairro" autocapitalize="words"></div>
           </div>
+          <div class="grid g4" style="margin-top:16px">
+            <div class="fld"><label for="at_comp">Complemento</label><input id="at_comp" placeholder="apto, casa, bloco…"></div>
+            <div class="fld"><label for="at_tipoend">Tipo de endereço</label>
+              <select id="at_tipoend">
+                <option value="urbano">Urbano — tem rua e número</option>
+                <option value="rural">Rural, sítio, estrada — sem rua</option>
+              </select></div>
+            <div class="fld" style="grid-column:span 2"><label for="at_ref" id="at_lblRef">Ponto de referência</label><input id="at_ref" placeholder="Ex.: em frente à padaria"></div>
+          </div>
+          <div class="grid g4" style="margin-top:16px">
+            <div class="fld" style="grid-column:span 2"><label for="at_geo">Geolocalização</label>
+              <input id="at_geo" placeholder="latitude, longitude" autocomplete="off"></div>
+          </div>
+          <div id="at_geoAcoes" class="chips" style="margin-top:10px"></div>
+          <div id="at_geoAviso"></div>
+          <p class="help" style="margin:6px 0 0">Endereço do lead: só a <b>cidade</b> é obrigatória. O resto é opcional — mas digitando o CEP ele se preenche sozinho.</p>
           <div class="chips" style="margin-top:12px">
             <button class="btn sm ghost" type="button" id="at_leadCompleto">Abrir cadastro completo do lead</button>
             <span class="help">Todos os campos do cliente. Para o lead, são obrigatórios nome e sobrenome, telefone, cidade, origem e tipo de atendimento.</span>
@@ -4005,7 +4021,8 @@ function faltamObrig(c,modo){
   if(c&&c.tipo==="Pessoa Jurídica")base=base.filter(function(x){return ["rg","sexo"].indexOf(x[0])<0;});
   /* endereço rural não tem rua, número nem CEP de rua: no lugar deles o
      sistema exige a referência de como chegar e a geolocalização */
-  if(c&&c.tipoend==="rural"){
+  /* lead exige só a cidade no endereço — as exigências do rural valem para cliente */
+  if(modo==="cliente"&&c&&c.tipoend==="rural"){
     base=base.filter(function(x){return ["rua","num","comp","cep"].indexOf(x[0])<0;});
     base=base.concat([["ref","Ponto de referência"],["geo","Geolocalização"]]);
   }
@@ -11149,7 +11166,9 @@ function abrirAtend(a){
   var v=a||{};
   $("at_nome").value=v.cliente||"";$("at_tel").value=v.tel||"";$("at_doc").value=v.doc||"";
   $("at_cidade").value=v.cidade||"";$("at_sexo").value=v.sexo||"";$("at_uf").value=v.uf||"";
-  ["cep","rua","num","bairro"].forEach(function(k){$("at_"+k).value=v[k]||"";});
+  ["cep","rua","num","comp","bairro","ref"].forEach(function(k){$("at_"+k).value=v[k]||"";});
+  $("at_tipoend").value=v.tipoend||"urbano";$("at_geo").value=v.geo||"";
+  try{$("at_geo").dispatchEvent(new Event("input"));}catch(e){}
   $("at_colab").value=v.colaborador||usuarioAtual;
   $("at_data").value=v.data||iso(new Date());
   var ag=new Date();
@@ -11218,7 +11237,9 @@ function preencherCliente(c){
   clienteVinc=c;
   $("at_nome").value=c.nome||"";$("at_tel").value=c.tel||"";$("at_doc").value=c.doc||"";
   $("at_cidade").value=c.cidade||"";$("at_sexo").value=c.sexo||"";
-  ["cep","rua","num","bairro"].forEach(function(k){$("at_"+k).value=c[k]||"";});
+  ["cep","rua","num","comp","bairro","ref"].forEach(function(k){$("at_"+k).value=c[k]||"";});
+  $("at_tipoend").value=c.tipoend||"urbano";$("at_geo").value=c.geo||"";
+  try{$("at_geo").dispatchEvent(new Event("input"));}catch(e){}
   if($("at_uf"))$("at_uf").value=c.uf||"";
   ajustarOrigemAt();
   var vendas=vendasDe(c.id).length,lead=ehLead(c);
@@ -11237,6 +11258,8 @@ function abrirLeadCompleto(){
     doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
     uf:$("at_uf").value.trim().toUpperCase(),sexo:$("at_sexo").value,
     cep:$("at_cep").value.trim(),rua:$("at_rua").value.trim(),num:$("at_num").value.trim(),bairro:$("at_bairro").value.trim(),
+    comp:$("at_comp").value.trim(),ref:$("at_ref").value.trim(),
+    tipoend:$("at_tipoend").value||"urbano",geo:$("at_geo").value.trim(),
     origem:$("at_origem").value};
   if(!d.nome){
     $("at_alerta").innerHTML='<div class="note crit"><b>Escreva o nome antes.</b> O cadastro completo abre com o que você já digitou.</div>';
@@ -11250,7 +11273,7 @@ function abrirLeadCompleto(){
   voltaAtend=true;
   ir("clientes");
   abrirCliente(null);
-  ["nome","tel","doc","cidade","uf","cep","rua","num","bairro"].forEach(function(k){
+  ["nome","tel","doc","cidade","uf","cep","rua","num","comp","bairro","ref","tipoend","geo"].forEach(function(k){
     var e=$("c_"+k);
     if(e&&d[k]){e.value=d[k];e.__escolhido=d[k];}
   });
@@ -11334,6 +11357,8 @@ async function salvarAtend(){
       doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
       uf:$("at_uf").value.trim().toUpperCase(),origem:$("at_origem").value,origemEm:iso(new Date()),
       cep:$("at_cep").value.trim(),rua:$("at_rua").value.trim(),num:$("at_num").value.trim(),bairro:$("at_bairro").value.trim(),
+      comp:$("at_comp").value.trim(),ref:$("at_ref").value.trim(),
+      tipoend:$("at_tipoend").value||"urbano",geo:$("at_geo").value.trim(),
       tipoPrimeiroAtend:tiposSel[0]||"",primeiroAtendEm:iso(new Date()),
       criadoEm:iso(new Date()),criadoPor:usuarioAtual,criadoVia:"atendimento"};
     clientes.push(c);clienteVinc=c;leadNovo=c;
@@ -11349,7 +11374,7 @@ async function salvarAtend(){
   }
   /* endereço digitado no atendimento completa o que o cadastro ainda não tem */
   var endMudou=false;
-  ["cep","rua","num","bairro","uf"].forEach(function(k){
+  ["cep","rua","num","comp","bairro","ref","uf","tipoend","geo"].forEach(function(k){
     var v=$("at_"+k).value.trim();if(k==="uf")v=v.toUpperCase();
     if(v&&!clienteVinc[k]){clienteVinc[k]=v;endMudou=true;}
   });
@@ -11360,6 +11385,8 @@ async function salvarAtend(){
   a.tel=tel;a.doc=$("at_doc").value.trim();a.cidade=$("at_cidade").value.trim();
   a.uf=$("at_uf").value.trim().toUpperCase();a.origem=clienteVinc.origem||$("at_origem").value;
   a.cep=$("at_cep").value.trim();a.rua=$("at_rua").value.trim();a.num=$("at_num").value.trim();a.bairro=$("at_bairro").value.trim();
+  a.comp=$("at_comp").value.trim();a.ref=$("at_ref").value.trim();
+  a.tipoend=$("at_tipoend").value||"urbano";a.geo=$("at_geo").value.trim();
   a.colaborador=$("at_colab").value;a.tipos=tiposSel.slice();a.tipo=tiposSel.join(" · ");
   a.data=$("at_data").value;a.inicio=ini;a.fim=fim;a.obs=$("at_obs").value.trim();
   a.status="aberto";a.iniciativa=iniSel;
@@ -13114,7 +13141,7 @@ function erro(msg){
     {cep:"u_cep", rua:"u_rua", bairro:"u_bairro", cidade:"u_cidade", uf:"u_uf", num:"u_num", comp:"u_comp"},
     {cep:"",      rua:"na_rua",bairro:"na_bairro",cidade:"na_cidade",uf:"na_uf", num:"na_num", comp:""},
     {cep:"",      rua:"",      bairro:"",         cidade:"os_cidade",uf:"os_uf"},
-    {cep:"at_cep",rua:"at_rua",bairro:"at_bairro",cidade:"at_cidade",uf:"at_uf", num:"at_num", comp:""}
+    {cep:"at_cep",rua:"at_rua",bairro:"at_bairro",cidade:"at_cidade",uf:"at_uf", num:"at_num", comp:"at_comp"}
   ];
   var cacheCEP={},buscandoCEP={},preenchendoCEP=false;
 
@@ -13380,7 +13407,11 @@ function erro(msg){
           confirmar(g.cidade,it.cidade);
           confirmar(g.uf,it.uf);
           avisoCEP(campo,"");
-          if(g.cidade==="c_cidade"){try{if(window.aplicarTipoEnderecoMF)window.aplicarTipoEnderecoMF();}catch(e){}}
+          /* reaplica urbano/rural do próprio formulário (cadastro ou atendimento) */
+          try{
+            var tpe=document.getElementById(String(g.cidade).split("_")[0]+"_tipoend");
+            if(tpe&&tpe.__aplicarTipo)tpe.__aplicarTipo();
+          }catch(e){}
           var r=document.getElementById(g.rua);
           if(r)try{r.focus();}catch(e){}
         });
@@ -13705,32 +13736,51 @@ function erro(msg){
     var k=uf+"|"+normalizar(cidade);
     if(cacheCepCidade[k]!==undefined){var g=cacheCepCidade[k];cb(g.cep,g.confirmado);return;}
     function guardar(cep,confirmado){cacheCepCidade[k]={cep:cep,confirmado:confirmado};cb(cep,confirmado);}
-    fetch("https://viacep.com.br/ws/"+uf+"/"+encodeURIComponent(cidade)+"/Centro/json/")
-      .then(function(r){return r.json();})
-      .then(function(j){
-        if(!j||!j.length)throw new Error("vazio");
-        var pre=String(j[0].cep||"").replace(/\D/g,"").slice(0,5);
-        if(pre.length!==5)throw new Error("prefixo");
-        var cand=pre+"000";
-        fetch("https://brasilapi.com.br/api/cep/v2/"+cand)
-          .then(function(r){return r.json();})
-          .then(function(b){
-            var ok=!!(b&&b.city&&normalizar(b.city)===normalizar(cidade));
-            guardar(cand,ok);
-          },function(){guardar(cand,false);});
-      },function(){guardar("",false);});
+    /* A ViaCEP só busca por nome de rua. "Centro" como rua costuma voltar vazio
+       (Pará de Minas volta []); "Rua" e "Avenida" acham ruas em qualquer cidade. */
+    var termos=["Rua","Avenida","Centro"];
+    function buscar(i){
+      if(i>=termos.length){guardar("",false);return;}
+      fetch("https://viacep.com.br/ws/"+uf+"/"+encodeURIComponent(cidade)+"/"+termos[i]+"/json/")
+        .then(function(r){return r.json();})
+        .then(function(j){
+          var pres=[];
+          for(var x=0;x<(j||[]).length;x++){
+            var p=String(j[x].cep||"").replace(/\D/g,"").slice(0,5);
+            if(p.length===5&&pres.indexOf(p)<0)pres.push(p);
+          }
+          if(!pres.length){buscar(i+1);return;}
+          conferir(pres.slice(0,3),0,pres[0]+"000");
+        })
+        .then(null,function(){buscar(i+1);});
+    }
+    /* a cidade pode ter mais de um prefixo (35660 e 35661): vale o -000 que os
+       Correios confirmam como a própria cidade */
+    function conferir(pres,n,primeiro){
+      if(n>=pres.length){guardar(primeiro,false);return;}
+      var cand=pres[n]+"000";
+      fetch("https://brasilapi.com.br/api/cep/v2/"+cand)
+        .then(function(r){return r.json();})
+        .then(function(b){
+          if(b&&b.city&&normalizar(b.city)===normalizar(cidade))guardar(cand,true);
+          else conferir(pres,n+1,primeiro);
+        })
+        .then(null,function(){conferir(pres,n+1,primeiro);});
+    }
+    buscar(0);
   }
 
   /* no endereço rural a rua e o bairro são escritos à mão, sem lista obrigatória */
   function enderecoLivre(campo){
-    var t=document.getElementById("c_tipoend");
+    var p=String(campo.id||"").split("_")[0];
+    var t=document.getElementById(p+"_tipoend");
     if(!t||t.value!=="rural")return false;
-    return campo.id==="c_rua"||campo.id==="c_bairro";
+    return campo.id===p+"_rua"||campo.id===p+"_bairro";
   }
   window.enderecoLivreMF=enderecoLivre;
 
-  function avisoGeo(texto,tipo){
-    var d=document.getElementById("c_geoAviso");
+  function avisoGeo(texto,tipo,p){
+    var d=document.getElementById((p||"c")+"_geoAviso");
     if(!d)return;
     d.innerHTML=texto?'<div class="note '+(tipo==="erro"?"crit":(tipo==="ok"?"ok":"warn"))+'">'+escT(texto)+"</div>":"";
   }
@@ -13788,7 +13838,11 @@ function erro(msg){
         mapaAlvo.__escolhido=mapaAlvo.value;
         try{mapaAlvo.dispatchEvent(new Event("input",{bubbles:true}));}catch(e){}
         var pc=coordValida(v).split(",");
-        try{if(window.preencherPeloPontoMF)window.preencherPeloPontoMF(pc[0],pc[1],function(){});}catch(e){}
+        /* cada formulário (cadastro, atendimento) preenche o próprio endereço pelo ponto */
+        try{
+          var fp=mapaAlvo.__preencherPeloPonto||window.preencherPeloPontoMF;
+          if(fp)fp(pc[0],pc[1],function(){});
+        }catch(e){}
       }
       d.hidden=true;
     };
@@ -13808,7 +13862,8 @@ function erro(msg){
   function centroInicial(campo,cb){
     var c=coordValida(campo.value);
     if(c){var p=c.split(",");cb([+p[0],+p[1]],18);return;}
-    var cidade=valorDe("c_cidade"),uf=valorDe("c_uf")||UF_PADRAO;
+    var pf=String(campo.id||"c_").split("_")[0];
+    var cidade=valorDe(pf+"_cidade"),uf=valorDe(pf+"_uf")||UF_PADRAO;
     if(navigator.geolocation){
       navigator.geolocation.getCurrentPosition(function(p){
         cb([p.coords.latitude,p.coords.longitude],17);
@@ -13861,10 +13916,13 @@ function erro(msg){
     });
   }
   window.abrirMapaMF=abrirMapa;
-  function ligarGeo(){
-    var campo=document.getElementById("c_geo");
-    var acoes=document.getElementById("c_geoAcoes");
-    var tipo=document.getElementById("c_tipoend");
+  /* P = prefixo do formulário: "c" (cadastro do cliente/lead) ou "at" (atendimento) */
+  function ligarGeo(P){
+    P=P||"c";
+    function aviso(t,k){avisoGeo(t,k,P);}
+    var campo=document.getElementById(P+"_geo");
+    var acoes=document.getElementById(P+"_geoAcoes");
+    var tipo=document.getElementById(P+"_tipoend");
     if(!campo||!acoes||campo.__geoLigado)return;
     campo.__geoLigado=true;
 
@@ -13875,8 +13933,8 @@ function erro(msg){
     }
     function atualizarLink(){
       var url=linkMapa(campo.value),wz=linkWaze(campo.value);
-      [["c_geoLink","📍 Rota no Google Maps","btn sm",url],
-       ["c_geoWaze","🚗 Rota no Waze","btn sm ghost",wz]].forEach(function(p){
+      [[P+"_geoLink","📍 Rota no Google Maps","btn sm",url],
+       [P+"_geoWaze","🚗 Rota no Waze","btn sm ghost",wz]].forEach(function(p){
         var a=document.getElementById(p[0]);
         if(!a){
           a=document.createElement("a");
@@ -13910,13 +13968,13 @@ function erro(msg){
           var uf=String(a["ISO3166-2-lvl4"]||"").replace("BR-","");
           if(!uf&&a.state)uf=UF_POR_ESTADO[normalizar(a.state)]||"";
           var bairro=a.suburb||a.neighbourhood||a.quarter||a.city_district||"";
-          var rural=(document.getElementById("c_tipoend")||{}).value==="rural";
+          var rural=(document.getElementById(P+"_tipoend")||{}).value==="rural";
           preenchendoCEP=true;
-          if(cidade)confirmar("c_cidade",cidade);
-          if(uf)confirmar("c_uf",uf);
+          if(cidade)confirmar(P+"_cidade",cidade);
+          if(uf)confirmar(P+"_uf",uf);
           if(!rural){
-            if(bairro)confirmar("c_bairro",bairro);
-            if(a.road)confirmar("c_rua",a.road);
+            if(bairro)confirmar(P+"_bairro",bairro);
+            if(a.road)confirmar(P+"_rua",a.road);
             /* o CEP do mapa é aproximado: quem dá o CEP é a base dos Correios */
             if(cidade&&uf&&a.road){
               correiosRua(cidade,uf,nucleoRua(a.road),function(lista){
@@ -13927,16 +13985,16 @@ function erro(msg){
                 if(!alvo&&lista.length===1)alvo=lista[0];
                 if(alvo){
                   preenchendoCEP=true;
-                  preencher("c_cep",alvo.cep,true);
-                  if(alvo.bairro)confirmar("c_bairro",alvo.bairro);
+                  preencher(P+"_cep",alvo.cep,true);
+                  if(alvo.bairro)confirmar(P+"_bairro",alvo.bairro);
                   preenchendoCEP=false;
                 }
               });
             }
           }
           preenchendoCEP=false;
-          if(rural&&cidade){try{if(window.aplicarTipoEnderecoMF)window.aplicarTipoEnderecoMF();}catch(e){}}
-          if(!rural&&a.road){var nn=document.getElementById("c_num");if(nn)setTimeout(function(){try{nn.focus();}catch(e){}},150);}
+          if(rural&&cidade){try{aplicarTipo();}catch(e){}}
+          if(!rural&&a.road){var nn=document.getElementById(P+"_num");if(nn)setTimeout(function(){try{nn.focus();}catch(e){}},150);}
           cb(cidade,uf,a,rural);
         },function(){cb("","",{},false);});
     }
@@ -13944,22 +14002,22 @@ function erro(msg){
     /* marca o ponto de onde a pessoa está, na hora */
     function marcarAqui(aoTerminar){
       if(!navigator.geolocation){
-        avisoGeo("Este aparelho não informa localização. Use “Marcar no mapa”.","erro");
+        aviso("Este aparelho não informa localização. Use “Marcar no mapa”.","erro");
         if(aoTerminar)aoTerminar(false);
         return;
       }
-      avisoGeo("Procurando a sua localização…");
+      aviso("Procurando a sua localização…");
       navigator.geolocation.getCurrentPosition(function(pos){
         var la=pos.coords.latitude,lo=pos.coords.longitude;
         campo.value=la.toFixed(6)+","+lo.toFixed(6);
         campo.__escolhido=campo.value;
         atualizarLink();
         var m=Math.round(pos.coords.accuracy||0);
-        avisoGeo("Ponto gravado com precisão de "+m+" m. Descobrindo a cidade…","ok");
+        aviso("Ponto gravado com precisão de "+m+" m. Descobrindo a cidade…","ok");
         preencherPeloPonto(la,lo,function(cidade,uf,a,rural){
           var onde=[a.road,a.suburb||a.neighbourhood,cidade&&uf?cidade+"/"+uf:cidade]
             .filter(Boolean).join(", ");
-          avisoGeo("Ponto gravado com precisão de "+m+" m"+(onde?" — "+onde:"")+"."+
+          aviso("Ponto gravado com precisão de "+m+" m"+(onde?" — "+onde:"")+"."+
             (cidade?(rural
               ? " Cidade preenchida; escreva a estrada e a comunidade."
               : " Cidade, bairro, rua e CEP preenchidos pelo ponto — falta o número da casa e o complemento.")
@@ -13969,34 +14027,35 @@ function erro(msg){
         });
         if(aoTerminar)aoTerminar(true);
       },function(e){
-        avisoGeo(e&&e.code===1
+        aviso(e&&e.code===1
           ? "Você não autorizou a localização. Autorize no navegador ou use “Marcar no mapa”."
           : "Não consegui a localização agora. Use “Marcar no mapa”.","erro");
         if(aoTerminar)aoTerminar(false);
       },{enableHighAccuracy:true,timeout:12000,maximumAge:0});
     }
     var bLocal=botao("Marcar onde estou",function(){marcarAqui();});
-    window.preencherPeloPontoMF=preencherPeloPonto;
+    campo.__preencherPeloPonto=preencherPeloPonto;
+    if(P==="c")window.preencherPeloPontoMF=preencherPeloPonto;
 
     var bEnd=botao("Buscar pelo endereço",function(){
-      var rua=valorDe("c_rua"),num=valorDe("c_num"),bairro=valorDe("c_bairro"),
-          cidade=valorDe("c_cidade"),uf=valorDe("c_uf")||UF_PADRAO,cep=valorDe("c_cep");
-      if(!cidade){avisoGeo("Escolha a cidade primeiro.","erro");return;}
+      var rua=valorDe(P+"_rua"),num=valorDe(P+"_num"),bairro=valorDe(P+"_bairro"),
+          cidade=valorDe(P+"_cidade"),uf=valorDe(P+"_uf")||UF_PADRAO,cep=valorDe(P+"_cep");
+      if(!cidade){aviso("Escolha a cidade primeiro.","erro");return;}
       var q=[rua&&num?rua+", "+num:rua,bairro,cidade,uf,cep,"Brasil"].filter(Boolean).join(", ");
       bEnd.disabled=true;bEnd.textContent="procurando…";
       fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q="+encodeURIComponent(q))
         .then(function(r){return r.json();})
         .then(function(j){
           bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
-          if(!j||!j.length){avisoGeo("Não achei este endereço no mapa. Estando no local, use “Pegar do meu aparelho”.","erro");return;}
+          if(!j||!j.length){aviso("Não achei este endereço no mapa. Estando no local, use “Pegar do meu aparelho”.","erro");return;}
           campo.value=(+j[0].lat).toFixed(6)+","+(+j[0].lon).toFixed(6);
           campo.__escolhido=campo.value;
           atualizarLink();
-          avisoGeo("Ponto encontrado pelo endereço: "+String(j[0].display_name||"").slice(0,90)+
+          aviso("Ponto encontrado pelo endereço: "+String(j[0].display_name||"").slice(0,90)+
             ". Confira no mapa — é aproximado.","");
         },function(){
           bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
-          avisoGeo("Não consegui consultar o mapa agora.","erro");
+          aviso("Não consegui consultar o mapa agora.","erro");
         });
     });
 
@@ -14005,8 +14064,8 @@ function erro(msg){
 
     /* ---- urbano x rural ---- */
     function cepDoMunicipio(){
-      var cidade=valorDe("c_cidade"),uf=(valorDe("c_uf")||UF_PADRAO).toUpperCase();
-      var cep=document.getElementById("c_cep");
+      var cidade=valorDe(P+"_cidade"),uf=(valorDe(P+"_uf")||UF_PADRAO).toUpperCase();
+      var cep=document.getElementById(P+"_cep");
       if(!cidade||!cep)return;
       cep.value="";
       cep.placeholder="procurando o CEP da cidade…";
@@ -14018,28 +14077,33 @@ function erro(msg){
           cep.__escolhido=cep.value;
           preenchendoCEP=false;
           cep.placeholder="CEP da cidade";
-          avisoGeo("CEP "+formatarCEP(c)+" — é o CEP único de "+cidade+
+          aviso("CEP "+formatarCEP(c)+" — é o CEP único de "+cidade+
             (confirmado?"":" (prefixo da cidade terminado em 000)")+
             ". Escreva a rua ou a estrada e o bairro do jeito que forem conhecidos, e marque a geolocalização.","");
         }else{
           cep.placeholder="sem CEP único conhecido";
-          avisoGeo("Não achei um CEP único para "+cidade+
+          aviso("Não achei um CEP único para "+cidade+
             ". Pode deixar o CEP em branco: no endereço rural o que vale é a geolocalização.","");
         }
       });
     }
     function aplicarTipo(){
       var rural=(tipo&&tipo.value==="rural");
-      var lbl=document.getElementById("c_lblRef");
-      if(lbl)lbl.innerHTML=rural?'Como chegar <span class="req">*</span>':"Ponto de referência";
+      /* lead exige só a cidade: no rural, "como chegar" e geolocalização só levam
+         asterisco na ficha de cliente (o botão diz "Salvar lead" no modo lead) */
+      var sv=document.getElementById("cliSalvar");
+      var ehLeadFicha=(P!=="c")||!!(sv&&/lead/i.test(sv.textContent||""));
+      var ast='<span class="req end-req"'+(ehLeadFicha?' style="visibility:hidden"':"")+">*</span>";
+      var lbl=document.getElementById(P+"_lblRef");
+      if(lbl)lbl.innerHTML=rural?"Como chegar "+ast:"Ponto de referência";
       var lg=campo.parentNode&&campo.parentNode.querySelector("label");
-      if(lg)lg.innerHTML=rural?'Geolocalização <span class="req">*</span>':"Geolocalização";
-      var r=document.getElementById("c_ref");
+      if(lg)lg.innerHTML=rural?"Geolocalização "+ast:"Geolocalização";
+      var r=document.getElementById(P+"_ref");
       if(r)r.placeholder=rural
         ? "Ex.: estrada para Pitangui, km 7, fazenda Boa Vista, portão azul depois da ponte"
         : "Ex.: em frente à padaria";
-      var cep=document.getElementById("c_cep");
-      var rua=document.getElementById("c_rua"),bairro=document.getElementById("c_bairro");
+      var cep=document.getElementById(P+"_cep");
+      var rua=document.getElementById(P+"_rua"),bairro=document.getElementById(P+"_bairro");
       if(rua)rua.placeholder=rural?"Estrada, córrego, sítio — escreva como é conhecido":"";
       if(bairro)bairro.placeholder=rural?"Comunidade, distrito ou região":"";
       if(rural){
@@ -14047,15 +14111,17 @@ function erro(msg){
         cepDoMunicipio();
       }else{
         if(cep){cep.readOnly=false;cep.placeholder="00000-000";}
-        avisoGeo("");
+        aviso("");
       }
     }
     if(tipo){tipo.addEventListener("change",aplicarTipo);}
     aplicarTipo();
-    window.aplicarTipoEnderecoMF=aplicarTipo;
+    if(tipo)tipo.__aplicarTipo=aplicarTipo;
+    if(P==="c")window.aplicarTipoEnderecoMF=aplicarTipo;
   }
-  ligarGeo();
-  setTimeout(ligarGeo,2500);
+  /* a geolocalização vale no cadastro e no atendimento, onde o lead nasce */
+  ligarGeo("c");ligarGeo("at");
+  setTimeout(function(){ligarGeo("c");ligarGeo("at");},2500);
 
   /* ================= LEITOR DE CÓDIGO DE BARRAS =================
      Aponta a câmera do celular para a etiqueta e o número de série entra
