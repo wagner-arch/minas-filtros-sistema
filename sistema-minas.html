@@ -2867,6 +2867,15 @@ img{max-width:100%}
           </div>
           <div id="em_preview" style="display:flex;gap:26px;margin-top:18px;align-items:flex-start"></div>
         </div>
+        <div class="sect">
+          <p class="sect-t">Mapa — geolocalização exata pelo número da casa</p>
+          <div class="grid g2">
+            <div class="fld"><label for="em_gmapsChave">Chave do Google Maps</label><input id="em_gmapsChave" autocomplete="off" spellcheck="false" placeholder="AIza…"></div>
+            <div class="fld"><label>&nbsp;</label><button class="btn mut" type="button" id="emGmapsTestar">Testar a chave</button></div>
+          </div>
+          <p class="help">Com a chave, o endereço digitado (rua e número) vira o ponto da casa, como no Google Maps. Sem a chave, o sistema usa o mapa aberto, que só acha a rua. A chave deve estar restrita ao site wagner-arch.github.io, com a Maps JavaScript API e a Geocoding API ativadas. Enquanto o sistema não tem banco de dados, cole e salve a chave uma vez em cada aparelho.</p>
+          <div id="em_gmapsEstado"></div>
+        </div>
         <div class="actions"><button class="btn" type="button" id="emSalvar">Salvar dados da empresa</button></div>
       </div>
 
@@ -3820,6 +3829,7 @@ async function carregar(){
     var em=await db.doc("config/empresa").get();
     if(em.exists&&em.data())Object.keys(EMPRESA).forEach(function(k){
       if(em.data()[k]!=null)EMPRESA[k]=em.data()[k];});
+    if(EMPRESA.gmapsChave)sincChaveGoogle();
     var ce=await db.doc("config/celebracoes").get();
     if(ce.exists&&ce.data()&&ce.data().dados)celebracoes=ce.data().dados;
     var mt=await db.doc("config/metas").get();
@@ -4779,11 +4789,16 @@ var EMPRESA={
   site:"",
   instagram:"https://www.instagram.com/minasfiltrosonline",
   youtube:"https://www.youtube.com/@MinasFiltrosOn-Line",
-  cidade:"Pará de Minas"
+  cidade:"Pará de Minas",
+  gmapsChave:""
 };
+/* chave do Google Maps (geolocalização exata pelo número): fica também no
+   aparelho, onde o módulo de endereço lê — e, enquanto não há banco, é o que guarda */
+try{EMPRESA.gmapsChave=localStorage.getItem("mf_gmaps_chave")||"";}catch(e){}
+function sincChaveGoogle(){try{if(EMPRESA.gmapsChave)localStorage.setItem("mf_gmaps_chave",EMPRESA.gmapsChave);else localStorage.removeItem("mf_gmaps_chave");}catch(e){}}
 async function gravarEmpresa(){if(!db)return;try{await db.doc("config/empresa").set(EMPRESA);}catch(e){console.warn(e);}}
 function renderEmpresa(){
-  ["razao","cnpj","cidade","endereco","fone","site","instagram","youtube"].forEach(function(k){
+  ["razao","cnpj","cidade","endereco","fone","site","instagram","youtube","gmapsChave"].forEach(function(k){
     var el=$("em_"+k);if(el)el.value=EMPRESA[k]||"";});
   var pv=$("em_preview");pv.innerHTML="";
   [["Instagram",EMPRESA.instagram],["YouTube",EMPRESA.youtube]].forEach(function(x){
@@ -12448,9 +12463,19 @@ function ligar(){
     if(p){ir("pedidos");abrirPedido(p);}};
 
   $("emSalvar").onclick=async function(){
-    ["razao","cnpj","cidade","endereco","fone","site","instagram","youtube"].forEach(function(k){
+    ["razao","cnpj","cidade","endereco","fone","site","instagram","youtube","gmapsChave"].forEach(function(k){
       var el=$("em_"+k);if(el)EMPRESA[k]=el.value.trim();});
+    sincChaveGoogle();
     await gravarEmpresa();renderEmpresa();toast("Dados da empresa salvos.");};
+  /* testa a chave do Google Maps buscando um endereço conhecido */
+  $("emGmapsTestar").onclick=function(){
+    var k=$("em_gmapsChave").value.trim(),est=$("em_gmapsEstado");
+    function mostra(t){est.innerHTML='<div class="note"></div>';est.firstChild.textContent=t;}
+    if(!k){mostra("Cole a chave no campo acima e toque em Testar a chave.");return;}
+    if(!window.testarGoogleMF){mostra("Recarregue a página e tente de novo.");return;}
+    mostra("Testando a chave no Google…");
+    window.testarGoogleMF(k).then(function(r){mostra(r.texto);});
+  };
 
   $("orcBusca").oninput=renderOrcam;$("orcFiltro").onchange=renderOrcam;
   $("orcNovo").onclick=function(){abrirOrc(null);};
@@ -13934,6 +13959,107 @@ function erro(msg){
     });
   }
   window.abrirMapaMF=abrirMapa;
+  /* ---- Google: geolocalização exata pelo número da casa (pedido do Wagner, 12/09) ----
+     O mapa aberto (Nominatim) não tem número de casa em Pará de Minas. Com a chave
+     do Google Maps (Dados da Empresa; restrita ao site; Maps JavaScript API e
+     Geocoding API ativadas), a busca pelo endereço usa o Geocoder do Google e diz a
+     precisão: ROOFTOP no número = ponto da casa; RANGE_INTERPOLATED = calculado pela
+     numeração da rua. A REST da Geocoding API não aceita restrição por site — por
+     isso o Geocoder da biblioteca JavaScript. Chave no aparelho ("mf_gmaps_chave"). */
+  var googleCarga=null,chaveCarregada="";
+  function chaveGoogle(){try{return String(localStorage.getItem("mf_gmaps_chave")||"").trim();}catch(e){return "";}}
+  function carregarGoogle(chave){
+    chave=chave||chaveGoogle();
+    if(!chave)return Promise.reject(new Error("sem-chave"));
+    if(googleCarga){
+      if(googleCarga.chave===chave||!googleCarga.script)return googleCarga.p;
+      return Promise.reject(new Error("recarregar"));
+    }
+    if(window.google&&google.maps&&google.maps.Geocoder){
+      if(chaveCarregada&&chaveCarregada!==chave)return Promise.reject(new Error("recarregar"));
+      googleCarga={chave:chave,script:false,p:Promise.resolve(google.maps.Geocoder)};
+      return googleCarga.p;
+    }
+    var p=new Promise(function(ok,falha){
+      var feito=false;
+      function fim(G,erro){
+        if(feito)return;feito=true;
+        if(G)ok(G);else{googleCarga=null;falha(erro||new Error("sem-geocoder"));}
+      }
+      window.__mfGoogleOk=function(){
+        var g=window.google&&google.maps;
+        if(g&&g.importLibrary){
+          g.importLibrary("geocoding").then(function(lib){fim((lib&&lib.Geocoder)||g.Geocoder);},
+            function(e){fim(null,e);});
+        }else fim(g&&g.Geocoder);
+      };
+      var s=document.createElement("script");
+      s.async=true;
+      s.src="https://maps.googleapis.com/maps/api/js?key="+encodeURIComponent(chave)+
+        "&v=weekly&language=pt-BR&region=BR&loading=async&callback=__mfGoogleOk";
+      s.onerror=function(){fim(null,new Error("rede"));};
+      chaveCarregada=chave;
+      document.head.appendChild(s);
+      setTimeout(function(){fim(null,new Error("tempo"));},15000);
+    });
+    googleCarga={chave:chave,script:true,p:p};
+    return p;
+  }
+  function geocodificarGoogle(endereco,chave){
+    return carregarGoogle(chave).then(function(G){
+      return new Promise(function(ok,falha){
+        function erro(e){
+          var c=String((e&&(e.code||e.message))||e||"erro");
+          if(/ZERO_RESULTS/.test(c))ok(null);else falha(new Error(c));
+        }
+        try{
+          /* só a forma com promessa: com callback, a promessa rejeitada ficaria solta */
+          var r=new G().geocode({address:endereco,region:"br",componentRestrictions:{country:"BR"}});
+          if(r&&r.then)r.then(function(resp){ok((resp&&resp.results&&resp.results[0])||null);},erro);
+          else falha(new Error("sem-promessa"));
+        }catch(e){erro(e);}
+      });
+    });
+  }
+  /* o que o Google achou vale para esta cidade e esta rua? e com que precisão? */
+  function qualidadeGoogle(r,num,cidade){
+    var comp={};
+    (r.address_components||[]).forEach(function(c){(c.types||[]).forEach(function(t){comp[t]=c.long_name;});});
+    var cid=comp.administrative_area_level_2||comp.locality||"";
+    if(cidade&&cid&&normalizar(cid)!==normalizar(cidade))return null;
+    if(!comp.route)return null;
+    var loc=r.geometry&&r.geometry.location;
+    if(!loc)return null;
+    var la=typeof loc.lat==="function"?loc.lat():+loc.lat,lo=typeof loc.lng==="function"?loc.lng():+loc.lng;
+    var lt=r.geometry.location_type||"";
+    var nG=String(comp.street_number||"").replace(/\D/g,""),nD=String(num||"").replace(/\D/g,"");
+    var numOk=!!(nD&&nG&&nG===nD);
+    var lugar=String(r.formatted_address||"").slice(0,70);
+    if(numOk&&lt==="ROOFTOP")
+      return {lat:la,lng:lo,nivel:"numero",tipo:"ok",texto:"Geolocalização exata no número "+nD+" (Google): "+lugar+"."};
+    if(numOk)
+      return {lat:la,lng:lo,nivel:"numeracao",tipo:"ok",texto:"Geolocalização no número "+nD+", calculada pela numeração da rua (Google): "+lugar+". Confira no mapa."};
+    return {lat:la,lng:lo,nivel:"rua",tipo:"",texto:(nD?"O Google não tem o número "+nD+" nesta rua — ponto na rua: ":"Ponto na rua (falta o número): ")+lugar+"."};
+  }
+  function motivoGoogle(e){
+    var m=String((e&&e.message)||e||"");
+    if(/REQUEST_DENIED|sem-geocoder/.test(m))return "O Google recusou a chave: confira se a Geocoding API está ativada e se o site está liberado na chave.";
+    if(/OVER_QUERY_LIMIT|OVER_DAILY_LIMIT/.test(m))return "O limite de buscas do Google foi atingido.";
+    if(/recarregar/.test(m))return "A chave do Google mudou: recarregue a página para usar a nova.";
+    if(/rede|tempo/.test(m))return "Não consegui falar com o Google agora.";
+    return "O Google não respondeu ("+m+").";
+  }
+  window.testarGoogleMF=function(chave){
+    var ENDTESTE="Rua do Rosário, 250 - Centro, Pará de Minas - MG, Brasil";
+    return geocodificarGoogle(ENDTESTE,chave).then(function(r){
+      if(!r)return {ok:false,texto:"A chave respondeu, mas o Google não achou o endereço de teste ("+ENDTESTE+")."};
+      var q=qualidadeGoogle(r,"250","Pará de Minas");
+      return {ok:true,texto:"Chave funcionando. Teste com "+ENDTESTE+": "+
+        (q&&q.nivel==="numero"?"ponto exato no número.":q&&q.nivel==="numeracao"?"ponto calculado pela numeração da rua.":"ponto na rua.")+
+        " Salve os dados da empresa para usar."};
+    },function(e){return {ok:false,texto:motivoGoogle(e)};});
+  };
+
   /* P = prefixo do formulário: "c" (cadastro do cliente/lead) ou "at" (atendimento) */
   function ligarGeo(P){
     P=P||"c";
@@ -14144,12 +14270,34 @@ function erro(msg){
       tentativas.push({q:[rua,bairro,cidade,uf,"Brasil"].filter(Boolean).join(", ")});
       if(!automatico){bEnd.disabled=true;bEnd.textContent="procurando…";}
       else aviso("Procurando a geolocalização pelo endereço…");
-      (function tentar(i,falhouRede){
+      /* com a chave do Google: primeiro o Google, que tem o número da casa; sem
+         chave, sem a rua no Google ou com erro, o mapa aberto (Nominatim) */
+      var obsGoogle="";
+      if(chaveGoogle()&&rua){
+        var textoEnd=rua+(num?", "+num:"")+(bairro?" - "+bairro:"")+", "+cidade+" - "+uf+", Brasil";
+        geocodificarGoogle(textoEnd).then(function(r){
+          if(minha!==geoBusca)return;
+          var q=r&&qualidadeGoogle(r,num,cidade);
+          if(!q){obsGoogle="O Google não achou esta rua. ";tentar(0,false);return;}
+          bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
+          campo.value=q.lat.toFixed(6)+","+q.lng.toFixed(6);
+          campo.__escolhido=campo.value;
+          campo.__geoExato="";
+          campo.__geoNivel=q.nivel;
+          atualizarLink();
+          aviso(q.texto,q.tipo);
+        },function(e){
+          if(minha!==geoBusca)return;
+          obsGoogle=motivoGoogle(e)+" ";
+          tentar(0,false);
+        });
+      }else tentar(0,false);
+      function tentar(i,falhouRede){
         if(minha!==geoBusca)return;
         if(i>=tentativas.length){
           bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
-          aviso(falhouRede?"Não consegui consultar o mapa agora — cole no campo a localização do Google Maps.":
-            "Não achei este endereço no mapa. Estando no local, use “Marcar onde estou”.","erro");
+          aviso(obsGoogle+(falhouRede?"Não consegui consultar o mapa agora — cole no campo a localização do Google Maps.":
+            "Não achei este endereço no mapa. Estando no local, use “Marcar onde estou”."),"erro");
           return;
         }
         consultaMapa(tentativas[i],function(res,erroRede){
@@ -14159,12 +14307,13 @@ function erro(msg){
           campo.value=(+res.lat).toFixed(6)+","+(+res.lon).toFixed(6);
           campo.__escolhido=campo.value;
           campo.__geoExato="";   /* veio do endereço: aproximado */
+          campo.__geoNivel="mapa-aberto";
           atualizarLink();
-          aviso("Geolocalização atualizada pelo endereço"+(rua&&num&&i===0?", com o número":"")+": "+
+          aviso(obsGoogle+"Geolocalização atualizada pelo endereço"+(rua&&num&&i===0?", com o número":"")+": "+
             String(res.display_name||"").slice(0,80)+". É aproximada — confira no mapa.",
             (rua&&num&&i===0)?"ok":"");
         });
-      })(0,false);
+      }
     }
     var bEnd=botao("Buscar pelo endereço",function(){geoPeloEndereco(false);});
     /* dispara sozinho quando o endereço muda (o CEP preenche rua, bairro e cidade
