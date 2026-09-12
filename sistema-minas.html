@@ -1833,9 +1833,16 @@ img{max-width:100%}
             <div class="fld"><label for="at_uf">Estado</label><input id="at_uf" maxlength="2" placeholder="MG"></div>
             <div class="fld"><label for="at_colab">Atendido por</label><select id="at_colab"></select></div>
           </div>
+          <!-- endereço opcional no lead: digitou o CEP, o sistema preenche tudo -->
+          <div class="grid g4" style="margin-top:16px">
+            <div class="fld"><label for="at_cep">CEP</label><input id="at_cep" inputmode="numeric" placeholder="digite e o endereço vem sozinho"></div>
+            <div class="fld"><label for="at_rua">Rua</label><input id="at_rua" autocapitalize="words"></div>
+            <div class="fld"><label for="at_num">Número</label><input id="at_num" inputmode="numeric"></div>
+            <div class="fld"><label for="at_bairro">Bairro</label><input id="at_bairro" autocapitalize="words"></div>
+          </div>
           <div class="chips" style="margin-top:12px">
             <button class="btn sm ghost" type="button" id="at_leadCompleto">Abrir cadastro completo do lead</button>
-            <span class="help">Todos os campos do cliente. Para o lead, só nome, telefone, cidade e estado são obrigatórios.</span>
+            <span class="help">Todos os campos do cliente. Para o lead, são obrigatórios nome e sobrenome, telefone, cidade, origem e tipo de atendimento.</span>
           </div>
           <div id="at_achou"></div>
         </div>
@@ -11141,7 +11148,8 @@ function abrirAtend(a){
     EQUIPE.forEach(function(n){var op=document.createElement("option");op.textContent=n;sk.appendChild(op);});});
   var v=a||{};
   $("at_nome").value=v.cliente||"";$("at_tel").value=v.tel||"";$("at_doc").value=v.doc||"";
-  $("at_cidade").value=v.cidade||"";$("at_sexo").value=v.sexo||"";
+  $("at_cidade").value=v.cidade||"";$("at_sexo").value=v.sexo||"";$("at_uf").value=v.uf||"";
+  ["cep","rua","num","bairro"].forEach(function(k){$("at_"+k).value=v[k]||"";});
   $("at_colab").value=v.colaborador||usuarioAtual;
   $("at_data").value=v.data||iso(new Date());
   var ag=new Date();
@@ -11210,6 +11218,7 @@ function preencherCliente(c){
   clienteVinc=c;
   $("at_nome").value=c.nome||"";$("at_tel").value=c.tel||"";$("at_doc").value=c.doc||"";
   $("at_cidade").value=c.cidade||"";$("at_sexo").value=c.sexo||"";
+  ["cep","rua","num","bairro"].forEach(function(k){$("at_"+k).value=c[k]||"";});
   if($("at_uf"))$("at_uf").value=c.uf||"";
   ajustarOrigemAt();
   var vendas=vendasDe(c.id).length,lead=ehLead(c);
@@ -11227,6 +11236,7 @@ function abrirLeadCompleto(){
   var d={nome:$("at_nome").value.trim(),tel:$("at_tel").value.trim(),
     doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
     uf:$("at_uf").value.trim().toUpperCase(),sexo:$("at_sexo").value,
+    cep:$("at_cep").value.trim(),rua:$("at_rua").value.trim(),num:$("at_num").value.trim(),bairro:$("at_bairro").value.trim(),
     origem:$("at_origem").value};
   if(!d.nome){
     $("at_alerta").innerHTML='<div class="note crit"><b>Escreva o nome antes.</b> O cadastro completo abre com o que você já digitou.</div>';
@@ -11240,7 +11250,7 @@ function abrirLeadCompleto(){
   voltaAtend=true;
   ir("clientes");
   abrirCliente(null);
-  ["nome","tel","doc","cidade","uf"].forEach(function(k){
+  ["nome","tel","doc","cidade","uf","cep","rua","num","bairro"].forEach(function(k){
     var e=$("c_"+k);
     if(e&&d[k]){e.value=d[k];e.__escolhido=d[k];}
   });
@@ -11323,6 +11333,7 @@ async function salvarAtend(){
       nome:nome,sexo:$("at_sexo").value,tel:tel,
       doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
       uf:$("at_uf").value.trim().toUpperCase(),origem:$("at_origem").value,origemEm:iso(new Date()),
+      cep:$("at_cep").value.trim(),rua:$("at_rua").value.trim(),num:$("at_num").value.trim(),bairro:$("at_bairro").value.trim(),
       tipoPrimeiroAtend:tiposSel[0]||"",primeiroAtendEm:iso(new Date()),
       criadoEm:iso(new Date()),criadoPor:usuarioAtual,criadoVia:"atendimento"};
     clientes.push(c);clienteVinc=c;leadNovo=c;
@@ -11336,11 +11347,19 @@ async function salvarAtend(){
     clienteVinc.origem=$("at_origem").value;clienteVinc.origemEm=iso(new Date());
     if(db){try{await col("clientes").doc(clienteVinc.id).set(clienteVinc);}catch(e){console.warn(e);}}
   }
+  /* endereço digitado no atendimento completa o que o cadastro ainda não tem */
+  var endMudou=false;
+  ["cep","rua","num","bairro","uf"].forEach(function(k){
+    var v=$("at_"+k).value.trim();if(k==="uf")v=v.toUpperCase();
+    if(v&&!clienteVinc[k]){clienteVinc[k]=v;endMudou=true;}
+  });
+  if(endMudou&&db){try{await col("clientes").doc(clienteVinc.id).set(clienteVinc);}catch(e){console.warn(e);}}
   var a=editandoAt||{id:uid(),loja:lojaAtual};
   var veioDeAtividade=(a.natureza==="atividade");
   a.natureza="atendimento";a.clienteId=clienteVinc.id;a.cliente=clienteVinc.nome;
   a.tel=tel;a.doc=$("at_doc").value.trim();a.cidade=$("at_cidade").value.trim();
   a.uf=$("at_uf").value.trim().toUpperCase();a.origem=clienteVinc.origem||$("at_origem").value;
+  a.cep=$("at_cep").value.trim();a.rua=$("at_rua").value.trim();a.num=$("at_num").value.trim();a.bairro=$("at_bairro").value.trim();
   a.colaborador=$("at_colab").value;a.tipos=tiposSel.slice();a.tipo=tiposSel.join(" · ");
   a.data=$("at_data").value;a.inicio=ini;a.fim=fim;a.obs=$("at_obs").value.trim();
   a.status="aberto";a.iniciativa=iniSel;
@@ -13095,7 +13114,7 @@ function erro(msg){
     {cep:"u_cep", rua:"u_rua", bairro:"u_bairro", cidade:"u_cidade", uf:"u_uf", num:"u_num", comp:"u_comp"},
     {cep:"",      rua:"na_rua",bairro:"na_bairro",cidade:"na_cidade",uf:"na_uf", num:"na_num", comp:""},
     {cep:"",      rua:"",      bairro:"",         cidade:"os_cidade",uf:"os_uf"},
-    {cep:"",      rua:"",      bairro:"",         cidade:"at_cidade",uf:"at_uf"}
+    {cep:"at_cep",rua:"at_rua",bairro:"at_bairro",cidade:"at_cidade",uf:"at_uf", num:"at_num", comp:""}
   ];
   var cacheCEP={},buscandoCEP={},preenchendoCEP=false;
 
@@ -13178,9 +13197,15 @@ function erro(msg){
       }else{
         avisoCEP(campo,e.cidade+"/"+e.uf+" — este CEP vale para a cidade toda; escreva a rua e o bairro.","");
       }
-    },function(){
+    },function(err){
       buscandoCEP[d]=false;
-      avisoCEP(campo,"CEP "+formatarCEP(d)+" não encontrado na base dos Correios. Confira o número ou preencha à mão.","erro");
+      campo.__ultimoCEP="";
+      /* falha de rede (sem internet, ou busca bloqueada — como na pré-visualização do
+         arquivo dentro do app do Claude) não é "CEP inexistente" */
+      var semRede=!!(err&&(err.name==="TypeError"||navigator.onLine===false));
+      avisoCEP(campo,semRede
+        ? "Não consegui falar com a base dos Correios (sem internet ou busca bloqueada). Tente de novo ou preencha à mão."
+        : "CEP "+formatarCEP(d)+" não encontrado na base dos Correios. Confira o número ou preencha à mão.","erro");
     });
   }
 
