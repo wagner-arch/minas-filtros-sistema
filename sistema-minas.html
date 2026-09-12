@@ -848,7 +848,9 @@ img{max-width:100%}
             <div class="fld"><label for="c_codigo">Código</label><input id="c_codigo" readonly></div>
             <div class="fld"><label for="c_tipo">Tipo de contato <span class="req" id="c_reqTipo">*</span></label>
               <select id="c_tipo"><option>Pessoa Física</option><option>Pessoa Jurídica</option></select></div>
-            <div class="fld"><label for="c_origem">Origem do contato <span class="req" id="c_reqOrigem">*</span></label><select id="c_origem"></select></div>
+            <div class="fld"><label for="c_origem">Origem do contato <span class="req" id="c_reqOrigem">*</span></label><select id="c_origem"></select>
+              <div class="help" id="c_origemAjuda"></div></div>
+            <div class="fld" id="c_tipoAtWrap" hidden><label for="c_tipoAt">Tipo do 1º atendimento <span class="req">*</span></label><select id="c_tipoAt"></select></div>
           </div>
         </div>
 
@@ -1817,7 +1819,8 @@ img{max-width:100%}
               <div class="auto" id="at_sug" hidden></div>
             </div>
             <div class="fld"><label for="at_tel">Telefone <span class="req">*</span></label><input id="at_tel"></div>
-            <div class="fld"><label for="at_origem">Mídia de origem</label><select id="at_origem"></select></div>
+            <div class="fld"><label for="at_origem">Origem do contato <span class="req" id="at_reqOrigem">*</span></label><select id="at_origem"></select>
+              <div class="help" id="at_origemAjuda"></div></div>
           </div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="at_sexo">Sexo</label>
@@ -3414,6 +3417,8 @@ img{max-width:100%}
           <input id="na_num" inputmode="numeric"></div>
         <div class="fld"><label for="na_ref">Ponto de referência</label>
           <input id="na_ref" placeholder="Ex.: em frente à padaria"></div>
+        <div class="fld"><label for="na_origem">Origem do contato <span class="req">*</span></label>
+          <select id="na_origem"></select></div>
       </div>
     </div>
     <div class="sect" style="margin-top:6px">
@@ -3944,7 +3949,23 @@ function renderClientes(){
 }
 /* obrigatórios do LEAD (primeiro atendimento) — regra do Wagner: nome e sobrenome,
    telefone e cidade. CPF, identidade, nascimento, sexo e endereço ficam para a venda. */
-var CO_LEAD=[["nome","Nome e sobrenome"],["tel","Telefone"],["cidade","Cidade"]];
+var CO_LEAD=[["nome","Nome e sobrenome"],["tel","Telefone"],["cidade","Cidade"],["origem","Origem do contato"]];
+/* ORIGEM: escolhida uma única vez, no primeiro cadastro, e gravada para sempre.
+   A lista começa vazia de propósito — ninguém passa com a primeira opção sem ver. */
+function opcoesOrigem(sel,valor){
+  var s=$(sel);if(!s)return;
+  s.innerHTML='<option value="">— escolha a origem —</option>'+
+    ORIGENS.map(function(x){return "<option>"+esc(x)+"</option>";}).join("")+
+    ((valor&&ORIGENS.indexOf(valor)<0)?"<option>"+esc(valor)+"</option>":"");
+  s.value=valor||"";
+}
+function opcoesTipoAt(sel){
+  var s=$(sel);if(!s)return;
+  var atual=s.value;
+  s.innerHTML='<option value="">— como foi o contato —</option>'+
+    tipos.map(function(t){return "<option>"+esc(t)+"</option>";}).join("");
+  if(atual)s.value=atual;
+}
 /* obrigatórios do CLIENTE — exigidos para vender */
 var CO_CLI=[["tipo","Tipo de contato"],["nome","Nome e sobrenome"],["sexo","Sexo"],
   ["origem","Origem do contato"],["tel","Telefone"],["cidade","Cidade"],["uf","Estado"],
@@ -3981,6 +4002,8 @@ function faltamObrig(c,modo){
     return !String(c[x[0]]||"").trim();}).map(function(x){return x[1];});
   if(c&&c.tipo!=="Pessoa Jurídica"&&String(c.nome||"").trim()&&!temSobrenome(c.nome))
     falta.unshift("Sobrenome");
+  /* lead novo cadastrado pela aba Leads: diz como foi o primeiro atendimento */
+  if(c&&c.__pedeTipoAt&&!c.tipoAt)falta.push("Tipo do 1º atendimento");
   return falta;
 }
 function proxCodigo(){
@@ -4012,13 +4035,14 @@ function modoCli(){
 function aplicarModoCli(){
   var m=modoCli(),lead=(m==="lead");
   /* lead: só nome e sobrenome, telefone e cidade levam asterisco */
-  ["c_reqDoc","c_reqNasc","c_reqTipo","c_reqOrigem","c_reqSexo"].forEach(function(id){
+  ["c_reqDoc","c_reqNasc","c_reqTipo","c_reqSexo"].forEach(function(id){
     var e=$(id);if(e)e.style.visibility=lead?"hidden":"";});
   Array.prototype.forEach.call(document.querySelectorAll(".end-req"),function(e){
     e.style.visibility=lead?"hidden":"";});
   $("cliSalvar").textContent=lead?"Salvar lead":"Salvar cliente";
   $("c_modoNota").innerHTML=lead
-    ? '<div class="note"><b>Cadastro de lead.</b> Obrigatórios: nome e sobrenome, telefone e cidade. '+
+    ? '<div class="note"><b>Cadastro de lead.</b> Obrigatórios: nome e sobrenome, telefone, cidade, origem'+
+      ($("c_tipoAtWrap").hidden?"":" e o tipo do 1º atendimento")+". "+
       "CPF, identidade, nascimento, sexo e endereço podem ficar em branco — viram obrigatórios na hora de lançar a primeira venda.</div>"
     : '<div class="note ok"><b>Cadastro de cliente.</b> Este contato já comprou: documento, nascimento e endereço completo são obrigatórios.</div>';
   mostrarFaltantes();
@@ -4027,7 +4051,17 @@ function abrirCliente(c){
   editandoCli=c||null;$("cliLista").hidden=true;$("cliForm").hidden=false;
   var v=c||{};
   $("c_codigo").value=v.codigo||proxCodigo();
-  $("c_tipo").value=v.tipo||"Pessoa Física";$("c_origem").value=v.origem||ORIGENS[0];
+  $("c_tipo").value=v.tipo||"Pessoa Física";
+  /* origem gravada no primeiro cadastro não muda mais */
+  opcoesOrigem("c_origem",v.origem||"");
+  $("c_origem").disabled=!!v.origem;
+  $("c_origemAjuda").textContent=v.origem
+    ? "Registrada no primeiro cadastro"+(v.origemEm?" ("+v.origemEm+")":"")+" — não muda."
+    : "Fica gravada no cadastro e não muda depois.";
+  /* lead novo pela aba Leads pede o tipo do primeiro atendimento; vindo do
+     Atendimento não pede, porque o próprio atendimento registra o tipo */
+  opcoesTipoAt("c_tipoAt");$("c_tipoAt").value="";
+  $("c_tipoAtWrap").hidden=!!(c||voltaAtend);
   CAMPOS_CLI.forEach(function(k){var el=$("c_"+k);if(el)el.value=v[k]||"";});
   $("c_temconj").value=v.temconj||"nao";
   preencherIndicados(v.indicado);toggleConj();toggleTipoPJ();renderEstrelas(c);
@@ -4129,7 +4163,8 @@ function renderIndicacoes(){
 
 function toggleConj(){$("c_conjWrap").hidden=$("c_temconj").value!=="sim";}
 function lerForm(){
-  var c={tipo:$("c_tipo").value,origem:$("c_origem").value};
+  var c={tipo:$("c_tipo").value,origem:$("c_origem").value,
+    tipoAt:$("c_tipoAt").value,__pedeTipoAt:!$("c_tipoAtWrap").hidden};
   CAMPOS_CLI.forEach(function(k){var el=$("c_"+k);if(el)c[k]=el.value.trim();});
   return c;
 }
@@ -10197,7 +10232,9 @@ function naConferirCadastro(){
 }
 async function naCriarLead(nome){
   var c={id:uid(),loja:lojaAtual,codigo:proxCodigo(),criadoEm:iso(new Date()),
-    criadoPor:usuarioAtual,tipo:"Pessoa Física",origem:(naCtx&&naCtx.origem)||"Atividade",
+    criadoPor:usuarioAtual,tipo:"Pessoa Física",
+    origem:$("na_origem").value||(naCtx&&naCtx.origem)||"",origemEm:iso(new Date()),
+    tipoPrimeiroAtend:naTipos[0]||"",primeiroAtendEm:iso(new Date()),
     nome:nome,tel:$("na_tel").value.trim(),cidade:$("na_cidade").value.trim(),
     bairro:$("na_bairro").value.trim(),rua:$("na_rua").value.trim(),
     num:$("na_num").value.trim(),comp:$("na_ref").value.trim()};
@@ -10250,6 +10287,7 @@ function abrirNovaAtividade(ctx){
   $("na_data").value=iso(d);$("na_hora").value=ctx.hora||"09:00";
   $("na_obs").value=ctx.obs||"";$("na_alerta").innerHTML="";
   naLimparCadastro();
+  opcoesOrigem("na_origem","");
   renderChipsNa();naConferirCadastro();naAjustarTexto();
   $("ativModal").hidden=false;
 }
@@ -10300,6 +10338,7 @@ async function criarAtividadeRetorno(){
     if(!temSobrenome(naCtx.cliente))falta.push("sobrenome");
     if(!$("na_tel").value.trim())falta.push("telefone");
     if(!$("na_cidade").value.trim())falta.push("cidade");
+    if(!$("na_origem").value)falta.push("origem");
     if(visita){
       if(!$("na_bairro").value.trim())falta.push("bairro");
       if(!$("na_rua").value.trim())falta.push("rua");
@@ -11036,15 +11075,13 @@ function abrirAtend(a){
   editandoAt=a||null;clienteVinc=null;
   $("atendLista").hidden=true;$("atendForm").hidden=false;$("atendFecha").hidden=true;
   $("atendTitulo").textContent=a?("Editar · "+(a.cliente||"")):"Novo atendimento";
-  var so=$("at_origem");so.innerHTML="";
-  ORIGENS.forEach(function(x){var o=document.createElement("option");o.textContent=x;so.appendChild(o);});
+  opcoesOrigem("at_origem",(a&&a.origem)||"");
   [ "at_colab","af_resp" ].forEach(function(id){
     var sk=$(id);sk.innerHTML="";
     EQUIPE.forEach(function(n){var op=document.createElement("option");op.textContent=n;sk.appendChild(op);});});
   var v=a||{};
   $("at_nome").value=v.cliente||"";$("at_tel").value=v.tel||"";$("at_doc").value=v.doc||"";
   $("at_cidade").value=v.cidade||"";$("at_sexo").value=v.sexo||"";
-  if(v.origem)so.value=v.origem;
   $("at_colab").value=v.colaborador||usuarioAtual;
   $("at_data").value=v.data||iso(new Date());
   var ag=new Date();
@@ -11057,6 +11094,24 @@ function abrirAtend(a){
   Array.prototype.forEach.call($("at_iniciativa").querySelectorAll("button"),function(b){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-i")===iniSel));});
   renderChipsTipos();$("at_alerta").innerHTML="";$("at_achou").innerHTML="";$("at_sug").hidden=true;
+  ajustarOrigemAt();
+}
+/* no atendimento, a origem só se escolhe para contato novo (ou cadastro antigo sem
+   origem); de quem já tem, ela vem do cadastro e fica travada */
+function ajustarOrigemAt(){
+  var s=$("at_origem");if(!s)return;
+  var c=clienteVinc,fixa=!!(c&&c.origem);
+  if(fixa){
+    var tem=Array.prototype.some.call(s.options,function(o){return o.value===c.origem;});
+    if(!tem){var o=document.createElement("option");o.textContent=c.origem;s.appendChild(o);}
+    s.value=c.origem;
+  }
+  s.disabled=fixa;
+  $("at_reqOrigem").style.visibility=fixa?"hidden":"";
+  $("at_origemAjuda").textContent=fixa
+    ? "Registrada no primeiro cadastro — não muda."
+    : (c?"Este cadastro ainda não tem origem: escolha agora, ela fica gravada."
+        :"Primeiro contato: por onde ele chegou. Fica gravada no cadastro.");
 }
 function achaCliente(q){
   /* procura por nome, telefone, documento ou código — o vendedor digita o que tiver na mão */
@@ -11096,7 +11151,7 @@ function preencherCliente(c){
   $("at_nome").value=c.nome||"";$("at_tel").value=c.tel||"";$("at_doc").value=c.doc||"";
   $("at_cidade").value=c.cidade||"";$("at_sexo").value=c.sexo||"";
   if($("at_uf"))$("at_uf").value=c.uf||"";
-  if(c.origem)$("at_origem").value=c.origem;
+  ajustarOrigemAt();
   var vendas=vendasDe(c.id).length,lead=ehLead(c);
   $("at_achou").innerHTML='<div class="note ok"><b>'+(lead?"Lead":"Cliente")+" já cadastrado · "+esc(c.codigo||"")+
     ".</b> Campos preenchidos automaticamente · "+
@@ -11197,26 +11252,35 @@ async function salvarAtend(){
     var faltaLead=[];
     if(!temSobrenome(nome))faltaLead.push("sobrenome");
     if(!$("at_cidade").value.trim())faltaLead.push("cidade");
+    if(!$("at_origem").value)faltaLead.push("origem");
     if(faltaLead.length){
       $("at_alerta").innerHTML='<div class="note crit"><b>Falta preencher: '+faltaLead.join(" · ")+
-        ".</b> Este contato não tem cadastro e vai nascer como lead — nome e sobrenome, telefone e cidade "+
+        ".</b> Este contato não tem cadastro e vai nascer como lead — nome e sobrenome, telefone, cidade, origem e tipo de atendimento "+
         "são o mínimo para alguém conseguir voltar a falar com ele. "+
         'Se quiser registrar tudo agora, use <b>Abrir cadastro completo do lead</b>.</div>';
       return;}
     var c={id:uid(),loja:lojaAtual,codigo:proxCodigo(),tipo:"Pessoa Física",
       nome:nome,sexo:$("at_sexo").value,tel:tel,
       doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
-      uf:$("at_uf").value.trim().toUpperCase(),origem:$("at_origem").value,
+      uf:$("at_uf").value.trim().toUpperCase(),origem:$("at_origem").value,origemEm:iso(new Date()),
+      tipoPrimeiroAtend:tiposSel[0]||"",primeiroAtendEm:iso(new Date()),
       criadoEm:iso(new Date()),criadoPor:usuarioAtual,criadoVia:"atendimento"};
     clientes.push(c);clienteVinc=c;leadNovo=c;
     if(db){try{await col("clientes").doc(c.id).set(c);}catch(e){console.warn(e);}}
   }
 
+  /* cadastro antigo ainda sem origem: escolhe agora, uma vez, e fica gravada */
+  if(!clienteVinc.origem){
+    if(!$("at_origem").value){
+      $("at_alerta").innerHTML='<div class="note crit"><b>Escolha a origem do contato.</b> Este cadastro ainda não tem — ela fica gravada e não muda mais.</div>';return;}
+    clienteVinc.origem=$("at_origem").value;clienteVinc.origemEm=iso(new Date());
+    if(db){try{await col("clientes").doc(clienteVinc.id).set(clienteVinc);}catch(e){console.warn(e);}}
+  }
   var a=editandoAt||{id:uid(),loja:lojaAtual};
   var veioDeAtividade=(a.natureza==="atividade");
   a.natureza="atendimento";a.clienteId=clienteVinc.id;a.cliente=clienteVinc.nome;
   a.tel=tel;a.doc=$("at_doc").value.trim();a.cidade=$("at_cidade").value.trim();
-  a.uf=$("at_uf").value.trim().toUpperCase();a.origem=$("at_origem").value;
+  a.uf=$("at_uf").value.trim().toUpperCase();a.origem=clienteVinc.origem||$("at_origem").value;
   a.colaborador=$("at_colab").value;a.tipos=tiposSel.slice();a.tipo=tiposSel.join(" · ");
   a.data=$("at_data").value;a.inicio=ini;a.fim=fim;a.obs=$("at_obs").value.trim();
   a.status="aberto";a.iniciativa=iniSel;
@@ -11639,7 +11703,7 @@ function ir(s){
 }
 function montarSelects(){
   var sl=$("loja");LOJAS.forEach(function(l){var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;sl.appendChild(o);});
-  var so=$("c_origem");ORIGENS.forEach(function(x){var o=document.createElement("option");o.textContent=x;so.appendChild(o);});
+  /* a origem do cadastro é montada ao abrir a ficha (opcoesOrigem) — aqui duplicava a lista */
   ["v_prosp","v_vend","v_inst","v_iresp","agendaPessoa"].forEach(function(id){
     var s=$(id);s.innerHTML=(id==="v_inst"||id==="v_iresp"||id==="agendaPessoa")?'<option value="">'+(id==="agendaPessoa"?"Equipe toda":"—")+"</option>":"";
     EQUIPE.forEach(function(n){var o=document.createElement("option");o.textContent=n;s.appendChild(o);});});
@@ -12108,7 +12172,7 @@ function ligar(){
   ["c_email","c_apelido"].forEach(function(id){$(id).oninput=mostrarFaltantes;});
   ["c_nome","c_tel","c_doc","c_nasc","c_cep","c_rua","c_num","c_comp","c_bairro","c_cidade"]
     .forEach(function(id){var el=$(id);if(el)el.oninput=mostrarFaltantes;});
-  ["c_sexo","c_tipo"].forEach(function(id){$(id).addEventListener("change",mostrarFaltantes);});
+  ["c_sexo","c_tipo","c_origem","c_tipoAt"].forEach(function(id){$(id).addEventListener("change",mostrarFaltantes);});
   $("c_tipo").addEventListener("change",toggleTipoPJ);
   $("cliSalvar").onclick=async function(){
     var lead=(modoCli()==="lead"),dados=lerForm();
@@ -12123,7 +12187,11 @@ function ligar(){
     }
     var c=editandoCli||{id:uid(),loja:lojaAtual,criadoEm:iso(new Date()),criadoPor:usuarioAtual};
     if(!c.codigo)c.codigo=$("c_codigo").value||proxCodigo();
-    c.tipo=dados.tipo;c.origem=dados.origem;c.indicado=$("c_indicado").value;
+    c.tipo=dados.tipo;c.indicado=$("c_indicado").value;
+    /* a origem entra uma vez e nunca é sobrescrita */
+    if(!c.origem&&dados.origem){c.origem=dados.origem;c.origemEm=iso(new Date());}
+    if(dados.__pedeTipoAt&&dados.tipoAt&&!c.tipoPrimeiroAtend){
+      c.tipoPrimeiroAtend=dados.tipoAt;c.primeiroAtendEm=iso(new Date());}
     CAMPOS_CLI.forEach(function(k){if(k!=="uf")c[k]=dados[k]||"";});
     c.uf=$("c_uf").value.trim().toUpperCase();c.temconj=$("c_temconj").value;
     if(!editandoCli)clientes.push(c);
@@ -12291,7 +12359,7 @@ function ligar(){
   $("atendSalvar").onclick=salvarAtend;
   $("atendBusca").oninput=renderAtend;$("atendFiltro").onchange=renderAtend;
 
-  $("at_nome").oninput=function(){clienteVinc=null;$("at_achou").innerHTML="";buscarCliente();};
+  $("at_nome").oninput=function(){clienteVinc=null;$("at_achou").innerHTML="";ajustarOrigemAt();buscarCliente();};
   $("at_leadCompleto").onclick=abrirLeadCompleto;
   $("at_nome").onblur=function(){setTimeout(function(){$("at_sug").hidden=true;},180);};
   Array.prototype.forEach.call($("at_completo").querySelectorAll("button"),function(b){
