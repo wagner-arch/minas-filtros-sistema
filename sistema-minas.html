@@ -983,6 +983,7 @@ img{max-width:100%}
         <!-- histórico do cliente ACIMA do nome (pedido do Wagner, 12/09): toque na aba abre, toque de novo fecha -->
         <div id="cliHist" hidden style="margin:2px 0 18px">
           <div class="abas abas-cli" id="cliAbas">
+            <button type="button" data-ab="dados" aria-current="true">Dados pessoais</button>
             <button type="button" data-ab="hist">Histórico</button>
             <button type="button" data-ab="ate">Atendimentos</button>
             <button type="button" data-ab="atv">Atividades</button>
@@ -1049,6 +1050,8 @@ img{max-width:100%}
           </div>
         </div>
 
+        <!-- DADOS PESSOAIS: o cadastro só aparece nesta aba (pedido do Wagner, 12/09) -->
+        <div id="cliDados">
         <div id="c_modoNota"></div>
 
         <div class="sect">
@@ -1161,6 +1164,7 @@ img{max-width:100%}
         <div class="actions">
           <button class="btn" type="button" id="cliSalvar">Salvar cliente</button>
           <button class="btn mut" type="button" id="cliCancelar">Cancelar</button>
+        </div>
         </div>
       </div>
     </section>
@@ -1288,7 +1292,7 @@ img{max-width:100%}
               <div class="fld"><label for="v_vend">Vendedor · 60%</label><select id="v_vend"></select></div>
               <div class="fld"><label for="v_inst">Instalador · 20%</label><select id="v_inst"></select></div>
             </div>
-            <p class="help">Instalador em branco: o vendedor acumula os 20%.</p>
+            <p class="help" id="v_instAjuda">Instalador em branco: o vendedor acumula os 20%.</p>
           </div>
 
           <div class="card vstep" data-s="2">
@@ -4610,9 +4614,8 @@ function abrirCliente(c){
     ? esc("Editar · "+c.nome)+(ehLead(c)?' <span class="pill p-acc" style="vertical-align:middle;margin-left:8px">lead</span>':
         ' <span class="pill p-ok" style="vertical-align:middle;margin-left:8px">cliente</span>')
     : "Novo lead";
-  /* ficha aberta: abas do histórico fechadas (o cadastro aparece inteiro logo abaixo delas) */
-  Array.prototype.forEach.call($("cliAbas").querySelectorAll("button"),function(x){x.setAttribute("aria-current","false");});
-  Array.prototype.forEach.call(document.querySelectorAll("#cliHist .ab-corpo"),function(d){d.hidden=true;});
+  /* ficha aberta: começa na aba Dados pessoais */
+  abaCliente("dados");
   try{renderCliHist(c);}catch(e){$("cliHist").hidden=true;}
   travarDadosPessoais(c);
 }
@@ -5061,6 +5064,7 @@ function renderFormas(){
     el.oninput=el.onchange=function(){
       var i=+el.getAttribute("data-i"),k=el.getAttribute("data-f");
       formas[i][k]=(k==="valor"?(parseFloat(el.value)||0):(k==="parc"?parseInt(el.value,10):el.value));
+      if(k==="valor")formas[i].__auto=false;
       if(k==="tipo"){renderFormas();}
       calcular();
     };
@@ -5069,8 +5073,30 @@ function renderFormas(){
     b.onclick=function(){formas.splice(+b.getAttribute("data-rmf"),1);renderFormas();calcular();};
   });
 }
+/* regra do Wagner (12/09): sem instalador informado ou sem instalação futura, o vendedor é o
+   instalador e fica com os 20% — na tela o campo mostra isso */
+function ajustarInstalador(){
+  var si=$("v_inst");if(!si||!$("v_idata"))return;
+  var temInst=!!$("v_idata").value,vend=$("v_vend").value,aj=$("v_instAjuda");
+  if(!temInst){
+    si.value=vend;si.disabled=true;
+    if(aj)aj.textContent="Sem instalação futura: o vendedor ("+(vend||"—")+") é o instalador e fica com os 20%.";
+  }else{
+    si.disabled=false;
+    if(aj)aj.textContent=si.value
+      ? "Instalação futura: "+si.value+" é o instalador e fica com os 20%."
+      : "Instalador em branco: o vendedor ("+(vend||"—")+") é o instalador e fica com os 20%.";
+  }
+}
 function calcular(){
   var total=itens.reduce(function(a,i){return a+(i.valor*(i.qtd||1));},0);
+  /* forma de pagamento já com o total do pedido (regra do Wagner, 12/09): com uma forma só, o valor
+     acompanha o total até alguém digitar outro valor */
+  if(formas.length===1&&formas[0].__auto!==false&&Math.round((+formas[0].valor||0)*100)!==Math.round(total*100)){
+    formas[0].valor=Math.round(total*100)/100;
+    var inpF=$("v_formas")?$("v_formas").querySelector('[data-f="valor"]'):null;
+    if(inpF)inpF.value=formas[0].valor;
+  }
 
   var somaFormas=0,dep=0,descV=0,partes=[];
   formas.forEach(function(f){
@@ -5170,8 +5196,11 @@ async function salvarPedido(){
   var ped={id:uid(),loja:lojaAtual,numero:(pedidos.filter(function(p){return p.loja===lojaAtual;}).length+20801),
     data:new Date().toISOString().slice(0,10),hora:agoraHM(),
     cliente:cli?cli.nome:"—",clienteId:cli?cli.id:"",
-    prospector:$("v_prosp").value,vendedor:$("v_vend").value,instalador:$("v_inst").value,
-    respInstalacao:$("v_idata").value?($("v_iresp").value||$("v_inst").value||""):"",
+    prospector:$("v_prosp").value,vendedor:$("v_vend").value,
+    /* regra do Wagner (12/09): sem instalação futura, ou sem instalador informado, o vendedor é o
+       instalador e fica com os 20% */
+    instalador:$("v_idata").value?($("v_inst").value||$("v_iresp").value||$("v_vend").value):$("v_vend").value,
+    respInstalacao:$("v_idata").value?($("v_iresp").value||$("v_inst").value||$("v_vend").value):"",
     itens:itens.slice(),formas:formas.slice(),total:r.total,depreciado:r.dep,base:r.base,pontos:r.pontos,
     obs:$("v_obs").value.trim(),usoImagem:$("v_imagem").value,anexos:anexados,assinado:true,assinaturaImg:assinaturaParaDoc(),
     abaixoTabela:!!r.abaixo,status:etapaVenda({abaixoTabela:!!r.abaixo,instalacao:$("v_idata").value}),
@@ -9656,6 +9685,17 @@ function renderLeads(){
    anotações livres. Cada item mostra tipo, observação e motivo de finalização e abre o registro;
    qualquer item pode ser fixado no topo. Anotações e fixados ficam no cadastro (c.notas, c.fixados). */
 var hcCliente=null;
+/* abas da ficha (regra do Wagner, 12/09): Dados pessoais (o cadastro) · Histórico · Atendimentos ·
+   Atividades · Pedidos · Orçamentos · OS — uma aberta por vez; os campos do cadastro só em Dados pessoais */
+function abaCliente(k){
+  Array.prototype.forEach.call($("cliAbas").querySelectorAll("button"),function(x){
+    x.setAttribute("aria-current",String(x.getAttribute("data-ab")===k));});
+  Array.prototype.forEach.call(document.querySelectorAll("#cliHist .ab-corpo"),function(d){
+    d.hidden=(d.getAttribute("data-ab")!==k);});
+  if($("cliDados"))$("cliDados").hidden=(k!=="dados");
+  /* histórico abre no fim, no mais recente, como uma conversa */
+  if(k==="hist"){var lh=$("hc_lista");if(lh)setTimeout(function(){lh.scrollTop=lh.scrollHeight;},0);}
+}
 function hcEventos(c){
   var ev=[];
   function hm(h){return h?String(h).slice(0,5):"";}
@@ -13589,16 +13629,7 @@ function ligar(){
     $("cliForm").hidden=true;$("cliLista").hidden=false;
     if(vv){ir("venda");try{atualizarEtapas();}catch(e){}}};
   Array.prototype.forEach.call($("cliAbas").querySelectorAll("button"),function(b){
-    b.onclick=function(){
-      /* tocar na aba aberta fecha: o histórico fica acima do nome e não empurra a ficha à toa */
-      var fechar=b.getAttribute("aria-current")==="true";
-      Array.prototype.forEach.call($("cliAbas").querySelectorAll("button"),function(x){
-        x.setAttribute("aria-current",String(!fechar&&x===b));});
-      Array.prototype.forEach.call(document.querySelectorAll("#cliHist .ab-corpo"),function(d){
-        d.hidden=fechar||(d.getAttribute("data-ab")!==b.getAttribute("data-ab"));});
-      /* histórico abre no fim, no mais recente, como uma conversa */
-      if(!fechar&&b.getAttribute("data-ab")==="hist"){var lh=$("hc_lista");if(lh)setTimeout(function(){lh.scrollTop=lh.scrollHeight;},0);}
-    };});
+    b.onclick=function(){abaCliente(b.getAttribute("data-ab"));};});
   $("hc_salvar").onclick=anotarHistorico;
   Array.prototype.forEach.call(document.querySelectorAll("[data-hnovo]"),function(b){
     b.onclick=function(){hcNovo(b.getAttribute("data-hnovo"));};});
@@ -14219,7 +14250,15 @@ function ligar(){
   $("v_gar").onchange=notaGarantia;$("v_imagem").onchange=calcular;
   $("finBusca").oninput=renderFin;$("finQuem").onchange=renderFin;
   ["v_valor","v_qtd"].forEach(function(id){$(id).oninput=calcular;$(id).onchange=calcular;});
-  $("v_addForma").onclick=function(){formas.push({tipo:"Dinheiro",valor:0,parc:1});renderFormas();calcular();};
+  $("v_addForma").onclick=function(){
+    /* a forma nova já vem com o que falta para fechar o total do pedido */
+    var tot=itens.reduce(function(a,i){return a+(i.valor*(i.qtd||1));},0);
+    var soma=formas.reduce(function(a,f){return a+(+f.valor||0);},0);
+    formas.forEach(function(f){f.__auto=false;});
+    formas.push({tipo:"Dinheiro",valor:Math.max(0,Math.round((tot-soma)*100)/100),parc:1,__auto:false});
+    renderFormas();calcular();};
+  ["v_vend","v_idata","v_inst"].forEach(function(id){$(id).addEventListener("change",function(){ajustarInstalador();calcular();});});
+  $("v_idata").addEventListener("input",ajustarInstalador);
   $("v_salvar").onclick=salvarPedido;$("v_limpar").onclick=function(){limparPedido();render();};
   ligarAssinatura();renderFormas();renderAnexos();notaGarantia();
   /* regra do Wagner (12/09): da etapa Itens só se avança com item incluído */
@@ -14508,6 +14547,7 @@ function irEtapa(n){
   });
   /* comissão ao vivo só da etapa Pagamento em diante (regra do Wagner, 12/09) */
   var vcom=$("v_comissao");if(vcom)vcom.hidden=etapa<3;
+  try{ajustarInstalador();if(etapa===3)calcular();}catch(e){}
   $("v_voltar").style.visibility=(etapa===1?"hidden":"visible");
   $("v_avancar").style.visibility=(etapa===5?"hidden":"visible");
   window.scrollTo(0,0);
