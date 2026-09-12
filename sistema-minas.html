@@ -856,6 +856,7 @@ img{max-width:100%}
 
         <div class="sect">
           <p class="sect-t" id="c_tituloDados">Dados pessoais</p>
+          <div class="note" id="c_travaNota" hidden style="margin-bottom:12px"><b>Cliente: nome, CPF/CNPJ e RG não se alteram.</b> Endereço, geolocalização e contato podem ser atualizados.</div>
           <div class="grid g4">
             <div class="fld" style="grid-column:span 2"><label for="c_nome" id="c_lblNome">Nome e sobrenome <span class="req">*</span></label><input id="c_nome"></div>
             <div class="fld" style="position:relative">
@@ -4076,6 +4077,25 @@ function abrirCliente(c){
         ' <span class="pill p-ok" style="vertical-align:middle;margin-left:8px">cliente</span>')
     : "Novo lead";
   try{renderCliHist(c);}catch(e){$("cliHist").hidden=true;}
+  travarDadosPessoais(c);
+}
+/* Regra do Wagner (12/09): a ficha de CLIENTE (já comprou) serve para consulta e para
+   atualizar endereço e contato — nome, CPF/CNPJ e RG não se editam (nem o tipo PF/PJ,
+   que define o documento). Campo que chegou vazio (base importada) preenche uma vez.
+   Lead continua editável: é nele que CPF e RG são preenchidos para a primeira venda. */
+var DADOS_TRAVADOS=[["c_nome","nome"],["c_doc","doc"],["c_rg","rg"]];
+function clienteTravado(c){return !!(c&&c.id&&!ehLead(c));}
+function travarDadosPessoais(c){
+  var cli=clienteTravado(c);
+  DADOS_TRAVADOS.forEach(function(x){
+    var e=$(x[0]);if(!e)return;
+    var trava=cli&&!!String(c[x[1]]||"").trim();
+    e.readOnly=trava;
+    e.style.opacity=trava?".72":"";
+    e.title=trava?"Dado pessoal de cliente — não se altera":"";
+  });
+  $("c_tipo").disabled=cli;
+  $("c_travaNota").hidden=!cli;
 }
 /* ---------- indicações ---------- */
 function indicadosPor(id){
@@ -12239,7 +12259,12 @@ function ligar(){
     if(!c.origem&&dados.origem){c.origem=dados.origem;c.origemEm=iso(new Date());}
     if(dados.__pedeTipoAt&&dados.tipoAt&&!c.tipoPrimeiroAtend){
       c.tipoPrimeiroAtend=dados.tipoAt;c.primeiroAtendEm=iso(new Date());}
+    /* cliente: nome, CPF/CNPJ, RG e tipo que já existem ficam como estavam */
+    var fixos={};
+    if(clienteTravado(editandoCli))["nome","doc","rg","tipo"].forEach(function(k){
+      if(String(editandoCli[k]||"").trim())fixos[k]=editandoCli[k];});
     CAMPOS_CLI.forEach(function(k){if(k!=="uf")c[k]=dados[k]||"";});
+    Object.keys(fixos).forEach(function(k){c[k]=fixos[k];});
     c.uf=$("c_uf").value.trim().toUpperCase();c.temconj=$("c_temconj").value;
     if(!editandoCli)clientes.push(c);
     if(db){try{await col("clientes").doc(c.id).set(c);}catch(e){console.warn(e);}}
