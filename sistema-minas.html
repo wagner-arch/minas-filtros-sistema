@@ -874,6 +874,7 @@ img{max-width:100%}
           </div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="c_doc" id="c_lblDoc">CPF <span class="req" id="c_reqDoc">*</span></label><input id="c_doc" placeholder="000.000.000-00"></div>
+            <div class="fld" id="c_rgWrap"><label for="c_rg">Identidade (RG) <span class="req" id="c_reqRg">*</span></label><input id="c_rg" placeholder="MG-00.000.000"></div>
             <div class="fld" id="c_ieWrap" hidden><label for="c_ie">Inscrição Estadual</label><input id="c_ie" placeholder="Número ou ISENTA"></div>
             <div class="fld"><label for="c_nasc" id="c_lblNasc">Data de nascimento <span class="req" id="c_reqNasc">*</span></label><input id="c_nasc" type="date"></div>
             <div class="fld"><label for="c_tel">Telefone <span class="req">*</span></label><input id="c_tel" placeholder="(37) 90000-0000"></div>
@@ -1111,6 +1112,7 @@ img{max-width:100%}
           <div class="card vstep" data-s="1">
             <h2>Cliente e papéis</h2>
             <div class="fld" style="margin-bottom:16px"><label for="v_cliente">Cliente <span class="req">*</span></label><select id="v_cliente"></select></div>
+            <div id="v_cadAviso" style="margin-bottom:14px"></div>
             <div class="grid g3">
               <div class="fld"><label for="v_prosp">Prospector · 20%</label><select id="v_prosp"></select></div>
               <div class="fld"><label for="v_vend">Vendedor · 60%</label><select id="v_vend"></select></div>
@@ -1424,7 +1426,7 @@ img{max-width:100%}
           </select>
           <span class="count" id="ldCount"></span>
           <span class="sp"></span>
-          <button class="btn" type="button" id="ldNovo">Novo lead</button>
+          <button class="btn" type="button" id="ldNovo" title="O lead nasce no Atendimento — esta aba é para consultar, filtrar e editar">Registrar atendimento</button>
         </div>
         <div class="tw"><table>
           <thead><tr><th>Lead</th><th>Origem</th><th>Último contato</th><th>Orçamentos</th><th>Próximo retorno</th><th>Situação</th><th></th></tr></thead>
@@ -2995,7 +2997,6 @@ img{max-width:100%}
   <div class="novo-menu" id="novoMenu" hidden>
     <button type="button" data-novo="orcam"><b>Orçamento</b><span>Proposta para enviar ao cliente</span></button>
     <button type="button" data-novo="pedido"><b>Pedido</b><span>Venda com produtos, garantia e pagamento</span></button>
-    <button type="button" data-novo="cliente"><b>Cliente</b><span>Cadastro completo, com checagem de duplicidade</span></button>
     <button type="button" data-novo="produto"><b>Produto</b><span>Preços, comissão, estoque e pós-venda</span></button>
     <button type="button" data-novo="atend"><b>Atendimento</b><span>Contato que acabou de acontecer</span></button>
     <button type="button" data-novo="ativ"><b>Atividade</b><span>Contato futuro a agendar</span></button>
@@ -3969,14 +3970,14 @@ function opcoesTipoAt(sel){
 /* obrigatórios do CLIENTE — exigidos para vender */
 var CO_CLI=[["tipo","Tipo de contato"],["nome","Nome e sobrenome"],["sexo","Sexo"],
   ["origem","Origem do contato"],["tel","Telefone"],["cidade","Cidade"],["uf","Estado"],
-  ["doc","CPF/CNPJ"],["nasc","Data de nascimento"],["cep","CEP"],
+  ["doc","CPF/CNPJ"],["rg","Identidade (RG)"],["nasc","Data de nascimento"],["cep","CEP"],
   ["rua","Rua"],["num","Número"],["comp","Complemento"],["bairro","Bairro"],
   ["geo","Geolocalização"]];
 /* pessoa física precisa de nome E sobrenome — "Maria" sozinho não identifica ninguém */
 function temSobrenome(n){
   return String(n||"").trim().split(/\s+/).filter(function(p){return p.length>=2;}).length>=2;
 }
-var CAMPOS_CLI=["nome","doc","apelido","nasc","tel","email","prof","cep","rua","num","comp","bairro","cidade","uf",
+var CAMPOS_CLI=["nome","doc","rg","apelido","nasc","tel","email","prof","cep","rua","num","comp","bairro","cidade","uf",
   "tipoend","ref","geo",
   "sexo","ie","respNome","respContato","respTel","comprasNome","comprasTel","comprasEmail",
   "conjnome","conjcpf","conjrg","conjnasc","conjtel","conjemail"];
@@ -3992,6 +3993,8 @@ function mapaLink(geo){
 }
 function faltamObrig(c,modo){
   var base=(modo==="cliente"?CO_CLI:CO_LEAD).slice();
+  /* pessoa jurídica não tem identidade (RG) nem sexo */
+  if(c&&c.tipo==="Pessoa Jurídica")base=base.filter(function(x){return ["rg","sexo"].indexOf(x[0])<0;});
   /* endereço rural não tem rua, número nem CEP de rua: no lugar deles o
      sistema exige a referência de como chegar e a geolocalização */
   if(c&&c.tipoend==="rural"){
@@ -4020,7 +4023,7 @@ function toggleTipoPJ(){
   $("c_lblApelido").textContent=pj?"Nome fantasia":"Apelido";
   $("c_lblNasc").innerHTML=(pj?"Data de fundação":"Data de nascimento")+
     ' <span class="req" id="c_reqNasc">*</span>';
-  $("c_ieWrap").hidden=!pj;
+  $("c_ieWrap").hidden=!pj;$("c_rgWrap").hidden=pj;
   $("c_pjWrap").hidden=!pj;
   $("c_profWrap").hidden=pj;
   $("c_conjSel").hidden=pj;
@@ -4030,12 +4033,13 @@ function toggleTipoPJ(){
 }
 function modoCli(){
   /* enquanto não houver venda, o cadastro é de lead e exige só o essencial */
-  return (editandoCli&&!ehLead(editandoCli))?"cliente":"lead";
+  /* vindo do pedido, o cadastro é para vender: exige o completo mesmo sendo lead */
+  return (voltaVenda||(editandoCli&&!ehLead(editandoCli)))?"cliente":"lead";
 }
 function aplicarModoCli(){
   var m=modoCli(),lead=(m==="lead");
   /* lead: só nome e sobrenome, telefone e cidade levam asterisco */
-  ["c_reqDoc","c_reqNasc","c_reqTipo","c_reqSexo"].forEach(function(id){
+  ["c_reqDoc","c_reqRg","c_reqNasc","c_reqTipo","c_reqSexo"].forEach(function(id){
     var e=$(id);if(e)e.style.visibility=lead?"hidden":"";});
   Array.prototype.forEach.call(document.querySelectorAll(".end-req"),function(e){
     e.style.visibility=lead?"hidden":"";});
@@ -4044,7 +4048,9 @@ function aplicarModoCli(){
     ? '<div class="note"><b>Cadastro de lead.</b> Obrigatórios: nome e sobrenome, telefone, cidade, origem'+
       ($("c_tipoAtWrap").hidden?"":" e o tipo do 1º atendimento")+". "+
       "CPF, identidade, nascimento, sexo e endereço podem ficar em branco — viram obrigatórios na hora de lançar a primeira venda.</div>"
-    : '<div class="note ok"><b>Cadastro de cliente.</b> Este contato já comprou: documento, nascimento e endereço completo são obrigatórios.</div>';
+    : (voltaVenda
+      ? '<div class="note warn"><b>Cadastro para tirar o pedido.</b> Para vender são obrigatórios: CPF, identidade, data de nascimento, sexo, estado, endereço completo e geolocalização. Salve e o pedido continua de onde parou.</div>'
+      : '<div class="note ok"><b>Cadastro de cliente.</b> Este contato já comprou: CPF, identidade, nascimento, sexo e endereço completo são obrigatórios.</div>');
   mostrarFaltantes();
 }
 function abrirCliente(c){
@@ -4486,12 +4492,34 @@ function calcular(){
     '<tr><td>Uso de Imagem</td><td class="num">'+(temImagem?'<span class="pill p-acc">vai sair</span>':'<span class="pill p-mut">não autorizado</span>')+"</td></tr>";
   return {total:total,dep:dep,base:base,pontos:pontos,abaixo:abaixo,somaFormas:somaFormas,dif:dif};
 }
+/* O lead pode ter nascido só com nome, telefone, cidade, origem e tipo de atendimento.
+   Para TIRAR O PEDIDO o cadastro precisa estar completo (CO_CLI): CPF, identidade,
+   nascimento, sexo, estado, endereço e geolocalização. */
+var voltaVenda=false;
+function avisoCadastroVenda(){
+  var el=$("v_cadAviso");
+  var c=clientes.filter(function(x){return x.id===$("v_cliente").value;})[0];
+  if(!c){if(el)el.innerHTML="";return false;}
+  var f=faltamObrig(c,"cliente");
+  if(!el)return !f.length;
+  if(!f.length){el.innerHTML='<div class="note ok"><b>Cadastro completo.</b> Pronto para tirar o pedido.</div>';return true;}
+  el.innerHTML='<div class="note crit"><b>Para tirar o pedido falta no cadastro de '+esc(c.nome)+":</b> "+
+    esc(f.join(" · "))+'.<div style="margin-top:8px"><button class="btn sm" type="button" id="v_completarCad">Completar cadastro</button></div></div>';
+  $("v_completarCad").onclick=function(){
+    voltaVenda=true;ir("clientes");abrirCliente(c);
+    toast("Complete o cadastro e salve — o pedido continua de onde parou.");};
+  return false;
+}
 async function salvarPedido(){
-  if(!itens.length){toast("Adicione ao menos um item.");return;}
+  var cliSel=clientes.filter(function(c){return c.id===$("v_cliente").value;})[0];
+  if(!cliSel){toast("Escolha o cliente do pedido.");irEtapa(1);return;}
+  if(!avisoCadastroVenda()){toast("Complete o cadastro de "+cliSel.nome+" antes de tirar o pedido.");irEtapa(1);return;}
+  if(!itens.length){toast("Adicione ao menos um produto, com a quantidade.");irEtapa(2);return;}
   var r=calcular();
-  if(r.dif!==0){toast("A soma das formas de pagamento não bate com o total.");return;}
-  if(!assinaturaFeita){toast("Falta a assinatura do cliente.");return;}
-  var cli=clientes.filter(function(c){return c.id===$("v_cliente").value;})[0];
+  if(formas.some(function(f){return (+f.valor||0)>0&&!f.tipo;})){toast("Escolha a forma de pagamento de cada valor.");irEtapa(3);return;}
+  if(r.dif!==0){toast("A soma das formas de pagamento não bate com o total.");irEtapa(3);return;}
+  if(!assinaturaFeita){toast("Falta a assinatura do cliente.");irEtapa(5);return;}
+  var cli=cliSel;
   var anexados=ANEXOS.filter(function(a){return a.arquivo;}).map(function(a){return a.rot;});
   var ped={id:uid(),loja:lojaAtual,numero:(pedidos.filter(function(p){return p.loja===lojaAtual;}).length+20801),
     data:new Date().toISOString().slice(0,10),hora:agoraHM(),
@@ -10219,16 +10247,19 @@ function naConferirCadastro(){
   if(!digitado){w.hidden=true;return;}
   w.hidden=false;
   var visita=naPedeEndereco();
-  /* lead exige nome e sobrenome, telefone e cidade; bairro e rua só quando é visita */
-  $("na_reqEnd").hidden=false;$("na_reqEnd").style.visibility="visible";
-  ["na_bairro","na_rua"].forEach(function(id){
-    var l=document.querySelector('label[for="'+id+'"] .req');
-    if(l)l.style.visibility=visita?"visible":"hidden";
-  });
+  /* regra de 12/09: lead só nasce no Atendimento. Sem cadastro, a atividade não
+     cria nada — manda registrar o primeiro contato, já com o nome digitado */
+  Array.prototype.forEach.call(w.querySelectorAll(".grid"),function(g){g.hidden=true;});
   $("na_cadAviso").innerHTML="<b>"+esc(digitado)+" ainda não tem cadastro.</b> "+
-    (visita
-      ? "Para agendar uma visita o sistema precisa do telefone e do endereço — é para lá que alguém vai. Preencha e o cadastro nasce como lead."
-      : "Informe telefone e cidade (e o nome com sobrenome). O cadastro nasce como lead e vira cliente na primeira venda.");
+    "O lead nasce no Atendimento: registre o primeiro contato (nome e sobrenome, telefone, cidade, origem e tipo) e depois agende "+
+    (visita?"a visita.":"a atividade.")+
+    '<div style="margin-top:8px"><button class="btn sm" type="button" id="na_irAtend">Registrar atendimento</button></div>';
+  $("na_irAtend").onclick=function(){
+    $("ativModal").hidden=true;
+    ir("atend");abrirAtend(null);
+    $("at_nome").value=digitado;
+    toast("Registre o primeiro contato de "+digitado+" — depois agende a atividade.");
+  };
 }
 async function naCriarLead(nome){
   var c={id:uid(),loja:lojaAtual,codigo:proxCodigo(),criadoEm:iso(new Date()),
@@ -10332,30 +10363,11 @@ async function criarAtividadeRetorno(){
   /* sem cadastro não há atividade: quem for atender precisa saber para onde ir
      e para qual número ligar */
   if(!naCtx.clienteId){
+    /* regra de 12/09: o lead nasce no Atendimento — a atividade não cria cadastro */
     naConferirCadastro();
-    var visita=naPedeEndereco(),falta=[];
-    /* lead: nome e sobrenome, telefone e cidade; visita pede também bairro e rua */
-    if(!temSobrenome(naCtx.cliente))falta.push("sobrenome");
-    if(!$("na_tel").value.trim())falta.push("telefone");
-    if(!$("na_cidade").value.trim())falta.push("cidade");
-    if(!$("na_origem").value)falta.push("origem");
-    if(visita){
-      if(!$("na_bairro").value.trim())falta.push("bairro");
-      if(!$("na_rua").value.trim())falta.push("rua");
-    }
-    if(falta.length){
-      $("na_alerta").innerHTML='<div class="note crit"><b>Falta preencher:</b> '+falta.join(" · ")+
-        ".</b> "+(visita
-          ? "Uma visita sem endereço manda alguém para lugar nenhum."
-          : "Sem telefone não há como fazer o contato.")+"</div>";
-      var alvo=document.getElementById(falta[0]==="telefone"?"na_tel":"na_"+falta[0]);
-      if(alvo){try{alvo.focus();}catch(e){}}
-      return;
-    }
-    var novo=await naCriarLead(naCtx.cliente);
-    naCtx.clienteId=novo.id;naCtx.tel=novo.tel;naCtx.cidade=novo.cidade;
-    naCtx.origem=novo.origem;
-    toast("Lead "+novo.codigo+" cadastrado.");
+    $("na_alerta").innerHTML='<div class="note crit"><b>'+esc(naCtx.cliente||"Este contato")+
+      " ainda não tem cadastro.</b> Registre o primeiro contato em Atendimentos e depois agende a atividade.</div>";
+    return;
   }
 
   var vinc=clientes.filter(function(c){return c.id===naCtx.clienteId;})[0]||{};
@@ -10403,11 +10415,19 @@ async function virarVenda(o){
   if(o.situacao==="convertido"){toast("Este orçamento já virou venda.");return;}
   /* leva os itens e a condição para a tela de pedido — a venda só nasce ao salvar lá */
   var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  /* orçamento feito sem vínculo: acha o cadastro pelo telefone (lead registrado depois no Atendimento) */
   if(!c){
-    c={id:uid(),loja:lojaAtual,tipo:"Pessoa Física",nome:o.cliente,tel:o.tel,email:o.email,cidade:o.cidade,origem:ORIGENS[0]};
-    clientes.push(c);
-    if(db){try{await col("clientes").doc(c.id).set(c);}catch(e){console.warn(e);}}
-    o.clienteId=c.id;
+    var tel=String(o.tel||"").replace(/\D/g,"");
+    if(tel.length>=8)c=clientes.filter(function(x){
+      return x.loja===lojaAtual&&String(x.tel||"").replace(/\D/g,"").slice(-8)===tel.slice(-8);})[0];
+    if(c){o.clienteId=c.id;if(db){try{await col("orcamentos").doc(o.id).set(o);}catch(e){console.warn(e);}}}
+  }
+  /* regra de 12/09: o cadastro nasce no Atendimento — sem ele não vira venda */
+  if(!c){
+    toast("Registre o atendimento de "+(o.cliente||"o cliente")+" primeiro — o lead nasce lá. Depois volte e vire a venda.");
+    ir("atend");abrirAtend(null);
+    $("at_nome").value=o.cliente||"";$("at_tel").value=o.tel||"";$("at_cidade").value=o.cidade||"";
+    return;
   }
   itens=o.itens.map(function(i){
     return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:i.qtd||1,valor:+i.valor||0,
@@ -11715,7 +11735,10 @@ function ligar(){
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){b.onclick=function(){ir(b.dataset.s);};});
   $("loja").onchange=function(){lojaAtual=this.value;itens=[];render();toast(nomeLoja());};
 
-  $("cliCancelar").onclick=function(){$("cliForm").hidden=true;$("cliLista").hidden=false;};
+  $("cliCancelar").onclick=function(){
+    var vv=voltaVenda;voltaVenda=false;
+    $("cliForm").hidden=true;$("cliLista").hidden=false;
+    if(vv){ir("venda");try{atualizarEtapas();}catch(e){}}};
   Array.prototype.forEach.call($("cliAbas").querySelectorAll("button"),function(b){
     b.onclick=function(){
       Array.prototype.forEach.call($("cliAbas").querySelectorAll("button"),function(x){
@@ -12089,7 +12112,8 @@ function ligar(){
       nota:"<b>Nova atividade.</b> Escolha o cliente pelo nome — se ele já tiver cadastro, o sistema vincula sozinho."});};
 
   $("ldBusca").oninput=renderLeads;$("ldFiltro").onchange=renderLeads;
-  $("ldNovo").onclick=function(){ir("clientes");abrirCliente(null);};
+  /* regra de 12/09: lead só nasce no Atendimento; a aba Leads é consulta, filtro e edição */
+  $("ldNovo").onclick=function(){ir("atend");abrirAtend(null);};
   $("c_indicBusca").oninput=function(){$("c_indicado").value="";buscarIndicador();};
   $("c_indicBusca").onblur=function(){setTimeout(function(){$("c_indicSug").hidden=true;},180);};
   $("in_fechar").onclick=function(){$("indicModal").hidden=true;inCli=null;};
@@ -12175,6 +12199,10 @@ function ligar(){
   ["c_sexo","c_tipo","c_origem","c_tipoAt"].forEach(function(id){$(id).addEventListener("change",mostrarFaltantes);});
   $("c_tipo").addEventListener("change",toggleTipoPJ);
   $("cliSalvar").onclick=async function(){
+    /* cadastro novo só pelo Atendimento (ficha completa aberta de lá) */
+    if(!editandoCli&&!voltaAtend){
+      $("cliFalta").innerHTML='<div class="note crit"><b>Lead novo nasce no Atendimento.</b> Registre o primeiro contato em Atendimentos; esta ficha serve para consultar e editar.</div>';
+      toast("Cadastre o lead pelo Atendimento.");return;}
     var lead=(modoCli()==="lead"),dados=lerForm();
     var falta=faltamObrig(dados,lead?"lead":"cliente");
     if(falta.length){
@@ -12200,6 +12228,11 @@ function ligar(){
     editandoCli=null;$("cliForm").hidden=true;$("cliLista").hidden=false;
     toast((eraLead?"Lead ":"Cliente ")+c.codigo+" salvo.");render();
     if(voltaAtend){voltarDoLead(c);}
+    else if(voltaVenda){
+      voltaVenda=false;ir("venda");
+      try{$("v_cliente").value=c.id;atualizarEtapas();calcular();}catch(e){}
+      toast("Cadastro de "+c.nome+" completo — continue o pedido.");
+    }
   };
 
   $("prodCancelar").onclick=function(){$("prodForm").hidden=true;$("prodLista").hidden=false;};
@@ -12481,7 +12514,9 @@ async function gravarFormas(){
 /* etapas do pedido */
 var etapa=1;
 function feitaEtapa(n){
-  if(n===1)return !!$("v_cliente").value;
+  if(n===1){
+    var cc=clientes.filter(function(x){return x.id===$("v_cliente").value;})[0];
+    return !!cc&&!faltamObrig(cc,"cliente").length;}
   if(n===2)return itens.length>0;
   if(n===3){var t=itens.reduce(function(a,i){return a+(i.valor*(i.qtd||1));},0);
     var s=formas.reduce(function(a,f){return a+(+f.valor||0);},0);
@@ -12507,6 +12542,7 @@ function atualizarEtapas(){
   Array.prototype.forEach.call(document.querySelectorAll("#v_steps button"),function(b){
     var s=+b.dataset.step;b.classList.toggle("feito",s!==etapa&&feitaEtapa(s));});
   try{ajustarEquipItem();}catch(e){}
+  try{avisoCadastroVenda();}catch(e){}
 }
 
 /* A arte oficial vem em azul sobre fundo branco e com muita margem sobrando.
@@ -12654,7 +12690,6 @@ function navegacaoBasica(){
       fecha();
       var q=b.getAttribute("data-novo");
       if(q==="pedido"){ir("venda");}
-      else if(q==="cliente"){ir("clientes");try{abrirCliente(null);}catch(err){}}
       else if(q==="produto"){ir("produtos");try{abrirProduto(null);}catch(err){}}
       else if(q==="atend"){ir("atend");try{abrirAtend(null);}catch(err){}}
       else if(q==="ativ"){ir("ativ");try{$("avNova").click();}catch(err){}}
