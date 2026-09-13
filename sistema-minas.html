@@ -2331,12 +2331,17 @@ img{max-width:100%}
     <section class="screen" id="s-fatur" hidden>
       <div class="page-head"><h1>Remunerações Colaboradores</h1><p>Extrato do mês de cada colaborador: vendas em que participou (valor depreciado pela forma de pagamento e pela posição na venda), faixa de comissão, vale alimentação e prêmios.</p></div>
 
+      <div class="toolbar" style="padding:0 0 10px;flex-wrap:wrap;gap:8px">
+        <select id="fat_quem" style="max-width:240px"></select>
+        <select id="fat_comp" style="max-width:200px"></select>
+      </div>
+      <div class="abas" id="fat_abas" style="margin:0 0 14px">
+        <button type="button" data-fa="extrato" aria-current="true">Extrato do mês</button>
+        <button type="button" data-fa="adiant">Adiantamento</button>
+      </div>
+
+      <div id="fat_pExtrato">
       <div class="card">
-        <div class="toolbar" style="padding:0 0 12px">
-          <select id="fat_quem" style="max-width:240px"></select>
-          <select id="fat_comp" style="max-width:200px"></select>
-          <span class="sp"></span>
-        </div>
         <div id="fat_extrato"></div>
       </div>
 
@@ -2365,6 +2370,28 @@ img{max-width:100%}
           <thead><tr><th>Colaborador</th><th>Papel</th><th>Pedido</th><th>Competência de origem</th><th class="num">Valor</th><th class="num">Pontos</th><th>Motivo</th></tr></thead>
           <tbody id="fat_ajustes"></tbody>
         </table></div>
+      </div>
+      </div>
+
+      <!-- ADIANTAMENTO (pedido do Wagner, 12/09) -->
+      <div id="fat_pAdiant" hidden>
+        <div class="card">
+          <h2>Solicitar adiantamento</h2>
+          <div id="ad_info"></div>
+          <div class="grid g3">
+            <div class="fld"><label for="ad_valor">Valor do adiantamento (R$)</label><input id="ad_valor" type="number" step="0.01" min="0" inputmode="decimal"></div>
+            <div class="fld" style="align-self:end"><button class="btn" type="button" id="ad_solicitar">Solicitar</button></div>
+          </div>
+          <div id="ad_alerta"></div>
+          <div id="ad_regras"></div>
+        </div>
+        <div class="card flush">
+          <div class="toolbar"><b>Histórico de adiantamentos</b><span class="sp"></span><span class="count" id="ad_count"></span></div>
+          <div class="tw"><table>
+            <thead><tr><th>Solicitado em</th><th>Mês da folha</th><th class="num">Valor</th><th>Situação</th><th></th></tr></thead>
+            <tbody id="ad_body"></tbody>
+          </table></div>
+        </div>
       </div>
     </section>
 
@@ -4351,6 +4378,8 @@ async function carregar(){
     if(gbf.exists&&gbf.data()&&gbf.data().assid)BENEFICIOS=gbf.data();
     var gab=await db.doc("config/abonos_premio").get();
     if(gab.exists&&gab.data()&&Array.isArray(gab.data().lista))abonosPremio=gab.data().lista;
+    var gad=await db.doc("config/adiantamentos").get();
+    if(gad.exists&&gad.data()&&Array.isArray(gad.data().lista))adiantamentos=gad.data().lista;
     if(EMPRESA.gmapsChave)sincChaveGoogle();
     var ce=await db.doc("config/celebracoes").get();
     if(ce.exists&&ce.data()&&ce.data().dados)celebracoes=ce.data().dados;
@@ -6704,7 +6733,9 @@ function linhaTitulo(t,especie){
         ? '<div class="t-sub">recebido '+BRL(t.valorPago)+"</div>":"")+"</td>"+
     '<td><span class="pill '+s.cls+'">'+s.n+"</span></td>"+
     '<td class="num">'+(t.status==="aberto"
-      ? '<button class="btn ghost sm" type="button" data-bx="'+t.id+'">Baixar</button> '+
+      ? (adiantAguardandoRecebido(t)
+          ? '<span class="pill p-warn">aguardando o colaborador tocar em Recebido</span> '
+          : '<button class="btn ghost sm" type="button" data-bx="'+t.id+'">Baixar</button> ')+
         '<button class="btn mut sm" type="button" data-tcx="'+t.id+'">Cancelar</button>'
       : (t.status==="pago"?'<button class="btn mut sm" type="button" data-est="'+t.id+'">Estornar</button>':""))+"</td></tr>";
 }
@@ -6827,6 +6858,7 @@ var bxTit=null;
 function abrirBaixa(id){
   bxTit=titulos.filter(function(t){return t.id===id;})[0];
   if(!bxTit)return;
+  if(adiantAguardandoRecebido(bxTit)){bxTit=null;toast("O financeiro só paga o adiantamento depois que o colaborador tocar em Recebido.");return;}
   opcoesFinanceiro();
   var rec=(bxTit.especie==="receber");
   $("bx_titulo").textContent=rec?"Registrar recebimento":"Registrar pagamento";
@@ -8384,6 +8416,124 @@ async function salvarBeneficios(){
   render();
   toast("Benefícios salvos — já valem na remuneração e no cartão de ponto.");
 }
+/* ================= ADIANTAMENTO SALARIAL (regras do Wagner, 12/09) =================
+   Teto: 20% do salário fixo no mês (somando os adiantamentos do mês que não foram cancelados).
+   Até o dia 18 a solicitação vai direto para Contas a Pagar; depois do dia 18 fica aguardando a
+   liberação do administrador. O próprio colaborador toca em Recebido quando pega o dinheiro: o valor
+   é descontado na folha do mês e só então o financeiro consegue dar baixa no pagamento. */
+var adiantamentos=[],ADIANT_PCT=20,ADIANT_DIA=18;
+async function gravarAdiantamentos(){if(!db)return;try{await db.doc("config/adiantamentos").set({lista:adiantamentos});}catch(e){console.warn(e);}}
+function diaDoMesAdiant(){return +window.DIA_ADIANT_MF||new Date().getDate();}
+function tetoAdiant(quem){var u=usuarioPor(quem)||{};return Math.round((+u.salario||0)*ADIANT_PCT/100*100)/100;}
+function adiantDoMes(quem,c){
+  return adiantamentos.filter(function(a){return a.loja===lojaAtual&&a.colaborador===quem&&a.comp===c&&a.status!=="cancelado";});
+}
+function tituloDoAdiant(a){return (a&&a.tituloId)?titulos.filter(function(t){return t.id===a.tituloId;})[0]||null:null;}
+/* conta a pagar de adiantamento só pode ser baixada depois do Recebido do colaborador */
+function adiantAguardandoRecebido(t){
+  if(!t||t.origem!=="adiantamento")return false;
+  var a=adiantamentos.filter(function(x){return x.id===t.adiantamentoId;})[0];
+  return !a||a.status!=="recebido";
+}
+async function criarTituloAdiant(a){
+  var ct=(centros.filter(function(c){return /folha|sal[aá]r|pessoal|funcion/i.test(c.nome||"");})[0]||{}).id||"";
+  var t={id:uid(),loja:a.loja,especie:"pagar",origem:"adiantamento",adiantamentoId:a.id,pessoa:a.colaborador,
+    descricao:"Adiantamento salarial · "+a.colaborador+" · "+rotuloComp(a.comp),centroId:ct,caixaId:"",
+    emissao:hojeISO(),vencimento:hojeISO(),valor:a.valor,parcela:1,totalParcelas:1,status:"aberto",valorPago:0,
+    criadoEm:hojeISO(),criadoPor:usuarioAtual};
+  titulos.push(t);await grava("titulos",t);
+  a.tituloId=t.id;
+}
+async function solicitarAdiantamento(){
+  var quem=$("fat_quem").value,c=compAtual(),v=Math.round((parseFloat($("ad_valor").value)||0)*100)/100;
+  var al=$("ad_alerta");
+  function erro(m){al.innerHTML='<div class="note crit"><b>'+m+"</b></div>";}
+  if(quem!==usuarioAtual&&!ehAdministrador()){erro("Só o próprio colaborador (ou o administrador) solicita adiantamento.");return;}
+  if(!(v>0)){erro("Informe o valor do adiantamento.");try{$("ad_valor").focus();}catch(e){}return;}
+  var teto=tetoAdiant(quem),ja=adiantDoMes(quem,c).reduce(function(s,a){return s+(+a.valor||0);},0),livre=Math.max(0,Math.round((teto-ja)*100)/100);
+  if(!teto){erro(quem+" não tem salário fixo no cadastro — sem salário não há teto para adiantamento.");return;}
+  if(v>livre){erro("Passa do teto de "+ADIANT_PCT+"% do salário fixo ("+BRL(teto)+"). Já solicitado no mês: "+BRL(ja)+". Disponível: "+BRL(livre)+".");return;}
+  var depois=diaDoMesAdiant()>ADIANT_DIA;
+  var a={id:uid(),loja:lojaAtual,colaborador:quem,comp:c,valor:v,solicitadoEm:iso(new Date())+" "+agoraHM(),solicitadoPor:usuarioAtual,
+    status:depois?"aguardando":"solicitado",tituloId:""};
+  if(!depois)await criarTituloAdiant(a);
+  adiantamentos.push(a);await gravarAdiantamentos();
+  $("ad_valor").value="";al.innerHTML="";
+  render();
+  toast(depois
+    ? "Solicitado depois do dia "+ADIANT_DIA+": aguardando a liberação do administrador."
+    : "Adiantamento de "+BRL(v)+" solicitado — já está em Contas a Pagar. Toque em Recebido quando pegar o dinheiro.");
+}
+async function acaoAdiantamento(id,acao){
+  var a=adiantamentos.filter(function(x){return x.id===id;})[0];if(!a)return;
+  if(acao==="liberar"){
+    if(!ehAdministrador()){toast("Só o administrador libera adiantamento depois do dia "+ADIANT_DIA+".");return;}
+    await criarTituloAdiant(a);a.status="solicitado";a.liberadoPor=usuarioAtual;a.liberadoEm=iso(new Date())+" "+agoraHM();
+    toast("Adiantamento liberado — foi para Contas a Pagar.");
+  }else if(acao==="recebido"){
+    if(a.colaborador!==usuarioAtual){toast("Só "+a.colaborador+" confirma que recebeu o adiantamento.");return;}
+    a.status="recebido";a.recebidoEm=iso(new Date())+" "+agoraHM();
+    toast("Recebido confirmado — "+BRL(a.valor)+" descontado na folha de "+rotuloComp(a.comp)+". O financeiro já pode dar baixa.");
+  }else if(acao==="cancelar"){
+    if(a.colaborador!==usuarioAtual&&!ehAdministrador()){toast("Só o colaborador ou o administrador cancelam.");return;}
+    a.status="cancelado";a.canceladoPor=usuarioAtual;
+    var t=tituloDoAdiant(a);if(t&&t.status==="aberto"){t.status="cancelado";await grava("titulos",t);}
+    toast("Adiantamento cancelado.");
+  }
+  await gravarAdiantamentos();
+  render();
+}
+function renderAdiantamento(){
+  if(!$("ad_body"))return;
+  var quem=$("fat_quem").value||usuarioAtual,c=compAtual();
+  var teto=tetoAdiant(quem),ja=adiantDoMes(quem,c).reduce(function(s,a){return s+(+a.valor||0);},0),livre=Math.max(0,teto-ja);
+  var dia=diaDoMesAdiant(),depois=dia>ADIANT_DIA,proprio=(quem===usuarioAtual);
+  $("ad_info").innerHTML='<div class="kpis" style="margin:0 0 12px">'+
+    '<div class="kpi"><div class="l">Teto do mês ('+ADIANT_PCT+'% do salário)</div><div class="v">'+BRL(teto)+"</div></div>"+
+    '<div class="kpi"><div class="l">Já solicitado em '+esc(rotuloComp(c))+'</div><div class="v">'+BRL(ja)+"</div></div>"+
+    '<div class="kpi"><div class="l">Disponível</div><div class="v" style="color:'+(livre>0?"var(--ok)":"var(--crit)")+'">'+BRL(livre)+"</div></div></div>"+
+    (depois?'<div class="note warn"><b>Hoje é dia '+dia+", depois do dia "+ADIANT_DIA+".</b> A solicitação fica aguardando a liberação do administrador.</div>":"")+
+    (!proprio?'<div class="note">Vendo os adiantamentos de <b>'+esc(quem)+"</b>."+(ehAdministrador()?" Como administrador você pode solicitar em nome dele e liberar; o Recebido é só dele.":"")+"</div>":"");
+  $("ad_valor").placeholder="até "+BRL(livre);
+  $("ad_regras").innerHTML='<div class="note" style="margin-top:12px"><b>Como funciona.</b> '+
+    "O colaborador pode pedir adiantamento de até <b>"+ADIANT_PCT+"% do salário fixo</b> no mês (somando todos os pedidos do mês). "+
+    "Pode solicitar <b>até o dia "+ADIANT_DIA+"</b>: a solicitação vai direto para <b>Contas a Pagar</b>. Depois do dia "+ADIANT_DIA+" ela fica <b>aguardando a liberação do administrador</b>. "+
+    "Quando pegar o dinheiro, o colaborador toca em <b>Recebido</b>: o valor é <b>descontado na folha do mês</b> (aparece no extrato da remuneração) "+
+    "e só então o <b>financeiro consegue dar baixa</b> no pagamento. Antes do Recebido, a solicitação pode ser cancelada.</div>";
+  var lista=adiantamentos.filter(function(a){return a.loja===lojaAtual&&a.colaborador===quem;})
+    .sort(function(x,y){return String(y.solicitadoEm).localeCompare(String(x.solicitadoEm));});
+  $("ad_count").textContent=lista.length+(lista.length===1?" adiantamento":" adiantamentos");
+  var b=$("ad_body");
+  if(!lista.length){b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum adiantamento</div>Os pedidos de adiantamento de '+esc(quem)+" aparecem aqui.</div></td></tr>";return;}
+  b.innerHTML=lista.map(function(a){
+    var t=tituloDoAdiant(a),sit,ac="";
+    var dq=String(a.solicitadoEm||"").split(" ");
+    if(a.status==="aguardando"){sit='<span class="pill p-warn">aguardando liberação do administrador</span>';
+      if(ehAdministrador())ac+='<button class="btn sm" type="button" data-ada="liberar" data-adi="'+a.id+'">Liberar</button> ';}
+    else if(a.status==="solicitado"){sit='<span class="pill p-acc">em Contas a Pagar · falta o Recebido</span>';
+      if(a.colaborador===usuarioAtual)ac+='<button class="btn sm" type="button" data-ada="recebido" data-adi="'+a.id+'">Recebido</button> ';}
+    else if(a.status==="recebido"){
+      var rq=String(a.recebidoEm||"").split(" ");
+      sit='<span class="pill p-ok">recebido em '+esc(dataCurta(rq[0]))+" · descontado na folha</span>"+
+        (t&&t.status==="pago"?'<div class="t-sub">pago pelo financeiro em '+esc(dataCurta(t.pagoEm))+"</div>":'<div class="t-sub">aguardando a baixa do financeiro</div>');}
+    else sit='<span class="pill p-mut">cancelado</span>';
+    if((a.status==="aguardando"||a.status==="solicitado")&&(a.colaborador===usuarioAtual||ehAdministrador()))
+      ac+='<button class="btn mut sm" type="button" data-ada="cancelar" data-adi="'+a.id+'">Cancelar</button>';
+    return "<tr><td>"+esc(dataCurta(dq[0]))+(dq[1]?'<div class="t-sub">'+esc(dq[1])+" · por "+esc(a.solicitadoPor||"")+"</div>":"")+"</td>"+
+      "<td>"+esc(rotuloComp(a.comp))+"</td>"+
+      '<td class="num"><b>'+BRL(a.valor)+"</b></td><td>"+sit+(a.liberadoPor?'<div class="t-sub">liberado por '+esc(a.liberadoPor)+"</div>":"")+"</td>"+
+      '<td class="num">'+ac+"</td></tr>";
+  }).join("");
+  Array.prototype.forEach.call(b.querySelectorAll("[data-ada]"),function(bt){
+    bt.onclick=function(){acaoAdiantamento(bt.getAttribute("data-adi"),bt.getAttribute("data-ada"));};});
+}
+function abaRemuneracao(k){
+  Array.prototype.forEach.call($("fat_abas").querySelectorAll("button"),function(x){
+    x.setAttribute("aria-current",String(x.getAttribute("data-fa")===k));});
+  $("fat_pExtrato").hidden=(k!=="extrato");
+  $("fat_pAdiant").hidden=(k!=="adiant");
+  $("fat_comp").hidden=(k!=="extrato");
+}
 /* ================= REMUNERAÇÃO DO COLABORADOR (extrato do mês, regras do Wagner, 12/09) ================= */
 function valorDepreciadoPedido(p){return +(p.depreciado!=null?p.depreciado:p.base)||0;}
 function produtoMaisCaro(p){
@@ -8409,7 +8559,11 @@ function extratoRemuneracao(quem,c){
   fat=Math.round(fat*100)/100;
   var pct=pctFaixa(fat),com=Math.round(fat*pct/100*100)/100;
   var rem=totalRemuneracao(quem,c);
-  return {vendas:vendas,ajustes:aj,fat:fat,pct:pct,comissao:com,rem:rem,total:Math.round((com+rem.total)*100)/100};
+  /* adiantamento recebido no mês é descontado na folha */
+  var adiant=adiantamentos.filter(function(a){return a.loja===lojaAtual&&a.colaborador===quem&&a.comp===c&&a.status==="recebido";})
+    .reduce(function(s,a){return s+(+a.valor||0);},0);
+  return {vendas:vendas,ajustes:aj,fat:fat,pct:pct,comissao:com,rem:rem,adiant:adiant,
+    total:Math.round((com+rem.total-adiant)*100)/100};
 }
 function remLinha(rot,valor,forte,sub,cls){
   return '<div class="rem-l'+(cls?" rem-"+cls:"")+'"><span>'+esc(rot)+(sub?"<small>"+esc(sub)+"</small>":"")+"</span>"+
@@ -8428,7 +8582,9 @@ function textoRegrasRem(){
     '<div class="note"><b>4. Prêmio de assiduidade.</b> '+BRL(B.assid.valor)+" por mês, menos "+BRL(B.assid.porFalta)+" por falta e "+BRL(B.assid.porMinuto)+
       " por minuto de atraso (o que passa da tolerância no check-in e no retorno do almoço). Nunca fica negativo. O administrador pode cancelar uma penalidade no Cartão de Ponto.</div>"+
     '<div class="note"><b>5. Prêmio de desempenho.</b> '+BRL(B.desemp.valor)+" × o cumprimento médio das metas do mês: 100% das metas → 100% do prêmio; 60% → 60%; e assim por diante.</div>"+
-    '<p class="help">Valores e regras dos benefícios em Configurações › Benefícios.</p>';
+    '<div class="note"><b>6. Adiantamento salarial.</b> Até '+ADIANT_PCT+"% do salário fixo no mês, solicitado até o dia "+ADIANT_DIA+
+      " (depois, só com liberação do administrador). Quando o colaborador toca em Recebido, o valor é descontado do total a receber do mês.</div>"+
+    '<p class="help">Valores e regras dos benefícios em Configurações › Benefícios; adiantamento na aba Adiantamento desta tela.</p>';
 }
 function renderExtratoRem(){
   var sq=$("fat_quem");if(!sq)return;
@@ -8467,9 +8623,11 @@ function renderExtratoRem(){
           [pa.faltas?pa.faltas+" falta"+(pa.faltas===1?"":"s"):"",pa.atraso?pa.atraso+" min de atraso":""].filter(Boolean).join(" e ")+")":" · sem falta e sem atraso")+
         (pa.canceladas?" · "+pa.canceladas+" penalidade(s) cancelada(s)":""))+
       remLinha("Prêmio de desempenho",BRL(pd.pago),false,pd.comMeta?pd.perc+"% das metas cumpridas × "+BRL(pd.valor):"sem meta definida no mês")+
+      (x.adiant?remLinha("Adiantamento salarial recebido","− "+BRL(x.adiant),false,"descontado na folha do mês"):"")+
       remLinha("Total a receber",BRL(x.total),true,null,"total")+
     "</div>";
   $("fat_regras").innerHTML=textoRegrasRem();
+  try{renderAdiantamento();}catch(e){console.warn(e);}
 }
 
 /* ---------- câmera e conferência facial ---------- */
@@ -14599,6 +14757,9 @@ function ligar(){
 
   $("fat_comp").onchange=renderFatur;
   $("fat_quem").onchange=renderExtratoRem;
+  Array.prototype.forEach.call($("fat_abas").querySelectorAll("button"),function(b){
+    b.onclick=function(){abaRemuneracao(b.getAttribute("data-fa"));};});
+  $("ad_solicitar").onclick=solicitarAdiantamento;
   /* Configurações › Benefícios */
   ["bf_va","bf_assidValor","bf_porFalta","bf_porMinuto","bf_desemp"].forEach(function(id){
     $(id).oninput=function(){bfSujo=true;regrasBeneficiosTela();};});
