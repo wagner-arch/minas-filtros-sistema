@@ -2198,6 +2198,14 @@ img{max-width:100%}
               <option value="emdia">Em dia</option>
               <option value="premium">Só plano Premium</option>
             </select>
+            <select id="mpStatus" style="max-width:220px">
+              <option value="">Todos os status</option>
+              <option value="aguardando">Aguardando contato</option>
+              <option value="agendado">Agendado visita</option>
+              <option value="realizada">Visita realizada</option>
+              <option value="comvenda">Visita realizada · com venda</option>
+              <option value="semvenda">Visita realizada · sem venda</option>
+            </select>
             <select id="mpProd" style="max-width:200px"></select>
             <select id="mpGrupo" style="max-width:170px"></select>
             <select id="mpIdade" style="max-width:170px">
@@ -2216,13 +2224,17 @@ img{max-width:100%}
             <button class="btn ghost" type="button" id="mpNovo">Cadastrar equipamento</button>
           </div>
           <div class="tw"><table>
-            <thead><tr><th>Cliente</th><th>Equipamento</th><th>Endereço</th><th>Compra</th><th class="num">Valor pago</th><th>Pagamento</th><th>Última troca</th><th>Próxima troca</th><th>Situação</th><th></th></tr></thead>
+            <thead><tr><th>Cliente</th><th>Equipamento</th><th>Endereço</th><th>Compra</th><th class="num">Valor pago</th><th>Pagamento</th><th>Última troca</th><th>Próxima troca</th><th>Situação</th><th>Status</th><th></th></tr></thead>
             <tbody id="mpBody"></tbody>
           </table></div>
         </div>
         <div class="card">
-          <div class="note"><b>Como funciona.</b> A próxima manutenção é a última mais os dias do cadastro do produto. Ao registrar uma manutenção pelo número de série,
-          a data avança sozinha. Filtre por cidade e bairro para montar o roteiro do dia do instalador — e use <b>Agendar visita</b> para virar atividade na agenda dele.</div>
+          <div class="note"><b>Como funciona.</b> Entra aqui todo produto vendido com <b>"Manutenção (dias)"</b> no cadastro. A próxima manutenção é a data mais recente entre a última compra
+          do produto e a última manutenção, mais esses dias. <b>Só conta como manutenção a troca de um produto com "Manutenção (dias)" no cadastro</b> — na venda (escolhendo o aparelho)
+          ou em Registrar manutenção: aí o prazo reinicia. Troca sem esse produto fica só no histórico e não muda a data. <b>O sistema não agenda visita sozinho.</b><br>
+          <b>Status:</b> <b>Aguardando contato</b> — vence em até 30 dias ou já venceu, sem visita. <b>Dois cliques no nome do cliente</b> abrem o atendimento dele;
+          finalizando com <i>Finalizar e criar atividade futura</i>, a visita fica ligada ao aparelho e o status vira <b>Agendado visita</b> (o botão Agendar também serve).
+          Concluída a visita, vira <b>Visita realizada</b> — <b>com venda</b> (pedido lançado ou manutenção cobrada) ou <b>sem venda</b>. Quando o próximo vencimento chegar perto, volta a Aguardando contato.</div>
         </div>
       </div>
 
@@ -3875,6 +3887,7 @@ img{max-width:100%}
         <thead><tr><th>Peça</th><th class="num">Qtd</th><th class="num">Valor</th><th></th></tr></thead>
         <tbody id="mn_pecas"></tbody>
       </table></div>
+      <div id="mn_regra"></div>
     </div>
     <div class="fld" style="margin-top:8px"><label for="mn_obs">O que foi feito</label>
       <textarea id="mn_obs" rows="3" placeholder="Troca de refil, limpeza, aferição…"></textarea></div>
@@ -5128,7 +5141,7 @@ function rotuloEquip(e){
   if(e.local)partes.push(e.local);
   if(!e.serie&&!e.local)partes.push("sem série e sem localização");
   var px=proximaDe(e);
-  if(px)partes.push("vence "+px);
+  if(px)partes.push("vence "+dataCurta(px));
   return partes.join(" · ");
 }
 function equipsDoCliente(){
@@ -5144,12 +5157,13 @@ function ajustarEquipItem(){
   var w=$("v_equipWrap"),sel=$("v_equip"),ajuda=$("v_equipAjuda");
   if(!w||!sel)return;
   var lista=equipsDoCliente();
-  if(!p||!lista.length){w.hidden=true;sel.innerHTML="";ajustarLocalItem();return;}
+  /* produto sem "Manutenção (dias)" no cadastro nunca é manutenção de aparelho (regra do Wagner, 14/09) */
+  if(!p||!(+p.manut>0)||!lista.length){w.hidden=true;sel.innerHTML="";ajustarLocalItem();return;}
   w.hidden=false;
   sel.innerHTML="";
   var oNovo=document.createElement("option");
   oNovo.value="";
-  oNovo.textContent=(+p.manut)?"— é um aparelho novo, não é manutenção —":"— não é manutenção de nenhum aparelho —";
+  oNovo.textContent="— é um aparelho novo, não é manutenção —";
   sel.appendChild(oNovo);
   lista.forEach(function(e){
     var o=document.createElement("option");
@@ -8306,6 +8320,40 @@ async function gerarDemo(){
     [{tipo:"Dinheiro",valor:1790,parc:1}],noMes(8),aprovada(9));
   log.push("5 vendas da Carol aprovadas neste mês (Pix, cartão, dinheiro; posições diferentes) para a folha de pagamento de exemplo");
 
+  /* --- manutenção periódica: equipamentos das vendas e um exemplo de cada status de contato --- */
+  try{await sincronizarEquipamentos();}catch(errEq){console.warn(errEq);}
+  var tipoMan=tipos.filter(function(t){return /manuten/i.test(t);})[0]||tipos.filter(function(t){return /visita/i.test(t);})[0]||tipos[0]||"Visita presencial";
+  async function eqDemo(c,p,atraso,local){
+    var md=+p.manut||180;
+    var e={id:uid(),demo:true,loja:L,chave:"c:"+c.id+"|"+p.id+"|"+semAcento(local),clienteId:c.id,cliente:c.nome,
+      produtoId:p.id,produto:p.nome,serie:"",compradoEm:"",compradoHora:"",valorCompra:null,formaPgto:"",
+      instaladoEm:somaDias(hoje,-(md+atraso)),manutDias:md,ultimaManut:"",ultimaManutHora:"",
+      ultimoValor:null,ultimaForma:"",plano:"Bronze",tecnico:"Guilherme Guimarães",local:local,obs:"",
+      pedidoId:"",pedidoNumero:"",historico:[],ativo:true,criadoEm:hoje};
+    equipamentos.push(e);await grava("equipamentos",e);return e;
+  }
+  function visitaDemo(e,c,extra){
+    var a={id:uid(),demo:true,loja:L,natureza:"atividade",clienteId:c.id,cliente:c.nome,tel:c.tel||"",cidade:c.cidade||"",
+      colaborador:"Guilherme Guimarães",vendedor:"Guilherme Guimarães",tipos:[tipoMan],tipo:tipoMan,
+      data:hoje,inicio:"09:00",fim:"",obs:"Visita de manutenção periódica · "+e.produto+(e.local?" · "+e.local:""),
+      equipId:e.id,situacao:"pendente",status:"aberto",criadoEm:hoje};
+    Object.keys(extra||{}).forEach(function(k){a[k]=extra[k];});
+    return a;
+  }
+  await eqDemo(c1,pE,20,"cozinha");                    /* venceu há 20 dias → Aguardando contato */
+  await eqDemo(c4,pB,-15,"área de serviço");           /* vence em 15 dias → Aguardando contato */
+  var eAgd=await eqDemo(c2,pE,5,"copa");               /* visita marcada → Agendado visita */
+  var eSem=await eqDemo(c4,pE,10,"varanda");           /* visita feita, sem venda */
+  var visDemo=[
+    visitaDemo(eAgd,c2,{data:dias(2),inicio:"10:00"}),
+    visitaDemo(eSem,c4,{data:dias(-1),status:"finalizado",situacao:"concluida",concluidaEm:dias(-1),concluidaPor:"Guilherme Guimarães",
+      motivos:["Sem interesse"],resultado:"Cliente preferiu deixar a troca do refil para o mês que vem."})];
+  var eqV2=equipamentos.filter(function(x){return x.pedidoId===v2.id&&x.produtoId===pA.id;})[0];
+  if(eqV2)visDemo.push(visitaDemo(eqV2,c1,{data:v2.data,status:"finalizado",situacao:"concluida",concluidaEm:v2.data,
+    concluidaPor:"Carol",motivos:["Vendido"],vendaPedidoId:v2.id,resultado:"Refil trocado e plano Premium I contratado."}));
+  for(var vdi=0;vdi<visDemo.length;vdi++){atendimentos.push(visDemo[vdi]);await grava("atendimentos",visDemo[vdi]);}
+  log.push("manutenção periódica: 2 aguardando contato, 1 agendado visita, 1 visita realizada sem venda e 1 com venda");
+
   /* --- venda com reabertura pendente de autorização --- */
   v1.reabertura={por:"Erico",quando:dias(-1),
     motivo:"Item lançado com o valor errado — o cliente pagou R$ 1.890,00 e a nota saiu R$ 1.790,00.",
@@ -11119,6 +11167,65 @@ function sitEq(e){
   if(d<=30)return {k:"mes",n:"Vence em "+d+" dias",cls:"p-acc",dias:d};
   return {k:"emdia",n:"Em dia · "+d+" dias",cls:"p-ok",dias:d};
 }
+/* ---------- status de contato da manutenção (regra do Wagner, 14/09) ----------
+   O sistema NÃO agenda visita sozinho. Cada aparelho tem um status:
+   · Aguardando contato — vence em até JANELA_CONTATO dias ou já venceu, sem visita agendada nem realizada nesse período;
+   · Agendado visita — há visita (atividade ligada ao aparelho) ainda não concluída;
+   · Visita realizada — a visita foi concluída: com venda (pedido lançado ou manutenção cobrada) ou sem venda.
+   O status é calculado da agenda, então nunca fica desencontrado dela. */
+var JANELA_CONTATO=30,atendManutEq=null;
+function visitasDoEquip(e){
+  return atendimentos.filter(function(a){
+    return a.equipId===e.id&&(a.natureza==="atividade"||a.eraAtividade)&&a.situacao!=="reagendada";});
+}
+function vendaDaVisita(a){
+  return !!(a.vendaPedidoId||a.vendaManutReg||ehVendido(a.motivos)||
+    (a.acoes||[]).some(function(x){return x.tipo==="pedido"&&x.id;}));
+}
+function statusManut(e){
+  if(e.ativo===false)return {k:"",n:"—",cls:"p-mut",sub:"desativado"};
+  var vs=visitasDoEquip(e);
+  var pend=vs.filter(function(a){return a.status!=="finalizado";})
+    .sort(function(x,y){return ((x.data||"")+(x.inicio||"")).localeCompare((y.data||"")+(y.inicio||""));})[0];
+  if(pend)return {k:"agendado",n:"Agendado visita",cls:"p-acc",visita:pend,
+    sub:"para "+dataCurta(pend.data)+(pend.inicio?" às "+pend.inicio:"")+(pend.colaborador?" · "+pend.colaborador:"")};
+  var px=proximaDe(e),h=hojeISO();
+  var dentro=!!px&&somaDias(h,JANELA_CONTATO)>=px;
+  var feita=vs.filter(function(a){return a.status==="finalizado";})
+    .sort(function(x,y){return String(y.concluidaEm||y.data||"").localeCompare(String(x.concluidaEm||x.data||""));})[0];
+  if(feita){
+    var dV=String(feita.concluidaEm||feita.data||"").slice(0,10);
+    /* a visita vale para o vencimento atual; quando o próximo vencimento chega perto, volta a Aguardando contato */
+    if(!dentro||dV>=somaDias(px,-JANELA_CONTATO)){
+      var cv=vendaDaVisita(feita);
+      return {k:cv?"comvenda":"semvenda",n:"Visita realizada · "+(cv?"com venda":"sem venda"),cls:cv?"p-ok":"p-mut",visita:feita,
+        sub:"em "+dataCurta(dV)+((feita.concluidaPor||feita.colaborador)?" · "+(feita.concluidaPor||feita.colaborador):"")};
+    }
+  }
+  if(dentro)return {k:"aguardando",n:"Aguardando contato",cls:"p-warn",sub:(px<h?"venceu em ":"vence em ")+dataCurta(px)};
+  return {k:"",n:"—",cls:"p-mut",sub:"ainda longe do vencimento"};
+}
+/* dois cliques no nome do cliente na Manutenção Periódica: abre o atendimento ligado ao aparelho.
+   A visita marcada no fecho ("Finalizar e criar atividade futura") nasce ligada a ele → Agendado visita. */
+function abrirAtendManut(e){
+  var c=e&&clientes.filter(function(x){return x.id===e.clienteId;})[0];
+  if(!c){toast("Este equipamento não está ligado a um cadastro de cliente.");return;}
+  ir("atend");
+  try{abrirAtend(null);}catch(er){console.warn(er);}
+  atendManutEq=e;
+  try{preencherCliente(c);}catch(er){console.warn(er);}
+  var tm=tipos.filter(function(t){return /manuten/i.test(t);})[0]||tipos.filter(function(t){return /visita|pós/i.test(t);})[0];
+  if(tm&&tiposSel.indexOf(tm)<0){tiposSel.push(tm);try{renderChipsTipos();}catch(er){}}
+  iniSel="ativo";
+  Array.prototype.forEach.call($("at_iniciativa").querySelectorAll("button"),function(b){
+    b.setAttribute("aria-pressed",String(b.getAttribute("data-i")===iniSel));});
+  var px=proximaDe(e),ident=(e.serie?"série "+e.serie:(e.local||"sem série"));
+  $("at_obs").value="Contato da manutenção periódica · "+(e.produto||"")+" · "+ident+(px?" · vence "+dataCurta(px):"")+"\n";
+  $("at_achou").insertAdjacentHTML("beforeend",'<div class="note"><b>Manutenção periódica</b> · '+esc(e.produto||"")+" · "+esc(ident)+
+    (px?" · vence "+esc(dataCurta(px)):"")+". Registre o contato e, se a visita for marcada, finalize com "+
+    "<b>Finalizar e criar atividade futura</b> — o cliente passa a <b>Agendado visita</b> na Manutenção Periódica.</div>");
+  toast("Atendimento de "+(c.nome||"")+" aberto pela manutenção periódica.");
+}
 /* Toda venda de produto com intervalo de manutenção alimenta a manutenção
    periódica — com ou sem número de série.
    Com série, cada aparelho é um registro próprio. Sem série, o cliente tem um
@@ -11203,10 +11310,10 @@ async function sincronizarEquipamentos(){
   }
   return criados;
 }
-/* A VENDA baixa a manutenção pendente do aparelho e gera a próxima, contada a
-   partir da data da venda. O aparelho é o que o vendedor escolheu na hora de
-   incluir o item — por série ou por localização. Aparelho que só nasceu nesta
-   venda é compra, não manutenção. */
+/* A VENDA de produto com "Manutenção (dias)" baixa a manutenção do aparelho: o prazo reinicia na data
+   da venda e a visita agendada dele passa a Visita realizada · com venda. O aparelho é o que o vendedor
+   escolheu na hora de incluir o item — por série ou por localização. Aparelho que só nasceu nesta
+   venda é compra, não manutenção. Nada é agendado sozinho (regra do Wagner, 14/09). */
 async function manutencaoPelaVenda(ped){
   var alvos=[],j,it,prod,ja;
   for(j=0;j<(ped.itens||[]).length;j++){
@@ -11214,7 +11321,8 @@ async function manutencaoPelaVenda(ped){
     prod=produtos.filter(function(x){return x.id===it.pid;})[0];
     ja=equipDaVenda(ped,it);            /* antes de sincronizar: já existia? */
     if(!ja)continue;
-    if(it.equipId||(prod&&(+prod.manut)))alvos.push({it:it,e:ja});
+    /* regra do Wagner (14/09): só conta como manutenção o produto com "Manutenção (dias)" no cadastro */
+    if(prod&&(+prod.manut)>0)alvos.push({it:it,e:ja});
   }
   try{await sincronizarEquipamentos();}catch(err){console.warn(err);}
   var baixadas=0,agendadas=0,trocas=0;
@@ -11237,12 +11345,11 @@ async function manutencaoPelaVenda(ped){
     var pend=atendimentos.filter(function(a){
       return a.equipId===e.id&&a.natureza==="atividade"&&a.status!=="finalizado";});
     for(var k=0;k<pend.length;k++){
+      pend[k].vendaPedidoId=ped.id;
       await concluirAtivPorAcao(pend[k],
-        "Baixada pela venda "+ped.numero+" de "+ped.data+" — o produto foi trocado nesta venda.");
+        "Baixada pela venda "+ped.numero+" de "+dataCurta(ped.data)+" — o produto foi trocado nesta venda.");
       baixadas++;
     }
-    var nova=await agendarProximaManut(e,{tecnico:ped.instalador||ped.vendedor||"",hora:ped.hora||""});
-    if(nova)agendadas++;
   }
   return {baixadas:baixadas,agendadas:agendadas,trocas:trocas};
 }
@@ -11314,28 +11421,35 @@ function renderManut(){
         if((e._c.doc||"").replace(/\D/g,"").indexOf(num)>=0)return true;
         if((e._c.tel||"").replace(/\D/g,"").indexOf(num)>=0)return true;}
       return false;})
+    .filter(function(e){
+      var fs=$("mpStatus")?$("mpStatus").value:"";
+      if(!fs)return true;
+      var k=statusManut(e).k;
+      return fs==="realizada"?(k==="comvenda"||k==="semvenda"):k===fs;})
     .sort(function(a,b){
       var sa=sitEq(a).dias,sb=sitEq(b).dias;
       if(sa==null)return 1;if(sb==null)return -1;return sa-sb;});
   var ativos=base.filter(function(e){return e.ativo!==false;});
   var venc=ativos.filter(function(e){return sitEq(e).k==="vencida";});
-  var sem=ativos.filter(function(e){return sitEq(e).k==="semana";});
-  var mes=ativos.filter(function(e){return ["mes","semana","vencida"].indexOf(sitEq(e).k)>=0;});
-  var prem=ativos.filter(function(e){return !!e.plano&&e.plano!=="Bronze";});
+  if($("mpStatus")&&!$("mpStatus").__ligado){$("mpStatus").__ligado=true;$("mpStatus").onchange=renderManut;}
+  var stAtivos=ativos.map(function(e){return statusManut(e).k;});
+  function contaSt(k){return stAtivos.filter(function(x){return x===k;}).length;}
+  var nAg=contaSt("aguardando"),nAgd=contaSt("agendado"),nCom=contaSt("comvenda"),nSem=contaSt("semvenda");
   $("mpKpis").innerHTML=
     '<div class="kpi"><div class="l">Equipamentos ativos</div><div class="v">'+ativos.length+"</div></div>"+
     '<div class="kpi"><div class="l">Vencidas</div><div class="v" style="color:'+(venc.length?"var(--crit)":"inherit")+'">'+venc.length+"</div></div>"+
-    '<div class="kpi"><div class="l">Vencem em 7 dias</div><div class="v" style="color:'+(sem.length?"var(--warn)":"inherit")+'">'+sem.length+"</div></div>"+
-    '<div class="kpi"><div class="l">Vencem em 30 dias</div><div class="v">'+mes.length+"</div></div>"+
-    '<div class="kpi"><div class="l">Plano Premium</div><div class="v">'+prem.length+"</div></div>";
+    '<div class="kpi"><div class="l">Aguardando contato</div><div class="v" style="color:'+(nAg?"var(--warn)":"inherit")+'">'+nAg+"</div></div>"+
+    '<div class="kpi"><div class="l">Agendado visita</div><div class="v">'+nAgd+"</div></div>"+
+    '<div class="kpi"><div class="l">Visita realizada</div><div class="v">'+(nCom+nSem)+'</div><div class="l" style="margin-top:4px">'+
+      nCom+" com venda · "+nSem+" sem venda</div></div>";
   $("mpCount").textContent=lista.length+(lista.length===1?" equipamento":" equipamentos");
   var b=$("mpBody");b.innerHTML="";
-  if(!lista.length){b.innerHTML='<tr><td colspan="10"><div class="empty"><div class="big">Nenhum equipamento nesta visão</div>Vendas de produto com número de série e intervalo de manutenção entram aqui sozinhas.</div></td></tr>';return;}
+  if(!lista.length){b.innerHTML='<tr><td colspan="11"><div class="empty"><div class="big">Nenhum equipamento nesta visão</div>Vendas de produto com "Manutenção (dias)" no cadastro entram aqui sozinhas.</div></td></tr>';return;}
   lista.forEach(function(e){
-    var s=sitEq(e),c=e._c,px=proximaDe(e);
+    var s=sitEq(e),c=e._c,px=proximaDe(e),st=statusManut(e);
     var tr=document.createElement("tr");tr.className="clickable";
     var idade=idadeDe(c.nasc);
-    tr.innerHTML='<td><div class="t-main"><button type="button" class="lnk-cli" data-mpcli="'+esc(e.clienteId||"")+'">'+esc(e.cliente||c.nome||"—")+"</button></div>"+
+    tr.innerHTML='<td><div class="t-main"><button type="button" class="lnk-cli" title="Dois cliques abrem o atendimento deste cliente" data-mpeq="'+esc(e.id)+'" data-mpcli="'+esc(e.clienteId||"")+'">'+esc(e.cliente||c.nome||"—")+"</button></div>"+
         '<div class="t-sub">'+esc(c.tel||"")+(idade!=null?" · "+idade+" anos":"")+"</div></td>"+
       '<td><div class="t-main">'+esc(e.produto||"—")+'</div><div class="t-sub"><code>'+
         esc(e.serie||"sem série")+"</code>"+(e.local?" · "+esc(e.local):"")+
@@ -11343,13 +11457,14 @@ function renderManut(){
       '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
         '</div><div class="t-sub">'+esc([c.bairro,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
         mapaLink(c.geo)+"</div></td>"+
-      "<td>"+esc(e.compradoEm||e.instaladoEm||"—")+"</td>"+
+      "<td>"+esc(dataCurta(e.compradoEm||e.instaladoEm||"")||"—")+"</td>"+
       '<td class="num">'+(e.valorCompra!=null?BRL(e.valorCompra):"—")+"</td>"+
       "<td>"+esc(e.formaPgto||"—")+"</td>"+
-      '<td><div class="t-main">'+esc(e.ultimaManut||e.instaladoEm||"—")+'</div><div class="t-sub">'+
+      '<td><div class="t-main">'+esc(dataCurta(e.ultimaManut||e.instaladoEm||"")||"—")+'</div><div class="t-sub">'+
         (e.ultimaManut?esc(e.ultimaManutHora||""):esc(horaUltimaVendaDe(e)||"instalação"))+"</div></td>"+
-      "<td><b>"+esc(px||"—")+"</b>"+(e.manutDias?'<div class="t-sub">a cada '+e.manutDias+" dias</div>":"")+"</td>"+
+      "<td><b>"+esc(px?dataCurta(px):"—")+"</b>"+(e.manutDias?'<div class="t-sub">a cada '+e.manutDias+" dias</div>":"")+"</td>"+
       '<td><span class="pill '+s.cls+'">'+s.n+"</span></td>"+
+      '<td data-mpst="'+esc(st.k)+'"><span class="pill '+st.cls+'">'+esc(st.n)+"</span>"+(st.sub?'<div class="t-sub">'+esc(st.sub)+"</div>":"")+"</td>"+
       '<td class="num"><button class="btn ghost sm" type="button" data-mpb="'+e.id+'">Manutenção</button> '+
         '<button class="btn mut sm" type="button" data-mpa="'+e.id+'">Agendar</button></td>';
     tr.onclick=function(ev){
@@ -11357,17 +11472,22 @@ function renderManut(){
       abrirEquip(e);};
     b.appendChild(tr);
   });
-  /* nome do cliente na lista abre o atendimento já preenchido */
+  /* DOIS cliques (ou dois toques) no nome do cliente abrem o atendimento ligado ao aparelho (regra do Wagner, 14/09).
+     Contado à mão, e não pelo dblclick, para funcionar igual no celular. */
   Array.prototype.forEach.call(b.querySelectorAll("[data-mpcli]"),function(bt){
     bt.onclick=function(ev){
       ev.stopPropagation();
-      var cid=bt.getAttribute("data-mpcli");
-      var c=clientes.filter(function(x){return x.id===cid;})[0];
-      if(!c){toast("Este equipamento não está ligado a um cadastro de cliente.");return;}
-      ir("atend");
-      try{abrirAtend(null);}catch(e){}
-      try{preencherCliente(c);}catch(e){}
-      toast("Atendimento aberto para "+(c.nome||"")+" — registre o contato.");
+      var agora=new Date().getTime();
+      if(bt.__toque&&agora-bt.__toque<650){
+        bt.__toque=0;
+        var eq=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mpeq");})[0];
+        abrirAtendManut(eq);
+        return;
+      }
+      bt.__toque=agora;
+      setTimeout(function(){
+        if(bt.__toque===agora){bt.__toque=0;toast("Dê dois cliques no nome para abrir o atendimento de "+bt.textContent+".");}
+      },700);
     };});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mpb]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
@@ -11434,8 +11554,9 @@ function renderHistEq(){
   if(!e||!(e.historico||[]).length){$("mp_hist").innerHTML="";return;}
   $("mp_hist").innerHTML='<div class="sect"><p class="sect-t">Histórico deste equipamento</p><div class="linha-tempo">'+
     e.historico.slice().reverse().map(function(h){
-      return '<div class="lt"><div class="cab"><b>'+esc(h.data)+"</b> · "+esc(h.tecnico||"")+
-        (h.cobranca?' · <span class="pill p-mut">'+esc({plano:"pelo plano",cobrada:"cobrada",garantia:"garantia"}[h.cobranca]||h.cobranca)+"</span>":"")+"</div>"+
+      return '<div class="lt"><div class="cab"><b>'+esc(dataCurta(h.data))+"</b> · "+esc(h.tecnico||"")+
+        (h.cobranca?' · <span class="pill p-mut">'+esc({plano:"pelo plano",cobrada:"cobrada",garantia:"garantia"}[h.cobranca]||h.cobranca)+"</span>":"")+
+        (h.semTroca?' · <span class="pill p-warn">não contou como manutenção</span>':"")+"</div>"+
         '<div class="txt">'+esc(h.obs||"—")+
         ((h.pecas||[]).length?"<br><span class=\"t-sub\">Peças: "+esc(h.pecas.map(function(x){return x.qtd+"× "+x.nome;}).join(", "))+"</span>":"")+
         "</div></div>";}).join("")+"</div></div>";
@@ -11495,7 +11616,7 @@ function abrirManut(e){
   var st=$("mn_tecnico");st.innerHTML="";
   EQUIPE.forEach(function(n){var o=document.createElement("option");o.textContent=n;st.appendChild(o);});
   opcoes("mn_peca",produtos.filter(function(p){return (p.status||"ativo")==="ativo";}),
-    function(p){return p.id;},function(p){return p.cod+" · "+p.nome;},null);
+    function(p){return p.id;},function(p){return p.cod+" · "+p.nome+((+p.manut>0)?" · manutenção "+p.manut+" dias":"");},null);
   $("mn_serie").value=e?(e.serie||e.cliente||""):"";$("mn_data").value=hojeISO();
   $("mn_hora").value=(e?horaUltimaVendaDe(e):"")||agoraHM();
   var sf=$("mn_forma");
@@ -11541,56 +11662,50 @@ function buscarSerie(){
     box.appendChild(b);});
   box.hidden=false;
 }
+/* regra do Wagner (14/09): a manutenção só conta (reinicia o prazo, conclui a visita e agenda a próxima)
+   com a troca de um produto que tenha "Manutenção (dias)" no cadastro */
+function pecaContaManut(i){
+  var p=produtos.filter(function(x){return x.id===i.pid;})[0];
+  return !!(p&&+p.manut>0);
+}
 function renderMnPecas(){
   var b=$("mn_pecas");b.innerHTML="";
   if(!mnPecas.length)b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhuma peça</div></div></td></tr>';
   mnPecas.forEach(function(i,idx){
-    b.innerHTML+="<tr><td>"+esc(i.nome)+'</td><td class="num">'+i.qtd+'</td><td class="num">'+BRL(i.valor*i.qtd)+"</td>"+
+    b.innerHTML+="<tr><td>"+esc(i.nome)+(pecaContaManut(i)?' <span class="pill p-ok">conta como manutenção</span>':"")+
+      '</td><td class="num">'+i.qtd+'</td><td class="num">'+BRL(i.valor*i.qtd)+"</td>"+
       '<td class="num"><button class="btn mut sm" type="button" data-mnrm="'+idx+'">Remover</button></td></tr>';});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mnrm]"),function(bt){
     bt.onclick=function(){mnPecas.splice(+bt.getAttribute("data-mnrm"),1);renderMnPecas();};});
+  var rg=$("mn_regra");if(!rg)return;
+  var contam=mnPecas.filter(pecaContaManut);
+  rg.innerHTML=contam.length
+    ? '<div class="note ok" style="margin-top:10px"><b>Conta como manutenção</b> — '+esc(contam.map(function(i){return i.nome;}).join(", "))+
+      ". Ao registrar, o prazo reinicia nesta data e a visita agendada deste aparelho passa a Visita realizada. "+
+      "A próxima não é agendada sozinha — o aparelho volta a Aguardando contato quando o vencimento chegar perto.</div>"
+    : '<div class="note warn" style="margin-top:10px"><b>Ainda não conta como manutenção.</b> Só vale a troca de um produto com "Manutenção (dias)" no cadastro '+
+      "(marcado na lista como “manutenção N dias”). Sem ele, o registro fica só no histórico: a data da próxima não muda e a visita continua na agenda.</div>";
 }
-/* Feita a manutenção, a próxima já nasce agendada na data do vencimento.
-   Sem isso a lista mostra a data, mas ninguém é lembrado no dia. */
-async function agendarProximaManut(e,reg){
-  var px=proximaDe(e);
-  if(!px)return null;
-  var ja=atendimentos.filter(function(a){
-    return a.equipId===e.id&&a.natureza==="atividade"&&a.status!=="finalizado"&&a.data===px;})[0];
-  if(ja)return null;
-  var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
-  var tipoManut=tipos.filter(function(t){return /manuten|visita|pós/i.test(t);})[0]||tipos[0]||"Visita presencial";
-  var a={id:uid(),loja:e.loja||lojaAtual,natureza:"atividade",
-    clienteId:e.clienteId||"",cliente:e.cliente||c.nome||"",
-    tel:c.tel||"",doc:c.doc||"",cidade:c.cidade||"",uf:c.uf||"",
-    endereco:[c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "),
-    origem:c.origem||"",
-    colaborador:(reg&&reg.tecnico)||e.tecnico||usuarioAtual,
-    vendedor:e.tecnico||"",
-    tipos:[tipoManut],tipo:tipoManut,
-    data:px,inicio:(reg&&reg.hora)||"09:00",fim:"",
-    obs:"Manutenção periódica · "+(e.produto||"")+
-      (e.serie?" · série "+e.serie:(e.local?" · "+e.local:""))+
-      " · vence "+px,
-    origemOrc:"",origemAtiv:"",equipId:e.id,
-    situacao:"pendente",status:"aberto",criadaPorManut:true};
-  atendimentos.push(a);
-  await grava("atendimentos",a);
-  return a;
-}
+/* (14/09) a próxima visita NÃO é mais agendada sozinha: o aparelho entra em "Aguardando contato"
+   quando o vencimento chega perto, e a visita nasce do atendimento feito pela Manutenção Periódica. */
 async function registrarManut(){
   var e=mnEq||eqPor($("mn_serie").value);
   if(!e){$("mn_alerta").innerHTML='<div class="note crit"><b>Escolha o equipamento na lista.</b> Procure pela série, pelo nome do cliente ou pelo número do pedido.</div>';return;}
   var data=$("mn_data").value;
   if(!data){$("mn_alerta").innerHTML='<div class="note crit"><b>Informe a data.</b></div>';return;}
   var valorTroca=mnPecas.reduce(function(a,i){return a+i.valor*i.qtd;},0);
+  /* só a troca de produto com "Manutenção (dias)" conta como manutenção (regra do Wagner, 14/09) */
+  var conta=mnPecas.some(pecaContaManut);
   var reg={data:data,hora:$("mn_hora").value||agoraHM(),tecnico:$("mn_tecnico").value,
     cobranca:$("mn_cobranca").value,forma:$("mn_forma").value||"",valor:valorTroca,
     pecas:mnPecas.slice(),obs:$("mn_obs").value.trim(),por:usuarioAtual,em:hojeISO()};
+  if(!conta)reg.semTroca=true;
   e.historico=e.historico||[];e.historico.push(reg);
-  e.ultimaManut=data;e.ultimaManutHora=reg.hora;
-  e.ultimoValor=(reg.cobranca==="cobrada"?valorTroca:0);
-  e.ultimaForma=(reg.cobranca==="cobrada"?reg.forma:({plano:"Coberta pelo plano",garantia:"Garantia de fábrica"}[reg.cobranca]||""));
+  if(conta){
+    e.ultimaManut=data;e.ultimaManutHora=reg.hora;
+    e.ultimoValor=(reg.cobranca==="cobrada"?valorTroca:0);
+    e.ultimaForma=(reg.cobranca==="cobrada"?reg.forma:({plano:"Coberta pelo plano",garantia:"Garantia de fábrica"}[reg.cobranca]||""));
+  }
   e.tecnico=reg.tecnico||e.tecnico;
   await grava("equipamentos",e);
   /* peças saem do estoque de quem fez o serviço; se ele não tem, do almoxarifado */
@@ -11601,7 +11716,10 @@ async function registrarManut(){
   }
   /* manutenção cobrada vira título a receber */
   var valor=valorTroca;
-  var msg="Manutenção registrada · próxima em "+proximaDe(e)+".";
+  var msg=conta
+    ? "Manutenção registrada · próxima em "+dataCurta(proximaDe(e))+"."
+    : "Registrado no histórico, mas não conta como manutenção: nenhum produto com \"Manutenção (dias)\" foi trocado. A próxima continua em "+
+      (proximaDe(e)?dataCurta(proximaDe(e)):"—")+".";
   if(reg.cobranca==="cobrada"&&valor>0){
     var t={id:uid(),loja:lojaAtual,especie:"receber",origem:"manutencao",equipId:e.id,
       clienteId:e.clienteId,pessoa:e.cliente,docRef:"Manut. "+(e.serie||e.pedidoNumero||""),
@@ -11612,15 +11730,18 @@ async function registrarManut(){
     titulos.push(t);await grava("titulos",t);
     msg+=" "+BRL(valor)+" em Contas a Receber.";
   }
-  /* baixa a manutenção que estava pendente e já agenda a próxima */
-  var pendentes=atendimentos.filter(function(a){
-    return a.equipId===e.id&&a.natureza==="atividade"&&a.status!=="finalizado";});
-  for(var v=0;v<pendentes.length;v++){
-    await concluirAtivPorAcao(pendentes[v],"Concluída pela manutenção de "+data);
+  /* conclui a visita agendada deste aparelho (→ Visita realizada) — só quando conta como manutenção.
+     Nada é agendado sozinho: o aparelho volta a Aguardando contato quando o próximo vencimento chegar perto. */
+  if(conta){
+    var pendentes=atendimentos.filter(function(a){
+      return a.equipId===e.id&&a.natureza==="atividade"&&a.status!=="finalizado";});
+    for(var v=0;v<pendentes.length;v++){
+      if(reg.cobranca==="cobrada"&&valor>0)pendentes[v].vendaManutReg=true;
+      await concluirAtivPorAcao(pendentes[v],"Concluída pela manutenção de "+dataCurta(data));
+    }
+    if(pendentes.length)msg+=" Visita agendada concluída — status Visita realizada · "+
+      ((reg.cobranca==="cobrada"&&valor>0)?"com venda":"sem venda")+".";
   }
-  if(pendentes.length)msg+=" "+pendentes.length+" visita"+(pendentes.length===1?"":"s")+" da agenda concluída"+(pendentes.length===1?"":"s")+".";
-  var nova=await agendarProximaManut(e,reg);
-  if(nova)msg+=" Próxima visita agendada para "+nova.data+".";
   $("manutModal").hidden=true;mnEq=null;
   toast(msg);
   renderManut();if(editandoEq===e){renderHistEq();$("mp_ultima").value=e.ultimaManut;notaEquip();}
@@ -12433,7 +12554,10 @@ async function criarAtividadeRetorno(){
     tipos:naTipos.slice(),tipo:naTipos.join(" · "),
     data:$("na_data").value,inicio:$("na_hora").value,fim:"",
     obs:$("na_obs").value.trim(),origemOrc:naCtx.orcId||"",
-    origemAtiv:naCtx.origemAtiv||"",equipId:naCtx.equipId||"",situacao:"pendente",status:"aberto"};
+    origemAtiv:naCtx.origemAtiv||"",
+    /* reagendada ou retorno de uma visita de manutenção continua ligada ao aparelho */
+    equipId:naCtx.equipId||((atendimentos.filter(function(x){return !!naCtx.origemAtiv&&x.id===naCtx.origemAtiv;})[0]||{}).equipId)||"",
+    situacao:"pendente",status:"aberto"};
   atendimentos.push(a);
   if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
   /* nasceu de outra atividade: a anterior se encerra como reagendada */
@@ -13889,7 +14013,7 @@ function renderChipsTipos(){
   });
 }
 function abrirAtend(a){
-  editandoAt=a||null;clienteVinc=null;
+  editandoAt=a||null;clienteVinc=null;atendManutEq=null;
   $("atendLista").hidden=true;$("atendForm").hidden=false;$("atendFecha").hidden=true;
   $("atendTitulo").textContent=a?("Editar · "+(a.cliente||"")):"Novo atendimento";
   opcoesOrigem("at_origem",(a&&a.origem)||"");
@@ -14135,10 +14259,12 @@ async function salvarAtend(){
   a.data=$("at_data").value;a.inicio=ini;a.fim=fim;a.obs=$("at_obs").value.trim();
   a.status="aberto";a.iniciativa=iniSel;
   if(veioDeAtividade)a.eraAtividade=true;
+  /* atendimento aberto pela Manutenção Periódica: a visita marcada no fecho nasce ligada ao aparelho */
+  if(atendManutEq&&!veioDeAtividade)a.manutEquipId=atendManutEq.id;
   if(!a.criadoEm)a.criadoEm=iso(new Date());
   if(!editandoAt)atendimentos.push(a);
   if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
-  editandoAt=null;
+  editandoAt=null;atendManutEq=null;
 
   /* fase 2 — encerramento */
   atendPend=a;completoSel="";motivosSel=[];
@@ -14150,6 +14276,12 @@ async function salvarAtend(){
      (ehLead(clienteVinc)?"<br><br>Lead "+esc(clienteVinc.codigo||"")+" — ainda sem venda.":
       "<br><br>Cliente "+esc(clienteVinc.codigo||"")+" · "+vendasDe(clienteVinc.id).length+" venda(s) no histórico."));
   $("af_data").value="";$("af_ini").value="";$("af_obs").value="";
+  var eqF=equipamentos.filter(function(x){return !!x.id&&x.id===(a.manutEquipId||a.equipId);})[0];
+  if(eqF){
+    $("af_obs").value="Visita de manutenção periódica · "+(eqF.produto||"")+(eqF.serie?" · série "+eqF.serie:(eqF.local?" · "+eqF.local:""));
+    $("at_resumo").insertAdjacentHTML("beforeend","<br><br><b>Manutenção periódica · "+esc(eqF.produto||"")+
+      ".</b> Para o cliente ficar como <b>Agendado visita</b>, use <b>Finalizar e criar atividade futura</b> com a data da visita.");
+  }
   $("at_futuraBloco").hidden=true;$("at_fechaAlerta").innerHTML="";
   Array.prototype.forEach.call($("at_completo").querySelectorAll("button"),function(b){b.setAttribute("aria-pressed","false");});
   renderChipsMotivos();window.scrollTo(0,0);
@@ -14184,7 +14316,7 @@ async function agendarFuturaDoAtend(at){
   var f={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:at.clienteId,cliente:at.cliente,
     colaborador:$("af_resp").value,tipos:(at.tipos||[]).slice(),tipo:at.tipo,
     data:$("af_data").value,inicio:$("af_ini").value,fim:"",obs:$("af_obs").value.trim(),
-    origemAtend:at.id,status:"aberto"};
+    origemAtend:at.id,equipId:at.manutEquipId||at.equipId||"",status:"aberto"};
   atendimentos.push(f);
   if(db){try{await col("atendimentos").doc(f.id).set(f);}catch(e){console.warn(e);}}
   return f;
@@ -14209,7 +14341,8 @@ async function fecharAtend(comFutura){
   if(db){try{await col("atendimentos").doc(atendPend.id).set(atendPend);}catch(e){console.warn(e);}}
   if(comFutura){
     var f=await agendarFuturaDoAtend(atendPend);
-    toast("Atendimento finalizado e atividade agendada para "+f.data+".");
+    toast("Atendimento finalizado e atividade agendada para "+dataCurta(f.data)+"."+
+      (f.equipId?" Na Manutenção Periódica o cliente fica como Agendado visita.":""));
   } else {
     toast("Atendimento finalizado.");
   }
@@ -15070,7 +15203,7 @@ function ligar(){
   $("mn_add").onclick=function(){
     var p=produtos.filter(function(x){return x.id===$("mn_peca").value;})[0];if(!p){toast("Escolha a peça.");return;}
     var qm=qtdInformada("mn_qtd");if(!qm)return;
-    mnPecas.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qm,valor:+p.cheia||0});
+    mnPecas.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qm,valor:+p.cheia||0,manut:+p.manut||0});
     renderMnPecas();limparInclusao("mn_peca","mn_qtd");};
   $("mn_ok").onclick=registrarManut;
   $("mn_fechar").onclick=function(){$("manutModal").hidden=true;mnEq=null;};
