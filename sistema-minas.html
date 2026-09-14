@@ -12761,6 +12761,8 @@ function abrirOS(o,ctx){
 
   var v=o||{};
   $("osTitulo").textContent=o?("OS "+o.numero+" · "+(o.cliente||"")):"Nova ordem de serviço";
+  /* ficha, canhoto e envio só depois que o atendente abre a OS (regra do Wagner, 14/09) */
+  $("osFicha").hidden=!o;$("osZap").hidden=!o;
   $("os_nome").value=v.cliente||"";$("os_tel").value=v.tel||"";$("os_doc").value=v.doc||"";
   $("os_end").value=v.endereco||"";$("os_cidade").value=v.cidade||"";$("os_email").value=v.email||"";
   $("os_prod").value=v.produtoId||"";$("os_serie").value=v.serie||"";
@@ -12901,12 +12903,7 @@ function renderHistOS(){
 }
 async function salvarOS(){
   var nome=$("os_nome").value.trim(),tel=$("os_tel").value.trim();
-  if(!nome||!tel){$("os_alerta").innerHTML='<div class="note crit"><b>Cliente e telefone são obrigatórios.</b></div>';return null;}
-  if(!editandoOS&&!osLocalSel){
-    $("os_alerta").innerHTML='<div class="note crit"><b>Escolha o local do atendimento:</b> Atendimento na loja ou Atendimento externo.</div>';
-    try{$("os_local").scrollIntoView({block:"center"});}catch(e){}return null;}
-  if(!$("os_defeito").value.trim()){
-    $("os_alerta").innerHTML='<div class="note crit"><b>Descreva a alegação do cliente.</b> É o que vai na ficha e no canhoto do cliente.</div>';return null;}
+  if(!validarAberturaOS())return null;
   var o=editandoOS||{id:uid(),loja:lojaAtual,
     numero:(ordens.filter(function(x){return x.loja===lojaAtual;}).length+3001),
     historico:[],criadoEm:hojeISO(),criadoPor:usuarioAtual,atendente:usuarioAtual};
@@ -12990,17 +12987,11 @@ async function concluirOS(){
 function ligarAcoesOS(){
   function on(id,fn){var e=$(id);if(e)e.onclick=fn;}
   on("osSalvar",async function(){
-    var eraNova=!editandoOS;
+    /* OS nova: toda OS precisa de técnico agendado para analisar — abre a janela da atividade e só grava junto com ela */
+    if(!editandoOS){criarAtividadeTecnicoOS();return;}
     var o=await salvarOS();if(!o)return;
-    /* atendimento externo: o técnico precisa da atividade para ir até o cliente — a janela já abre */
-    if(eraNova&&o.local==="externo"&&!ativTecDaOS(o)){
-      renderOS();abrirOS(o);
-      if(abrirAtivTecnicoOS(o))toast("OS "+o.numero+" aberta. Atendimento externo: agende a atividade do técnico.");
-      render();return;}
     $("osForm").hidden=true;$("osLista").hidden=false;
-    toast(eraNova
-      ? "OS "+o.numero+" aberta — "+(o.tecnico?"disponível para "+o.tecnico+" fazer o diagnóstico.":"crie a atividade para o técnico atender.")
-      : "OS "+o.numero+" salva.");
+    toast("OS "+o.numero+" salva."+(ativTecDaOS(o)?"":" Atenção: esta OS ainda está sem atividade para o técnico."));
     renderOS();render();});
   on("osConcluir",concluirOS);
   on("osEntregar",async function(){
@@ -13035,8 +13026,19 @@ function marcarLocalOS(){
   Array.prototype.forEach.call($("os_local").querySelectorAll("button"),function(b){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-l")===osLocalSel));});
   $("os_localNota").innerHTML=osLocalSel==="externo"
-    ? '<div class="note"><b>Atendimento externo.</b> O técnico vai até o cliente: ao abrir a OS, a janela da atividade do técnico abre para marcar o dia e a hora.</div>'
-    : (osLocalSel==="loja"?'<div class="note"><b>Atendimento na loja.</b> O produto fica na empresa: imprima a ficha (prender no produto) e o canhoto do cliente.</div>':"");
+    ? '<div class="note"><b>Atendimento externo.</b> O técnico vai até o cliente — a atividade do técnico é a visita.</div>'
+    : (osLocalSel==="loja"?'<div class="note"><b>Atendimento na loja.</b> O produto fica na empresa para o técnico analisar. Depois de abrir, imprima a ficha (prender no produto) e o canhoto do cliente.</div>':"");
+}
+/* validação da abertura (a OS nova só é gravada junto com a atividade do técnico) */
+function validarAberturaOS(){
+  var nome=$("os_nome").value.trim(),tel=$("os_tel").value.trim();
+  if(!nome||!tel){$("os_alerta").innerHTML='<div class="note crit"><b>Cliente e telefone são obrigatórios.</b></div>';return false;}
+  if(!editandoOS&&!osLocalSel){
+    $("os_alerta").innerHTML='<div class="note crit"><b>Escolha o local do atendimento:</b> Atendimento na loja ou Atendimento externo.</div>';
+    try{$("os_local").scrollIntoView({block:"center"});}catch(e){}return false;}
+  if(!$("os_defeito").value.trim()){
+    $("os_alerta").innerHTML='<div class="note crit"><b>Descreva a alegação do cliente.</b> É o que vai na ficha e no canhoto do cliente.</div>';return false;}
+  return true;
 }
 function renderFotosOS(){
   var w=$("os_fotos");if(!w)return;
@@ -13065,32 +13067,44 @@ function ativTecDaOS(o){
 function renderAtivTecOS(){
   var o=editandoOS,a=ativTecDaOS(o);
   $("os_ativTec").innerHTML=!o
-    ? '<p class="help">O botão abre a OS e a janela da atividade: escolha o técnico, o dia e a hora. A atividade vai para a agenda dele.</p>'
+    ? '<div class="note"><b>A OS só é aberta com a atividade do técnico agendada.</b> Ao clicar em <b>Abrir OS</b> (ou no botão abaixo), '+
+      "escolha o técnico, o dia e a hora — a OS e a atividade são gravadas juntas e a atividade vai para a agenda do técnico.</div>"
     : (a
       ? '<div class="note ok"><b>Atividade do técnico:</b> '+esc(a.colaborador||"—")+" · "+esc(dataCurta(a.data))+(a.inicio?" às "+esc(a.inicio):"")+
         " · "+(a.status==="finalizado"?"concluída":"a realizar")+"</div>"
-      : '<div class="note warn"><b>Nenhuma atividade para o técnico ainda.</b>'+(o.local==="externo"?" No atendimento externo o técnico precisa dela para ir até o cliente.":"")+"</div>");
+      : '<div class="note crit"><b>Esta OS está sem atividade para o técnico.</b> Agende agora — toda OS precisa de um técnico para analisar.</div>');
   $("osCriarAtiv").textContent=a?"Criar outra atividade para o técnico":"Criar atividade para o técnico";
 }
+/* o = OS já gravada; null = OS nova, ainda no formulário (ela é gravada quando a atividade for criada) */
 function abrirAtivTecnicoOS(o){
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  var cid=o?o.clienteId:(osCli?osCli.id:"");
+  var c=clientes.filter(function(x){return x.id===cid;})[0];
   if(!c){
-    $("os_alerta").innerHTML='<div class="note crit"><b>Para criar a atividade, o cliente precisa ter cadastro.</b> '+
+    $("os_alerta").innerHTML='<div class="note crit"><b>Para agendar o técnico, o cliente precisa ter cadastro.</b> '+
       "Escolha o cliente pela busca do campo Cliente — sem cadastro, registre o primeiro contato em Atendimentos.</div>";
+    try{$("os_nome").focus();}catch(e){}
     return false;}
+  var pf=produtos.filter(function(x){return x.id===$("os_prod").value;})[0];
+  var local=o?o.local:osLocalSel,equip=o?o.equipamento:(pf?pf.nome:$("os_marca").value.trim());
+  var serie=o?o.serie:$("os_serie").value.trim(),alega=o?o.defeito:$("os_defeito").value.trim();
   var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
   abrirNovaAtividade({clienteId:c.id,cliente:c.nome,tel:c.tel,doc:c.doc,cidade:c.cidade,origem:c.origem,
-    colaborador:o.tecnico||"",dias:1,hora:"09:00",tipos:tt,osId:o.id,
-    obs:"OS "+o.numero+" · "+localOSN(o.local)+" · "+(o.equipamento||"")+(o.serie?" · série "+o.serie:"")+" · Alegação: "+(o.defeito||""),
-    nota:"<b>Atividade do técnico para a OS "+o.numero+".</b> Escolha o técnico em Responsável, o dia e a hora. "+
-      "A atividade vai para a agenda dele, e ele fica como técnico responsável pela OS."});
+    colaborador:(o&&o.tecnico)||"",dias:1,hora:"09:00",tipos:tt,osId:o?o.id:"",osNova:!o,
+    obs:(o?"OS "+o.numero:"OS nova")+" · "+localOSN(local)+(equip?" · "+equip:"")+(serie?" · série "+serie:"")+" · Alegação: "+alega,
+    nota:o
+      ? "<b>Atividade do técnico para a OS "+o.numero+".</b> Escolha o técnico em Responsável, o dia e a hora. A atividade vai para a agenda dele, e ele fica como técnico responsável pela OS."
+      : "<b>Agende o técnico para analisar esta OS.</b> A OS só é aberta junto com esta atividade: escolha o técnico em Responsável, o dia e a hora. Cancelando, nada é gravado."});
   return true;
 }
 async function criarAtividadeTecnicoOS(){
-  var eraNova=!editandoOS;
+  if(!editandoOS){
+    if(!validarAberturaOS())return;
+    $("os_alerta").innerHTML="";
+    abrirAtivTecnicoOS(null);
+    return;
+  }
   var o=await salvarOS();if(!o)return;
   renderOS();
-  if(eraNova)abrirOS(o);
   abrirAtivTecnicoOS(o);
 }
 function podeTecnicoOS(o){return !!o&&(ehGestor()||!o.tecnico||o.tecnico===usuarioAtual);}
@@ -13666,6 +13680,16 @@ async function criarAtividadeRetorno(){
     return;
   }
 
+  /* OS nova: só é gravada agora, junto com a atividade do técnico (regra do Wagner, 14/09) */
+  var osNovaAberta=null;
+  if(naCtx.osNova){
+    osNovaAberta=await salvarOS();
+    if(!osNovaAberta){
+      $("na_alerta").innerHTML='<div class="note crit"><b>A OS ainda não pôde ser aberta.</b> '+esc(($("os_alerta").innerText||"").trim())+"</div>";
+      return;}
+    naCtx.osId=osNovaAberta.id;
+    $("na_obs").value=$("na_obs").value.replace(/^OS nova/,"OS "+osNovaAberta.numero);
+  }
   var vinc=clientes.filter(function(c){return c.id===naCtx.clienteId;})[0]||{};
   var a={id:uid(),loja:lojaAtual,natureza:"atividade",
     clienteId:naCtx.clienteId||"",cliente:naCtx.cliente,tel:naCtx.tel||vinc.tel||"",
@@ -13693,7 +13717,8 @@ async function criarAtividadeRetorno(){
         texto:"Atividade criada para o técnico "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")});
       await grava("ordens",osT);
       ir("os");abrirOS(osT);renderOS();
-      toast("Atividade da OS "+osT.numero+" agendada para "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")+". Ela já está na agenda do técnico.");
+      toast((osNovaAberta?"OS "+osT.numero+" aberta e atividade":"Atividade da OS "+osT.numero)+" agendada para "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")+". Ela já está na agenda do técnico."+
+        (osNovaAberta?" A ficha e o canhoto já estão disponíveis no topo da OS.":""));
     }
     render();return;
   }
@@ -16643,9 +16668,15 @@ function ligar(){
   $("osCancelar").onclick=function(){$("osForm").hidden=true;$("osLista").hidden=false;editandoOS=null;osOrigemAtiv=null;};
   $("osVoltarImp").onclick=function(){$("osImpressao").hidden=true;$("osForm").hidden=false;};
   $("osImprimir").onclick=function(){window.print();};
-  $("osFicha").onclick=async function(){var o=await salvarOS();if(o)fichaOS();};
+  /* OS nova ainda sem técnico agendado: primeiro abre a OS com a atividade do técnico */
+  function osNovaSemAtiv(){
+    if(editandoOS)return false;
+    toast("Primeiro abra a OS agendando o técnico. Depois a ficha e o envio ficam disponíveis.");
+    criarAtividadeTecnicoOS();return true;
+  }
+  $("osFicha").onclick=async function(){if(osNovaSemAtiv())return;var o=await salvarOS();if(o)fichaOS();};
   /* envio da OS em PDF: salva, mostra a ficha que vai e começa a gerar no botão da ficha */
-  $("osZap").onclick=async function(){var o=await salvarOS();if(!o)return;fichaOS();enviarOSWhatsApp(o,$("osImpZap"));};
+  $("osZap").onclick=async function(){if(osNovaSemAtiv())return;var o=await salvarOS();if(!o)return;fichaOS();enviarOSWhatsApp(o,$("osImpZap"));};
   $("osImpZap").onclick=function(){if(editandoOS)enviarOSWhatsApp(editandoOS,this);};
   $("os_nome").oninput=function(){osCli=null;$("os_achou").innerHTML="";buscarClienteOS();};
   $("os_nome").onblur=function(){setTimeout(function(){$("os_sug").hidden=true;},180);};
