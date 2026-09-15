@@ -1867,9 +1867,23 @@ img{max-width:100%}
           </div>
           <div class="fld" style="margin-top:16px"><label for="os_defeito">Alegação do cliente <span class="req">*</span></label>
             <textarea id="os_defeito" rows="3" placeholder="Com as palavras do cliente — é isso que vai na ficha e no canhoto"></textarea></div>
-          <div id="os_ativTec" style="margin-top:14px"></div>
+        </div>
+
+        <!-- atividade do técnico (visita) dentro da própria OS (regra do Wagner, 14/09) -->
+        <div class="sect" id="os_secAtivTec">
+          <p class="sect-t">Atividade do técnico</p>
+          <div id="os_ativTec"></div>
+          <div id="os_ativTecForm">
+            <div class="grid g4">
+              <div class="fld"><label for="ot_resp">Técnico <span class="req">*</span></label><select id="ot_resp"></select></div>
+              <div class="fld"><label for="ot_data">Data da visita <span class="req">*</span></label><input id="ot_data" type="date"></div>
+              <div class="fld"><label for="ot_hora">Hora</label><input id="ot_hora" type="time"></div>
+            </div>
+            <div class="fld" style="margin-top:14px"><label for="ot_obs">O que o técnico vai fazer</label>
+              <textarea id="ot_obs" rows="2" placeholder="Em branco, vai o resumo da OS: local, produto, série e alegação do cliente"></textarea></div>
+          </div>
           <div class="actions" style="justify-content:flex-start">
-            <button class="btn ghost" type="button" id="osCriarAtiv">Criar atividade para o técnico</button>
+            <button class="btn" type="button" id="osCriarAtiv">Criar atividade para o técnico</button>
           </div>
         </div>
 
@@ -11381,8 +11395,10 @@ function abrirAcoes(a){
       var k=bt.getAttribute("data-ac");
       $("acoesModal").hidden=true;
       if(k==="os"){
-        ir("os");abrirOS(null,{atividade:a});
-        toast("OS aberta para "+(a.cliente||"o cliente")+" — só falta o que é da OS.");
+        var osAc=await criarOSDaAcao(a,c);
+        ir("os");abrirOS(osAc);renderOS();
+        if(c.id){try{preencherClienteOS(c);}catch(e){console.warn(e);}}
+        toast("OS "+osAc.numero+" aberta para "+(a.cliente||"o cliente")+". Complete o local, o produto e a alegação e crie a atividade do técnico na própria OS.");
       } else if(k==="venda"){
         ir("venda");
         try{if(c.id){$("v_cliente").value=c.id;atualizarEtapas();}
@@ -11634,8 +11650,8 @@ function renderPedOS(){
         (ac.inicio?" às "+esc(ac.inicio):"")+" · "+(ac.status==="finalizado"?"concluída":"a fazer")+"</div>"
     : '<div class="note">Terminou a análise? Clique em <b>Atividade realizada</b>: a atendente '+esc(o.atendente||"")+" recebe a atividade <b>Fazer contato Cliente</b> daqui a 10 minutos, com todo o processo.</div>";
   /* OS externa: sem orçamento para depois — o técnico resolve e finaliza na casa do cliente (regra do Wagner, 14/09) */
-  if(ext)contato=ped?"":'<div class="note"><b>Atendimento externo: o técnico resolve na casa do cliente.</b> Cliente aprovou: '+
-    "<b>Cliente aprovou · lançar peças e serviços e finalizar</b>. Não aprovou: <b>Cliente não aprovou · cobrar serviço de atendimento</b>. "+
+  if(ext)contato=ped?"":'<div class="note"><b>Atendimento externo: o técnico resolve na casa do cliente.</b> Passou os valores e o cliente aprovou: '+
+    "<b>Abrir o pedido da OS</b>. Não aprovou: <b>Cliente não aprovou · cobrar serviço de atendimento</b>. "+
     "Nos dois casos o pedido é finalizado com forma de pagamento e assinatura, e a OS é finalizada junto.</div>";
   /* a OS se finaliza como o pedido: com instalação futura (fecha quando a instalação for finalizada) ou sem (cliente retira na loja) */
   var fechada=["entregue","cancelada"].indexOf(o.status)>=0;
@@ -11651,7 +11667,7 @@ function renderPedOS(){
   var bt="";
   if(ext){
     if(!ped&&tec&&!fechada){
-      bt+='<button class="btn" type="button" id="osPecasPed">Cliente aprovou · lançar peças e serviços e finalizar</button>';
+      bt+='<button class="btn" type="button" id="osPecasPed">Abrir o pedido da OS · peças, serviços e pagamento</button>';
       bt+='<button class="btn ghost" type="button" id="osServAtend">Cliente não aprovou · cobrar serviço de atendimento</button>';
     }
   }else{
@@ -13408,7 +13424,7 @@ function marcarLocalOS(){
 function validarAberturaOS(){
   var nome=$("os_nome").value.trim(),tel=$("os_tel").value.trim();
   if(!nome||!tel){$("os_alerta").innerHTML='<div class="note crit"><b>Cliente e telefone são obrigatórios.</b></div>';return false;}
-  if(!editandoOS&&!osLocalSel){
+  if(!osLocalSel&&(!editandoOS||!editandoOS.local)){
     $("os_alerta").innerHTML='<div class="note crit"><b>Escolha o local do atendimento:</b> Atendimento na loja ou Atendimento externo.</div>';
     try{$("os_local").scrollIntoView({block:"center"});}catch(e){}return false;}
   if(!$("os_defeito").value.trim()){
@@ -13439,16 +13455,26 @@ function ativTecDaOS(o){
   if(!o||!o.atividadeTecId)return null;
   return atendimentos.filter(function(x){return x.id===o.atividadeTecId;})[0]||null;
 }
+/* seção "Atividade do técnico" da OS: sem atividade ainda, os campos ficam na própria OS (técnico, data, hora, o que fazer) */
 function renderAtivTecOS(){
   var o=editandoOS,a=ativTecDaOS(o);
-  $("os_ativTec").innerHTML=!o
-    ? '<div class="note"><b>A OS só é aberta com a atividade do técnico agendada.</b> Ao clicar em <b>Abrir OS</b> (ou no botão abaixo), '+
-      "escolha o técnico, o dia e a hora — a OS e a atividade são gravadas juntas e a atividade vai para a agenda do técnico.</div>"
-    : (a
-      ? '<div class="note ok"><b>Atividade do técnico:</b> '+esc(a.colaborador||"—")+" · "+esc(dataCurta(a.data))+(a.inicio?" às "+esc(a.inicio):"")+
+  var fechada=!!(o&&["concluida","entregue","cancelada"].indexOf(o.status)>=0);
+  $("os_ativTecForm").hidden=!!a||fechada;
+  if(!a){
+    var sr=$("ot_resp");
+    sr.innerHTML='<option value="">— escolha o técnico —</option>'+EQUIPE.map(function(n){return "<option>"+esc(n)+"</option>";}).join("");
+    sr.value=(o&&o.tecnico)||"";
+    var d=new Date();d.setDate(d.getDate()+1);
+    $("ot_data").value=iso(d);$("ot_hora").value="09:00";$("ot_obs").value="";
+  }
+  $("os_ativTec").innerHTML=a
+    ? '<div class="note ok"><b>Atividade do técnico:</b> '+esc(a.colaborador||"—")+" · "+esc(dataCurta(a.data))+(a.inicio?" às "+esc(a.inicio):"")+
         " · "+(a.status==="finalizado"?"concluída":"a realizar")+"</div>"
-      : '<div class="note crit"><b>Esta OS está sem atividade para o técnico.</b> Agende agora — toda OS precisa de um técnico para analisar.</div>');
+    : (o
+      ? '<div class="note warn"><b>OS '+o.numero+' aberta.</b> Escolha o técnico, a data e a hora da visita e clique em <b>Criar atividade para o técnico</b> — a atividade vai para a agenda dele.</div>'
+      : '<div class="note">Escolha o técnico, a data e a hora da visita e clique em <b>Criar atividade para o técnico</b> — a OS é gravada junto e a atividade vai para a agenda dele.</div>');
   $("osCriarAtiv").textContent=a?"Criar outra atividade para o técnico":"Criar atividade para o técnico";
+  $("osCriarAtiv").hidden=fechada;
 }
 /* o = OS já gravada; null = OS nova, ainda no formulário (ela é gravada quando a atividade for criada) */
 function abrirAtivTecnicoOS(o){
@@ -13472,15 +13498,56 @@ function abrirAtivTecnicoOS(o){
   return true;
 }
 async function criarAtividadeTecnicoOS(){
-  if(!editandoOS){
-    if(!validarAberturaOS())return;
-    $("os_alerta").innerHTML="";
-    abrirAtivTecnicoOS(null);
-    return;
+  /* já tem atividade: uma nova visita usa a janela de atividade */
+  if(editandoOS&&ativTecDaOS(editandoOS)){
+    var o0=await salvarOS();if(!o0)return;
+    renderOS();abrirAtivTecnicoOS(o0);return;
   }
+  if(!validarAberturaOS())return;
+  var cid=editandoOS?editandoOS.clienteId:(osCli?osCli.id:"");
+  if(osCli)cid=osCli.id;
+  var c=clientes.filter(function(x){return x.id===cid;})[0];
+  if(!c){
+    $("os_alerta").innerHTML='<div class="note crit"><b>Para agendar o técnico, o cliente precisa ter cadastro.</b> '+
+      "Escolha o cliente pela busca do campo Cliente — sem cadastro, registre o primeiro contato em Atendimentos.</div>";
+    try{$("os_nome").focus();}catch(e){}return;}
+  var resp=$("ot_resp").value,data=$("ot_data").value,hora=$("ot_hora").value;
+  if(!resp||!data){
+    $("os_alerta").innerHTML='<div class="note crit"><b>Escolha o técnico e a data da visita</b> na seção Atividade do técnico.</div>';
+    try{$("os_secAtivTec").scrollIntoView({block:"center"});}catch(e){}return;}
+  var nova=!editandoOS;
   var o=await salvarOS();if(!o)return;
-  renderOS();
-  abrirAtivTecnicoOS(o);
+  var obs=$("ot_obs").value.trim()||("OS "+o.numero+" · "+localOSN(o.local)+(o.equipamento?" · "+o.equipamento:"")+(o.serie?" · série "+o.serie:"")+" · Alegação: "+(o.defeito||""));
+  var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
+  var a={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:c.id,cliente:c.nome,tel:c.tel||"",doc:c.doc||"",cidade:c.cidade||"",
+    endereco:[c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "),origem:c.origem||"",
+    colaborador:resp,vendedor:"",tipos:tt,tipo:tt.join(" · "),data:data,inicio:hora,fim:"",obs:obs,
+    origemOrc:"",origemAtiv:"",equipId:"",osId:o.id,osEtapa:"",situacao:"pendente",status:"aberto",criadoEm:hojeISO(),criadoPor:usuarioAtual};
+  atendimentos.push(a);
+  if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
+  o.tecnico=resp;o.atividadeTecId=a.id;o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Atividade criada para o técnico "+resp+" em "+dataCurta(data)+(hora?" às "+hora:"")});
+  await grava("ordens",o);
+  $("os_alerta").innerHTML="";
+  abrirOS(o);renderOS();render();
+  toast((nova?"OS "+o.numero+" aberta e atividade":"Atividade da OS "+o.numero)+" agendada para "+resp+" em "+dataCurta(data)+(hora?" às "+hora:"")+
+    ". Ela já está na agenda do técnico.");
+}
+/* "Abrir OS para o cliente" nas ações do atendimento/atividade: a OS já nasce gravada, com o cliente (regra do Wagner, 14/09) */
+async function criarOSDaAcao(a,c){
+  if(!c||!c.id)c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
+  var o={id:uid(),loja:lojaAtual,numero:(ordens.filter(function(x){return x.loja===lojaAtual;}).length+3001),
+    historico:[],criadoEm:hojeISO(),criadoPor:usuarioAtual,atendente:usuarioAtual,
+    cliente:c.nome||a.cliente||"",clienteId:c.id||a.clienteId||"",tel:c.tel||a.tel||"",doc:c.doc||a.doc||"",email:c.email||"",
+    endereco:[c.rua,c.num,c.comp,c.bairro].filter(Boolean).join(", "),cidade:[c.cidade||a.cidade,c.uf].filter(Boolean).join("/"),
+    produtoId:"",equipamento:"",serie:"",marca:"",compra:"",tipo:"orcamento",abertura:hojeISO(),hora:agoraHM(),local:"",fotosAvarias:[],
+    prazo:"",tecnico:"",defeito:a.obs||"",acessorios:"",avarias:"",laudo:"",reparo:"",pecasNec:"",infoTec:"",
+    pecas:[],mao:0,taxa:0,desconto:0,status:"aberta",entrega:"",retiradoPor:"",pagto:"",total:0,origemAtiv:a.id};
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"OS aberta às "+o.hora+" a partir "+(a.natureza==="atividade"?"da atividade":"do atendimento")+
+    " de "+dataCurta(a.data||"")+" · atendente "+usuarioAtual});
+  ordens.push(o);await grava("ordens",o);
+  await registrarAcaoAtiv(a,"os",o.id,o.numero,"OS "+o.numero+" aberta");
+  return o;
 }
 function podeTecnicoOS(o){return !!o&&(ehGestor()||!o.tecnico||o.tecnico===usuarioAtual);}
 function ajustarEtapasOS(){
