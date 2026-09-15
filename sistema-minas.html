@@ -11234,6 +11234,14 @@ async function confirmarFinalizar(){
   if(!txt){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Escreva como foi.</b> Sem isso, quem pegar este cliente amanhã não sabe o que já foi conversado.</div>';return;}
   if(ehVendido(fmMotivos)){
+    /* contato de OS interna sem pedido: a venda é o pedido da OS (itens do técnico, pagamento e entrega) */
+    var osV=a.osId?ordens.filter(function(x){return x.id===a.osId;})[0]:null;
+    if(osV&&osV.local==="loja"&&!osV.pedidoId&&["entregue","cancelada"].indexOf(osV.status)<0){
+      $("fimModal").hidden=true;fmReg=null;
+      abrirPedidoDaOS(osV,"atendente",a);
+      toast("Venda da OS "+osV.numero+": lance a forma de pagamento e a entrega e finalize o pedido. Depois a atividade é finalizada.");
+      return;
+    }
     var pedV=pedidoDaAtividade(a)||pedidoDaInstalacaoAtiv(a);
     if(!pedV){
       /* guarda o que foi escrito: o pedido salvo conclui a atividade com isso */
@@ -11259,6 +11267,18 @@ async function confirmarFinalizar(){
   $("fimModal").hidden=true;
   var pedirRetorno=(fmRetorno==="sim");
   toast("Atividade de "+(a.cliente||"")+" concluída.");
+  /* OS interna: o cliente ficou de pensar ou de passar na loja → OS aguardando retorno do cliente (regra do Wagner, 14/09) */
+  var osRet=null;
+  if(a.osId&&(a.motivos||[]).indexOf(MOT_RETORNO_OS)>=0){
+    osRet=ordens.filter(function(x){return x.id===a.osId;})[0]||null;
+    if(osRet&&!osRet.pedidoId&&["entregue","cancelada"].indexOf(osRet.status)<0){
+      osRet.status="retorno";osRet.aguardandoRetornoEm=hojeISO();osRet.aguardandoRetornoPor=usuarioAtual;osRet.retornoObs=txt;
+      osRet.historico=osRet.historico||[];
+      osRet.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Contato com o cliente · Aguardando retorno do cliente — "+txt});
+      await grava("ordens",osRet);
+      toast("Atividade concluída. OS "+osRet.numero+" aguardando retorno do cliente — quando ele decidir, use Finalizar OS · pagamento e entrega.");
+    }else osRet=null;
+  }
   render();
   /* "Instalação concluída" com a instalação ainda aberta: segue para a janela dela */
   var piF=pedidoDaInstalacaoAtiv(a);
@@ -11272,10 +11292,15 @@ async function confirmarFinalizar(){
   if(pedirRetorno){
     var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
     setTimeout(function(){
+      /* contato de OS: o retorno continua ligado à OS, com o tipo Fazer contato Cliente */
+      var ctxOS=(a.osId&&a.osEtapa==="contato")?ordens.filter(function(x){return x.id===a.osId;})[0]:null;
       abrirNovaAtividade({clienteId:a.clienteId||"",cliente:a.cliente,tel:a.tel||c.tel,
         doc:a.doc||c.doc,cidade:a.cidade||c.cidade,origem:c.origem,
-        colaborador:a.colaborador||usuarioAtual,dias:3,obs:"",origemAtiv:a.id,
-        nota:"<b>Retorno da atividade concluída.</b> "+esc(txt)});},350);
+        colaborador:a.colaborador||usuarioAtual,dias:3,origemAtiv:a.id,
+        obs:ctxOS?"Retorno do cliente · OS "+ctxOS.numero+" — "+txt:"",
+        tipos:ctxOS&&tipos.indexOf(TIPO_CONTATO_OS)>=0?[TIPO_CONTATO_OS]:undefined,
+        osContatoId:ctxOS?ctxOS.id:"",
+        nota:"<b>Retorno da atividade concluída.</b> "+esc(txt)+(ctxOS?"<br>A nova atividade fica ligada à OS "+ctxOS.numero+".":"")});},350);
   }
   fmReg=null;
 }
@@ -11374,7 +11399,34 @@ var pedOrigemAtiv=null,orcOrigemAtiv=null;
       técnico → diagnóstico → peças e serviços);
    3. o atendente fala com o cliente, "Lançar forma de pagamento" abre o mesmo pedido na etapa Pagamento, e
       finalizado o pedido segue a finalização de sempre da atividade (o que aconteceu + agendar outra). */
-var pedOrigemOS=null,pedOSModo="",pedOSAtiv=null,TIPO_CONTATO_OS="Fazer contato Cliente";
+var pedOrigemOS=null,pedOSModo="",pedOSAtiv=null,TIPO_CONTATO_OS="Fazer contato Cliente",MOT_RETORNO_OS="Aguardando Retorno Cliente";
+/* contato feito e o cliente ficou de pensar ou de passar na loja: OS parada aguardando o retorno dele */
+function notaRetornoOS(o){
+  if(!o||o.status!=="retorno")return "";
+  return '<div class="note warn"><b>Aguardando retorno do cliente</b> desde '+esc(dataCurta(o.aguardandoRetornoEm||""))+
+    (o.aguardandoRetornoPor?" · "+esc(o.aguardandoRetornoPor):"")+(o.retornoObs?" — "+esc(o.retornoObs):"")+
+    ". Quando o cliente decidir ou passar na loja, use <b>Finalizar OS · pagamento e entrega</b>; se ele ligar autorizando o serviço, "+
+    "<b>Cliente autorizou · agendar técnico para o serviço</b>.</div>";
+}
+/* cliente autorizou: a atendente agenda o técnico para executar o serviço e o fluxo segue (regra do Wagner, 14/09) */
+function notaServicoOS(o){
+  if(!o||!o.autorizadoEm)return "";
+  var at=ativTecDaOS(o),feito=!!(o.servicoRealizadoEm||(at&&at.status==="finalizado"));
+  return '<div class="note '+(feito?"ok":"")+'"><b>Serviço autorizado pelo cliente</b> em '+esc(dataCurta(o.autorizadoEm))+(o.autorizadoPor?" · "+esc(o.autorizadoPor):"")+
+    (at?" · técnico "+esc(at.colaborador||"—")+" · "+esc(dataCurta(at.data))+(at.inicio?" às "+esc(at.inicio):""):"")+
+    " · "+(feito?"serviço realizado":"a realizar — depois o técnico marca <b>Atividade realizada</b>")+"</div>";
+}
+function abrirAtivServicoOS(o){
+  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  if(!c){toast("A OS precisa de um cliente com cadastro para agendar o técnico.");return;}
+  var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
+  abrirNovaAtividade({clienteId:c.id,cliente:c.nome,tel:c.tel,doc:c.doc,cidade:c.cidade,origem:c.origem,
+    colaborador:o.tecnico||"",dias:1,hora:"09:00",tipos:tt,osId:o.id,osServico:true,
+    obs:"Executar o serviço autorizado pelo cliente · OS "+o.numero+" · "+localOSN(o.local)+" · "+(o.equipamento||"")+(o.serie?" · série "+o.serie:"")+
+      " · Reparo: "+(o.reparo||o.laudo||"—")+((o.itensOS||[]).length?" · Peças e serviços: "+resumoItensOS(o.itensOS):""),
+    nota:"<b>O cliente autorizou o serviço da OS "+o.numero+".</b> Escolha o técnico, o dia e a hora. Depois de executar, o técnico marca "+
+      "<b>Atividade realizada</b> na OS e o contato com o cliente volta para a atendente."});
+}
 function totalItensOS(o){return ((o&&o.itensOS)||[]).reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0);}
 function resumoItensOS(lista){
   return (lista||[]).map(function(i){return (i.qtd||1)+"× "+i.nome+" ("+BRL((+i.valor||0)*(i.qtd||1))+")"+(i.planoCobre?" coberto pelo plano":"");}).join("; ");
@@ -11460,20 +11512,28 @@ function resumoProcessoOS(o){
   l.push("Alegação do cliente: "+(o.defeito||"—"));
   l.push("Acessórios: "+(o.acessorios||"—")+" · Avarias: "+(o.avarias||"sem avarias")+((o.fotosAvarias||[]).length?" ("+o.fotosAvarias.length+" foto(s) na OS)":""));
   if(at)l.push("Técnico: "+(at.colaborador||o.tecnico||"—")+" · atividade de "+dataCurta(at.data||"")+(at.inicio?" às "+at.inicio:"")+" · realizada em "+dataCurta(hojeISO()));
+  if(o.retornoObs)l.push("Contato anterior: aguardando retorno do cliente — "+o.retornoObs);
+  if(o.autorizadoEm)l.push("Cliente autorizou o serviço em "+dataCurta(o.autorizadoEm)+(o.autorizadoPor?" (registrado por "+o.autorizadoPor+")":"")+
+    (o.servicoRealizadoEm?" · serviço realizado em "+dataCurta(o.servicoRealizadoEm):""));
   l.push("Diagnóstico — problema encontrado: "+(o.laudo||"—")+" · reparo necessário: "+(o.reparo||"—")+
     (o.pecasNec?" · peças necessárias: "+o.pecasNec:"")+(o.infoTec?" · informações técnicas: "+o.infoTec:""));
   l.push("Peças e serviços: "+(lista.length?resumoItensOS(lista)+" · total "+BRL(lista.reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0)):"nenhum incluído"));
   if(formasTexto(fs))l.push((ped?"Pagamento do pedido "+ped.numero+": ":"Pagamento previsto: ")+formasTexto(fs));
-  l.push("→ Fazer contato com o cliente: apresentar o diagnóstico e os valores, negociar a forma de pagamento e registrar o que foi resolvido.");
+  l.push(o.servicoRealizadoEm
+    ? "→ Fazer contato com o cliente: avisar que o serviço foi realizado, lançar a forma de pagamento e combinar a entrega (retirada na loja ou instalação futura)."
+    : "→ Fazer contato com o cliente: apresentar o diagnóstico e os valores, negociar a forma de pagamento e registrar o que foi resolvido.");
   return l.join("\n");
 }
 async function atividadeRealizadaOS(){
   var o=editandoOS;if(!o)return;
   if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") ou a gestão marca a atividade como realizada.");return;}
   if(!o.diagnosticoEm){toast("Salve o diagnóstico técnico antes.");return;}
-  if(o.atividadeContatoId){toast("A atividade do técnico já foi marcada como realizada.");return;}
-  if(!(o.itensOS||[]).length&&!o.pedidoId&&!confirm("Nenhuma peça ou serviço foi incluído. Marcar a atividade como realizada assim mesmo?"))return;
   var at=ativTecDaOS(o);
+  /* depois da autorização do cliente o técnico marca de novo, agora pelo serviço executado */
+  var foiServico=!!(o.autorizadoEm&&at&&at.status!=="finalizado");
+  if(o.atividadeContatoId&&!foiServico){toast("A atividade do técnico já foi marcada como realizada.");return;}
+  if(!(o.itensOS||[]).length&&!o.pedidoId&&!confirm("Nenhuma peça ou serviço foi incluído. Marcar a atividade como realizada assim mesmo?"))return;
+  if(foiServico){o.servicoRealizadoEm=hojeISO();o.servicoRealizadoPor=usuarioAtual;}
   var resumo=resumoProcessoOS(o);
   if(at&&at.status!=="finalizado"){
     at.resultado="Diagnóstico: "+(o.laudo||"");
@@ -11535,14 +11595,20 @@ function renderPedOS(){
       ? '<div class="note"><b>Instalação futura do pedido '+ped.numero+":</b> "+esc(respInstalacao(ped)||"—")+" · "+esc(dataCurta(String(ped.instalacao).slice(0,10)))+
         (String(ped.instalacao).slice(11).trim()?" às "+esc(String(ped.instalacao).slice(11).trim()):"")+". A OS é finalizada quando a instalação for finalizada.</div>"
       : "");
+  var atS=ativTecDaOS(o),servicoPend=!!(o.autorizadoEm&&atS&&atS.status!=="finalizado");
   var bt="";
   if(!ped&&tec&&!fechada)bt+='<button class="btn" type="button" id="osPecasPed">'+(lista.length?"Alterar peças e serviços":"Incluir peças e serviços")+"</button>";
-  if(!ac&&tec&&!fechada)bt+='<button class="btn ghost" type="button" id="osAtivRealizada">Atividade realizada</button>';
-  if(!ped&&ac&&podeAtd&&!fechada)bt+='<button class="btn" type="button" id="osFinalizarPed">Finalizar OS · pagamento e entrega</button>';
+  if(tec&&!fechada&&(!ac||servicoPend))
+    bt+='<button class="btn ghost" type="button" id="osAtivRealizada">'+(servicoPend?"Serviço realizado · atividade realizada":"Atividade realizada")+"</button>";
+  if(!ped&&ac&&podeAtd&&!fechada&&!servicoPend){
+    bt+='<button class="btn" type="button" id="osFinalizarPed">Finalizar OS · pagamento e entrega</button>';
+    if(!o.autorizadoEm)bt+='<button class="btn ghost" type="button" id="osAutorizar">Cliente autorizou · agendar técnico para o serviço</button>';
+  }
   if(instPend&&!fechada)bt+='<button class="btn ghost" type="button" id="osAbrirInst">Abrir a instalação</button>';
-  w.innerHTML=tabela+estado+contato+final+(bt?'<div class="actions" style="justify-content:flex-start">'+bt+"</div>":"");
+  w.innerHTML=tabela+estado+contato+notaRetornoOS(o)+notaServicoOS(o)+final+(bt?'<div class="actions" style="justify-content:flex-start">'+bt+"</div>":"");
   if($("osPecasPed"))$("osPecasPed").onclick=function(){abrirPedidoDaOS(o,"tecnico");};
   if($("osAtivRealizada"))$("osAtivRealizada").onclick=atividadeRealizadaOS;
+  if($("osAutorizar"))$("osAutorizar").onclick=function(){abrirAtivServicoOS(o);};
   if($("osFinalizarPed"))$("osFinalizarPed").onclick=function(){abrirPedidoDaOS(o,"atendente",ac&&ac.status!=="finalizado"?ac:null);};
   if($("osAbrirInst"))$("osAbrirInst").onclick=function(){abrirInstalacao(ped);};
 }
@@ -12909,6 +12975,7 @@ var OS_STATUS=[
   {k:"aberta",n:"Aberta",cls:"p-acc"},
   {k:"analise",n:"Em análise",cls:"p-acc"},
   {k:"aprovacao",n:"Aguardando aprovação do cliente",cls:"p-warn"},
+  {k:"retorno",n:"Aguardando retorno do cliente",cls:"p-warn"},
   {k:"aprovada",n:"Aprovada",cls:"p-ok"},
   {k:"reprovada",n:"Reprovada pelo cliente",cls:"p-crit"},
   {k:"concluida",n:"Concluída",cls:"p-ok"},
@@ -12954,7 +13021,7 @@ function renderOS(){
     .sort(function(a,b){return b.numero-a.numero;});
   var abertas=base.filter(function(o){return ["concluida","entregue","cancelada","reprovada"].indexOf(o.status)<0;});
   var atrasadas=abertas.filter(function(o){return o.prazo&&o.prazo<hojeISO();});
-  var aguardando=base.filter(function(o){return o.status==="aprovacao";});
+  var aguardando=base.filter(function(o){return o.status==="aprovacao"||o.status==="retorno";});
   var fab=base.filter(function(o){return o.tipo==="garantia"&&o.status!=="cancelada"&&!o.fabricantePagou;});
   $("osKpis").innerHTML=
     '<div class="kpi"><div class="l">Em andamento</div><div class="v">'+abertas.length+"</div></div>"+
@@ -13952,21 +14019,29 @@ async function criarAtividadeRetorno(){
     origemAtiv:naCtx.origemAtiv||"",
     /* reagendada ou retorno de uma visita de manutenção continua ligada ao aparelho */
     equipId:naCtx.equipId||((atendimentos.filter(function(x){return !!naCtx.origemAtiv&&x.id===naCtx.origemAtiv;})[0]||{}).equipId)||"",
-    osId:naCtx.osId||"",
+    osId:naCtx.osId||naCtx.osContatoId||"",osEtapa:naCtx.osContatoId?"contato":(naCtx.osServico?"servico":""),
     situacao:"pendente",status:"aberto"};
   atendimentos.push(a);
   if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
   /* atividade do técnico de uma OS: o responsável vira o técnico da OS e volta para a OS */
   if(naCtx.osId){
     var osT=ordens.filter(function(x){return x.id===naCtx.osId;})[0];
+    var servOS=!!naCtx.osServico;
     $("ativModal").hidden=true;naCtx=null;
     if(osT){
       osT.tecnico=a.colaborador;osT.atividadeTecId=a.id;osT.historico=osT.historico||[];
+      if(servOS){
+        /* cliente autorizou: OS aprovada e o contato que estava pendente se encerra */
+        osT.autorizadoEm=hojeISO();osT.autorizadoPor=usuarioAtual;osT.servicoRealizadoEm="";
+        if(["entregue","cancelada"].indexOf(osT.status)<0)osT.status="aprovada";
+        var acA=osT.atividadeContatoId?atendimentos.filter(function(x){return x.id===osT.atividadeContatoId;})[0]:null;
+        if(acA&&acA.status!=="finalizado")await concluirAtivPorAcao(acA,"Cliente autorizou o serviço · técnico "+a.colaborador+" agendado");
+      }
       osT.historico.push({quando:hojeISO(),por:usuarioAtual,
-        texto:"Atividade criada para o técnico "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")});
+        texto:(servOS?"Cliente autorizou o serviço · atividade para o técnico ":"Atividade criada para o técnico ")+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")});
       await grava("ordens",osT);
       ir("os");abrirOS(osT);renderOS();
-      toast((osNovaAberta?"OS "+osT.numero+" aberta e atividade":"Atividade da OS "+osT.numero)+" agendada para "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")+". Ela já está na agenda do técnico."+
+      toast((servOS?"Serviço autorizado pelo cliente. Atividade da OS "+osT.numero:(osNovaAberta?"OS "+osT.numero+" aberta e atividade":"Atividade da OS "+osT.numero))+" agendada para "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")+". Ela já está na agenda do técnico."+
         (osNovaAberta?" A ficha e o canhoto já estão disponíveis no topo da OS.":""));
     }
     render();return;
@@ -13979,6 +14054,16 @@ async function criarAtividadeRetorno(){
       await registrarAcaoAtiv(ant,"atividade",a.id,"","Nova atividade criada para "+a.data+(a.inicio?" às "+a.inicio:""));
       if(await concluirAtivPorAcao(ant,"Continuou na atividade de "+a.data,"reagendada"))
         msgExtra=" A anterior foi encerrada como reagendada.";
+    }
+  }
+  /* novo contato de uma OS: a OS passa a apontar para ele */
+  if(naCtx.osContatoId){
+    var osC=ordens.filter(function(x){return x.id===naCtx.osContatoId;})[0];
+    if(osC){
+      osC.atividadeContatoId=a.id;osC.historico=osC.historico||[];
+      osC.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Novo contato com o cliente agendado para "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")});
+      await grava("ordens",osC);
+      msgExtra+=" Ligado à OS "+osC.numero+".";
     }
   }
   $("ativModal").hidden=true;naCtx=null;
@@ -15442,7 +15527,7 @@ function renderTipos(){
 }
 
 /* ---------- motivos de finalização ---------- */
-var SEED_MOTIVOS=["Vendido","Instalação concluída","Serviço realizado","Vai pensar","Preço alto","Sem interesse","Não atendeu","Reagendou visita","Já tem purificador","Fora da área de atendimento","Orçamento enviado","Aniversariante Contatado com sucesso","Aniversariante sem contato"];
+var SEED_MOTIVOS=["Vendido","Instalação concluída","Serviço realizado","Vai pensar","Preço alto","Sem interesse","Não atendeu","Reagendou visita","Já tem purificador","Fora da área de atendimento","Orçamento enviado","Aniversariante Contatado com sucesso","Aniversariante sem contato","Aguardando Retorno Cliente"];
 var motivos=[];
 async function gravarMotivos(){if(!db)return;try{await db.doc("config/motivos_finalizacao").set({lista:motivos});}catch(e){console.warn(e);}}
 function renderMotivos(){
@@ -16182,6 +16267,8 @@ function garantirAniversarioCfg(){
   /* atividade do atendente depois que o técnico marca "Atividade realizada" na OS interna */
   if(tipos.indexOf("Fazer contato Cliente")<0){tipos.push("Fazer contato Cliente");mud.t=true;}
   [MOT_ANIV_OK,MOT_ANIV_NAO].forEach(function(m){if(motivos.indexOf(m)<0){motivos.push(m);mud.m=true;}});
+  /* OS interna: cliente vai pensar ou passar na loja (regra do Wagner, 14/09) */
+  if(motivos.indexOf("Aguardando Retorno Cliente")<0){motivos.push("Aguardando Retorno Cliente");mud.m=true;}
   if(!metaTipos.aniversario)metaTipos.aniversario=[];
   if(metaTipos.aniversario.indexOf(TIPO_ANIV)<0){metaTipos.aniversario.push(TIPO_ANIV);mud.mt=true;}
   return mud;
