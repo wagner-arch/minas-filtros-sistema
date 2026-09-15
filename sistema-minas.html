@@ -14026,7 +14026,7 @@ async function criarAtividadeRetorno(){
   /* atividade do técnico de uma OS: o responsável vira o técnico da OS e volta para a OS */
   if(naCtx.osId){
     var osT=ordens.filter(function(x){return x.id===naCtx.osId;})[0];
-    var servOS=!!naCtx.osServico;
+    var servOS=!!naCtx.osServico,contatoParaFinalizar=null;
     $("ativModal").hidden=true;naCtx=null;
     if(osT){
       osT.tecnico=a.colaborador;osT.atividadeTecId=a.id;osT.historico=osT.historico||[];
@@ -14035,7 +14035,8 @@ async function criarAtividadeRetorno(){
         osT.autorizadoEm=hojeISO();osT.autorizadoPor=usuarioAtual;osT.servicoRealizadoEm="";
         if(["entregue","cancelada"].indexOf(osT.status)<0)osT.status="aprovada";
         var acA=osT.atividadeContatoId?atendimentos.filter(function(x){return x.id===osT.atividadeContatoId;})[0]:null;
-        if(acA&&acA.status!=="finalizado")await concluirAtivPorAcao(acA,"Cliente autorizou o serviço · técnico "+a.colaborador+" agendado");
+        /* o contato pendente não fecha sozinho: segue a finalização normal (motivo, o que aconteceu, agendar outra) */
+        if(acA&&acA.status!=="finalizado")contatoParaFinalizar=acA;
       }
       osT.historico.push({quando:hojeISO(),por:usuarioAtual,
         texto:(servOS?"Cliente autorizou o serviço · atividade para o técnico ":"Atividade criada para o técnico ")+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")});
@@ -14043,6 +14044,12 @@ async function criarAtividadeRetorno(){
       ir("os");abrirOS(osT);renderOS();
       toast((servOS?"Serviço autorizado pelo cliente. Atividade da OS "+osT.numero:(osNovaAberta?"OS "+osT.numero+" aberta e atividade":"Atividade da OS "+osT.numero))+" agendada para "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")+". Ela já está na agenda do técnico."+
         (osNovaAberta?" A ficha e o canhoto já estão disponíveis no topo da OS.":""));
+      if(contatoParaFinalizar){
+        var cpf=contatoParaFinalizar;
+        setTimeout(function(){
+          abrirFinalizar(cpf);
+          toast("Técnico agendado. Agora finalize o contato: marque o motivo, escreva o que o cliente autorizou e responda se quer agendar outra atividade.");},500);
+      }
     }
     render();return;
   }
@@ -15527,7 +15534,7 @@ function renderTipos(){
 }
 
 /* ---------- motivos de finalização ---------- */
-var SEED_MOTIVOS=["Vendido","Instalação concluída","Serviço realizado","Vai pensar","Preço alto","Sem interesse","Não atendeu","Reagendou visita","Já tem purificador","Fora da área de atendimento","Orçamento enviado","Aniversariante Contatado com sucesso","Aniversariante sem contato","Aguardando Retorno Cliente"];
+var SEED_MOTIVOS=["Vendido","Instalação concluída","Serviço realizado","Vai pensar","Preço alto","Sem interesse","Não atendeu","Reagendou visita","Já tem purificador","Fora da área de atendimento","Orçamento enviado","Aniversariante Contatado com sucesso","Aniversariante sem contato","Aguardando Retorno Cliente","Cliente Autorizou o Serviço"];
 var motivos=[];
 async function gravarMotivos(){if(!db)return;try{await db.doc("config/motivos_finalizacao").set({lista:motivos});}catch(e){console.warn(e);}}
 function renderMotivos(){
@@ -16269,6 +16276,7 @@ function garantirAniversarioCfg(){
   [MOT_ANIV_OK,MOT_ANIV_NAO].forEach(function(m){if(motivos.indexOf(m)<0){motivos.push(m);mud.m=true;}});
   /* OS interna: cliente vai pensar ou passar na loja (regra do Wagner, 14/09) */
   if(motivos.indexOf("Aguardando Retorno Cliente")<0){motivos.push("Aguardando Retorno Cliente");mud.m=true;}
+  if(motivos.indexOf("Cliente Autorizou o Serviço")<0){motivos.push("Cliente Autorizou o Serviço");mud.m=true;}
   if(!metaTipos.aniversario)metaTipos.aniversario=[];
   if(metaTipos.aniversario.indexOf(TIPO_ANIV)<0){metaTipos.aniversario.push(TIPO_ANIV);mud.mt=true;}
   return mud;
