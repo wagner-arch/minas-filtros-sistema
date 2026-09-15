@@ -179,6 +179,9 @@
   .rep-item{display:block;width:100%;text-align:left;margin:0 0 6px;white-space:normal;line-height:1.3}
   /* extrato de remuneração */
   .rem-resumo{margin-top:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  /* OS interna: resumo do processo em várias linhas e aviso do pedido da OS */
+  #fm_obs{white-space:pre-wrap}
+  #v_osBanner{margin-bottom:14px}
   /* fotos das avarias na abertura da OS */
   .os-fotos-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;position:relative}
   .os-foto-in{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:0;top:0}
@@ -1389,6 +1392,7 @@ img{max-width:100%}
     <section class="screen" id="s-venda" hidden>
       <div class="page-head"><h1>Novo Pedido</h1><p>A conta aparece enquanto você monta — não depois de fechar.</p></div>
 
+      <div class="note" id="v_osBanner" hidden></div>
       <div class="steps" id="v_steps">
         <button type="button" data-step="1"><i>1</i><b>Cliente</b></button>
         <button type="button" data-step="2"><i>2</i><b>Itens</b></button>
@@ -1811,7 +1815,7 @@ img{max-width:100%}
           </div>
           <div class="fld" style="margin-top:16px"><label>Local do atendimento <span class="req">*</span></label>
             <div class="chips" id="os_local">
-              <button type="button" data-l="loja" aria-pressed="false">Atendimento na loja</button>
+              <button type="button" data-l="loja" aria-pressed="false">Atendimento interno (na loja)</button>
               <button type="button" data-l="externo" aria-pressed="false">Atendimento externo</button>
             </div>
             <div id="os_localNota"></div>
@@ -1895,6 +1899,7 @@ img{max-width:100%}
         <div class="sect" id="os_secValores">
           <p class="sect-t">3 · Valores e orçamento</p>
           <div id="os_valNota"></div>
+          <div id="os_pedOS" hidden></div>
           <div class="grid g4" style="margin-top:6px">
             <div class="fld"><label for="os_peca">Peça ou produto</label><select id="os_peca"></select></div>
             <div class="fld"><label for="os_pqtd">Qtd</label><input id="os_pqtd" type="number" min="1" value="" placeholder="Qtd" inputmode="numeric"></div>
@@ -5500,6 +5505,11 @@ function renderFormas(){
    instalador e fica com os 20% — na tela o campo mostra isso */
 function ajustarInstalador(){
   var si=$("v_inst");if(!si||!$("v_idata"))return;
+  /* pedido das peças e serviços de uma OS: o técnico é o instalador e fica com os 20% */
+  if(pedOrigemOS){
+    si.value=pedOrigemOS.tecnico||$("v_vend").value;si.disabled=true;
+    var ajo=$("v_instAjuda");if(ajo)ajo.textContent="OS "+pedOrigemOS.numero+": o técnico ("+(pedOrigemOS.tecnico||"—")+") é o instalador e fica com os 20%.";
+    return;}
   var temInst=!!$("v_idata").value,vend=$("v_vend").value,aj=$("v_instAjuda");
   if(!temInst){
     si.value=vend;si.disabled=true;
@@ -5634,6 +5644,13 @@ async function salvarPedido(){
     obs:$("v_obs").value.trim(),usoImagem:$("v_imagem").value,anexos:anexados,arquivos:arquivos,assinado:true,assinaturaImg:assinaturaParaDoc(),
     abaixoTabela:!!r.abaixo,status:etapaVenda({abaixoTabela:!!r.abaixo,instalacao:$("v_idata").value}),
     instalacao:$("v_idata").value?($("v_idata").value+" "+($("v_ihora").value||"")):""};
+  /* pedido das peças e serviços de uma OS interna (regra do Wagner, 14/09) */
+  var osDoPed=pedOrigemOS,ativContatoOS=pedOSAtiv;
+  if(osDoPed){
+    ped.osId=osDoPed.id;ped.osNumero=osDoPed.numero;
+    if(osDoPed.tecnico)ped.instalador=osDoPed.tecnico;
+    ped.obs=(ped.obs?ped.obs+"\n":"")+"Referente à OS "+osDoPed.numero+".";
+  }
   var eraLead=(cli&&ehLead(cli));
   /* produto sem estoque de quem entrega: solicitação de retirada para o responsável pelo estoque (regra do Wagner, 14/09) */
   var nRetiradas=0;
@@ -5654,6 +5671,15 @@ async function salvarPedido(){
     try{avisarRetiradas();}catch(e){}},1800);
   pedidos.push(ped);
   if(db){try{await col("pedidos").doc(ped.id).set(ped);}catch(e){console.warn(e);}}
+  if(osDoPed){
+    osDoPed.pedidoId=ped.id;osDoPed.itensOS=JSON.parse(JSON.stringify(ped.itens));osDoPed.formasOS=JSON.parse(JSON.stringify(ped.formas));
+    if(["concluida","entregue","cancelada"].indexOf(osDoPed.status)<0)osDoPed.status="aprovada";
+    osDoPed.historico=osDoPed.historico||[];
+    osDoPed.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Pedido "+ped.numero+" lançado · "+BRL(ped.total)+
+      (formasTexto(ped.formas)?" · "+formasTexto(ped.formas):"")});
+    await grava("ordens",osDoPed);
+    pedOrigemOS=null;pedOSModo="";pedOSAtiv=null;renderBannerOS();
+  }
 
   /* a venda só RESERVA o estoque de quem vai entregar. A baixa, a reposição, as
      parcelas no Contas a Receber e a comissão acontecem na Aprovação Financeira. */
@@ -5712,6 +5738,16 @@ async function salvarPedido(){
         doc:ra.doc||rc.doc,cidade:ra.cidade||rc.cidade,origem:rc.origem,
         colaborador:ra.colaborador||usuarioAtual,dias:3,obs:"",
         nota:"<b>Pedido "+ped.numero+" salvo.</b> Agende o novo contato que ficou combinado."});},450);};
+  }
+  /* pedido lançado pela atividade Fazer contato Cliente: fechada a janela do envio, a atividade é finalizada
+     pela regra de sempre (o que aconteceu + se quer agendar outra atividade) */
+  if(ativContatoOS&&ativContatoOS.status!=="finalizado"){
+    var antesOk=vendaOkDepois;
+    vendaOkDepois=function(){
+      if(antesOk)antesOk();
+      setTimeout(function(){
+        abrirFinalizar(ativContatoOS);
+        toast("Pedido "+ped.numero+" lançado. Agora finalize a atividade de contato: escreva o que foi resolvido com o cliente.");},450);};
   }
   /* finalizou a venda: janela com "Enviar Pedido Venda para cliente via WhatsApp" */
   abrirVendaOk(ped);
@@ -6046,7 +6082,7 @@ function localVendaForm(){
   return resp?locColab(resp):LOC_EMPRESA;
 }
 function faltaEstoqueVenda(p,qtd){
-  if(!p||p.grupo==="Planos")return 0;
+  if(!p||p.grupo==="Planos"||/servi|m[ãa]o de obra/i.test(p.grupo||""))return 0;
   var loc=localVendaForm();
   var disp=saldoEm(p.id,loc)-((reservasDe(loc)[p.id])||0);
   if(loc===LOC_EMPRESA)disp-=retiradasPendentesSaindo(p.id,lojaAtual);
@@ -11053,6 +11089,8 @@ function abrirDetalhes(a){
   var osDaAtiv=a.osId?ordens.filter(function(z){return z.id===a.osId;})[0]:null;
   $("dt_acoes").innerHTML=ac+
     (osDaAtiv?'<button class="btn ghost" type="button" id="dt_os">Abrir a OS '+osDaAtiv.numero+"</button>":"")+
+    (osDaAtiv&&a.osEtapa==="contato"&&a.status!=="finalizado"&&!osDaAtiv.pedidoId
+      ?'<button class="btn ghost" type="button" id="dt_osPag">Lançar forma de pagamento</button>':"")+
     (pedInst?'<button class="btn ghost" type="button" id="dt_inst">'+(pedInst.instaladoEm?"Ver a venda completa":"Abrir a instalação · incluir produtos")+"</button>":"")+
     '<button class="btn mut" type="button" id="dt_fechar">Fechar</button>';
   $("dt_alerta").innerHTML="";
@@ -11065,6 +11103,7 @@ function abrirDetalhes(a){
   function on(id,fn){var e=$(id);if(e)e.onclick=fn;}
   on("dt_fechar",function(){$("detModal").hidden=true;detReg=null;});
   on("dt_os",function(){$("detModal").hidden=true;ir("os");abrirOS(osDaAtiv);});
+  on("dt_osPag",function(){$("detModal").hidden=true;abrirPedidoDaOS(osDaAtiv,"atendente",a);});
   on("dt_inst",function(){$("detModal").hidden=true;abrirInstalacao(pedInst,pedInst.instaladoEm?"venda":undefined);});
   on("dt_editar",function(){$("detModal").hidden=true;ir("atend");abrirAtend(a);});
   on("dt_acoes2",function(){$("detModal").hidden=true;abrirAcoes(a);});
@@ -11202,6 +11241,18 @@ async function confirmarFinalizar(){
   $("fimModal").hidden=true;
   var pedirRetorno=(fmRetorno==="sim");
   toast("Atividade de "+(a.cliente||"")+" concluída.");
+  /* instalação do purificador de uma OS interna concluída pelo técnico: a OS é finalizada */
+  if(a.osId&&a.osEtapa==="instalacao"){
+    var osI=ordens.filter(function(x){return x.id===a.osId;})[0];
+    if(osI&&["entregue","cancelada"].indexOf(osI.status)<0){
+      osI.status="entregue";osI.concluidaEm=osI.concluidaEm||hojeISO();osI.concluidaPor=osI.concluidaPor||usuarioAtual;
+      osI.entrega=hojeISO();osI.retiradoPor="Instalado no cliente por "+(a.colaborador||usuarioAtual);
+      osI.historico=osI.historico||[];
+      osI.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Instalação concluída pelo técnico "+(a.colaborador||"")+" · OS finalizada — "+txt});
+      await grava("ordens",osI);
+      toast("Atividade concluída. Purificador instalado: OS "+osI.numero+" finalizada.");
+    }
+  }
   render();
   /* "Instalação concluída" com a instalação ainda aberta: segue para a janela dela */
   var piF=pedidoDaInstalacaoAtiv(a);
@@ -11306,6 +11357,222 @@ function preencherOrcDoCliente(c){
   $("or_achou").innerHTML='<div class="note ok"><b>Cliente vinculado a partir da atividade.</b></div>';
 }
 var pedOrigemAtiv=null,orcOrigemAtiv=null;
+
+/* ---------- OS interna (na loja): peças e serviços pelo pedido, "Atividade realizada" e contato do atendente ----------
+   Regra do Wagner (14/09), só para OS com Atendimento interno (o.local "loja"):
+   1. o técnico abre a OS pelos Detalhes da atividade dele, lança o diagnóstico e inclui peças e serviços na
+      tela do Novo Pedido (mesmas telas e regras, até a forma de pagamento) — pode finalizar o pedido ou só
+      "Salvar na OS sem finalizar" (o.itensOS / o.formasOS);
+   2. "Atividade realizada" conclui a atividade do técnico e cria para o atendente a atividade
+      "Fazer contato Cliente" daqui a 10 minutos, com todo o processo (primeiro atendimento → abertura →
+      técnico → diagnóstico → peças e serviços);
+   3. o atendente fala com o cliente, "Lançar forma de pagamento" abre o mesmo pedido na etapa Pagamento, e
+      finalizado o pedido segue a finalização de sempre da atividade (o que aconteceu + agendar outra). */
+var pedOrigemOS=null,pedOSModo="",pedOSAtiv=null,TIPO_CONTATO_OS="Fazer contato Cliente";
+function totalItensOS(o){return ((o&&o.itensOS)||[]).reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0);}
+function resumoItensOS(lista){
+  return (lista||[]).map(function(i){return (i.qtd||1)+"× "+i.nome+" ("+BRL((+i.valor||0)*(i.qtd||1))+")"+(i.planoCobre?" coberto pelo plano":"");}).join("; ");
+}
+function formasTexto(fs){
+  return (fs||[]).filter(function(f){return (+f.valor||0)>0;}).map(function(f){return f.tipo+" "+(f.parc||1)+"× "+BRL(f.valor);}).join(" + ");
+}
+function pedidoDaOS(o){return (o&&o.pedidoId)?(pedidos.filter(function(p){return p.id===o.pedidoId;})[0]||null):null;}
+function renderBannerOS(){
+  var b=$("v_osBanner");if(!b)return;
+  var o=pedOrigemOS;
+  if(!o){b.hidden=true;b.innerHTML="";return;}
+  b.hidden=false;
+  b.innerHTML="<b>Peças e serviços da OS "+o.numero+"</b> · "+esc(o.cliente||"")+" · técnico "+esc(o.tecnico||"—")+"<br>"+
+    (pedOSModo==="atendente"
+      ? "Lance a <b>forma de pagamento negociada com o cliente</b> e finalize o pedido — as regras são as de toda venda. Depois, finalize a atividade de contato."
+      : "Inclua as peças e serviços gastos. Você pode <b>Salvar na OS sem finalizar</b> ou seguir até o pagamento e finalizar o pedido.")+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
+      '<button class="btn sm" type="button" id="v_osRasc">Salvar na OS sem finalizar</button>'+
+      '<button class="btn ghost sm" type="button" id="v_osVoltar">Voltar para a OS</button></div>';
+  $("v_osRasc").onclick=salvarRascunhoOS;
+  $("v_osVoltar").onclick=function(){var ox=pedOrigemOS;sairModoOS();ir("os");if(ox)abrirOS(ox);};
+}
+function sairModoOS(){
+  pedOrigemOS=null;pedOSModo="";pedOSAtiv=null;
+  renderBannerOS();
+  try{limparPedido();}catch(e){}
+}
+function abrirPedidoDaOS(o,modo,ativ){
+  if(!o)return;
+  var pj=pedidoDaOS(o);
+  if(pj){toast("A OS "+o.numero+" já tem o pedido "+pj.numero+" lançado.");return;}
+  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  if(!c){toast("A OS precisa de um cliente com cadastro para lançar peças e serviços.");return;}
+  pedOrigemAtiv=null;
+  ir("venda");
+  try{limparPedido();}catch(e){}
+  pedOrigemOS=o;pedOSModo=modo||"tecnico";pedOSAtiv=ativ||null;
+  var atd=o.atendente||o.criadoPor||usuarioAtual;
+  try{$("v_cliente").value=c.id;$("v_prosp").value=atd;$("v_vend").value=atd;}catch(e){}
+  itens=JSON.parse(JSON.stringify(o.itensOS||[]));
+  if((o.formasOS||[]).length)formas=JSON.parse(JSON.stringify(o.formasOS));
+  try{renderFormas();calcular();atualizarEtapas();}catch(e){console.warn(e);}
+  irEtapa(pedOSModo==="atendente"&&itens.length?3:2);
+  renderBannerOS();
+}
+async function salvarRascunhoOS(){
+  var o=pedOrigemOS;if(!o)return;
+  if(!itens.length){toast("Inclua ao menos uma peça ou serviço.");irEtapa(2);return;}
+  try{calcular();}catch(e){}
+  o.itensOS=JSON.parse(JSON.stringify(itens));
+  var mexeu=pedOSModo==="atendente"||formas.length>1||formas.some(function(f){return f.__auto===false;})||
+    (formas[0]&&formas[0].tipo!=="Cartão de Crédito Sipag");
+  o.formasOS=mexeu?JSON.parse(JSON.stringify(formas)):[];
+  o.pecasServicosEm=hojeISO();o.pecasServicosPor=usuarioAtual;
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Peças e serviços salvos na OS, sem finalizar · "+resumoItensOS(o.itensOS)+
+    (o.formasOS.length?" · pagamento previsto: "+formasTexto(o.formasOS):"")});
+  await grava("ordens",o);
+  sairModoOS();
+  ir("os");abrirOS(o);renderOS();
+  toast("Peças e serviços salvos na OS "+o.numero+" · "+BRL(totalItensOS(o))+". O pedido não foi finalizado.");
+}
+function horaDaqui(min){
+  var d=new Date(),t=d.getHours()*60+d.getMinutes()+min;
+  t=Math.ceil(t/5)*5;if(t>23*60+59)t=23*60+59;
+  return String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0");
+}
+function resumoProcessoOS(o){
+  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var origem=o.origemAtiv?atendimentos.filter(function(x){return x.id===o.origemAtiv;})[0]:null;
+  var primeiro=origem||atendsDe(o.clienteId).filter(function(a){return a.natureza==="atendimento"&&(a.data||"")<=(o.abertura||"9999");})
+    .sort(function(x,y){return String(y.data||"").localeCompare(String(x.data||""));})[0];
+  var at=ativTecDaOS(o),ped=pedidoDaOS(o),lista=ped?ped.itens:(o.itensOS||[]),fs=ped?ped.formas:(o.formasOS||[]);
+  var l=[];
+  l.push("OS "+o.numero+" · "+localOSN(o.local)+" · aberta em "+dataCurta(o.abertura||"")+(o.hora?" às "+o.hora:"")+" por "+(o.atendente||o.criadoPor||"—"));
+  if(primeiro)l.push("Primeiro atendimento: "+dataCurta(primeiro.data||"")+" · "+(primeiro.colaborador||"—")+" · "+(primeiro.tipo||"")+(primeiro.obs?" — "+primeiro.obs:""));
+  l.push("Cliente: "+(o.cliente||"")+" · "+(o.tel||c.tel||""));
+  l.push("Produto: "+(o.equipamento||"—")+(o.serie?" · série "+o.serie:"")+(o.marca?" · "+o.marca:""));
+  l.push("Alegação do cliente: "+(o.defeito||"—"));
+  l.push("Acessórios: "+(o.acessorios||"—")+" · Avarias: "+(o.avarias||"sem avarias")+((o.fotosAvarias||[]).length?" ("+o.fotosAvarias.length+" foto(s) na OS)":""));
+  if(at)l.push("Técnico: "+(at.colaborador||o.tecnico||"—")+" · atividade de "+dataCurta(at.data||"")+(at.inicio?" às "+at.inicio:"")+" · realizada em "+dataCurta(hojeISO()));
+  l.push("Diagnóstico — problema encontrado: "+(o.laudo||"—")+" · reparo necessário: "+(o.reparo||"—")+
+    (o.pecasNec?" · peças necessárias: "+o.pecasNec:"")+(o.infoTec?" · informações técnicas: "+o.infoTec:""));
+  l.push("Peças e serviços: "+(lista.length?resumoItensOS(lista)+" · total "+BRL(lista.reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0)):"nenhum incluído"));
+  if(formasTexto(fs))l.push((ped?"Pagamento do pedido "+ped.numero+": ":"Pagamento previsto: ")+formasTexto(fs));
+  l.push("→ Fazer contato com o cliente: apresentar o diagnóstico e os valores, negociar a forma de pagamento e registrar o que foi resolvido.");
+  return l.join("\n");
+}
+async function atividadeRealizadaOS(){
+  var o=editandoOS;if(!o)return;
+  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") ou a gestão marca a atividade como realizada.");return;}
+  if(!o.diagnosticoEm){toast("Salve o diagnóstico técnico antes.");return;}
+  if(o.atividadeContatoId){toast("A atividade do técnico já foi marcada como realizada.");return;}
+  if(!(o.itensOS||[]).length&&!o.pedidoId&&!confirm("Nenhuma peça ou serviço foi incluído. Marcar a atividade como realizada assim mesmo?"))return;
+  var at=ativTecDaOS(o);
+  var resumo=resumoProcessoOS(o);
+  if(at&&at.status!=="finalizado"){
+    at.resultado="Diagnóstico: "+(o.laudo||"");
+    at.obs=(at.obs?at.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): atividade realizada. Diagnóstico: "+(o.laudo||"");
+    await concluirAtivPorAcao(at,"Atividade realizada pelo técnico · OS "+o.numero);
+  }
+  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var hora=horaDaqui(10),quem=o.atendente||o.criadoPor||usuarioAtual;
+  var ac={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:o.clienteId||"",cliente:o.cliente,tel:o.tel||c.tel||"",
+    doc:o.doc||c.doc||"",cidade:c.cidade||o.cidade||"",endereco:[c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "),
+    origem:c.origem||"",colaborador:quem,vendedor:"",tipos:[TIPO_CONTATO_OS],tipo:TIPO_CONTATO_OS,
+    data:hojeISO(),inicio:hora,fim:"",obs:resumo,osId:o.id,osEtapa:"contato",
+    situacao:"pendente",status:"aberto",criadoEm:hojeISO(),criadoPor:usuarioAtual};
+  atendimentos.push(ac);
+  if(db){try{await col("atendimentos").doc(ac.id).set(ac);}catch(e){console.warn(e);}}
+  o.atividadeContatoId=ac.id;o.tecnicoRealizouEm=hojeISO();o.tecnicoRealizouPor=usuarioAtual;
+  if(["aberta","analise"].indexOf(o.status)>=0)o.status="aprovacao";
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Atividade realizada pelo técnico · contato com o cliente agendado para "+quem+" hoje às "+hora});
+  await grava("ordens",o);
+  abrirOS(o);renderOS();render();
+  toast("Atividade realizada. "+quem+" recebeu a atividade Fazer contato Cliente para hoje às "+hora+", com todo o processo da OS.");
+}
+/* cliente buscou o produto na loja: a atendente finaliza a OS */
+async function finalizarOSRetirada(){
+  var o=editandoOS;if(!o)return;
+  if(!o.pedidoId&&totalOS(o)>0&&!confirm("Esta OS não tem pedido lançado: nada será cobrado pelas peças e serviços. Finalizar assim mesmo?"))return;
+  var quem=prompt("O cliente buscou o produto na loja. Quem retirou?",o.cliente||"");
+  if(quem===null)return;
+  o.status="entregue";o.concluidaEm=o.concluidaEm||hojeISO();o.concluidaPor=o.concluidaPor||usuarioAtual;
+  o.entrega=hojeISO();o.retiradoPor=quem.trim()||o.cliente||"";
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Cliente buscou o produto na loja (retirado por "+o.retiradoPor+") · OS finalizada"});
+  var at=ativTecDaOS(o);
+  if(at&&at.status!=="finalizado")await concluirAtivPorAcao(at,"OS "+o.numero+" finalizada");
+  if(o.origemAtiv){
+    var a0=atendimentos.filter(function(x){return x.id===o.origemAtiv;})[0];
+    if(a0)await concluirAtivPorAcao(a0,"Concluída pela OS "+o.numero);
+  }
+  await grava("ordens",o);
+  var ac=o.atividadeContatoId?atendimentos.filter(function(x){return x.id===o.atividadeContatoId;})[0]:null;
+  abrirOS(o);renderOS();render();
+  toast("OS "+o.numero+" finalizada: produto retirado na loja por "+o.retiradoPor+"."+
+    (ac&&ac.status!=="finalizado"?" Finalize também a atividade Fazer contato Cliente.":""));
+}
+/* ou uma atividade futura para o técnico instalar o purificador; concluída pelo técnico, finaliza a OS */
+function agendarInstalacaoOS(){
+  var o=editandoOS;if(!o)return;
+  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  if(!c){toast("A OS precisa de um cliente com cadastro para agendar a instalação.");return;}
+  var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
+  abrirNovaAtividade({clienteId:c.id,cliente:c.nome,tel:c.tel,doc:c.doc,cidade:c.cidade,origem:c.origem,
+    colaborador:o.tecnico||"",dias:1,hora:"09:00",tipos:tt,osId:o.id,osInstalacao:true,
+    obs:"Instalação do purificador · OS "+o.numero+" · "+(o.equipamento||"")+(o.serie?" · série "+o.serie:"")+
+      " · "+[c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "),
+    nota:"<b>Instalação do purificador da OS "+o.numero+".</b> Escolha o técnico, o dia e a hora. Quando o técnico concluir esta atividade, a OS é finalizada."});
+}
+/* etapa 3 da OS interna: resumo das peças e serviços, pedido, contato e botões */
+function renderPedOS(){
+  var w=$("os_pedOS"),sec=$("os_secValores");if(!w||!sec)return;
+  var o=editandoOS,loja=!!(o&&o.local==="loja");
+  w.hidden=!loja;
+  Array.prototype.forEach.call(sec.children,function(el){
+    if(el===w||el.id==="os_valNota"||el.classList.contains("sect-t"))return;
+    el.hidden=loja;});
+  var tit=sec.querySelector(".sect-t");if(tit)tit.textContent=loja?"3 · Peças, serviços e contato com o cliente":"3 · Valores e orçamento";
+  if(!loja){w.innerHTML="";return;}
+  $("os_valNota").innerHTML="";
+  var ped=pedidoDaOS(o),lista=ped?(ped.itens||[]):(o.itensOS||[]),fs=ped?ped.formas:(o.formasOS||[]);
+  var tec=podeTecnicoOS(o),ac=o.atividadeContatoId?atendimentos.filter(function(x){return x.id===o.atividadeContatoId;})[0]:null;
+  var total=lista.reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0);
+  var tabela=lista.length
+    ? '<div class="tw"><table><thead><tr><th>Peça ou serviço</th><th class="num">Qtd</th><th class="num">Total</th></tr></thead><tbody>'+
+        lista.map(function(i){return "<tr><td>"+esc(i.nome)+(i.planoCobre?' <span class="pill p-ok">coberto pelo plano</span>':"")+'</td><td class="num">'+(i.qtd||1)+
+          '</td><td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td></tr>";}).join("")+
+        '<tr><td colspan="2"><b>Total</b></td><td class="num"><b>'+BRL(total)+"</b></td></tr></tbody></table></div>"
+    : '<p class="help">Nenhuma peça ou serviço incluído ainda. O técnico inclui na mesma tela do Novo Pedido.</p>';
+  var estado=ped
+    ? '<div class="note ok"><b>Pedido '+ped.numero+" lançado</b> · "+esc(ped.status||"")+(formasTexto(fs)?" · "+esc(formasTexto(fs)):"")+"</div>"
+    : (lista.length?'<div class="note"><b>Salvo na OS sem finalizar</b>'+(o.pecasServicosPor?" por "+esc(o.pecasServicosPor)+" em "+esc(dataCurta(o.pecasServicosEm||"")):"")+
+        (formasTexto(fs)?" · pagamento previsto: "+esc(formasTexto(fs)):"")+"</div>":"");
+  var contato=ac
+    ? '<div class="note ok"><b>Atividade realizada pelo técnico.</b> Fazer contato Cliente: '+esc(ac.colaborador||"—")+" · "+esc(dataCurta(ac.data))+
+        (ac.inicio?" às "+esc(ac.inicio):"")+" · "+(ac.status==="finalizado"?"concluída":"a fazer")+"</div>"
+    : '<div class="note">Terminou a análise? Clique em <b>Atividade realizada</b>: a atendente '+esc(o.atendente||"")+" recebe a atividade <b>Fazer contato Cliente</b> daqui a 10 minutos, com todo o processo.</div>";
+  /* depois do contato, a atendente finaliza a OS (cliente buscou na loja) ou agenda a instalação com o técnico (regra do Wagner, 14/09) */
+  var inst=o.atividadeInstalacaoId?atendimentos.filter(function(x){return x.id===o.atividadeInstalacaoId;})[0]:null;
+  var fechada=["entregue","cancelada"].indexOf(o.status)>=0;
+  var podeAtd=ehGestor()||usuarioAtual===(o.atendente||o.criadoPor);
+  var final=fechada
+    ? '<div class="note ok"><b>OS finalizada</b>'+(o.retiradoPor?" · "+esc(o.retiradoPor):"")+(o.entrega?" · "+esc(dataCurta(o.entrega)):"")+"</div>"
+    : (inst?'<div class="note ok"><b>Instalação agendada:</b> '+esc(inst.colaborador||"—")+" · "+esc(dataCurta(inst.data))+(inst.inicio?" às "+esc(inst.inicio):"")+
+        " · "+(inst.status==="finalizado"?"concluída":"a realizar")+". A OS é finalizada quando o técnico concluir a atividade.</div>":"");
+  var bt="";
+  if(!ped&&tec&&!fechada)bt+='<button class="btn" type="button" id="osPecasPed">'+(lista.length?"Alterar peças e serviços":"Incluir peças e serviços")+"</button>";
+  if(!ac&&tec&&!fechada)bt+='<button class="btn ghost" type="button" id="osAtivRealizada">Atividade realizada</button>';
+  if(!ped&&ac&&podeAtd&&!fechada)bt+='<button class="btn ghost" type="button" id="osLancarPag">Lançar forma de pagamento</button>';
+  if(ac&&podeAtd&&!fechada){
+    bt+='<button class="btn ghost" type="button" id="osRetirada">Cliente buscou na loja · finalizar OS</button>';
+    if(!inst||inst.status==="finalizado")bt+='<button class="btn ghost" type="button" id="osAgInst">Agendar instalação com o técnico</button>';
+  }
+  w.innerHTML=tabela+estado+contato+final+(bt?'<div class="actions" style="justify-content:flex-start">'+bt+"</div>":"");
+  if($("osPecasPed"))$("osPecasPed").onclick=function(){abrirPedidoDaOS(o,"tecnico");};
+  if($("osAtivRealizada"))$("osAtivRealizada").onclick=atividadeRealizadaOS;
+  if($("osRetirada"))$("osRetirada").onclick=finalizarOSRetirada;
+  if($("osAgInst"))$("osAgInst").onclick=agendarInstalacaoOS;
+  if($("osLancarPag"))$("osLancarPag").onclick=function(){abrirPedidoDaOS(o,"atendente",ac&&ac.status!=="finalizado"?ac:null);};
+}
 
 /* ---------- ATIVIDADES ---------- */
 function renderAtividades(){
@@ -12697,7 +12964,7 @@ function osTipoN(k){var t=OS_TIPOS.filter(function(x){return x.k===k;})[0];retur
 function osStatusO(k){return OS_STATUS.filter(function(x){return x.k===k;})[0]||OS_STATUS[0];}
 function totalOS(o){
   var p=(o.pecas||[]).reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0);
-  return Math.round((p+(+o.mao||0)+(+o.taxa||0)-(+o.desconto||0))*100)/100;
+  return Math.round((p+(+o.mao||0)+(+o.taxa||0)-(+o.desconto||0)+totalItensOS(o))*100)/100;
 }
 function renderOS(){
   var q=($("osBusca").value||"").toLowerCase(),s=$("osSit").value,tp=$("osTipo").value;
@@ -12971,7 +13238,8 @@ async function concluirOS(){
     try{if(await concluirAtivPorAcao(at,"Concluída pela OS "+o.numero))msg+=" A atividade do técnico foi concluída.";}catch(e){console.warn(e);}
   }
   /* serviço cobrado vira título a receber */
-  if(o.tipo!=="garantia"&&totalOS(o)>0){
+  /* com pedido lançado, o valor já vai para o Contas a Receber pela Aprovação Financeira do pedido */
+  if(o.tipo!=="garantia"&&totalOS(o)>0&&!o.pedidoId){
     var t={id:uid(),loja:lojaAtual,especie:"receber",origem:"os",osId:o.id,
       clienteId:o.clienteId,pessoa:o.cliente,docRef:"OS "+o.numero,
       descricao:"OS "+o.numero+" · "+osTipoN(o.tipo),
@@ -13021,13 +13289,14 @@ function ligarAcoesOS(){
    alegação do cliente, local (na loja / externo) e o botão que cria a atividade do técnico. O técnico da OS é o
    responsável dessa atividade; tipo de serviço e prazo passaram para o diagnóstico (etapa 2). */
 var osLocalSel="",osFotos=[];
-function localOSN(k){return k==="externo"?"Atendimento externo":(k==="loja"?"Atendimento na loja":"—");}
+function localOSN(k){return k==="externo"?"Atendimento externo":(k==="loja"?"Atendimento interno (na loja)":"—");}
 function marcarLocalOS(){
   Array.prototype.forEach.call($("os_local").querySelectorAll("button"),function(b){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-l")===osLocalSel));});
   $("os_localNota").innerHTML=osLocalSel==="externo"
     ? '<div class="note"><b>Atendimento externo.</b> O técnico vai até o cliente — a atividade do técnico é a visita.</div>'
-    : (osLocalSel==="loja"?'<div class="note"><b>Atendimento na loja.</b> O produto fica na empresa para o técnico analisar. Depois de abrir, imprima a ficha (prender no produto) e o canhoto do cliente.</div>':"");
+    : (osLocalSel==="loja"?'<div class="note"><b>Atendimento interno (na loja).</b> O produto fica na empresa para o técnico analisar. O técnico lança o diagnóstico e as peças e serviços; '+
+      'ao marcar <b>Atividade realizada</b>, o atendente recebe a atividade <b>Fazer contato Cliente</b> com todo o processo. Depois de abrir, imprima a ficha (prender no produto) e o canhoto do cliente.</div>':"");
 }
 /* validação da abertura (a OS nova só é gravada junto com a atividade do técnico) */
 function validarAberturaOS(){
@@ -13110,8 +13379,9 @@ async function criarAtividadeTecnicoOS(){
 function podeTecnicoOS(o){return !!o&&(ehGestor()||!o.tecnico||o.tecnico===usuarioAtual);}
 function ajustarEtapasOS(){
   var o=editandoOS,tec=podeTecnicoOS(o);
-  var diag=!!(o&&o.diagnosticoEm),orc=!!(o&&o.orcamentoEm),fim=!!(o&&["concluida","entregue"].indexOf(o.status)>=0);
-  var etapas=[["Abertura",!!o],["Diagnóstico técnico",diag],["Valores e orçamento",orc],["Concluída",fim]];
+  var lojaE=!!(o&&o.local==="loja");
+  var diag=!!(o&&o.diagnosticoEm),orc=!!(o&&(lojaE?(o.atividadeContatoId||o.pedidoId):o.orcamentoEm)),fim=!!(o&&["concluida","entregue"].indexOf(o.status)>=0);
+  var etapas=[["Abertura",!!o],["Diagnóstico técnico",diag],[lojaE?"Peças, serviços e contato":"Valores e orçamento",orc],["Concluída",fim]];
   var atual=!o?0:(!diag?1:(!orc?2:(!fim?3:-1)));
   $("os_etapas").innerHTML=etapas.map(function(x,i){
     return '<span class="'+(i===atual?"atual":(x[1]?"feita":""))+'">'+(x[1]&&i!==atual?"✓ ":(i+1)+" · ")+x[0]+"</span>";}).join("");
@@ -13130,6 +13400,7 @@ function ajustarEtapasOS(){
       ". Mudou algum valor? Gere o orçamento de novo.</div>"
     : '<div class="note">Lance a mão de obra, as peças e produtos com as quantidades e outros custos. Em seguida, <b>Gerar orçamento</b>.</div>');
   $("osVerOrc").hidden=!orc;
+  renderPedOS();
 }
 async function salvarDiagnosticoOS(){
   var o=editandoOS;if(!o)return;
@@ -13703,14 +13974,25 @@ async function criarAtividadeRetorno(){
     origemAtiv:naCtx.origemAtiv||"",
     /* reagendada ou retorno de uma visita de manutenção continua ligada ao aparelho */
     equipId:naCtx.equipId||((atendimentos.filter(function(x){return !!naCtx.origemAtiv&&x.id===naCtx.origemAtiv;})[0]||{}).equipId)||"",
-    osId:naCtx.osId||"",
+    osId:naCtx.osId||"",osEtapa:naCtx.osInstalacao?"instalacao":"",
     situacao:"pendente",status:"aberto"};
   atendimentos.push(a);
   if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
   /* atividade do técnico de uma OS: o responsável vira o técnico da OS e volta para a OS */
   if(naCtx.osId){
     var osT=ordens.filter(function(x){return x.id===naCtx.osId;})[0];
+    var instOS=!!naCtx.osInstalacao;
     $("ativModal").hidden=true;naCtx=null;
+    if(osT&&instOS){
+      osT.tecnico=a.colaborador;osT.atividadeInstalacaoId=a.id;osT.historico=osT.historico||[];
+      osT.historico.push({quando:hojeISO(),por:usuarioAtual,
+        texto:"Instalação do purificador agendada para o técnico "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")});
+      await grava("ordens",osT);
+      ir("os");abrirOS(osT);renderOS();
+      toast("Instalação da OS "+osT.numero+" agendada para "+a.colaborador+" em "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"")+
+        ". Quando o técnico concluir a atividade, a OS é finalizada.");
+      render();return;
+    }
     if(osT){
       osT.tecnico=a.colaborador;osT.atividadeTecId=a.id;osT.historico=osT.historico||[];
       osT.historico.push({quando:hojeISO(),por:usuarioAtual,
@@ -15134,7 +15416,7 @@ async function decidir(p,ok,obs){
   render();
 }
 /* ---------- tipos de atendimento ---------- */
-var SEED_TIPOS=["Visita presencial","Ligação telefônica","WhatsApp","Instagram","Chat do site","Retorno de orçamento","Pós-venda","Aniversário do cliente","Contato Aniversariante","Atendimento técnico","Cobrança"];
+var SEED_TIPOS=["Visita presencial","Ligação telefônica","WhatsApp","Instagram","Chat do site","Retorno de orçamento","Pós-venda","Aniversário do cliente","Contato Aniversariante","Atendimento técnico","Fazer contato Cliente","Cobrança"];
 var tipos=[];
 async function gravarTipos(){if(!db)return;try{await db.doc("config/tipos_atendimento").set({lista:tipos});}catch(e){console.warn(e);}}
 var CANAIS=[["mensagem","Mensagem"],["ligacao","Ligação"],["abordagem","Abordagem"],["outro","Outro"]];
@@ -15917,6 +16199,8 @@ function garantirAniversarioCfg(){
   if(tipos.indexOf(TIPO_ANIV)<0){tipos.push(TIPO_ANIV);mud.t=true;}
   /* tipo da atividade do técnico criada pela OS */
   if(tipos.indexOf("Atendimento técnico")<0){tipos.push("Atendimento técnico");mud.t=true;}
+  /* atividade do atendente depois que o técnico marca "Atividade realizada" na OS interna */
+  if(tipos.indexOf("Fazer contato Cliente")<0){tipos.push("Fazer contato Cliente");mud.t=true;}
   [MOT_ANIV_OK,MOT_ANIV_NAO].forEach(function(m){if(motivos.indexOf(m)<0){motivos.push(m);mud.m=true;}});
   if(!metaTipos.aniversario)metaTipos.aniversario=[];
   if(metaTipos.aniversario.indexOf(TIPO_ANIV)<0){metaTipos.aniversario.push(TIPO_ANIV);mud.mt=true;}
@@ -16124,6 +16408,8 @@ function render(){
 var telaAtual="";
 function ir(s){
   var mudou=telaAtual!==s;
+  /* saiu do Novo Pedido aberto por uma OS sem salvar: volta ao pedido normal (o "Completar cadastro" mantém) */
+  if(mudou&&telaAtual==="venda"&&pedOrigemOS&&!voltaVenda){try{sairModoOS();}catch(e){console.warn(e);}}
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){b.setAttribute("aria-current",String(b.dataset.s===s));});
   Array.prototype.forEach.call(document.querySelectorAll(".screen"),function(x){x.hidden=true;});
   $("s-"+s).hidden=false;window.scrollTo(0,0);
