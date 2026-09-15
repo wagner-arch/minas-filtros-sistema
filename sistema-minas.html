@@ -1813,13 +1813,6 @@ img{max-width:100%}
             <div class="fld"><label for="os_hora">Hora</label><input id="os_hora" type="time"></div>
             <div class="fld" style="grid-column:span 2"><label for="os_atendente">Atendente</label><input id="os_atendente" readonly></div>
           </div>
-          <div class="fld" style="margin-top:16px"><label>Atendimento <span class="req">*</span></label>
-            <div class="chips" id="os_local">
-              <button type="button" data-l="loja" aria-pressed="false">Interno — na loja</button>
-              <button type="button" data-l="externo" aria-pressed="false">Externo — no endereço do cliente</button>
-            </div>
-            <div id="os_localNota"></div>
-          </div>
         </div>
 
         <div class="sect">
@@ -1873,6 +1866,14 @@ img{max-width:100%}
         <div class="sect" id="os_secAtivTec">
           <p class="sect-t">Atividade do técnico</p>
           <div id="os_ativTec"></div>
+          <!-- interno/externo é escolha da atividade do técnico, não da abertura (regra do Wagner, 14/09) -->
+          <div class="fld" style="margin-bottom:14px"><label>Onde o técnico vai atender <span class="req">*</span></label>
+            <div class="chips" id="os_local">
+              <button type="button" data-l="loja" aria-pressed="false">Interno — na loja</button>
+              <button type="button" data-l="externo" aria-pressed="false">Externo — no endereço do cliente</button>
+            </div>
+            <div id="os_localNota"></div>
+          </div>
           <div id="os_ativTecForm">
             <div class="grid g4">
               <div class="fld"><label for="ot_resp">Técnico <span class="req">*</span></label><select id="ot_resp"></select></div>
@@ -11398,7 +11399,7 @@ function abrirAcoes(a){
         var osAc=await criarOSDaAcao(a,c);
         ir("os");abrirOS(osAc);renderOS();
         if(c.id){try{preencherClienteOS(c);}catch(e){console.warn(e);}}
-        toast("OS "+osAc.numero+" aberta para "+(a.cliente||"o cliente")+". Marque o atendimento (interno ou externo), confira o produto e a alegação e crie a atividade do técnico na própria OS.");
+        toast("OS "+osAc.numero+" aberta para "+(a.cliente||"o cliente")+". Confira o produto e a alegação e, na Atividade do técnico, escolha interno ou externo, o técnico, a data e a hora.");
       } else if(k==="venda"){
         ir("venda");
         try{if(c.id){$("v_cliente").value=c.id;atualizarEtapas();}
@@ -13452,9 +13453,6 @@ function marcarLocalOS(){
 function validarAberturaOS(){
   var nome=$("os_nome").value.trim(),tel=$("os_tel").value.trim();
   if(!nome||!tel){$("os_alerta").innerHTML='<div class="note crit"><b>Cliente e telefone são obrigatórios.</b></div>';return false;}
-  if(!osLocalSel&&(!editandoOS||!editandoOS.local)){
-    $("os_alerta").innerHTML='<div class="note crit"><b>Escolha o atendimento:</b> Interno — na loja, ou Externo — no endereço do cliente.</div>';
-    try{$("os_local").scrollIntoView({block:"center"});}catch(e){}return false;}
   if(!$("os_defeito").value.trim()){
     $("os_alerta").innerHTML='<div class="note crit"><b>Descreva a alegação do cliente.</b> É o que vai na ficha e no canhoto do cliente.</div>';return false;}
   return true;
@@ -13488,6 +13486,8 @@ function renderAtivTecOS(){
   var o=editandoOS,a=ativTecDaOS(o);
   var fechada=!!(o&&["concluida","entregue","cancelada"].indexOf(o.status)>=0);
   $("os_ativTecForm").hidden=!!a||fechada;
+  /* criada a atividade, interno/externo fica travado (define o fluxo da OS) */
+  Array.prototype.forEach.call($("os_local").querySelectorAll("button"),function(b){b.disabled=!!a||fechada;});
   if(!a){
     var sr=$("ot_resp");
     sr.innerHTML='<option value="">— escolha o técnico —</option>'+EQUIPE.map(function(n){return "<option>"+esc(n)+"</option>";}).join("");
@@ -13499,8 +13499,8 @@ function renderAtivTecOS(){
     ? '<div class="note ok"><b>Atividade do técnico:</b> '+esc(a.colaborador||"—")+" · "+esc(dataCurta(a.data))+(a.inicio?" às "+esc(a.inicio):"")+
         " · "+(a.status==="finalizado"?"concluída":"a realizar")+"</div>"
     : (o
-      ? '<div class="note warn"><b>OS '+o.numero+' aberta.</b> Escolha o técnico, a data e a hora da visita e clique em <b>Criar atividade para o técnico</b> — a atividade vai para a agenda dele.</div>'
-      : '<div class="note">Escolha o técnico, a data e a hora da visita e clique em <b>Criar atividade para o técnico</b> — a OS é gravada junto e a atividade vai para a agenda dele.</div>');
+      ? '<div class="note warn"><b>OS '+o.numero+' aberta.</b> Escolha onde o técnico vai atender, o técnico, a data e a hora e clique em <b>Criar atividade para o técnico</b> — a atividade vai para a agenda dele.</div>'
+      : '<div class="note">Escolha onde o técnico vai atender, o técnico, a data e a hora e clique em <b>Criar atividade para o técnico</b> — a OS é gravada junto e a atividade vai para a agenda dele.</div>');
   $("osCriarAtiv").textContent=a?"Criar outra atividade para o técnico":"Criar atividade para o técnico";
   $("osCriarAtiv").hidden=fechada;
 }
@@ -13532,6 +13532,10 @@ async function criarAtividadeTecnicoOS(){
     renderOS();abrirAtivTecnicoOS(o0);return;
   }
   if(!validarAberturaOS())return;
+  /* interno ou externo: escolhido na Atividade do técnico */
+  if(!osLocalSel&&!(editandoOS&&editandoOS.local)){
+    $("os_alerta").innerHTML='<div class="note crit"><b>Na Atividade do técnico, escolha onde ele vai atender:</b> Interno — na loja, ou Externo — no endereço do cliente.</div>';
+    try{$("os_secAtivTec").scrollIntoView({block:"center"});}catch(e){}return;}
   var cid=editandoOS?editandoOS.clienteId:(osCli?osCli.id:"");
   if(osCli)cid=osCli.id;
   var c=clientes.filter(function(x){return x.id===cid;})[0];
@@ -13688,7 +13692,7 @@ function fichaOS(){
   var lim=somaDias(o.abertura||hojeISO(),DIAS_DESCARTE);
   function lin(r,v){return '<div class="lin"><b>'+r+"</b><span>"+esc(v||"—")+"</span></div>";}
   var comum=lin("Abertura",dataCurta(o.abertura||"")+(o.hora?" às "+o.hora:""))+lin("Atendente",o.atendente||o.criadoPor)+
-    lin("Atendimento",localOSN(o.local)+(o.local==="externo"&&o.endereco?" · "+o.endereco+(o.cidade?" · "+o.cidade:""):""))+
+    lin("Onde o técnico atende",localOSN(o.local)+(o.local==="externo"&&o.endereco?" · "+o.endereco+(o.cidade?" · "+o.cidade:""):""))+
     lin("Cliente",o.cliente)+lin("Telefone",o.tel)+
     lin("Produto",o.equipamento)+lin("Número de série",o.serie)+(o.marca?lin("Marca / modelo",o.marca):"")+
     (o.diagnosticoEm?lin("Tipo de serviço",osTipoN(o.tipo)):"")+(o.prazo?lin("Prazo",dataCurta(o.prazo)):"")+
