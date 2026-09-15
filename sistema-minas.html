@@ -5633,7 +5633,7 @@ async function salvarPedido(){
   var arquivos=ANEXOS.filter(function(a){return a.dados;}).map(function(a){return a.dados;});
   var anexados=arquivos.map(function(a){return a.nome;});
   var ped={id:uid(),loja:lojaAtual,numero:(pedidos.filter(function(p){return p.loja===lojaAtual;}).length+20801),
-    data:new Date().toISOString().slice(0,10),hora:agoraHM(),
+    data:hojeISO(),hora:agoraHM(),
     cliente:cli?cli.nome:"—",clienteId:cli?cli.id:"",
     prospector:$("v_prosp").value,vendedor:$("v_vend").value,
     /* regra do Wagner (12/09): sem instalação futura, ou sem instalador informado, o vendedor é o
@@ -5684,9 +5684,10 @@ async function salvarPedido(){
         msgOSFim="OS "+osDoPed.numero+": instalação futura agendada; a OS é finalizada quando a instalação for finalizada.";
       }else{
         osDoPed.status="entregue";osDoPed.concluidaEm=hojeISO();osDoPed.concluidaPor=usuarioAtual;
-        osDoPed.entrega=hojeISO();osDoPed.retiradoPor="Retirado na loja pelo cliente";
-        fimOS=" · sem instalação futura: cliente retira na loja · OS finalizada";
-        msgOSFim="OS "+osDoPed.numero+" finalizada: sem instalação futura, o cliente retira na loja.";
+        osDoPed.entrega=hojeISO();
+        osDoPed.retiradoPor="Cliente retira na loja · peças e serviços cobrados no pedido "+ped.numero;
+        fimOS=" · sem instalação futura: cliente retira na loja · peças e serviços cobrados no pedido, que segue o processo de todo pedido (Aprovação Financeira, estoque, Contas a Receber e comissão) · OS finalizada";
+        msgOSFim="OS "+osDoPed.numero+" finalizada: o cliente retira na loja e as peças e serviços foram cobrados no pedido "+ped.numero+", que segue para a Aprovação Financeira.";
       }
     }
     osDoPed.historico=osDoPed.historico||[];
@@ -13121,9 +13122,11 @@ function calcOS(){
   var ac="";
   ac+='<button class="btn" type="button" id="osSalvar">'+(editandoOS?"Salvar OS":"Abrir OS")+"</button>";
   if(editandoOS){
-    if(["concluida","entregue","cancelada"].indexOf(editandoOS.status)<0)
+    /* OS interna só se finaliza pelo pedido, com as peças e serviços cobrados (regra do Wagner, 14/09) */
+    var internaOS=editandoOS.local==="loja";
+    if(!internaOS&&["concluida","entregue","cancelada"].indexOf(editandoOS.status)<0)
       ac+='<button class="btn ghost" type="button" id="osConcluir">Concluir OS</button>';
-    if(editandoOS.status==="concluida")
+    if(!internaOS&&editandoOS.status==="concluida")
       ac+='<button class="btn ghost" type="button" id="osEntregar">Registrar entrega</button>';
     if(editandoOS.tipo==="garantia"&&!editandoOS.fabricantePagou&&editandoOS.status!=="aberta")
       ac+='<button class="btn ghost" type="button" id="osFab">Fabricante pagou</button>';
@@ -13188,6 +13191,8 @@ async function salvarOS(){
   return o;
 }
 async function concluirOS(){
+  if(editandoOS&&editandoOS.local==="loja"){
+    toast("OS interna é finalizada pelo pedido, com as peças e serviços cobrados: use Finalizar OS · pagamento e entrega.");return;}
   if(!$("os_laudo").value.trim()){
     $("os_alerta").innerHTML='<div class="note crit"><b>Lance o diagnóstico técnico antes de concluir a OS.</b></div>';return;}
   var o=await salvarOS();if(!o)return;
