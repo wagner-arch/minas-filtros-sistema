@@ -4596,6 +4596,8 @@ var SEED=[
  {cod:"PMF061",nome:"Purificador Pury Inox 127V C Eficiencia (eletrico)",pop:"Purificador Pury Inox",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1590.00,campanha:1510.50,minimo:1399.20,campativa:"nao",custo:763.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
  {cod:"PLANO-PI",nome:"PLANO PREMIUM I",pop:"Plano Premium I",marca:"Minas Filtros",grupo:"Planos",un:"UN",cheia:600.00,campanha:550.00,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:12,serie:"nao",estoque:0,contrato:"PLANO PREMIUM I TOP GELADO",vigencia:12,garantia:"Premium I",grupos:["Purificadores"],contratoTexto:CONTRATO_PREMIUM_I},
  {cod:"PLANO-PII",nome:"PLANO PREMIUM II",pop:"Plano Premium II",marca:"Minas Filtros",grupo:"Planos",un:"UN",cheia:250.00,campanha:230.00,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:12,serie:"nao",estoque:0,contrato:"(PREMIUM II)",vigencia:12,garantia:"Premium II",grupos:["Purificadores"],contratoTexto:CONTRATO_PREMIUM_II},
+ /* serviço cobrado na OS externa quando o cliente não aprova o conserto (regra do Wagner, 14/09) — valor ajustável em Produtos */
+ {cod:"SRV-ATEND",nome:"Serviço de atendimento técnico",pop:"Serviço de atendimento",marca:"Minas Filtros",grupo:"Serviços",un:"UN",cheia:100.00,campanha:100.00,minimo:100.00,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
  {cod:"PMF103",nome:"Purificador Top Life - Plano Premium",pop:"Purificador Top Life",marca:"Minas Filtros",grupo:"Planos",un:"UN",cheia:0.00,campanha:0.00,minimo:0.00,campativa:"nao",custo:0.00,pontos:20,manut:0,gar:12,serie:"nao",estoque:0},
  {cod:"PMF000",nome:"Purificador Top Life Heoxi Seminovo Inst",pop:"Purificador Top Life",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1600.00,campanha:1520.00,minimo:1408.00,campativa:"nao",custo:768.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
  {cod:"PMF000-2",nome:"Purificador Top Life Heoxi Seminovo Inst- Combo",pop:"Purificador Top Life",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1900.00,campanha:1805.00,minimo:1672.00,campativa:"nao",custo:912.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
@@ -4653,6 +4655,12 @@ async function carregar(){
       if(produtos.some(function(x){return x.cod===codPl;}))continue;
       var np=JSON.parse(JSON.stringify(planosSeed[ip]));np.id="plano-"+codPl.toLowerCase();
       await col("produtos").doc(np.id).set(np);produtos.push(np);
+    }
+    /* serviço de atendimento técnico da OS externa: garante na base já gravada */
+    var srvSeed=SEED.filter(function(x){return x.cod==="SRV-ATEND";})[0];
+    if(srvSeed&&!produtos.some(function(x){return x.cod==="SRV-ATEND";})){
+      var nsv=JSON.parse(JSON.stringify(srvSeed));nsv.id="srv-atend";
+      await col("produtos").doc(nsv.id).set(nsv);produtos.push(nsv);
     }
     /* planos gravados antes do cadastro de planos: completa o nome na venda e o contrato pelo modelo */
     for(var bp=0;bp<produtos.length;bp++){
@@ -5645,11 +5653,11 @@ async function salvarPedido(){
     abaixoTabela:!!r.abaixo,status:etapaVenda({abaixoTabela:!!r.abaixo,instalacao:$("v_idata").value}),
     instalacao:$("v_idata").value?($("v_idata").value+" "+($("v_ihora").value||"")):""};
   /* pedido das peças e serviços de uma OS interna (regra do Wagner, 14/09) */
-  var osDoPed=pedOrigemOS,ativContatoOS=pedOSAtiv,msgOSFim="";
+  var osDoPed=pedOrigemOS,ativContatoOS=pedOSAtiv,msgOSFim="",servAtendPed=pedOSServAtend;
   if(osDoPed){
     ped.osId=osDoPed.id;ped.osNumero=osDoPed.numero;
     if(osDoPed.tecnico)ped.instalador=osDoPed.tecnico;
-    ped.obs=(ped.obs?ped.obs+"\n":"")+"Referente à OS "+osDoPed.numero+".";
+    ped.obs=(ped.obs?ped.obs+"\n":"")+"Referente à OS "+osDoPed.numero+(servAtendPed?" · cliente não aprovou o serviço: cobrado o serviço de atendimento":"")+".";
   }
   var eraLead=(cli&&ehLead(cli));
   /* produto sem estoque de quem entrega: solicitação de retirada para o responsável pelo estoque (regra do Wagner, 14/09) */
@@ -5685,16 +5693,32 @@ async function salvarPedido(){
       }else{
         osDoPed.status="entregue";osDoPed.concluidaEm=hojeISO();osDoPed.concluidaPor=usuarioAtual;
         osDoPed.entrega=hojeISO();
-        osDoPed.retiradoPor="Cliente retira na loja · peças e serviços cobrados no pedido "+ped.numero;
-        fimOS=" · sem instalação futura: cliente retira na loja · peças e serviços cobrados no pedido, que segue o processo de todo pedido (Aprovação Financeira, estoque, Contas a Receber e comissão) · OS finalizada";
-        msgOSFim="OS "+osDoPed.numero+" finalizada: o cliente retira na loja e as peças e serviços foram cobrados no pedido "+ped.numero+", que segue para a Aprovação Financeira.";
+        if(osDoPed.local==="externo"){
+          osDoPed.clienteNaoAprovou=!!servAtendPed;
+          osDoPed.retiradoPor=(servAtendPed?"Cliente não aprovou o serviço · cobrado o serviço de atendimento":"Serviço realizado na casa do cliente")+" · pedido "+ped.numero;
+          fimOS=" · atendimento externo: "+(servAtendPed?"cliente não aprovou, cobrado o serviço de atendimento":"serviço realizado na casa do cliente")+
+            " · segue o processo de todo pedido (Aprovação Financeira, estoque, Contas a Receber e comissão) · OS finalizada";
+          msgOSFim="OS "+osDoPed.numero+" finalizada: "+(servAtendPed?"cobrado o serviço de atendimento":"serviço realizado na casa do cliente")+
+            " no pedido "+ped.numero+", que segue para a Aprovação Financeira.";
+        }else{
+          osDoPed.retiradoPor="Cliente retira na loja · peças e serviços cobrados no pedido "+ped.numero;
+          fimOS=" · sem instalação futura: cliente retira na loja · peças e serviços cobrados no pedido, que segue o processo de todo pedido (Aprovação Financeira, estoque, Contas a Receber e comissão) · OS finalizada";
+          msgOSFim="OS "+osDoPed.numero+" finalizada: o cliente retira na loja e as peças e serviços foram cobrados no pedido "+ped.numero+", que segue para a Aprovação Financeira.";
+        }
+        /* OS finalizada: a atividade do técnico e a de origem, se abertas, se encerram com ela */
+        var atFimOS=ativTecDaOS(osDoPed);
+        if(atFimOS&&atFimOS.status!=="finalizado")await concluirAtivPorAcao(atFimOS,"OS "+osDoPed.numero+" finalizada pelo pedido "+ped.numero);
+        if(osDoPed.origemAtiv){
+          var aOrOS=atendimentos.filter(function(x){return x.id===osDoPed.origemAtiv;})[0];
+          if(aOrOS&&aOrOS.status!=="finalizado")await concluirAtivPorAcao(aOrOS,"Concluída pela OS "+osDoPed.numero);
+        }
       }
     }
     osDoPed.historico=osDoPed.historico||[];
     osDoPed.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Pedido "+ped.numero+" lançado · "+BRL(ped.total)+
       (formasTexto(ped.formas)?" · "+formasTexto(ped.formas):"")+fimOS});
     await grava("ordens",osDoPed);
-    pedOrigemOS=null;pedOSModo="";pedOSAtiv=null;renderBannerOS();
+    pedOrigemOS=null;pedOSModo="";pedOSAtiv=null;pedOSServAtend=false;renderBannerOS();
   }
 
   /* a venda só RESERVA o estoque de quem vai entregar. A baixa, a reposição, as
@@ -6288,7 +6312,13 @@ async function migrarEstoqueInicial(){
 function respInstalacao(p){return p.respInstalacao||p.instalador||p.vendedor||"";}
 function responsavelVenda(p){return p.instalacao?respInstalacao(p):(p.vendedor||p.instalador||"");}
 /* o que sai do estoque na venda: os itens vendidos e os produtos usados na instalação */
-function itensDeEstoque(p){return (p.itens||[]).concat(p.materiaisInstalacao||[]).filter(function(i){return !ehPlano(i);});}
+function itensDeEstoque(p){return (p.itens||[]).concat(p.materiaisInstalacao||[]).filter(function(i){return !ehPlano(i)&&!ehServico(i);});}
+/* serviço (grupo Serviços / mão de obra, ex. Serviço de atendimento técnico): linha da venda, sem estoque nem reposição */
+function ehServico(i){
+  if(!i)return false;
+  var pr=produtos.filter(function(x){return x.id===i.pid;})[0];
+  return !!(pr&&/servi|m[ãa]o de obra/i.test(pr.grupo||""));
+}
 /* plano de garantia vendido: é linha da venda (total, comissão), mas é serviço — não tem estoque */
 function ehPlano(i){
   if(!i)return false;
@@ -11399,7 +11429,11 @@ var pedOrigemAtiv=null,orcOrigemAtiv=null;
       técnico → diagnóstico → peças e serviços);
    3. o atendente fala com o cliente, "Lançar forma de pagamento" abre o mesmo pedido na etapa Pagamento, e
       finalizado o pedido segue a finalização de sempre da atividade (o que aconteceu + agendar outra). */
-var pedOrigemOS=null,pedOSModo="",pedOSAtiv=null,TIPO_CONTATO_OS="Fazer contato Cliente",MOT_RETORNO_OS="Aguardando Retorno Cliente";
+var pedOrigemOS=null,pedOSModo="",pedOSAtiv=null,pedOSServAtend=false,TIPO_CONTATO_OS="Fazer contato Cliente",MOT_RETORNO_OS="Aguardando Retorno Cliente";
+function produtoServicoAtendimento(){
+  return produtos.filter(function(p){return p.cod==="SRV-ATEND";})[0]||
+    produtos.filter(function(p){return /servi[cç]o de atendimento/i.test(p.nome||"");})[0]||null;
+}
 /* contato feito e o cliente ficou de pensar ou de passar na loja: OS parada aguardando o retorno dele */
 function notaRetornoOS(o){
   if(!o||o.status!=="retorno")return "";
@@ -11441,8 +11475,12 @@ function renderBannerOS(){
   if(!o){b.hidden=true;b.innerHTML="";return;}
   b.hidden=false;
   b.innerHTML="<b>Peças e serviços da OS "+o.numero+"</b> · "+esc(o.cliente||"")+" · técnico "+esc(o.tecnico||"—")+"<br>"+
-    (pedOSModo==="atendente"
-      ? "Lance a <b>forma de pagamento negociada com o cliente</b>. Na etapa <b>Entrega</b>, preencha a <b>instalação futura</b> se o técnico vai instalar — em branco, o cliente retira na loja. "+
+    (pedOSServAtend
+      ? "O cliente não aprovou o serviço: cobre o <b>serviço de atendimento</b>, lance a forma de pagamento, colete a assinatura e finalize o pedido — a OS é finalizada junto."
+      : (o.local==="externo"&&pedOSModo!=="atendente")
+      ? "Na casa do cliente: inclua as peças e serviços usados, lance a forma de pagamento, colete a assinatura do cliente e finalize o pedido — a OS é finalizada junto."
+      : pedOSModo==="atendente"
+      ?"Lance a <b>forma de pagamento negociada com o cliente</b>. Na etapa <b>Entrega</b>, preencha a <b>instalação futura</b> se o técnico vai instalar — em branco, o cliente retira na loja. "+
         "Ao finalizar o pedido, a OS é finalizada junto (com instalação futura, quando a instalação for finalizada). Depois, finalize a atividade de contato."
       : "Inclua as peças e serviços gastos. Você pode <b>Salvar na OS sem finalizar</b> ou seguir até o pagamento e finalizar o pedido — com instalação futura ou com o cliente retirando na loja.")+
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
@@ -11452,11 +11490,11 @@ function renderBannerOS(){
   $("v_osVoltar").onclick=function(){var ox=pedOrigemOS;sairModoOS();ir("os");if(ox)abrirOS(ox);};
 }
 function sairModoOS(){
-  pedOrigemOS=null;pedOSModo="";pedOSAtiv=null;
+  pedOrigemOS=null;pedOSModo="";pedOSAtiv=null;pedOSServAtend=false;
   renderBannerOS();
   try{limparPedido();}catch(e){}
 }
-function abrirPedidoDaOS(o,modo,ativ){
+function abrirPedidoDaOS(o,modo,ativ,opc){
   if(!o)return;
   var pj=pedidoDaOS(o);
   if(pj){toast("A OS "+o.numero+" já tem o pedido "+pj.numero+" lançado.");return;}
@@ -11473,7 +11511,16 @@ function abrirPedidoDaOS(o,modo,ativ){
   itens=JSON.parse(JSON.stringify(o.itensOS||[]));
   if((o.formasOS||[]).length)formas=JSON.parse(JSON.stringify(o.formasOS));
   try{renderFormas();calcular();atualizarEtapas();}catch(e){console.warn(e);}
-  irEtapa(pedOSModo==="atendente"&&itens.length?3:2);
+  /* OS externa, cliente não aprovou: o pedido leva só o serviço de atendimento */
+  pedOSServAtend=!!(opc&&opc.servAtend);
+  if(pedOSServAtend){
+    itens=[];
+    var srv=produtoServicoAtendimento();
+    if(srv){
+      try{$("v_prod").value=srv.id;sincronizarValor();$("v_gar").value="Bronze";$("v_qtd").value="1";addItem();}catch(e){console.warn(e);}
+    }else toast("Cadastre em Produtos o Serviço de atendimento técnico (grupo Serviços) para cobrar a visita.");
+  }
+  irEtapa((pedOSModo==="atendente"||pedOSServAtend)&&itens.length?3:2);
   renderBannerOS();
 }
 async function salvarRascunhoOS(){
@@ -11560,12 +11607,13 @@ async function atividadeRealizadaOS(){
 /* etapa 3 da OS interna: resumo das peças e serviços, pedido, contato e botões */
 function renderPedOS(){
   var w=$("os_pedOS"),sec=$("os_secValores");if(!w||!sec)return;
-  var o=editandoOS,loja=!!(o&&o.local==="loja");
+  /* "loja" aqui = OS do fluxo novo (interna ou externa); ext = externa, o técnico finaliza na casa do cliente */
+  var o=editandoOS,loja=!!(o&&(o.local==="loja"||o.local==="externo")),ext=!!(o&&o.local==="externo");
   w.hidden=!loja;
   Array.prototype.forEach.call(sec.children,function(el){
     if(el===w||el.id==="os_valNota"||el.classList.contains("sect-t"))return;
     el.hidden=loja;});
-  var tit=sec.querySelector(".sect-t");if(tit)tit.textContent=loja?"3 · Peças, serviços e contato com o cliente":"3 · Valores e orçamento";
+  var tit=sec.querySelector(".sect-t");if(tit)tit.textContent=loja?(ext?"3 · Peças, serviços e pagamento":"3 · Peças, serviços e contato com o cliente"):"3 · Valores e orçamento";
   if(!loja){w.innerHTML="";return;}
   $("os_valNota").innerHTML="";
   var ped=pedidoDaOS(o),lista=ped?(ped.itens||[]):(o.itensOS||[]),fs=ped?ped.formas:(o.formasOS||[]);
@@ -11585,6 +11633,10 @@ function renderPedOS(){
     ? '<div class="note ok"><b>Atividade realizada pelo técnico.</b> Fazer contato Cliente: '+esc(ac.colaborador||"—")+" · "+esc(dataCurta(ac.data))+
         (ac.inicio?" às "+esc(ac.inicio):"")+" · "+(ac.status==="finalizado"?"concluída":"a fazer")+"</div>"
     : '<div class="note">Terminou a análise? Clique em <b>Atividade realizada</b>: a atendente '+esc(o.atendente||"")+" recebe a atividade <b>Fazer contato Cliente</b> daqui a 10 minutos, com todo o processo.</div>";
+  /* OS externa: sem orçamento para depois — o técnico resolve e finaliza na casa do cliente (regra do Wagner, 14/09) */
+  if(ext)contato=ped?"":'<div class="note"><b>Atendimento externo: o técnico resolve na casa do cliente.</b> Cliente aprovou: '+
+    "<b>Cliente aprovou · lançar peças e serviços e finalizar</b>. Não aprovou: <b>Cliente não aprovou · cobrar serviço de atendimento</b>. "+
+    "Nos dois casos o pedido é finalizado com forma de pagamento e assinatura, e a OS é finalizada junto.</div>";
   /* a OS se finaliza como o pedido: com instalação futura (fecha quando a instalação for finalizada) ou sem (cliente retira na loja) */
   var fechada=["entregue","cancelada"].indexOf(o.status)>=0;
   var podeAtd=ehGestor()||usuarioAtual===(o.atendente||o.criadoPor);
@@ -11597,6 +11649,12 @@ function renderPedOS(){
       : "");
   var atS=ativTecDaOS(o),servicoPend=!!(o.autorizadoEm&&atS&&atS.status!=="finalizado");
   var bt="";
+  if(ext){
+    if(!ped&&tec&&!fechada){
+      bt+='<button class="btn" type="button" id="osPecasPed">Cliente aprovou · lançar peças e serviços e finalizar</button>';
+      bt+='<button class="btn ghost" type="button" id="osServAtend">Cliente não aprovou · cobrar serviço de atendimento</button>';
+    }
+  }else{
   if(!ped&&tec&&!fechada)bt+='<button class="btn" type="button" id="osPecasPed">'+(lista.length?"Alterar peças e serviços":"Incluir peças e serviços")+"</button>";
   if(tec&&!fechada&&(!ac||servicoPend))
     bt+='<button class="btn ghost" type="button" id="osAtivRealizada">'+(servicoPend?"Serviço realizado · atividade realizada":"Atividade realizada")+"</button>";
@@ -11604,11 +11662,13 @@ function renderPedOS(){
     bt+='<button class="btn" type="button" id="osFinalizarPed">Finalizar OS · pagamento e entrega</button>';
     if(!o.autorizadoEm)bt+='<button class="btn ghost" type="button" id="osAutorizar">Cliente autorizou · agendar técnico para o serviço</button>';
   }
+  }
   if(instPend&&!fechada)bt+='<button class="btn ghost" type="button" id="osAbrirInst">Abrir a instalação</button>';
   w.innerHTML=tabela+estado+contato+notaRetornoOS(o)+notaServicoOS(o)+final+(bt?'<div class="actions" style="justify-content:flex-start">'+bt+"</div>":"");
   if($("osPecasPed"))$("osPecasPed").onclick=function(){abrirPedidoDaOS(o,"tecnico");};
   if($("osAtivRealizada"))$("osAtivRealizada").onclick=atividadeRealizadaOS;
   if($("osAutorizar"))$("osAutorizar").onclick=function(){abrirAtivServicoOS(o);};
+  if($("osServAtend"))$("osServAtend").onclick=function(){abrirPedidoDaOS(o,"tecnico",null,{servAtend:true});};
   if($("osFinalizarPed"))$("osFinalizarPed").onclick=function(){abrirPedidoDaOS(o,"atendente",ac&&ac.status!=="finalizado"?ac:null);};
   if($("osAbrirInst"))$("osAbrirInst").onclick=function(){abrirInstalacao(ped);};
 }
@@ -13190,7 +13250,7 @@ function calcOS(){
   ac+='<button class="btn" type="button" id="osSalvar">'+(editandoOS?"Salvar OS":"Abrir OS")+"</button>";
   if(editandoOS){
     /* OS interna só se finaliza pelo pedido, com as peças e serviços cobrados (regra do Wagner, 14/09) */
-    var internaOS=editandoOS.local==="loja";
+    var internaOS=editandoOS.local==="loja"||editandoOS.local==="externo";
     if(!internaOS&&["concluida","entregue","cancelada"].indexOf(editandoOS.status)<0)
       ac+='<button class="btn ghost" type="button" id="osConcluir">Concluir OS</button>';
     if(!internaOS&&editandoOS.status==="concluida")
@@ -13258,8 +13318,8 @@ async function salvarOS(){
   return o;
 }
 async function concluirOS(){
-  if(editandoOS&&editandoOS.local==="loja"){
-    toast("OS interna é finalizada pelo pedido, com as peças e serviços cobrados: use Finalizar OS · pagamento e entrega.");return;}
+  if(editandoOS&&(editandoOS.local==="loja"||editandoOS.local==="externo")){
+    toast("Esta OS é finalizada pelo pedido, com as peças e serviços cobrados.");return;}
   if(!$("os_laudo").value.trim()){
     $("os_alerta").innerHTML='<div class="note crit"><b>Lance o diagnóstico técnico antes de concluir a OS.</b></div>';return;}
   var o=await salvarOS();if(!o)return;
@@ -13338,7 +13398,8 @@ function marcarLocalOS(){
   Array.prototype.forEach.call($("os_local").querySelectorAll("button"),function(b){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-l")===osLocalSel));});
   $("os_localNota").innerHTML=osLocalSel==="externo"
-    ? '<div class="note"><b>Atendimento externo.</b> O técnico vai até o cliente — a atividade do técnico é a visita.</div>'
+    ? '<div class="note"><b>Atendimento externo.</b> O técnico vai até o cliente — a atividade do técnico é a visita. Lá ele faz o diagnóstico e finaliza a OS pelo pedido: '+
+      'com as peças e serviços se o cliente aprovar, ou cobrando o serviço de atendimento se não aprovar.</div>'
     : (osLocalSel==="loja"?'<div class="note"><b>Atendimento interno (na loja).</b> O produto fica na empresa para o técnico analisar. O técnico lança o diagnóstico e as peças e serviços; '+
       'ao marcar <b>Atividade realizada</b>, o atendente recebe a atividade <b>Fazer contato Cliente</b> com todo o processo. '+
       'A OS é finalizada pelo pedido, como toda venda: com instalação futura ou com o cliente retirando na loja. Depois de abrir, imprima a ficha (prender no produto) e o canhoto do cliente.</div>':"");
@@ -13424,9 +13485,9 @@ async function criarAtividadeTecnicoOS(){
 function podeTecnicoOS(o){return !!o&&(ehGestor()||!o.tecnico||o.tecnico===usuarioAtual);}
 function ajustarEtapasOS(){
   var o=editandoOS,tec=podeTecnicoOS(o);
-  var lojaE=!!(o&&o.local==="loja");
-  var diag=!!(o&&o.diagnosticoEm),orc=!!(o&&(lojaE?(o.atividadeContatoId||o.pedidoId):o.orcamentoEm)),fim=!!(o&&["concluida","entregue"].indexOf(o.status)>=0);
-  var etapas=[["Abertura",!!o],["Diagnóstico técnico",diag],[lojaE?"Peças, serviços e contato":"Valores e orçamento",orc],["Concluída",fim]];
+  var lojaE=!!(o&&(o.local==="loja"||o.local==="externo")),extE=!!(o&&o.local==="externo");
+  var diag=!!(o&&o.diagnosticoEm),orc=!!(o&&(lojaE?(extE?o.pedidoId:(o.atividadeContatoId||o.pedidoId)):o.orcamentoEm)),fim=!!(o&&["concluida","entregue"].indexOf(o.status)>=0);
+  var etapas=[["Abertura",!!o],["Diagnóstico técnico",diag],[lojaE?(extE?"Peças, serviços e pagamento":"Peças, serviços e contato"):"Valores e orçamento",orc],["Concluída",fim]];
   var atual=!o?0:(!diag?1:(!orc?2:(!fim?3:-1)));
   $("os_etapas").innerHTML=etapas.map(function(x,i){
     return '<span class="'+(i===atual?"atual":(x[1]?"feita":""))+'">'+(x[1]&&i!==atual?"✓ ":(i+1)+" · ")+x[0]+"</span>";}).join("");
