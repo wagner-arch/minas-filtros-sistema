@@ -1813,10 +1813,10 @@ img{max-width:100%}
             <div class="fld"><label for="os_hora">Hora</label><input id="os_hora" type="time"></div>
             <div class="fld" style="grid-column:span 2"><label for="os_atendente">Atendente</label><input id="os_atendente" readonly></div>
           </div>
-          <div class="fld" style="margin-top:16px"><label>Local do atendimento <span class="req">*</span></label>
+          <div class="fld" style="margin-top:16px"><label>Atendimento <span class="req">*</span></label>
             <div class="chips" id="os_local">
-              <button type="button" data-l="loja" aria-pressed="false">Atendimento interno (na loja)</button>
-              <button type="button" data-l="externo" aria-pressed="false">Atendimento externo</button>
+              <button type="button" data-l="loja" aria-pressed="false">Interno — na loja</button>
+              <button type="button" data-l="externo" aria-pressed="false">Externo — no endereço do cliente</button>
             </div>
             <div id="os_localNota"></div>
           </div>
@@ -11398,7 +11398,7 @@ function abrirAcoes(a){
         var osAc=await criarOSDaAcao(a,c);
         ir("os");abrirOS(osAc);renderOS();
         if(c.id){try{preencherClienteOS(c);}catch(e){console.warn(e);}}
-        toast("OS "+osAc.numero+" aberta para "+(a.cliente||"o cliente")+". Complete o local, o produto e a alegação e crie a atividade do técnico na própria OS.");
+        toast("OS "+osAc.numero+" aberta para "+(a.cliente||"o cliente")+". Marque o atendimento (interno ou externo), confira o produto e a alegação e crie a atividade do técnico na própria OS.");
       } else if(k==="venda"){
         ir("venda");
         try{if(c.id){$("v_cliente").value=c.id;atualizarEtapas();}
@@ -13194,6 +13194,7 @@ function abrirOS(o,ctx){
   $("os_fotoIn").onchange=lerFotosOS;
   $("osCriarAtiv").onclick=criarAtividadeTecnicoOS;
   renderFotosOS();renderAtivTecOS();
+  $("os_end").readOnly=!!osCli;$("os_cidade").readOnly=!!osCli;marcarLocalOS();
   ajustarEtapasOS();
 }
 function preencherClienteOS(c){
@@ -13215,6 +13216,9 @@ function preencherClienteOS(c){
     $("os_compra").value=comSerie[0].d||"";
     notaGarantiaOS();
   }
+  /* endereço vem do cadastro: na OS fica só leitura (altera-se no cadastro do cliente) */
+  $("os_end").readOnly=true;$("os_cidade").readOnly=true;
+  try{marcarLocalOS();}catch(e){}
 }
 function buscarClienteOS(){
   var box=$("os_sug"),achados=achaCliente($("os_nome").value);
@@ -13409,13 +13413,37 @@ function ligarAcoesOS(){
    alegação do cliente, local (na loja / externo) e o botão que cria a atividade do técnico. O técnico da OS é o
    responsável dessa atividade; tipo de serviço e prazo passaram para o diagnóstico (etapa 2). */
 var osLocalSel="",osFotos=[];
-function localOSN(k){return k==="externo"?"Atendimento externo":(k==="loja"?"Atendimento interno (na loja)":"—");}
+function localOSN(k){return k==="externo"?"Atendimento externo (no endereço do cliente)":(k==="loja"?"Atendimento interno (na loja)":"—");}
+/* atendimento externo: o local é sempre o endereço do cadastro do cliente (regra do Wagner, 14/09) */
+function clienteDaOS(){
+  if(osCli)return osCli;
+  return editandoOS?(clientes.filter(function(x){return x.id===editandoOS.clienteId;})[0]||null):null;
+}
+function enderecoCadastroCli(c){
+  if(!c)return "";
+  return [[c.rua,c.num].filter(Boolean).join(", "),c.comp,c.bairro,[c.cidade,c.uf].filter(Boolean).join("/"),c.cep?"CEP "+c.cep:""].filter(Boolean).join(" · ");
+}
+function faltaEnderecoVisita(c){
+  var f=[];if(!c)return ["cadastro do cliente"];
+  if(!c.cidade)f.push("cidade");
+  if(!c.rua&&!c.geo)f.push("rua ou geolocalização");
+  if(c.rua&&!c.num&&c.tipoend!=="rural")f.push("número");
+  return f;
+}
+function notaEnderecoExterno(){
+  var c=clienteDaOS(),falta=faltaEnderecoVisita(c);
+  var fluxo=" O técnico vai até lá: faz o diagnóstico e finaliza a OS pelo pedido — com as peças e serviços, ou cobrando o serviço de atendimento se o cliente não aprovar.";
+  if(!c)return '<div class="note"><b>Atendimento externo: no endereço do cadastro do cliente.</b> Escolha o cliente pela busca para ver o endereço.'+fluxo+"</div>";
+  return '<div class="note '+(falta.length?"crit":"")+'"><b>Atendimento externo no endereço do cadastro:</b> '+esc(enderecoCadastroCli(c)||"sem endereço")+
+    (c.ref?"<br>Ponto de referência: "+esc(c.ref):"")+mapaLink(c.geo)+
+    (falta.length?"<br><b>O cadastro de "+esc(c.nome||"")+" está sem "+esc(falta.join(", "))+".</b> Complete o cadastro do cliente para agendar a visita.":"")+
+    "<br>"+fluxo.trim()+"</div>";
+}
 function marcarLocalOS(){
   Array.prototype.forEach.call($("os_local").querySelectorAll("button"),function(b){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-l")===osLocalSel));});
   $("os_localNota").innerHTML=osLocalSel==="externo"
-    ? '<div class="note"><b>Atendimento externo.</b> O técnico vai até o cliente — a atividade do técnico é a visita. Lá ele faz o diagnóstico e finaliza a OS pelo pedido: '+
-      'com as peças e serviços se o cliente aprovar, ou cobrando o serviço de atendimento se não aprovar.</div>'
+    ? notaEnderecoExterno()
     : (osLocalSel==="loja"?'<div class="note"><b>Atendimento interno (na loja).</b> O produto fica na empresa para o técnico analisar. O técnico lança o diagnóstico e as peças e serviços; '+
       'ao marcar <b>Atividade realizada</b>, o atendente recebe a atividade <b>Fazer contato Cliente</b> com todo o processo. '+
       'A OS é finalizada pelo pedido, como toda venda: com instalação futura ou com o cliente retirando na loja. Depois de abrir, imprima a ficha (prender no produto) e o canhoto do cliente.</div>':"");
@@ -13425,7 +13453,7 @@ function validarAberturaOS(){
   var nome=$("os_nome").value.trim(),tel=$("os_tel").value.trim();
   if(!nome||!tel){$("os_alerta").innerHTML='<div class="note crit"><b>Cliente e telefone são obrigatórios.</b></div>';return false;}
   if(!osLocalSel&&(!editandoOS||!editandoOS.local)){
-    $("os_alerta").innerHTML='<div class="note crit"><b>Escolha o local do atendimento:</b> Atendimento na loja ou Atendimento externo.</div>';
+    $("os_alerta").innerHTML='<div class="note crit"><b>Escolha o atendimento:</b> Interno — na loja, ou Externo — no endereço do cliente.</div>';
     try{$("os_local").scrollIntoView({block:"center"});}catch(e){}return false;}
   if(!$("os_defeito").value.trim()){
     $("os_alerta").innerHTML='<div class="note crit"><b>Descreva a alegação do cliente.</b> É o que vai na ficha e no canhoto do cliente.</div>';return false;}
@@ -13511,6 +13539,12 @@ async function criarAtividadeTecnicoOS(){
     $("os_alerta").innerHTML='<div class="note crit"><b>Para agendar o técnico, o cliente precisa ter cadastro.</b> '+
       "Escolha o cliente pela busca do campo Cliente — sem cadastro, registre o primeiro contato em Atendimentos.</div>";
     try{$("os_nome").focus();}catch(e){}return;}
+  /* externo: a visita é no endereço do cadastro — sem endereço não agenda */
+  var faltaEnd=((osLocalSel||(editandoOS&&editandoOS.local))==="externo")?faltaEnderecoVisita(c):[];
+  if(faltaEnd.length){
+    $("os_alerta").innerHTML='<div class="note crit"><b>Atendimento externo é no endereço do cadastro do cliente, e o cadastro de '+esc(c.nome||"")+
+      " está sem "+esc(faltaEnd.join(", "))+".</b> Complete o cadastro do cliente e volte para agendar a visita.</div>";
+    return;}
   var resp=$("ot_resp").value,data=$("ot_data").value,hora=$("ot_hora").value;
   if(!resp||!data){
     $("os_alerta").innerHTML='<div class="note crit"><b>Escolha o técnico e a data da visita</b> na seção Atividade do técnico.</div>';
@@ -13518,6 +13552,7 @@ async function criarAtividadeTecnicoOS(){
   var nova=!editandoOS;
   var o=await salvarOS();if(!o)return;
   var obs=$("ot_obs").value.trim()||("OS "+o.numero+" · "+localOSN(o.local)+(o.equipamento?" · "+o.equipamento:"")+(o.serie?" · série "+o.serie:"")+" · Alegação: "+(o.defeito||""));
+  if(o.local==="externo")obs+="\nEndereço do cadastro: "+enderecoCadastroCli(c)+(c.ref?" · referência: "+c.ref:"");
   var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
   var a={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:c.id,cliente:c.nome,tel:c.tel||"",doc:c.doc||"",cidade:c.cidade||"",
     endereco:[c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "),origem:c.origem||"",
@@ -13653,7 +13688,7 @@ function fichaOS(){
   var lim=somaDias(o.abertura||hojeISO(),DIAS_DESCARTE);
   function lin(r,v){return '<div class="lin"><b>'+r+"</b><span>"+esc(v||"—")+"</span></div>";}
   var comum=lin("Abertura",dataCurta(o.abertura||"")+(o.hora?" às "+o.hora:""))+lin("Atendente",o.atendente||o.criadoPor)+
-    lin("Local",localOSN(o.local))+
+    lin("Atendimento",localOSN(o.local)+(o.local==="externo"&&o.endereco?" · "+o.endereco+(o.cidade?" · "+o.cidade:""):""))+
     lin("Cliente",o.cliente)+lin("Telefone",o.tel)+
     lin("Produto",o.equipamento)+lin("Número de série",o.serie)+(o.marca?lin("Marca / modelo",o.marca):"")+
     (o.diagnosticoEm?lin("Tipo de serviço",osTipoN(o.tipo)):"")+(o.prazo?lin("Prazo",dataCurta(o.prazo)):"")+
@@ -17167,7 +17202,8 @@ function ligar(){
   /* envio da OS em PDF: salva, mostra a ficha que vai e começa a gerar no botão da ficha */
   $("osZap").onclick=async function(){if(osNovaSemAtiv())return;var o=await salvarOS();if(!o)return;fichaOS();enviarOSWhatsApp(o,$("osImpZap"));};
   $("osImpZap").onclick=function(){if(editandoOS)enviarOSWhatsApp(editandoOS,this);};
-  $("os_nome").oninput=function(){osCli=null;$("os_achou").innerHTML="";buscarClienteOS();};
+  $("os_nome").oninput=function(){osCli=null;$("os_achou").innerHTML="";$("os_end").readOnly=false;$("os_cidade").readOnly=false;
+    try{marcarLocalOS();}catch(e){}buscarClienteOS();};
   $("os_nome").onblur=function(){setTimeout(function(){$("os_sug").hidden=true;},180);};
   $("os_prod").onchange=function(){sincronizarSerieOS();notaGarantiaOS();};
   $("os_compra").onchange=notaGarantiaOS;
