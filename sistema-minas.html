@@ -1464,6 +1464,7 @@ img{max-width:100%}
 
           <div class="card vstep" data-s="3">
             <h2>Formas de pagamento</h2>
+            <div id="v_creditoNota"></div>
             <div id="v_formas"></div>
             <button class="btn ghost sm" type="button" id="v_addForma" style="margin-top:12px">Adicionar forma de pagamento</button>
             <div class="calc" style="margin-top:20px">
@@ -4748,7 +4749,10 @@ var SEED_FORMAS=[
   {nome:"Mercado Livre",coef:seqUm(12)},
   {nome:"Mercado Shops",coef:seqUm(12)},
   {nome:"Permuta",coef:seqUm(16)},
-  {nome:"Locação",coef:seqUm(24)}
+  {nome:"Locação",coef:seqUm(24)},
+  /* direito não usado do plano virando abatimento: não deprecia e não gera título,
+     porque o dinheiro entrou na venda do plano (regra do Wagner, 16/09) */
+  {nome:"Crédito do plano",coef:{1:1}}
 ];
 function formaPor(nome){return formasPgto.filter(function(f){return f.nome===nome;})[0]||formasPgto[0]||{nome:"",coef:{1:1}};}
 function coefDe(nome,n){var f=formaPor(nome);return f.coef[n]||null;}
@@ -5989,16 +5993,119 @@ function addItem(){
   if(msgPlano)toast(msgPlano);
 }
 
+/* ---------- crédito do plano na troca de aparelho (regras do Wagner, 16/09) ----------
+   "o crédito vem geralmente de Plano Premium 1" e "o sistema deve analisar se
+   realmente o cliente tem o plano premium". O direito não usado (o refil, por
+   exemplo) vira crédito na venda do purificador novo: o purificador sai pelo
+   preço de tabela, a comissão não cai e o direito é baixado no plano. */
+var FORMA_CREDITO="Crédito do plano";
+function valorDoDireito(d){
+  /* o direito aponta produtos cadastrados; vale o mais caro deles pelo preço de tabela */
+  var ids=(d&&d.produtos)||[];
+  var v=0;
+  ids.forEach(function(pid){
+    var p=produtos.filter(function(x){return x.id===pid;})[0];
+    if(p)v=Math.max(v,+p.cheia||0);
+  });
+  if(!v&&d&&d.palavras){
+    var pal=String(d.palavras).split(/[,;]+/).map(function(s){return semAcento(s).trim();}).filter(Boolean);
+    produtos.forEach(function(p){
+      var n=semAcento(p.nome||"");
+      if(pal.some(function(w){return w&&n.indexOf(w)>=0;}))v=Math.max(v,+p.cheia||0);
+    });
+  }
+  return Math.round(v*100)/100;
+}
+/* só o direito de troca programada vira dinheiro. Peça de reposição (compressor,
+   gerador de ozônio, termostato) o cliente só recebe se quebrar — creditar o valor
+   dela seria pagar por um defeito que não aconteceu. */
+function direitoViraCredito(d){
+  if(!d||d.tipo==="visita")return false;
+  if(d.credito===true)return true;
+  if(d.credito===false)return false;
+  return /refil|elemento filtrante/.test(semAcento((d.item||"")+" "+(d.palavras||"")));
+}
+/* direitos de produto ainda não usados nos planos vigentes do cliente */
+function creditosDoPlano(cid){
+  var out=[];
+  planosVigentesCliente(cid).forEach(function(x){
+    var pl=x.info&&x.info.pl;if(!pl)return;
+    var uso=usoDoPlano(x.e,x.info);
+    (direitosDoPlano(pl)||[]).forEach(function(d){
+      if(!direitoViraCredito(d))return;
+      var usado=uso.itens[d.id]||0,resta=Math.max(0,(+d.qtd||0)-usado);
+      if(resta<=0)return;
+      var vu=valorDoDireito(d);
+      if(vu<=0)return;
+      out.push({equipId:x.e.id,equip:x.e,plano:x.e.plano,direitoId:d.id,direito:d.item,
+        qtd:resta,unit:vu,valor:Math.round(resta*vu*100)/100,fim:x.info.fim});
+    });
+  });
+  return out;
+}
+function creditoPlanoTotal(cid){
+  return Math.round(creditosDoPlano(cid).reduce(function(a,c){return a+c.valor;},0)*100)/100;
+}
+/* reparte o crédito usado entre os direitos disponíveis, na ordem em que vencem */
+function montarCreditoPlano(cid,valor){
+  var falta=Math.round((+valor||0)*100)/100,itens=[];
+  creditosDoPlano(cid).sort(function(a,b){return String(a.fim).localeCompare(String(b.fim));})
+    .forEach(function(c){
+      if(falta<=0.001)return;
+      var qtd=0,usa=0;
+      while(qtd<c.qtd&&falta>0.001){
+        var passo=Math.min(c.unit,falta);
+        usa=Math.round((usa+passo)*100)/100;falta=Math.round((falta-passo)*100)/100;qtd++;
+      }
+      if(usa>0)itens.push({equipId:c.equipId,plano:c.plano,direitoId:c.direitoId,
+        direito:c.direito,qtd:qtd,unit:c.unit,valor:usa,
+        aparelho:(c.equip.produto||"")+(c.equip.serie?" · série "+c.equip.serie:"")});
+    });
+  return {valor:Math.round(((+valor||0)-falta)*100)/100,itens:itens,
+    quando:hojeISO()+" "+agoraHM(),por:usuarioAtual};
+}
+function clienteDaVenda(){
+  return clientes.filter(function(c){return c.id===($("v_cliente")?$("v_cliente").value:"");})[0]||null;
+}
+/* o aviso e a trava do crédito: sem plano vigente com direito, a forma nem aparece */
+function notaCreditoPlano(){
+  var w=$("v_creditoNota");if(!w)return;
+  var c=clienteDaVenda();
+  var cr=c?creditosDoPlano(c.id):[];
+  var usado=formas.filter(function(f){return f.tipo===FORMA_CREDITO;})
+    .reduce(function(a,f){return a+(+f.valor||0);},0);
+  if(!cr.length){
+    w.innerHTML=usado
+      ? '<div class="note crit"><b>'+esc(c?c.nome:"O cliente")+" não tem plano vigente com direito disponível.</b> "+
+        "O crédito do plano não pode ser usado nesta venda.</div>"
+      : "";
+    return;
+  }
+  var tot=creditoPlanoTotal(c.id);
+  w.innerHTML='<div class="note '+(usado>tot?"crit":"ok")+'"><b>Crédito de plano disponível: '+BRL(tot)+".</b><br>"+
+    cr.map(function(x){
+      return esc(x.plano)+" de "+esc(x.equip.produto||"aparelho")+(x.equip.serie?" (série "+esc(x.equip.serie)+")":"")+
+        " · "+x.qtd+"× "+esc(x.direito)+" não usado"+(x.qtd===1?"":"s")+" · "+BRL(x.valor)+
+        " · vigente até "+esc(dataCurta(x.fim));
+    }).join("<br>")+
+    (usado>tot?"<br><b>Você lançou "+BRL(usado)+" de crédito, acima do disponível.</b>":"")+
+    "<br>Usando o crédito, o direito é baixado no plano: o cliente não recebe o produto depois.</div>";
+}
 /* formas de pagamento */
 var formas=[{tipo:"Cartão de Crédito Sipag",valor:0,parc:12}];
 function renderFormas(){
   var w=$("v_formas");w.innerHTML="";
   /* a lista das formas chega em carregar(); montar antes deixava a Forma 1 sem opções */
   if(!formasPgto.length){w.innerHTML='<span class="help">Carregando as formas de pagamento…</span>';return;}
+  var cliV=clienteDaVenda();
+  var temCredito=cliV?creditoPlanoTotal(cliV.id)>0:false;
   formas.forEach(function(f,i){
     var d=document.createElement("div");
     d.className="grid g4";d.style.marginBottom="14px";
-    var opts=formasPgto.map(function(t){return '<option'+(t.nome===f.tipo?" selected":"")+">"+t.nome+"</option>";}).join("");
+    /* a forma "Crédito do plano" só existe para quem tem plano vigente com direito */
+    var opts=formasPgto.filter(function(t){
+        return t.nome!==FORMA_CREDITO||temCredito||f.tipo===FORMA_CREDITO;})
+      .map(function(t){return '<option'+(t.nome===f.tipo?" selected":"")+">"+t.nome+"</option>";}).join("");
     var ps=parcelasDe(f.tipo);
     if(ps.indexOf(f.parc)<0){f.parc=ps[ps.length-1];}
     var pOpts=ps.map(function(n){return '<option value="'+n+'"'+(n===f.parc?" selected":"")+">"+n+"× · coef "+coefDe(f.tipo,n).toFixed(4).replace(".",",")+"</option>";}).join("");
@@ -6013,8 +6120,20 @@ function renderFormas(){
       var i=+el.getAttribute("data-i"),k=el.getAttribute("data-f");
       formas[i][k]=(k==="valor"?(parseFloat(el.value)||0):(k==="parc"?parseInt(el.value,10):el.value));
       if(k==="valor")formas[i].__auto=false;
-      if(k==="tipo"){renderFormas();}
-      calcular();
+      if(k==="tipo"){
+        if(el.value===FORMA_CREDITO){
+          formas[i].parc=1;
+          var cl2=clienteDaVenda(),lim=cl2?creditoPlanoTotal(cl2.id):0;
+          if(!(+formas[i].valor>0)||(+formas[i].valor)>lim)formas[i].valor=lim;
+          formas[i].__auto=false;
+        }
+        renderFormas();
+      }
+      if(k==="valor"&&formas[i].tipo===FORMA_CREDITO){
+        var cl3=clienteDaVenda(),lim3=cl3?creditoPlanoTotal(cl3.id):0;
+        if((+formas[i].valor||0)>lim3){formas[i].valor=lim3;renderFormas();}
+      }
+      calcular();notaCreditoPlano();
     };
   });
   Array.prototype.forEach.call(w.querySelectorAll("[data-rmf]"),function(b){
@@ -6280,6 +6399,17 @@ async function salvarPedido(){
   if(formas.some(function(f){return (+f.valor||0)>0&&!f.tipo;})){toast("Escolha a forma de pagamento de cada valor.");irEtapa(3);return;}
   if(r.dif!==0){toast("A soma das formas de pagamento não bate com o total.");irEtapa(3);return;}
   if(!assinaturaFeita){toast("Falta a assinatura do cliente.");irEtapa(5);return;}
+  /* crédito do plano: só existe com plano vigente e dentro do direito não usado */
+  var credV=formas.filter(function(f){return f.tipo===FORMA_CREDITO;})
+    .reduce(function(a,f){return a+(+f.valor||0);},0);
+  if(credV>0){
+    var crs=creditosDoPlano(cliSel.id),limite=creditoPlanoTotal(cliSel.id);
+    if(!crs.length){
+      toast(cliSel.nome+" não tem plano vigente com direito disponível — o crédito do plano não vale nesta venda.");
+      irEtapa(3);return;}
+    if(credV>limite+0.001){
+      toast("O crédito do plano é de no máximo "+BRL(limite)+" para "+cliSel.nome+".");irEtapa(3);return;}
+  }
   /* regra do Wagner (16/09): venda de purificador só fecha depois de responder
      se entrou usado na troca e se o vendedor aceita o usado no estoque dele */
   if(!trocaResp&&vendaTemPurificador(itens)){abrirTroca(salvarPedido);return;}
@@ -6298,7 +6428,8 @@ async function salvarPedido(){
     obs:$("v_obs").value.trim(),usoImagem:$("v_imagem").value,anexos:anexados,arquivos:arquivos,assinado:true,assinaturaImg:assinaturaParaDoc(),
     abaixoTabela:!!r.abaixo,status:etapaVenda({abaixoTabela:!!r.abaixo,instalacao:$("v_idata").value}),
     instalacao:$("v_idata").value?($("v_idata").value+" "+($("v_ihora").value||"")):"",
-    troca:trocaResp||null};
+    troca:trocaResp||null,
+    creditoPlano:(credV>0?montarCreditoPlano(cliSel.id,credV):null)};
   /* pedido das peças e serviços de uma OS interna (regra do Wagner, 14/09) */
   var osDoPed=pedOrigemOS,ativContatoOS=pedOSAtiv,msgOSFim="",servAtendPed=pedOSServAtend;
   if(osDoPed){
@@ -7026,8 +7157,11 @@ function direitosPadrao(pl){
     {id:"frete",item:"Frete do purificador para qualquer local do Brasil",tipo:"item",qtd:2,palavras:"frete",
       contratoPadrao:"{q} fretes para deslocamento do purificador para qualquer local do Brasil"}].concat(comuns);
   else lista=[
+    /* credito:true = direito de troca programada, que o cliente recebe de qualquer jeito
+       e por isso pode virar abatimento se ele trocar de aparelho (regra do Wagner, 16/09).
+       Peça de reposição por defeito não vira crédito: só vale se quebrar. */
     {id:"refil",item:"Troca de elemento filtrante (refil)",tipo:"item",qtd:1,palavras:"refil, elemento filtrante",
-      contratoPadrao:"{q} ({qe}) troca de elemento filtrante anual",fem:true},
+      credito:true,contratoPadrao:"{q} ({qe}) troca de elemento filtrante anual",fem:true},
     {id:"visita",item:"Visita técnica mensal",tipo:"visita",qtd:12,palavras:"",
       contratoPadrao:"Visita técnica mensal sem custo adicional, totalizando {n} visitas durante a vigência do contrato"}].concat(comuns);
   lista.forEach(function(d){d.produtos=d.tipo==="visita"?[]:produtosPorPalavras(d.palavras);});
@@ -7135,6 +7269,15 @@ function usoDoPlano(e,info){
       if(!it.planoCobre||it.planoCobre.equipId!==e.id)return;
       var d=dirs.filter(function(x){return x.id===it.planoCobre.direitoId;})[0]||direitoDoItem(info.pl,it.pid,it.nome);
       if(d)u.itens[d.id]=(u.itens[d.id]||0)+(+it.qtd||0);
+    });
+  });
+  /* direito trocado por crédito na venda de outro aparelho: sai do saldo do plano
+     (regra do Wagner, 16/09) — o cliente recebeu em dinheiro, não recebe o produto */
+  pedidos.forEach(function(p){
+    if(p.status==="Cancelada"||!p.creditoPlano)return;
+    (p.creditoPlano.itens||[]).forEach(function(cp){
+      if(cp.equipId!==e.id)return;
+      u.itens[cp.direitoId]=(u.itens[cp.direitoId]||0)+(+cp.qtd||0);
     });
   });
   /* peças de OS cobertas pelo plano deste aparelho (OS cancelada ou reprovada devolve) */
@@ -8812,8 +8955,22 @@ function aVista(tipo){
 /* toda venda vira parcelas em contas a receber */
 async function gerarReceberDoPedido(p){
   var gerados=[],ccVenda=await centroFixo("Venda de produto","Receitas","entrada");
+  /* crédito do plano não vira título: o dinheiro entrou quando o plano foi vendido.
+     Ele vira o custo de entregar o direito (regra do Wagner, 16/09). */
+  if(p.creditoPlano&&+p.creditoPlano.valor>0){
+    var ccPl=await centroFixo("Direito do plano utilizado","Planos","saida");
+    var cxPl=daLoja(caixas).filter(function(c){return c.padrao==="sim";})[0]||daLoja(caixas)[0];
+    var mvPl={id:uid(),loja:p.loja,caixaId:(cxPl||{}).id||"",data:p.data,tipo:"saida",
+      valor:+p.creditoPlano.valor,
+      descricao:"Direito do plano usado como crédito · Pedido "+p.numero+" · "+(p.cliente||"")+
+        " · "+(p.creditoPlano.itens||[]).map(function(x){return x.qtd+"× "+x.direito;}).join(", "),
+      nomePadrao:"Direito do plano utilizado",centroId:ccPl,pedidoId:p.id,
+      creditoPlano:true,semCaixa:true,por:usuarioAtual};
+    movs.push(mvPl);await grava("movs",mvPl);
+  }
   (p.formas||[]).forEach(function(f){
     var v=+f.valor||0;if(v<=0)return;
+    if(f.tipo===FORMA_CREDITO)return;   /* já tratado acima: não gera parcela a receber */
     var n=f.parc||1,parcela=Math.round(v/n*100)/100;
     for(var i=1;i<=n;i++){
       var t={id:uid(),loja:p.loja,especie:"receber",origem:"pedido",
@@ -11464,6 +11621,9 @@ async function gerarDemo(){
   await eqDemo(c4,pC,-15,"área de serviço","WZ-2002"); /* vence em 15 dias → Aguardando contato */
   var eAgd=await eqDemo(c2,pA,5,"copa","MF-3003");     /* visita marcada → Agendado visita */
   var eSem=await eqDemo(c4,pA,10,"varanda","MF-3004"); /* visita feita, sem venda */
+
+  /* Premium I com o refil AINDA não usado: é o crédito da troca de aparelho (regra do Wagner, 16/09) */
+  eAg1.plano="Premium I";eAg1.planoInicio=somaDias(hoje,-120);await grava("equipamentos",eAg1);
   var visDemo=[
     visitaDemo(eAgd,c2,{data:dias(2),inicio:"10:00"}),
     /* data exata: dias() da demonstração não volta antes do dia 1º do mês */
@@ -19049,6 +19209,7 @@ function render(){
   try{avisarPosseVeiculo();}catch(e){console.warn(e);}
   try{renderFin();}catch(e){console.warn("aprovação financeira",e);}
   try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();try{renderPadroes();}catch(e){}renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
+  try{notaCreditoPlano();}catch(e){}
   var sc=$("v_cliente"),atual=sc.value;sc.innerHTML="";
   clientes.filter(function(c){return c.loja===lojaAtual;}).forEach(function(c){
     var o=document.createElement("option");o.value=c.id;o.textContent=c.nome;sc.appendChild(o);});
@@ -19914,7 +20075,7 @@ function ligar(){
     b.onclick=function(){var n=+b.dataset.step;if(podeIrEtapa(n))irEtapa(n);};});
   $("v_voltar").onclick=function(){irEtapa(etapa-1);};
   $("v_avancar").onclick=function(){if(podeIrEtapa(etapa+1))irEtapa(etapa+1);};
-  $("v_cliente").onchange=atualizarEtapas;
+  $("v_cliente").onchange=function(){atualizarEtapas();try{renderFormas();notaCreditoPlano();}catch(e){}};
   irEtapa(1);
   $("cal_ant").onclick=function(){moverCal(-1);};
   $("cal_prox").onclick=function(){moverCal(1);};
