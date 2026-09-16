@@ -179,6 +179,8 @@
   .rep-item{display:block;width:100%;text-align:left;margin:0 0 6px;white-space:normal;line-height:1.3}
   /* extrato de remuneração */
   .rem-resumo{margin-top:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  /* selo do plano Premium ativo (cadastro, lista de clientes, manutenção periódica) */
+  .pill.p-plano{background:rgba(14,116,190,.14);color:#0e74be;border:1px solid rgba(14,116,190,.38);white-space:nowrap}
   /* OS interna: resumo do processo em várias linhas e aviso do pedido da OS */
   #fm_obs{white-space:pre-wrap}
   #v_osBanner{margin-bottom:14px}
@@ -2352,7 +2354,11 @@ img{max-width:100%}
               <option value="semana">Vencem nesta semana</option>
               <option value="mes">Vencem neste mês</option>
               <option value="emdia">Em dia</option>
-              <option value="premium">Só plano Premium</option>
+            </select>
+            <select id="mpPlano" style="max-width:210px" title="Plano Premium ativo">
+              <option value="">Com e sem plano Premium</option>
+              <option value="com">Com plano Premium ativo</option>
+              <option value="sem">Sem plano Premium</option>
             </select>
             <select id="mpStatus" style="max-width:220px">
               <option value="">Todos os status</option>
@@ -5338,7 +5344,7 @@ function renderClientes(){
     var f=faltantes(c),ind=estrelasDe(c.id),indTot=indicadosPor(c.id).length;
     var tr=document.createElement("tr");tr.className="clickable";
     tr.innerHTML='<td><div class="t-main">'+esc(c.nome)+
-        (ehLead(c)?' <span class="pill p-acc">lead</span>':"")+'</div>'+
+        (ehLead(c)?' <span class="pill p-acc">lead</span>':"")+seloPlanoCliente(c.id)+'</div>'+
         (c.apelido?'<div class="t-sub">'+esc(c.apelido)+'</div>':'')+'</td>'+
       "<td>"+esc(c.doc||"—")+"</td>"+
       '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
@@ -5516,7 +5522,7 @@ function abrirCliente(c){
   preencherIndicados(v.indicado);toggleConj();toggleTipoPJ();renderEstrelas(c);
   $("cliFormTitulo").innerHTML=c
     ? esc("Editar · "+c.nome)+(ehLead(c)?' <span class="pill p-acc" style="vertical-align:middle;margin-left:8px">lead</span>':
-        ' <span class="pill p-ok" style="vertical-align:middle;margin-left:8px">cliente</span>')
+        ' <span class="pill p-ok" style="vertical-align:middle;margin-left:8px">cliente</span>')+seloPlanoCliente(c.id)
     : "Novo lead";
   /* ficha aberta: começa na aba Dados pessoais */
   abaCliente("dados");
@@ -7487,6 +7493,19 @@ function planosVigentesCliente(cid,data){
       return e.loja===lojaAtual&&e.clienteId===cid&&e.ativo!==false&&e.plano&&e.plano!=="Bronze";})
     .map(function(e){return {e:e,info:planoDoEquip(e)};})
     .filter(function(x){return x.info&&h>=x.info.ini&&h<=x.info.fim;});
+}
+/* selo do plano no cadastro (pedido do Wagner, 16/09): "💧 Plano Premium I · ativo" só com plano VIGENTE;
+   sem plano ativo não aparece nada. Não usa estrela — a estrela do cadastro é das indicações */
+function planoAtivoEquip(e){
+  if(!e||e.ativo===false||!e.plano||e.plano==="Bronze")return false;
+  var inf=planoDoEquip(e),h=hojeISO();
+  return !!inf&&h>=inf.ini&&h<=inf.fim;
+}
+function seloPlanoCliente(cid){
+  var vig=[];try{vig=planosVigentesCliente(cid);}catch(e){}
+  var nomes=[];vig.forEach(function(x){if(nomes.indexOf(x.e.plano)<0)nomes.push(x.e.plano);});
+  return nomes.map(function(n){
+    return ' <span class="pill p-plano" title="Plano vigente — os direitos aparecem no atendimento, na atividade, na OS e na Manutenção Periódica">💧 Plano '+esc(n)+" · ativo</span>";}).join("");
 }
 /* atendimento, atividade e OS também consultam o plano (regra do Wagner, 14/09) */
 function htmlPlanoCliente(cid){
@@ -15291,8 +15310,13 @@ function renderManut(){
       if(sit==="semana")return s.k==="semana"||s.k==="vencida";
       if(sit==="mes")return s.k==="mes"||s.k==="semana"||s.k==="vencida";
       if(sit==="emdia")return s.k==="emdia";
-      if(sit==="premium")return !!e.plano&&e.plano!=="Bronze";
       return e.ativo!==false;})
+    /* com plano / sem plano / todos (pedido do Wagner, 16/09): "com" = plano Premium vigente hoje */
+    .filter(function(e){
+      var pf=$("mpPlano")?$("mpPlano").value:"";
+      if(!pf)return true;
+      var at=planoAtivoEquip(e);
+      return pf==="com"?at:!at;})
     .filter(function(e){
       if(!q)return true;
       var alvo=(textoBusca(e._c)+" "+(e.serie||"")+" "+(e.produto||"")+" "+(e.cliente||"")).toLowerCase();
@@ -15313,12 +15337,15 @@ function renderManut(){
   var ativos=base.filter(function(e){return e.ativo!==false;});
   var venc=ativos.filter(function(e){return sitEq(e).k==="vencida";});
   if($("mpStatus")&&!$("mpStatus").__ligado){$("mpStatus").__ligado=true;$("mpStatus").onchange=renderManut;}
+  if($("mpPlano")&&!$("mpPlano").__ligado){$("mpPlano").__ligado=true;$("mpPlano").onchange=renderManut;}
+  var nPlano=ativos.filter(planoAtivoEquip).length;
   var stAtivos=ativos.map(function(e){return statusManut(e).k;});
   function contaSt(k){return stAtivos.filter(function(x){return x===k;}).length;}
   var nAg=contaSt("aguardando"),nAgd=contaSt("agendado"),nCom=contaSt("comvenda"),nSem=contaSt("semvenda");
   var nRev=ativos.filter(function(e){var sm=statusManut(e);return sm.k==="aguardando"&&!!sm.revisita;}).length;
   $("mpKpis").innerHTML=
-    '<div class="kpi"><div class="l">Equipamentos ativos</div><div class="v">'+ativos.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Equipamentos ativos</div><div class="v">'+ativos.length+"</div>"+
+      '<div class="l" style="margin-top:4px">'+nPlano+" com plano Premium ativo</div></div>"+
     '<div class="kpi"><div class="l">Vencidas</div><div class="v" style="color:'+(venc.length?"var(--crit)":"inherit")+'">'+venc.length+"</div></div>"+
     '<div class="kpi"><div class="l">Aguardando contato</div><div class="v" style="color:'+(nAg?"var(--warn)":"inherit")+'">'+nAg+"</div>"+
       '<div class="l" style="margin-top:4px">'+nRev+" já visitado"+(nRev===1?"":"s")+" sem venda</div></div>"+
@@ -15338,9 +15365,9 @@ function renderManut(){
         esc(e.serie||"sem série")+"</code>"+(e.local?" · "+esc(e.local):"")+
         ((e.plano&&e.plano!=="Bronze")?(function(){
           var inf=planoDoEquip(e),hj=hojeISO();
-          if(!inf)return ' <span class="pill p-acc">'+esc(e.plano)+"</span>";
-          return (hj>=inf.ini&&hj<=inf.fim)?' <span class="pill p-acc">'+esc(e.plano)+" até "+esc(dataCurta(inf.fim))+"</span>"
-            :' <span class="pill p-mut">'+esc(e.plano)+" vencido</span>";})():"")+"</div></td>"+
+          if(!inf)return ' <span class="pill p-acc">Plano '+esc(e.plano)+"</span>";
+          return (hj>=inf.ini&&hj<=inf.fim)?' <span class="pill p-plano">💧 Plano '+esc(e.plano)+" · ativo até "+esc(dataCurta(inf.fim))+"</span>"
+            :' <span class="pill p-mut">Plano '+esc(e.plano)+" · vencido</span>";})():"")+"</div></td>"+
       '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
         '</div><div class="t-sub">'+esc([c.bairro,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
         mapaLink(c.geo)+"</div></td>"+
