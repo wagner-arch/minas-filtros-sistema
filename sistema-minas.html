@@ -5881,10 +5881,14 @@ function ajustarEquipItem(){
   /* pedido aberto pelo atendimento da Manutenção Periódica: o aparelho daquele atendimento já vem escolhido */
   var doAt=pedOrigemAtiv&&(pedOrigemAtiv.manutEquipId||pedOrigemAtiv.equipId);
   var alvoAt=doAt?lista.filter(function(e){return e.id===doAt;})[0]:null;
-  var vencido=alvoAt||lista.filter(function(e){var px=proximaDe(e);return px&&px<=hojeISO();})[0];
+  /* purificador vendido é sempre aparelho novo (troca ou compra): não vem marcado como manutenção de outro aparelho */
+  var vendeAparelho=ehPurificador({pid:p.id,nome:p.nome});
+  var vencido=alvoAt||(vendeAparelho?null:lista.filter(function(e){var px=proximaDe(e);return px&&px<=hojeISO();})[0]);
   sel.value=vencido?vencido.id:"";
   if(ajuda){
-    ajuda.textContent=alvoAt
+    ajuda.textContent=(vendeAparelho&&!alvoAt)
+      ? "Purificador vendido é um aparelho novo. Só escolha um aparelho da lista se for mesmo a manutenção dele."
+      : alvoAt
       ? "Aparelho do atendimento da Manutenção Periódica — já veio marcado."
       : vencido
         ? "O aparelho mais atrasado já veio marcado — troque se não for esse."
@@ -6289,7 +6293,10 @@ function nomeUsado(u){return [u.marca,u.modelo].filter(Boolean).join(" ")+(u.ser
 function abrirTroca(depois){
   trocaResp=null;trocaDepois=depois||null;
   var cli=(clientes.filter(function(c){return c.id===$("v_cliente").value;})[0]||{}).nome||"";
-  $("tr_sub").textContent=(cli?cli+" · ":"")+"a venda só fecha depois desta resposta.";
+  /* cliente com plano vigente: a série do usado é o que diz de qual aparelho o plano migra */
+  var nPl=0;try{nPl=planosVigentesCliente($("v_cliente").value).length;}catch(eP){}
+  $("tr_sub").textContent=(cli?cli+" · ":"")+"a venda só fecha depois desta resposta."+
+    (nPl?" Este cliente tem "+nPl+(nPl===1?" aparelho":" aparelhos")+" com plano vigente: se o usado for um deles, informe a série para o plano migrar para o aparelho novo.":"");
   Array.prototype.forEach.call($("tr_tem").querySelectorAll("button"),function(b){b.setAttribute("aria-pressed","false");});
   Array.prototype.forEach.call($("tr_aceita").querySelectorAll("button"),function(b){b.setAttribute("aria-pressed","false");});
   $("tr_dados").hidden=true;$("tr_destinoWrap").hidden=true;$("tr_aceitaNota").innerHTML="";
@@ -15141,10 +15148,30 @@ async function migrarPlanoDaTroca(ped){
     if(e&&(!e.plano||e.plano==="Bronze"))novo=e;
   });
   if(!novo)return null;
-  /* migra o plano que vence por último, entre os aparelhos que não são o novo */
-  var alvo=vig.filter(function(x){return x.e.id!==novo.id;})
-    .sort(function(a,b){return String(b.info.fim).localeCompare(String(a.info.fim));})[0];
-  if(!alvo)return null;
+  /* qual aparelho saiu: pela série do usado; sem série, só quando o cliente tem UM aparelho com plano vigente.
+     Sem identificar, não migra — senão o plano de um aparelho que continua na casa do cliente iria para o novo */
+  var cands=vig.filter(function(x){return x.e.id!==novo.id;});
+  var serieUsado=String(ped.troca.serie||"").trim().toLowerCase();
+  var alvo=null;
+  if(serieUsado)alvo=cands.filter(function(x){return String(x.e.serie||"").trim().toLowerCase()===serieUsado;})[0]||null;
+  else if(cands.length===1)alvo=cands[0];
+  if(!alvo){
+    var motivoNao="";
+    if(serieUsado){
+      var doCli=equipamentos.filter(function(e){return e.clienteId===ped.clienteId&&e.ativo!==false&&
+        String(e.serie||"").trim().toLowerCase()===serieUsado;})[0];
+      var infoV=doCli?planoDoEquip(doCli):null;
+      motivoNao=(doCli&&infoV)?"o plano "+doCli.plano+" do aparelho "+doCli.serie+" venceu em "+dataCurta(infoV.fim)
+        :"a série "+ped.troca.serie+" do usado não é de um aparelho do cliente com plano vigente";
+    }else if(cands.length>1){
+      motivoNao="o cliente tem "+cands.length+" aparelhos com plano vigente e a série do usado não foi informada";
+    }
+    if(motivoNao){
+      try{registrarEvento(ped,"Plano não migrado para o aparelho novo: "+motivoNao+".");await gravarPedido(ped);}catch(eN){console.warn(eN);}
+      return {motivo:motivoNao};
+    }
+    return null;
+  }
   if(String(alvo.info.fim)<String(ped.data||hojeISO()))return null;   /* vencido não migra */
   var uso=usoDoPlano(alvo.e,alvo.info);
   novo.plano=alvo.e.plano;
@@ -15160,6 +15187,8 @@ async function migrarPlanoDaTroca(ped){
     cobranca:"",texto:"Aparelho saiu na troca do pedido "+ped.numero+" · plano migrado para "+
       (novo.serie||novo.produto||"o aparelho novo")}]);
   await grava("equipamentos",alvo.e);
+  try{registrarEvento(ped,"Plano "+alvo.e.plano+" migrado do aparelho "+(alvo.e.serie||alvo.e.produto||"")+" para "+
+    (novo.serie||novo.produto||"o aparelho novo")+" · vigente até "+dataCurta(alvo.info.fim));await gravarPedido(ped);}catch(eM){console.warn(eM);}
   return {de:alvo.e,para:novo,fim:alvo.info.fim};
 }
 async function manutencaoPelaVenda(ped){
@@ -15173,7 +15202,8 @@ async function manutencaoPelaVenda(ped){
     if(prod&&(+prod.manut)>0)alvos.push({it:it,e:ja});
   }
   try{await sincronizarEquipamentos();}catch(err){console.warn(err);}
-  try{await migrarPlanoDaTroca(ped);}catch(errM){console.warn("migração do plano",errM);}
+  var migPlano=null;
+  try{migPlano=await migrarPlanoDaTroca(ped);}catch(errM){console.warn("migração do plano",errM);}
   var baixadas=0,agendadas=0,trocas=0;
   for(var i=0;i<alvos.length;i++){
     var e=alvos[i].e,item=alvos[i].it;
@@ -15201,7 +15231,7 @@ async function manutencaoPelaVenda(ped){
       baixadas++;
     }
   }
-  return {baixadas:baixadas,agendadas:agendadas,trocas:trocas};
+  return {baixadas:baixadas,agendadas:agendadas,trocas:trocas,plano:migPlano};
 }
 function renderManut(){
   var base=equipamentos.filter(function(e){return e.loja===lojaAtual;});
@@ -17248,7 +17278,11 @@ async function aprovarVenda(p,caixaId){
     try{rman=await manutencaoPelaVenda(p);}catch(eM){console.warn(eM);}
     toast("Pedido "+p.numero+" aprovado · estoque de "+nomeLocal(loc)+" baixado · "+
       parcelas.length+" parcela(s) no Contas a Receber"+
-      (rman.trocas?" · manutenção periódica baixada em "+rman.trocas+" aparelho"+(rman.trocas===1?"":"s"):"")+".");
+      (rman.trocas?" · manutenção periódica baixada em "+rman.trocas+" aparelho"+(rman.trocas===1?"":"s"):"")+
+      /* resultado da troca de aparelho com plano (regra do Wagner, 16/09) */
+      (rman.plano&&rman.plano.para?" · plano "+rman.plano.para.plano+" migrado de "+(rman.plano.de.serie||rman.plano.de.produto||"")+
+        " para "+(rman.plano.para.serie||rman.plano.para.produto||"o aparelho novo")+", vigente até "+dataCurta(rman.plano.fim):"")+
+      (rman.plano&&rman.plano.motivo?" · plano não migrado: "+rman.plano.motivo:"")+".");
     return true;
   } finally {
     delete aprovandoVenda[p.id];
