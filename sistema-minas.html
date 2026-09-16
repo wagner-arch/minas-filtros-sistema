@@ -7249,6 +7249,13 @@ function planoDoEquip(e){
 }
 function usoDoPlano(e,info){
   var u={visitas:0,itens:{}};
+  /* plano migrado na troca de aparelho: o que já foi usado no antigo conta aqui
+     (regra do Wagner, 16/09) — senão o cliente ganharia os direitos de novo */
+  if(e&&e.planoHerdado){
+    u.visitas=+e.planoHerdado.visitas||0;
+    Object.keys(e.planoHerdado.itens||{}).forEach(function(k){
+      u.itens[k]=(u.itens[k]||0)+(+e.planoHerdado.itens[k]||0);});
+  }
   /* visitas: as visitas concluídas ligadas ao aparelho na vigência (regra do Wagner, 14/09) */
   var diasVisita={};
   visitasDoEquip(e).forEach(function(a){
@@ -15119,6 +15126,42 @@ async function sincronizarEquipamentos(){
    da venda e a visita agendada dele passa a Visita realizada · com venda. O aparelho é o que o vendedor
    escolheu na hora de incluir o item — por série ou por localização. Aparelho que só nasceu nesta
    venda é compra, não manutenção. Nada é agendado sozinho (regra do Wagner, 14/09). */
+/* Troca de aparelho: o plano do antigo MIGRA para o novo, e só se ainda estiver
+   vigente (regra do Wagner, 16/09). O que já foi usado vai junto, senão o
+   cliente ganharia os direitos de novo; o aparelho que saiu é desativado. */
+async function migrarPlanoDaTroca(ped){
+  if(!ped||!ped.troca||!ped.troca.tem)return null;
+  var vig=planosVigentesCliente(ped.clienteId,ped.data);
+  if(!vig.length)return null;
+  /* o aparelho novo é o purificador desta venda que virou equipamento */
+  var novo=null;
+  (ped.itens||[]).forEach(function(it){
+    if(novo||!ehPurificador(it))return;
+    var e=equipDaVenda(ped,it);
+    if(e&&(!e.plano||e.plano==="Bronze"))novo=e;
+  });
+  if(!novo)return null;
+  /* migra o plano que vence por último, entre os aparelhos que não são o novo */
+  var alvo=vig.filter(function(x){return x.e.id!==novo.id;})
+    .sort(function(a,b){return String(b.info.fim).localeCompare(String(a.info.fim));})[0];
+  if(!alvo)return null;
+  if(String(alvo.info.fim)<String(ped.data||hojeISO()))return null;   /* vencido não migra */
+  var uso=usoDoPlano(alvo.e,alvo.info);
+  novo.plano=alvo.e.plano;
+  novo.planoInicio=alvo.info.ini;                 /* mantém o fim original */
+  novo.planoHerdado={de:alvo.e.id,serie:alvo.e.serie||"",itens:uso.itens||{},visitas:uso.visitas||0,
+    quando:hojeISO(),pedidoId:ped.id};
+  novo.historico=(novo.historico||[]).concat([{data:hojeISO(),hora:agoraHM(),tecnico:usuarioAtual,
+    cobranca:"",texto:"Plano "+alvo.e.plano+" migrado do aparelho "+(alvo.e.serie||alvo.e.produto||"")+
+      " · vigente até "+dataCurta(alvo.info.fim)}]);
+  await grava("equipamentos",novo);
+  alvo.e.ativo=false;alvo.e.planoMigradoPara=novo.id;alvo.e.saiuNaTrocaEm=hojeISO();
+  alvo.e.historico=(alvo.e.historico||[]).concat([{data:hojeISO(),hora:agoraHM(),tecnico:usuarioAtual,
+    cobranca:"",texto:"Aparelho saiu na troca do pedido "+ped.numero+" · plano migrado para "+
+      (novo.serie||novo.produto||"o aparelho novo")}]);
+  await grava("equipamentos",alvo.e);
+  return {de:alvo.e,para:novo,fim:alvo.info.fim};
+}
 async function manutencaoPelaVenda(ped){
   var alvos=[],j,it,prod,ja;
   for(j=0;j<(ped.itens||[]).length;j++){
@@ -15130,6 +15173,7 @@ async function manutencaoPelaVenda(ped){
     if(prod&&(+prod.manut)>0)alvos.push({it:it,e:ja});
   }
   try{await sincronizarEquipamentos();}catch(err){console.warn(err);}
+  try{await migrarPlanoDaTroca(ped);}catch(errM){console.warn("migração do plano",errM);}
   var baixadas=0,agendadas=0,trocas=0;
   for(var i=0;i<alvos.length;i++){
     var e=alvos[i].e,item=alvos[i].it;
