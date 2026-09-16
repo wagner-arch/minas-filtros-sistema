@@ -5670,7 +5670,7 @@ async function salvarPedido(){
   /* pedido das peças e serviços de uma OS interna (regra do Wagner, 14/09) */
   var osDoPed=pedOrigemOS,ativContatoOS=pedOSAtiv,msgOSFim="",servAtendPed=pedOSServAtend;
   if(osDoPed){
-    ped.osId=osDoPed.id;ped.osNumero=osDoPed.numero;
+    ped.osId=osDoPed.id;ped.osNumero=osDoPed.numero;ped.osLocal=osDoPed.local||"";
     if(osDoPed.tecnico)ped.instalador=osDoPed.tecnico;
     ped.obs=(ped.obs?ped.obs+"\n":"")+"Referente à OS "+osDoPed.numero+(servAtendPed?" · cliente não aprovou o serviço: cobrado o serviço de atendimento":"")+".";
   }
@@ -6134,6 +6134,8 @@ function retiradasPendentesSaindo(pid,loja){
     .reduce(function(a,r){return a+r.itens.filter(function(i){return i.pid===pid;}).reduce(function(b,i){return b+(+i.qtd||0);},0);},0);
 }
 function localVendaForm(){
+  /* pedido de OS interna sem instalação futura: confere o estoque da empresa, não o do técnico */
+  if(pedOrigemOS&&pedOrigemOS.local==="loja"&&!($("v_idata")&&$("v_idata").value))return LOC_EMPRESA;
   var temInst=!!($("v_idata")&&$("v_idata").value);
   var resp=temInst?($("v_iresp").value||$("v_inst").value||$("v_vend").value):$("v_vend").value;
   return resp?locColab(resp):LOC_EMPRESA;
@@ -6796,7 +6798,11 @@ function opcoesGarantia(){
     s.value=atual;
   });
 }
-function localDaVenda(p){var n=responsavelVenda(p);return n?locColab(n):LOC_EMPRESA;}
+/* OS interna (bancada) sem atividade futura: a peça sai do estoque da empresa, nunca do técnico (regra do Wagner, 15/09) */
+function localDaVenda(p){
+  if(p&&p.osId&&p.osLocal==="loja"&&!p.instalacao)return LOC_EMPRESA;
+  var n=responsavelVenda(p);return n?locColab(n):LOC_EMPRESA;
+}
 /* ainda não aprovada (venda antiga encerrada antes da aprovação existir conta como aprovada) */
 function vendaPendente(p){return p.status!=="Cancelada"&&!p.aprovado&&!(p.aprovado===undefined&&p.encerrada);}
 function etapaVenda(p){
@@ -11500,6 +11506,7 @@ function renderBannerOS(){
       ?"Lance a <b>forma de pagamento negociada com o cliente</b>. Na etapa <b>Entrega</b>, preencha a <b>instalação futura</b> se o técnico vai instalar — em branco, o cliente retira na loja. "+
         "Ao finalizar o pedido, a OS é finalizada junto (com instalação futura, quando a instalação for finalizada). Depois, finalize a atividade de contato."
       : "Inclua as peças e serviços gastos. Você pode <b>Salvar na OS sem finalizar</b> ou seguir até o pagamento e finalizar o pedido — com instalação futura ou com o cliente retirando na loja.")+
+    (o.local==="loja"?"<br><span class=\"t-sub\">Sem instalação futura, as peças saem do <b>estoque da loja</b>; com instalação futura, do estoque do técnico.</span>":"")+
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
       '<button class="btn sm" type="button" id="v_osRasc">Salvar na OS sem finalizar</button>'+
       '<button class="btn ghost sm" type="button" id="v_osVoltar">Voltar para a OS</button></div>';
@@ -11562,7 +11569,7 @@ function horaDaqui(min){
   t=Math.ceil(t/5)*5;if(t>23*60+59)t=23*60+59;
   return String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0");
 }
-function resumoProcessoOS(o){
+function resumoProcessoOS(o,fase){
   var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
   var origem=o.origemAtiv?atendimentos.filter(function(x){return x.id===o.origemAtiv;})[0]:null;
   var primeiro=origem||atendsDe(o.clienteId).filter(function(a){return a.natureza==="atendimento"&&(a.data||"")<=(o.abertura||"9999");})
@@ -11581,45 +11588,54 @@ function resumoProcessoOS(o){
     (o.servicoRealizadoEm?" · serviço realizado em "+dataCurta(o.servicoRealizadoEm):""));
   l.push("Diagnóstico — problema encontrado: "+(o.laudo||"—")+" · reparo necessário: "+(o.reparo||"—")+
     (o.pecasNec?" · peças necessárias: "+o.pecasNec:"")+(o.infoTec?" · informações técnicas: "+o.infoTec:""));
-  l.push("Peças e serviços: "+(lista.length?resumoItensOS(lista)+" · total "+BRL(lista.reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0)):"nenhum incluído"));
+  l.push("Peças e serviços: "+(lista.length
+    ? resumoItensOS(lista)+" · total "+BRL(lista.reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0))
+    : (fase==="orcamento"?"o técnico está lançando na OS — confira em Abrir a OS antes de ligar":"nenhum incluído")));
   if(formasTexto(fs))l.push((ped?"Pagamento do pedido "+ped.numero+": ":"Pagamento previsto: ")+formasTexto(fs));
-  l.push(o.servicoRealizadoEm
-    ? "→ Fazer contato com o cliente: avisar que o serviço foi realizado, lançar a forma de pagamento e combinar a entrega (retirada na loja ou instalação futura)."
-    : "→ Fazer contato com o cliente: apresentar o diagnóstico e os valores, negociar a forma de pagamento e registrar o que foi resolvido.");
+  l.push(fase==="retirada"||o.servicoRealizadoEm
+    ? "→ Fazer contato com o cliente: avisar que o serviço está pronto e combinar a retirada na loja. Quando ele buscar o produto, receba o valor negociado e finalize o pedido em Finalizar OS · pagamento e entrega."
+    : "→ Fazer contato com o cliente: apresentar o diagnóstico e o orçamento. Se ele aprovar, use Cliente autorizou · agendar técnico para o serviço na OS.");
   return l.join("\n");
 }
-async function atividadeRealizadaOS(){
-  var o=editandoOS;if(!o)return;
-  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") ou a gestão marca a atividade como realizada.");return;}
-  if(!o.diagnosticoEm){toast("Salve o diagnóstico técnico antes.");return;}
-  var at=ativTecDaOS(o);
-  /* depois da autorização do cliente o técnico marca de novo, agora pelo serviço executado */
-  var foiServico=!!(o.autorizadoEm&&at&&at.status!=="finalizado");
-  if(o.atividadeContatoId&&!foiServico){toast("A atividade do técnico já foi marcada como realizada.");return;}
-  if(!(o.itensOS||[]).length&&!o.pedidoId&&!confirm("Nenhuma peça ou serviço foi incluído. Marcar a atividade como realizada assim mesmo?"))return;
-  if(foiServico){o.servicoRealizadoEm=hojeISO();o.servicoRealizadoPor=usuarioAtual;}
-  var resumo=resumoProcessoOS(o);
-  if(at&&at.status!=="finalizado"){
-    at.resultado="Diagnóstico: "+(o.laudo||"");
-    at.obs=(at.obs?at.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): atividade realizada. Diagnóstico: "+(o.laudo||"");
-    await concluirAtivPorAcao(at,"Atividade realizada pelo técnico · OS "+o.numero);
-  }
+/* contato do atendente criado pelo sistema: "orcamento" logo depois do diagnóstico, "retirada" quando o serviço fica pronto */
+async function criarContatoAtendenteOS(o,fase){
   var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
   var hora=horaDaqui(10),quem=o.atendente||o.criadoPor||usuarioAtual;
   var ac={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:o.clienteId||"",cliente:o.cliente,tel:o.tel||c.tel||"",
     doc:o.doc||c.doc||"",cidade:c.cidade||o.cidade||"",endereco:[c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "),
     origem:c.origem||"",colaborador:quem,vendedor:"",tipos:[TIPO_CONTATO_OS],tipo:TIPO_CONTATO_OS,
-    data:hojeISO(),inicio:hora,fim:"",obs:resumo,osId:o.id,osEtapa:"contato",
+    data:hojeISO(),inicio:hora,fim:"",obs:resumoProcessoOS(o,fase),osId:o.id,osEtapa:"contato",osFase:fase||"orcamento",
     situacao:"pendente",status:"aberto",criadoEm:hojeISO(),criadoPor:usuarioAtual};
   atendimentos.push(ac);
   if(db){try{await col("atendimentos").doc(ac.id).set(ac);}catch(e){console.warn(e);}}
-  o.atividadeContatoId=ac.id;o.tecnicoRealizouEm=hojeISO();o.tecnicoRealizouPor=usuarioAtual;
+  o.atividadeContatoId=ac.id;
+  return ac;
+}
+/* serviço executado pelo técnico depois da autorização: abre o contato para o cliente buscar o produto */
+async function atividadeRealizadaOS(){
+  var o=editandoOS;if(!o)return;
+  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") ou a gestão marca a atividade como realizada.");return;}
+  if(!o.diagnosticoEm){toast("Salve o diagnóstico técnico antes.");return;}
+  var at=ativTecDaOS(o);
+  var foiServico=!!(o.autorizadoEm&&at&&at.status!=="finalizado");
+  if(o.atividadeContatoId&&!foiServico){toast("A atividade do técnico já foi marcada como realizada.");return;}
+  if(!(o.itensOS||[]).length&&!o.pedidoId&&!confirm("Nenhuma peça ou serviço foi incluído. Marcar a atividade como realizada assim mesmo?"))return;
+  if(foiServico){o.servicoRealizadoEm=hojeISO();o.servicoRealizadoPor=usuarioAtual;}
+  if(at&&at.status!=="finalizado"){
+    at.resultado=foiServico?"Serviço executado":"Diagnóstico: "+(o.laudo||"");
+    at.obs=(at.obs?at.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): "+(foiServico?"serviço executado.":"atividade realizada. Diagnóstico: "+(o.laudo||""));
+    await concluirAtivPorAcao(at,(foiServico?"Serviço realizado pelo técnico · OS ":"Atividade realizada pelo técnico · OS ")+o.numero);
+  }
+  var ac=await criarContatoAtendenteOS(o,foiServico?"retirada":"orcamento");
+  o.tecnicoRealizouEm=hojeISO();o.tecnicoRealizouPor=usuarioAtual;
   if(["aberta","analise"].indexOf(o.status)>=0)o.status="aprovacao";
   o.historico=o.historico||[];
-  o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Atividade realizada pelo técnico · contato com o cliente agendado para "+quem+" hoje às "+hora});
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:(foiServico?"Serviço realizado pelo técnico · contato para o cliente buscar o produto":"Atividade realizada pelo técnico · contato com o cliente")+
+    " agendado para "+ac.colaborador+" hoje às "+ac.inicio});
   await grava("ordens",o);
   abrirOS(o);renderOS();render();
-  toast("Atividade realizada. "+quem+" recebeu a atividade Fazer contato Cliente para hoje às "+hora+", com todo o processo da OS.");
+  toast((foiServico?"Serviço realizado. ":"Atividade realizada. ")+ac.colaborador+" recebeu a atividade Fazer contato Cliente para hoje às "+ac.inicio+
+    (foiServico?", para o cliente buscar o produto.":", com todo o processo da OS."));
 }
 /* etapa 3 da OS interna: resumo das peças e serviços, pedido, contato e botões */
 function renderPedOS(){
@@ -11647,9 +11663,9 @@ function renderPedOS(){
     : (lista.length?'<div class="note"><b>Salvo na OS sem finalizar</b>'+(o.pecasServicosPor?" por "+esc(o.pecasServicosPor)+" em "+esc(dataCurta(o.pecasServicosEm||"")):"")+
         (formasTexto(fs)?" · pagamento previsto: "+esc(formasTexto(fs)):"")+"</div>":"");
   var contato=ac
-    ? '<div class="note ok"><b>Atividade realizada pelo técnico.</b> Fazer contato Cliente: '+esc(ac.colaborador||"—")+" · "+esc(dataCurta(ac.data))+
+    ? '<div class="note ok"><b>Fazer contato Cliente ('+(ac.osFase==="retirada"?"retirada do produto":"orçamento")+"):</b> "+esc(ac.colaborador||"—")+" · "+esc(dataCurta(ac.data))+
         (ac.inicio?" às "+esc(ac.inicio):"")+" · "+(ac.status==="finalizado"?"concluída":"a fazer")+"</div>"
-    : '<div class="note">Terminou a análise? Clique em <b>Atividade realizada</b>: a atendente '+esc(o.atendente||"")+" recebe a atividade <b>Fazer contato Cliente</b> daqui a 10 minutos, com todo o processo.</div>";
+    : '<div class="note">Salvo o diagnóstico, o sistema cria sozinho a atividade <b>Fazer contato Cliente</b> para a atendente '+esc(o.atendente||"")+" levar o orçamento.</div>";
   /* OS externa: sem orçamento para depois — o técnico resolve e finaliza na casa do cliente (regra do Wagner, 14/09) */
   if(ext)contato=ped?"":'<div class="note"><b>Atendimento externo: o técnico resolve na casa do cliente.</b> Passou os valores e o cliente aprovou: '+
     "<b>Abrir o pedido da OS</b>. Não aprovou: <b>Cliente não aprovou · cobrar serviço de atendimento</b>. "+
@@ -13627,9 +13643,27 @@ async function salvarDiagnosticoOS(){
   s.diagnosticoPor=usuarioAtual;
   s.historico.push({quando:hojeISO(),por:usuarioAtual,texto:(primeiro?"Diagnóstico lançado: ":"Diagnóstico atualizado: ")+s.laudo});
   await grava("ordens",s);
+  /* OS interna: salvo o diagnóstico, o sistema já conclui a análise do técnico e cria o contato do atendente
+     com o orçamento (regra do Wagner, 15/09) */
+  var contatoDiag=null;
+  if(primeiro&&s.local==="loja"&&!s.atividadeContatoId){
+    var atD=ativTecDaOS(s);
+    if(atD&&atD.status!=="finalizado"){
+      atD.resultado="Diagnóstico: "+(s.laudo||"");
+      atD.obs=(atD.obs?atD.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): diagnóstico lançado. "+(s.laudo||"");
+      await concluirAtivPorAcao(atD,"Diagnóstico lançado · OS "+s.numero);
+    }
+    contatoDiag=await criarContatoAtendenteOS(s,"orcamento");
+    if(["aberta","analise"].indexOf(s.status)>=0)s.status="aprovacao";
+    s.historico.push({quando:hojeISO(),por:usuarioAtual,
+      texto:"Contato com o cliente (orçamento) agendado para "+contatoDiag.colaborador+" hoje às "+contatoDiag.inicio});
+    await grava("ordens",s);
+  }
   $("os_alerta").innerHTML="";
-  toast(primeiro?"Diagnóstico salvo. Agora lance mão de obra e peças para gerar o orçamento.":"Diagnóstico atualizado.");
-  abrirOS(s);renderOS();
+  toast(contatoDiag
+    ? "Diagnóstico salvo. Lance as peças e serviços agora: "+contatoDiag.colaborador+" já recebeu a atividade Fazer contato Cliente para hoje às "+contatoDiag.inicio+" com o orçamento."
+    : (primeiro?"Diagnóstico salvo. Agora lance mão de obra e peças para gerar o orçamento.":"Diagnóstico atualizado."));
+  abrirOS(s);renderOS();render();
   setTimeout(function(){try{$("os_secValores").scrollIntoView({block:"start"});}catch(e){}},60);
 }
 async function gerarOrcamentoOS(){
