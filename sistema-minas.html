@@ -20239,6 +20239,40 @@ function ligar(){
     if(EMPRESA.contEmail&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(EMPRESA.contEmail))toast("Confira o e-mail da contabilidade: "+EMPRESA.contEmail);
     sincChaveGoogle();
     await gravarEmpresa();renderEmpresa();toast("Dados da empresa salvos.");};
+  /* ponto pelo endereço para a loja e a casa do colaborador — MESMA ordem do cadastro do cliente:
+     1º base de endereços do IBGE (número exato); só sem ela, o mapa aberto (que não tem o número da casa) */
+  function acharGeoPorEndereco(o){
+    var ibge=window.buscarIBGEMF?window.buscarIBGEMF(o).then(null,function(){return null;}):Promise.resolve(null);
+    return ibge.then(function(r){
+      if(r&&r.la!=null)return {la:r.la,lo:r.lo,texto:r.texto,exato:r.nivel==="numero"||(r.nivel==="vizinhos"&&r.tipo==="ok")};
+      var q=[o.rua+(o.num?", "+o.num:""),o.bairro,o.cidade,o.uf,"Brasil"].filter(Boolean).join(", ");
+      return fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q="+encodeURIComponent(q))
+        .then(function(x){return x.json();})
+        .then(function(j){
+          if(!j||!j.length)return null;
+          return {la:+j[0].lat,lo:+j[0].lon,exato:false,
+            texto:(r&&r.semRua?"Esta rua não está na base de endereços do IBGE. ":"")+
+              "Ponto aproximado pelo mapa aberto, sem o número da casa: "+String(j[0].display_name||q).slice(0,90)+". Confira no mapa ou use “Marcar onde estou” no local."};
+        });
+    });
+  }
+  /* "Rua Doutor Lage, 106 - Centro, Pará de Minas/MG, 35660-036" → rua, número, bairro, cidade, UF, CEP */
+  function partesEnderecoLivre(s,cidadePadrao){
+    var t=String(s||"").trim(),o={rua:"",num:"",bairro:"",cidade:"",uf:"",cep:""};
+    var mc=/(\d{5})-?(\d{3})/.exec(t);if(mc){o.cep=mc[1]+"-"+mc[2];t=t.replace(mc[0],"");}
+    var p=t.split(",").map(function(x){return x.trim();}).filter(Boolean);
+    var mr=/^(.*?)\s+(?:n[º°o.]?\s*)?(\d+)\s*$/i.exec(p[0]||"");
+    if(mr&&!/^\d/.test(p[0])){o.rua=mr[1];o.num=mr[2];p.shift();}else{o.rua=p.shift()||"";}
+    p.forEach(function(x){
+      var mn=/^(?:n[º°o.]?\s*)?(\d+)\s*(?:[-–]\s*(.*))?$/i.exec(x);
+      if(mn&&!o.num){o.num=mn[1];if(mn[2])o.bairro=mn[2].trim();return;}
+      var mu=/^(.*?)\s*[\/\-–]\s*([A-Za-z]{2})$/.exec(x);
+      if(mu){o.cidade=mu[1].trim();o.uf=mu[2].toUpperCase();return;}
+      if(!o.bairro)o.bairro=x;else if(!o.cidade)o.cidade=x;
+    });
+    if(!o.cidade)o.cidade=cidadePadrao||"";
+    return o;
+  }
   /* geolocalização da casa do colaborador, achada pelo endereço do cadastro dele */
   $("uGeoBuscar").onclick=function(){
     var alvo=$("u_geoAvisoCasa");
@@ -20246,15 +20280,12 @@ function ligar(){
     var rua=($("u_rua").value||"").trim(),num=($("u_num").value||"").trim();
     var bai=($("u_bairro").value||"").trim(),cid=($("u_cidade").value||"").trim(),uf=($("u_uf").value||"").trim();
     if(!rua||!cid){nota("Preencha ao menos a rua e a cidade do colaborador.","crit");return;}
-    nota("Procurando o endereço…");
-    var q=[rua+(num?", "+num:""),bai,cid,uf,"Brasil"].filter(Boolean).join(", ");
-    fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q="+encodeURIComponent(q))
-      .then(function(r){return r.json();})
-      .then(function(j){
-        if(!j||!j.length){nota("Não achei este endereço no mapa. Cole as coordenadas do Google Maps.","warn");return;}
-        $("u_geo").value=(+j[0].lat).toFixed(6)+", "+(+j[0].lon).toFixed(6);
-        nota("Achei: "+(j[0].display_name||q)+". Confira e salve o colaborador.","ok");
-      },function(){nota("Não consegui falar com a base de mapas. Cole as coordenadas.","crit");});
+    if(!num)nota("Sem o número da casa o ponto fica no meio da rua. Procurando…","warn");else nota("Procurando o endereço…");
+    acharGeoPorEndereco({rua:rua,num:num,bairro:bai,cidade:cid,uf:uf,cep:($("u_cep").value||"").trim()}).then(function(r){
+      if(!r){nota("Não achei este endereço. Cole as coordenadas do Google Maps ou use “Marcar onde estou” na casa.","warn");return;}
+      $("u_geo").value=r.la.toFixed(6)+", "+r.lo.toFixed(6);
+      nota(r.texto+" Salve o colaborador.",r.exato?"ok":"warn");
+    },function(){nota("Não consegui consultar o endereço agora. Cole as coordenadas.","crit");});
   };
   $("uGeoAqui").onclick=function(){
     var alvo=$("u_geoAvisoCasa");
@@ -20271,16 +20302,15 @@ function ligar(){
     var end=($("em_endereco").value||"").trim(),cid=($("em_cidade").value||"").trim();
     var alvo=$("em_geoAvisoLoja");
     function nota(t,cls){alvo.innerHTML='<div class="note '+(cls||"")+'"></div>';alvo.firstChild.textContent=t;}
-    if(!end&&!cid){nota("Preencha o endereço completo da loja e toque de novo.","crit");return;}
-    nota("Procurando o endereço da loja…");
-    var q=[end,cid,"Brasil"].filter(Boolean).join(", ");
-    fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q="+encodeURIComponent(q))
-      .then(function(r){return r.json();})
-      .then(function(j){
-        if(!j||!j.length){nota("Não achei este endereço no mapa. Confira o endereço ou cole as coordenadas do Google Maps.","warn");return;}
-        $("em_geo").value=(+j[0].lat).toFixed(6)+", "+(+j[0].lon).toFixed(6);
-        nota("Achei: "+(j[0].display_name||q)+". Confira e toque em Salvar.","ok");
-      },function(){nota("Não consegui falar com a base de mapas. Tente de novo ou cole as coordenadas.","crit");});
+    if(!end){nota("Preencha o endereço completo da loja (rua, nº, bairro, cidade/UF) e toque de novo.","crit");return;}
+    var pe=partesEnderecoLivre(end,cid);
+    if(!pe.rua||!pe.cidade){nota("Escreva o endereço assim: Rua Doutor Lage, 106 - Centro, Pará de Minas/MG.","crit");return;}
+    nota(pe.num?"Procurando o endereço da loja…":"Sem o número o ponto fica no meio da rua. Procurando…",pe.num?"":"warn");
+    acharGeoPorEndereco(pe).then(function(r){
+      if(!r){nota("Não achei este endereço. Confira o endereço ou cole as coordenadas do Google Maps.","warn");return;}
+      $("em_geo").value=r.la.toFixed(6)+", "+r.lo.toFixed(6);
+      nota(r.texto+" Toque em Salvar.",r.exato?"ok":"warn");
+    },function(){nota("Não consegui consultar o endereço agora. Tente de novo ou cole as coordenadas.","crit");});
   };
   $("emGeoAqui").onclick=function(){
     var alvo=$("em_geoAvisoLoja");
@@ -22254,9 +22284,12 @@ function erro(msg){
   }
   function buscarIBGE(o){
     var u=ibgeRuaDigitada(o.rua);
-    if(!u.ult||!o.cidade)return Promise.resolve(null);
+    /* cidade escrita "Pará de Minas/MG" ou "Pará de Minas - MG": a UF sai do nome (senão a cidade não é achada na base) */
+    var cidIn=String(o.cidade||"").trim(),mUf=/^(.*?)\s*[\/\-–]\s*([A-Za-z]{2})\s*$/.exec(cidIn),ufIn=o.uf;
+    if(mUf){cidIn=mUf[1];if(!ufIn)ufIn=mUf[2];}
+    if(!u.ult||!cidIn)return Promise.resolve(null);
     return ibgeIndiceP().then(function(ind){
-      var c=ind&&ind.cidades&&ind.cidades[String(o.uf||UF_PADRAO).toUpperCase()+"|"+ibgeTexto(o.cidade)];
+      var c=ind&&ind.cidades&&ind.cidades[String(ufIn||UF_PADRAO).toUpperCase()+"|"+ibgeTexto(cidIn)];
       if(!c)return {fora:true};
       return ibgeArquivoP(c[0]+(c[1]?"-"+u.balde:"")+".txt").then(function(txt){
         var r=txt?ibgeProcurar(txt,u,o.cep,o.bairro):null;
