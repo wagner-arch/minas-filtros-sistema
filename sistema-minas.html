@@ -1295,10 +1295,12 @@ img{max-width:100%}
       <div class="card flush" id="prodLista">
         <div class="toolbar">
           <input id="prodBusca" placeholder="Buscar por nome ou código">
+          <select id="prodGrupo" style="max-width:200px"></select>
+          <select id="prodSub" style="max-width:200px"></select>
           <span class="count" id="prodCount"></span>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Produto</th><th class="num">Estoque</th><th class="num">Custo</th><th class="num">Frete</th><th class="num">100%</th><th class="num">70%</th><th class="num">Campanha</th><th class="num">Pontos</th><th>Série</th><th>Manutenção</th></tr></thead>
+          <thead><tr><th>Produto</th><th>Grupo · Subgrupo</th><th class="num">Estoque</th><th class="num">Custo</th><th class="num">Frete</th><th class="num">100%</th><th class="num">70%</th><th class="num">Campanha</th><th class="num">Pontos</th><th>Série</th><th>Manutenção</th></tr></thead>
           <tbody id="prodBody"></tbody>
         </table></div>
       </div>
@@ -1317,7 +1319,12 @@ img{max-width:100%}
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="p_pop">Nome popular</label><input id="p_pop"></div>
             <div class="fld"><label for="p_marca">Marca</label><input id="p_marca"></div>
-            <div class="fld"><label for="p_grupo">Grupo</label><input id="p_grupo"></div>
+            <div class="fld"><label for="p_grupo">Grupo <span class="req">*</span></label>
+              <input id="p_grupo" list="dlGrupos" autocomplete="off" placeholder="Purificadores, Refis, Acessórios…">
+              <datalist id="dlGrupos"></datalist></div>
+            <div class="fld"><label for="p_subgrupo">Subgrupo <span class="req">*</span></label>
+              <input id="p_subgrupo" list="dlSubgrupos" autocomplete="off" placeholder="Platinum Flex, Água Everest…">
+              <datalist id="dlSubgrupos"></datalist></div>
             <div class="fld"><label for="p_barras">Código de barras</label><input id="p_barras"></div>
           </div>
         </div>
@@ -3204,13 +3211,15 @@ img{max-width:100%}
       <div class="page-head"><h1>Centros de Custo</h1><p>A etiqueta que diz de onde veio ou para onde foi cada real. É o que faz o Fluxo de Caixa dizer alguma coisa.</p></div>
       <div class="card flush">
         <div class="toolbar">
-          <input id="ccNome" placeholder="Ex.: Combustível, Aluguel, Venda de produto" style="max-width:280px">
+          <input id="ccGrupo" placeholder="Grupo · ex.: Veículos" list="dlCcGrupos" autocomplete="off" style="max-width:220px">
+          <datalist id="dlCcGrupos"></datalist>
+          <input id="ccNome" placeholder="Subgrupo · ex.: Combustível" style="max-width:260px">
           <select id="ccTipo" style="max-width:170px"><option value="saida">Saída</option><option value="entrada">Entrada</option></select>
           <button class="btn" type="button" id="ccAdd">Adicionar</button>
           <span class="sp"></span><span class="count" id="ccCount"></span>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Centro de custo</th><th>Tipo</th><th class="num">Lançamentos</th><th class="num">Movimentado</th><th></th></tr></thead>
+          <thead><tr><th>Grupo</th><th>Subgrupo (centro de custo)</th><th>Tipo</th><th class="num">Lançamentos</th><th class="num">Movimentado</th><th></th></tr></thead>
           <tbody id="ccBody"></tbody>
         </table></div>
       </div>
@@ -5185,7 +5194,21 @@ function mostrarFaltantes(){
 /* produtos */
 function renderProdutos(){
   var q=($("prodBusca").value||"").toLowerCase();
-  var lista=produtos.filter(function(p){return !q||(p.nome||"").toLowerCase().indexOf(q)>=0||(p.cod||"").toLowerCase().indexOf(q)>=0;});
+  /* filtros de grupo e subgrupo (regra do Wagner, 15/09: todo produto tem os dois) */
+  var sg=$("prodGrupo"),ss=$("prodSub");
+  if(sg){
+    var gAt=sg.value;
+    sg.innerHTML='<option value="">Todos os grupos</option>'+listaGruposProd().map(function(g){return "<option>"+esc(g)+"</option>";}).join("");
+    sg.value=gAt||"";
+    var sAt=ss.value;
+    ss.innerHTML='<option value="">Todos os subgrupos</option>'+subgruposDeProdutos(sg.value).map(function(s){return "<option>"+esc(s)+"</option>";}).join("");
+    ss.value=sAt||"";
+    if(ss.value&&ss.selectedIndex<0)ss.value="";
+  }
+  var fg=sg?sg.value:"",fs=ss?ss.value:"";
+  var lista=produtos.filter(function(p){return !q||(p.nome||"").toLowerCase().indexOf(q)>=0||(p.cod||"").toLowerCase().indexOf(q)>=0;})
+    .filter(function(p){return !fg||(p.grupo||"")===fg;})
+    .filter(function(p){return !fs||(p.subgrupo||"")===fs;});
   $("prodCount").textContent=lista.length+(lista.length===1?" produto":" produtos");
   var b=$("prodBody");b.innerHTML="";
   lista.forEach(function(p){
@@ -5196,6 +5219,7 @@ function renderProdutos(){
     var inativo=(p.status||"ativo")==="inativo";
     if(inativo)tr.style.opacity=".55";
     tr.innerHTML='<td><div class="t-main">'+esc(p.nome)+(inativo?' <span class="pill p-mut">inativo</span>':"")+'</div><div class="t-sub"><code>'+esc(p.cod)+"</code> · "+esc(p.marca||"—")+"</div></td>"+
+      '<td><div class="t-main">'+esc(p.grupo||"—")+'</div><div class="t-sub">'+esc(p.subgrupo||"sem subgrupo")+"</div></td>"+
       '<td class="num"><span class="pill '+estCls+'">'+est+"</span></td>"+
       '<td class="num">'+(p.custo?BRL(p.custo):"—")+'</td><td class="num">'+(p.frete?BRL(p.frete):"—")+"</td>"+
       '<td class="num">'+BRL(p.cheia)+'</td><td class="num">'+(p.campanha?BRL(p.campanha):"—")+"</td>"+
@@ -5210,8 +5234,9 @@ function abrirProduto(p){
   editandoProd=p||null;$("prodLista").hidden=true;$("prodForm").hidden=false;
   $("prodFormTitulo").textContent=p?("Editar produto · "+p.nome):"Novo produto";
   var v=p||{};
-  ["cod","nome","pop","marca","grupo","barras","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){
+  ["cod","nome","pop","marca","grupo","subgrupo","barras","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){
     var el=$("p_"+k);if(el)el.value=(v[k]!=null?v[k]:"");});
+  atualizarListasGrupoProd();
   $("p_un").value=v.un||"UN";$("p_serie").value=v.serie||"nao";
   $("p_campativa").value=v.campativa||"nao";
   $("p_status").value=v.status||"ativo";notaStatus();
@@ -6780,6 +6805,51 @@ async function salvarSerieGrupos(){
   render();
   toast(g.length?"Número de série liberado só para: "+g.join(", ")+".":"Nenhum grupo com número de série.");
 }
+/* ---------- Grupo e Subgrupo do produto (regra do Wagner, 15/09: todo produto tem os dois) ---------- */
+function listaGruposProd(){
+  var c={};produtos.forEach(function(p){var g=String(p.grupo||"").trim();if(g)c[g]=1;});
+  return Object.keys(c).sort(function(a,b){return a.localeCompare(b,"pt-BR");});
+}
+function subgruposDeProdutos(grupo){
+  var c={};
+  produtos.forEach(function(p){
+    if(grupo&&String(p.grupo||"").trim()!==grupo)return;
+    var s=String(p.subgrupo||"").trim();if(s)c[s]=1;});
+  return Object.keys(c).sort(function(a,b){return a.localeCompare(b,"pt-BR");});
+}
+/* produto sem subgrupo: o sistema classifica pela linha do produto (editável no cadastro) */
+var LINHAS_SUB=[[/platinum flex/,"Platinum Flex"],[/he ?oxi|heoxi/,"HE Oxi"],[/platinum he/,"Platinum HE"],[/platinum/,"Platinum"],
+  [/everest/,"Água Everest"],[/water ?flex/,"Water Flex"],[/pury/,"Pury"],[/aquazon/,"Aquazon"],[/blue/,"Blue"],
+  [/vivax/,"Vivax"],[/acquaflex/,"Acquaflex"],[/maxfilter/,"Maxfilter"],[/top ?life/,"Top Life"],
+  [/gerador de ozonio/,"Gerador de ozônio"],[/refil|elemento filtrante|filtro/,"Refis e filtros"],
+  [/torneira|cavalete|mangueira|conexao|bica/,"Peças e acessórios"]];
+function subgrupoSugerido(p){
+  var n=semAcento((p.nome||"")+" "+(p.pop||"")),g=String(p.grupo||"").trim();
+  if(g==="Planos")return "Planos de garantia";
+  if(/servi/i.test(g))return "Serviços técnicos";
+  for(var i=0;i<LINHAS_SUB.length;i++)if(LINHAS_SUB[i][0].test(n))return LINHAS_SUB[i][1];
+  if(g==="Purificadores")return "Outros purificadores";
+  return g||"Diversos";
+}
+/* completa grupo e subgrupo do catálogo que veio sem, uma vez, e grava */
+async function normalizarGruposProdutos(){
+  var mudou=0;
+  for(var i=0;i<produtos.length;i++){
+    var p=produtos[i],alterou=false;
+    if(!String(p.grupo||"").trim()){p.grupo="Diversos";alterou=true;}
+    if(!String(p.subgrupo||"").trim()){p.subgrupo=subgrupoSugerido(p);alterou=true;}
+    if(alterou){mudou++;if(db)await grava("produtos",p);}
+  }
+  return mudou;
+}
+function atualizarListasGrupoProd(){
+  var dg=$("dlGrupos"),ds=$("dlSubgrupos");if(!dg||!ds)return;
+  dg.innerHTML=listaGruposProd().map(function(g){return '<option value="'+esc(g)+'">';}).join("");
+  var g=$("p_grupo")?$("p_grupo").value.trim():"";
+  var subs=subgruposDeProdutos(g);
+  if(!subs.length)subs=subgruposDeProdutos("");
+  ds.innerHTML=subs.map(function(s){return '<option value="'+esc(s)+'">';}).join("");
+}
 function gruposDeProdutos(){
   var cont={};
   produtos.forEach(function(x){var g=String(x.grupo||"").trim();if(g&&g!=="Planos")cont[g]=(cont[g]||0)+1;});
@@ -6888,8 +6958,8 @@ function abrirEstoque(modo,colab){
   $("es_sub").textContent=nomeLoja();
   opcoes("es_prod",produtos.filter(function(p){return (p.status||"ativo")==="ativo";}),
     function(p){return p.id;},function(p){return p.cod+" · "+p.nome;},null);
-  opcoes("es_centro",centros.filter(function(c){return c.tipo==="saida";}),
-    function(c){return c.id;},function(c){return c.nome;},"— sem centro —");
+  opcoes("es_centro",centrosOrdenados().filter(function(c){return c.tipo==="saida";}),
+    function(c){return c.id;},function(c){return nomeCentro(c);},"— sem centro —");
   $("es_data").value=hojeISO();$("es_obs").value="";$("es_alerta").innerHTML="";
   $("es_centroWrap").hidden=(modo!=="consumo");
   $("es_origemWrap").hidden=false;$("es_destinoWrap").hidden=false;
@@ -7340,14 +7410,17 @@ function renderEstConsumo(){
 /* ================= GESTÃO ADMINISTRATIVA ================= */
 var PERFIS=["Administrador","Financeiro","Gerente","Vendedor","Prospector","Instalador","Estoquista"];
 var caixas=[],centros=[],fornecedores=[],titulos=[],movs=[],notas=[];
+/* centro de custo tem grupo e subgrupo (regra do Wagner, 15/09): ex. Veículos › Combustível, Pneus, Troca de óleo */
 var SEED_CENTROS=[
-  {nome:"Venda de produto",tipo:"entrada"},{nome:"Serviço e instalação",tipo:"entrada"},
-  {nome:"Manutenção periódica",tipo:"entrada"},{nome:"Compra de mercadoria",tipo:"saida"},
-  {nome:"Frete e logística",tipo:"saida"},{nome:"Combustível",tipo:"saida"},
-  {nome:"Folha e encargos",tipo:"saida"},{nome:"Comissões",tipo:"saida"},
-  {nome:"Aluguel",tipo:"saida"},{nome:"Energia, água e telefone",tipo:"saida"},
-  {nome:"Marketing",tipo:"saida"},{nome:"Impostos",tipo:"saida"},
-  {nome:"Taxa de cartão",tipo:"saida"},{nome:"Manutenção de veículo",tipo:"saida"}
+  {grupo:"Receitas",nome:"Venda de produto",tipo:"entrada"},{grupo:"Receitas",nome:"Serviço e instalação",tipo:"entrada"},
+  {grupo:"Receitas",nome:"Manutenção periódica",tipo:"entrada"},{grupo:"Mercadorias",nome:"Compra de mercadoria",tipo:"saida"},
+  {grupo:"Logística",nome:"Frete e logística",tipo:"saida"},{grupo:"Veículos",nome:"Combustível",tipo:"saida"},
+  {grupo:"Veículos",nome:"Pneus",tipo:"saida"},{grupo:"Veículos",nome:"Troca de óleo",tipo:"saida"},
+  {grupo:"Veículos",nome:"Manutenção corretiva",tipo:"saida"},{grupo:"Veículos",nome:"Manutenção de veículo",tipo:"saida"},
+  {grupo:"Pessoal",nome:"Folha e encargos",tipo:"saida"},{grupo:"Pessoal",nome:"Comissões",tipo:"saida"},
+  {grupo:"Estrutura",nome:"Aluguel",tipo:"saida"},{grupo:"Estrutura",nome:"Energia, água e telefone",tipo:"saida"},
+  {grupo:"Comercial",nome:"Marketing",tipo:"saida"},{grupo:"Impostos e taxas",nome:"Impostos",tipo:"saida"},
+  {grupo:"Impostos e taxas",nome:"Taxa de cartão",tipo:"saida"}
 ];
 var SEED_CAIXAS=[
   {nome:"Caixa da Loja",tipo:"dinheiro",padrao:"sim"},
@@ -7381,7 +7454,8 @@ function opcoesFinanceiro(){
     if($(id))opcoes(id,cx,function(c){return c.id;},function(c){return c.nome;},
       id==="cmCaixa"?"Todos os caixas":null);});
   ["tt_centro","mv_centro","nf_centro"].forEach(function(id){
-    if($(id))opcoes(id,centros,function(c){return c.id;},function(c){return c.nome+" ("+(c.tipo==="entrada"?"entrada":"saída")+")";},"— sem centro —");});
+    if($(id))opcoes(id,centrosOrdenados(),function(c){return c.id;},
+      function(c){return nomeCentro(c)+" ("+(c.tipo==="entrada"?"entrada":"saída")+")";},"— sem centro —");});
   if($("nf_forn"))opcoes("nf_forn",fornecedores.filter(function(f){return f.status!=="inativo";}),
     function(f){return f.id;},function(f){return f.nome;},null);
   if($("nf_prod"))opcoes("nf_prod",produtos,function(p){return p.id;},function(p){return p.cod+" · "+p.nome;},null);
@@ -7737,15 +7811,51 @@ function abrirCaixa(c){
 }
 
 /* ---------- CENTROS DE CUSTO ---------- */
+function centrosOrdenados(){
+  return centros.slice().sort(function(a,b){
+    return String(a.grupo||"").localeCompare(String(b.grupo||""),"pt-BR")||String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR");});
+}
+/* centro antigo sem grupo: o sistema classifica pelo nome (editável no cadastro) */
+var GRUPOS_CC=[[/venda|servi|instala|manutencao periodica/,"Receitas"],[/mercadoria|compra/,"Mercadorias"],
+  [/frete|log/,"Logística"],[/combust|veiculo|pneu|oleo|revisao/,"Veículos"],[/folha|encargo|comiss|salario|vale|adiantamento/,"Pessoal"],
+  [/aluguel|energia|agua|telefone|internet|limpeza/,"Estrutura"],[/marketing|publicidade|midia|anuncio/,"Comercial"],
+  [/imposto|taxa|tarifa|cartao|juros|banco/,"Impostos e taxas"]];
+function grupoCentroSugerido(nome){
+  var n=semAcento(nome||"");
+  for(var i=0;i<GRUPOS_CC.length;i++)if(GRUPOS_CC[i][0].test(n))return GRUPOS_CC[i][1];
+  return "Geral";
+}
+async function normalizarCentros(){
+  var mudou=0;
+  for(var i=0;i<centros.length;i++){
+    var c=centros[i];
+    if(!String(c.grupo||"").trim()){c.grupo=grupoCentroSugerido(c.nome);mudou++;if(db)await grava("centros",c);}
+  }
+  return mudou;
+}
+function gruposDeCentros(){
+  var c={};centros.forEach(function(x){var g=String(x.grupo||"").trim();if(g)c[g]=1;});
+  return Object.keys(c).sort(function(a,b){return a.localeCompare(b,"pt-BR");});
+}
+function nomeCentro(c){return c?((c.grupo?c.grupo+" › ":"")+c.nome):"";}
 function renderCentros(){
   $("ccCount").textContent=centros.length+(centros.length===1?" centro":" centros");
+  var dl=$("dlCcGrupos");
+  if(dl)dl.innerHTML=gruposDeCentros().map(function(g){return '<option value="'+esc(g)+'">';}).join("");
   var b=$("ccBody");b.innerHTML="";
-  if(!centros.length){b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum centro de custo</div>Sem eles o fluxo de caixa não sabe classificar nada.</div></td></tr>';return;}
-  centros.forEach(function(c,i){
+  if(!centros.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum centro de custo</div>Sem eles o fluxo de caixa não sabe classificar nada.</div></td></tr>';return;}
+  /* agrupado: o grupo só aparece na primeira linha dele */
+  var ordem=centros.map(function(c,i){return {c:c,i:i};}).sort(function(x,y){
+    return String(x.c.grupo||"").localeCompare(String(y.c.grupo||""),"pt-BR")||String(x.c.nome||"").localeCompare(String(y.c.nome||""),"pt-BR");});
+  var gAnt="";
+  ordem.forEach(function(o){
+    var c=o.c,i=o.i;
     var usados=titulos.filter(function(t){return t.centroId===c.id;})
       .concat(movs.filter(function(m){return m.centroId===c.id;}));
     var tot=usados.reduce(function(a,x){return a+(+x.valor||0);},0);
-    b.innerHTML+="<tr><td><b>"+esc(c.nome)+"</b></td>"+
+    var g=String(c.grupo||"—"),mostraG=(g!==gAnt);gAnt=g;
+    b.innerHTML+="<tr><td>"+(mostraG?"<b>"+esc(g)+"</b>":'<span class="t-sub">'+esc(g)+"</span>")+"</td>"+
+      "<td><b>"+esc(c.nome)+"</b></td>"+
       "<td>"+(c.tipo==="entrada"?'<span class="pill p-ok">Entrada</span>':'<span class="pill p-warn">Saída</span>')+"</td>"+
       '<td class="num">'+usados.length+'</td><td class="num">'+BRL(tot)+"</td>"+
       '<td class="num">'+(usados.length?'<span class="pill p-mut">em uso</span>':
@@ -8944,6 +9054,7 @@ async function gerarDemo(){
       total:custoTotalDe(demoProds[pi]),antes:0,por:"Guilherme Guimarães"}];
     await grava("produtos",demoProds[pi]);
   }
+  try{await normalizarGruposProdutos();}catch(eG){console.warn(eG);}
   opcoesProduto();
   log.push("6 produtos de teste: com série, com campanha ativa, abaixo do mínimo, zerado, inativo, brinde de R$ 0,00 e material de consumo");
 
@@ -17034,12 +17145,13 @@ function ligar(){
     renderCadCaixas();opcoesFinanceiro();toast("Caixa salvo.");};
 
   $("ccAdd").onclick=async function(){
-    var n=$("ccNome").value.trim();
-    if(!n){toast("Escreva o nome do centro.");return;}
-    if(centros.some(function(c){return c.nome===n;})){toast("Esse centro já existe.");return;}
-    var c={id:uid(),nome:n,tipo:$("ccTipo").value};
+    var g=$("ccGrupo").value.trim(),n=$("ccNome").value.trim();
+    if(!g||!n){toast("Todo centro de custo precisa de Grupo e Subgrupo. Ex.: Veículos · Combustível.");
+      try{(g?$("ccNome"):$("ccGrupo")).focus();}catch(e){}return;}
+    if(centros.some(function(c){return c.nome===n&&String(c.grupo||"")===g;})){toast("Esse centro já existe em "+g+".");return;}
+    var c={id:uid(),grupo:g,nome:n,tipo:$("ccTipo").value};
     centros.push(c);await grava("centros",c);$("ccNome").value="";
-    renderCentros();opcoesFinanceiro();toast("Centro de custo adicionado.");};
+    renderCentros();opcoesFinanceiro();toast("Centro de custo "+g+" › "+n+" adicionado.");};
   $("ccNome").onkeydown=function(e){if(e.key==="Enter")$("ccAdd").click();};
 
   $("ogAdd").onclick=async function(){
@@ -17353,6 +17465,9 @@ function ligar(){
 
   $("prodCancelar").onclick=function(){$("prodForm").hidden=true;$("prodLista").hidden=false;};
   $("prodBusca").oninput=renderProdutos;
+  $("prodGrupo").onchange=function(){$("prodSub").value="";renderProdutos();};
+  $("prodSub").onchange=renderProdutos;
+  $("p_grupo").oninput=atualizarListasGrupoProd;
   $("p_campativa").onchange=notaCampanha;$("p_minimo").oninput=notaCampanha;
   ["p_custo","p_frete","p_ipi","p_st","p_federais","p_icms","p_cheia","p_campanha","p_minimo"].forEach(function(id){$(id).oninput=notaCusto;});
   $("p_estoque").oninput=notaEstoque;$("p_estmin").oninput=notaEstoque;
@@ -17363,7 +17478,12 @@ function ligar(){
     var dup=produtos.filter(function(p){return p.cod===cod&&(!editandoProd||p.id!==editandoProd.id);})[0];
     if(dup){toast("Já existe produto com o código "+cod+". O Código MF é único.");return;}
     var p=editandoProd||{id:uid()};
-    p.cod=cod;p.nome=nome;p.pop=$("p_pop").value.trim();p.marca=$("p_marca").value.trim();p.grupo=$("p_grupo").value.trim();
+    var grupo=$("p_grupo").value.trim(),subgrupo=$("p_subgrupo").value.trim();
+    if(!grupo||!subgrupo){
+      toast("Todo produto precisa de Grupo e Subgrupo.");
+      try{(grupo?$("p_subgrupo"):$("p_grupo")).focus();}catch(e){}
+      return;}
+    p.cod=cod;p.nome=nome;p.pop=$("p_pop").value.trim();p.marca=$("p_marca").value.trim();p.grupo=grupo;p.subgrupo=subgrupo;
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
     ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){p[k]=parseFloat($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
@@ -17878,6 +17998,8 @@ function erro(msg){
   if(!db&&$("offline").hidden)$("offline").hidden=false;
   try{await carregar();}catch(e){erro("carregar: "+e.message);}
   /* estoque antigo guardado no produto vira movimento "Estoque inicial", uma vez só */
+  try{await normalizarGruposProdutos();}catch(e){console.warn("grupos e subgrupos",e);}
+  try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
   try{await migrarEstoqueInicial();}catch(e){console.warn("estoque inicial",e);}
   /* só agora as funções existem — é aqui que o menu ganha a forma final */
   try{sincronizarEquipe();aplicarPerfil();}catch(e){console.warn(e);}
