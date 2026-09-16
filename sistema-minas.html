@@ -10863,6 +10863,24 @@ function aprenderCentro(idDesc,idCentro,idAlerta,lado){
   if($(idAlerta))$(idAlerta).innerHTML='<div class="note"><b>Centro de custo preenchido:</b> '+
     esc(caminhoCentro(centroPor(sg.id)))+" — "+esc(sg.por)+". Pode trocar se for outro.</div>";
 }
+/* taxa exata da operadora, tirada do coeficiente cadastrado da forma de pagamento
+   (regra do Wagner, 16/09: buscar a taxa exata e alertar quando vier diferente).
+   O coeficiente é o valor presente de cada real parcelado: o líquido de toda a
+   forma é (valor/n)/coef(n), então cada parcela cai com o fator 1/(n×coef). */
+function fatorLiquido(forma,n){
+  n=Math.max(1,+n||1);
+  var c=coefDe(forma,n);
+  if(!c)return 1;
+  var f=1/(n*c);
+  return (f>0&&f<=1.0001)?Math.min(f,1):1;
+}
+function liquidoEsperado(t){
+  return Math.round((+t.valor||0)*fatorLiquido(t.formaTipo,t.totalParcelas)*100)/100;
+}
+function taxaEsperadaPct(t){
+  var f=fatorLiquido(t.formaTipo,t.totalParcelas);
+  return Math.round((1-f)*10000)/100;
+}
 function conciliar(){
   var cx=$("cl_caixa").value,tol=Math.max(0,parseInt($("cl_tol").value,10)||0);
   var de=$("cl_de").value,ate=$("cl_ate").value;
@@ -10881,16 +10899,29 @@ function conciliar(){
     var melhor=null,melhorD=1e9;
     candidatos.forEach(function(t){
       if(usados[t.id]||t.especie!==esp)return;
-      var dv=Math.abs((+t.valor||0)-v);
-      /* cartão retém taxa: aceita o líquido menor que o bruto dentro de 12% */
-      var ok=(dv<0.02)||(esp==="receber"&&v<(+t.valor||0)&&dv<=(+t.valor||0)*0.12);
+      var bruto=+t.valor||0,dv=Math.abs(bruto-v);
+      /* o esperado é o líquido pela taxa cadastrada da forma; a banda larga de
+         12% continua só para CASAR — a diferença vira alerta, não silêncio */
+      var espLiq=liquidoEsperado(t),dLiq=Math.abs(espLiq-v);
+      var ok=(dv<0.02)||(dLiq<=Math.max(0.02,espLiq*0.005))||
+        (esp==="receber"&&v<bruto&&dv<=bruto*0.12);
       if(!ok)return;
       var dd=Math.abs((new Date(l.data)-new Date(t.vencimento))/86400000);
       if(dd>tol)return;
-      var score=dv*10+dd;
+      var score=Math.min(dv,dLiq)*10+dd;
       if(score<melhorD){melhorD=score;melhor=t;}
     });
-    if(melhor){usados[melhor.id]=true;l.match=melhor;l.dif=v-(+melhor.valor||0);}
+    if(melhor){
+      usados[melhor.id]=true;l.match=melhor;l.dif=v-(+melhor.valor||0);
+      var bruto2=+melhor.valor||0;
+      l.espLiq=liquidoEsperado(melhor);
+      l.taxaEsp=Math.round((bruto2-l.espLiq)*100)/100;
+      l.taxaReal=Math.round((bruto2-v)*100)/100;
+      l.pctEsp=taxaEsperadaPct(melhor);
+      l.pctReal=bruto2?Math.round((l.taxaReal/bruto2)*10000)/100:0;
+      /* alerta quando o que a operadora reteve não bate com a taxa cadastrada */
+      l.alertaTaxa=Math.abs(l.taxaReal-l.taxaEsp)>Math.max(0.02,bruto2*0.002);
+    }
   });
   var semTitulo=clLinhas.filter(function(l){return !l.match;});
   var semExtrato=candidatos.filter(function(t){return !usados[t.id];});
@@ -10904,10 +10935,23 @@ function conciliar(){
     '<div class="kpi"><div class="l">Só no extrato</div><div class="v" style="color:var(--warn)">'+semTitulo.length+"</div></div>"+
     '<div class="kpi"><div class="l">Só no sistema</div><div class="v" style="color:var(--crit)">'+semExtrato.length+"</div></div>"+
     '<div class="kpi"><div class="l">Taxa retida</div><div class="v">'+BRL(taxa)+"</div></div>";
-  $("cl_alerta").innerHTML=casou.length
+  var divergentes=casou.filter(function(l){return l.alertaTaxa;});
+  $("cl_alerta").innerHTML=(casou.length
     ? '<div class="note ok"><b>'+casou.length+" de "+clLinhas.length+
       " linhas casaram com títulos em aberto.</b> Confira e clique em <b>Baixar tudo que casou</b>.</div>"
-    : '<div class="note warn"><b>Nenhuma linha casou.</b> Verifique o período, a tolerância de dias e se os títulos já não foram baixados.</div>';
+    : '<div class="note warn"><b>Nenhuma linha casou.</b> Verifique o período, a tolerância de dias e se os títulos já não foram baixados.</div>')+
+    (divergentes.length
+      ? '<div class="note crit"><b>'+divergentes.length+" lançamento"+(divergentes.length===1?"":"s")+
+        " com taxa diferente da cadastrada.</b><br>"+
+        divergentes.map(function(l){
+          return esc((l.match.pessoa||l.match.descricao||"")+" · "+dataCurta(l.data))+
+            ": esperado "+BRL(l.espLiq)+" (taxa "+String(l.pctEsp).replace(".",",")+"%), "+
+            "veio "+BRL(Math.abs(l.valor))+" (taxa "+String(l.pctReal).replace(".",",")+"%) — "+
+            (l.taxaReal>l.taxaEsp?"<b>"+BRL(l.taxaReal-l.taxaEsp)+" a mais retido</b>"
+              :"<b>"+BRL(l.taxaEsp-l.taxaReal)+" a menos retido</b>");
+        }).join("<br>")+
+        "<br>Confira a taxa da operadora em Configurações › Formas de Pagamento. A baixa lança o valor que veio de verdade no extrato.</div>"
+      : (casou.length?'<div class="note"><b>Taxas conferidas.</b> O valor creditado bate com o coeficiente cadastrado de cada forma de pagamento.</div>':""));
   renderConcil();
 }
 function renderConcil(){
@@ -10915,15 +10959,17 @@ function renderConcil(){
   var h=$("cl_head"),b=$("cl_body");
   if(!d){h.innerHTML="";b.innerHTML='<tr><td><div class="empty"><div class="big">Nada conciliado ainda</div>Suba o extrato e clique em Ler extrato e conciliar.</div></td></tr>';return;}
   if(clAba==="casou"){
-    h.innerHTML="<th>Data extrato</th><th>Descrição no extrato</th><th class=\"num\">Valor extrato</th><th>Título</th><th class=\"num\">Valor título</th><th class=\"num\">Diferença</th>";
+    h.innerHTML="<th>Data extrato</th><th>Descrição no extrato</th><th class=\"num\">Valor extrato</th><th>Título</th><th class=\"num\">Valor título</th><th class=\"num\">Taxa esperada</th><th class=\"num\">Taxa recebida</th>";
     $("cl_count").textContent=d.casou.length+" conciliado(s)";
     b.innerHTML=d.casou.length?d.casou.map(function(l){
       return "<tr><td>"+esc(l.data)+"</td><td>"+esc(l.desc)+'</td><td class="num">'+BRL(Math.abs(l.valor))+"</td>"+
         "<td>"+esc((l.match.pessoa||"")+" · "+(l.match.descricao||""))+'<div class="t-sub">vence '+esc(l.match.vencimento)+"</div></td>"+
         '<td class="num">'+BRL(l.match.valor)+"</td>"+
-        '<td class="num">'+(Math.abs(l.dif)<0.01?"—":
-          '<span class="pill '+(l.dif<0?"p-warn":"p-acc")+'">'+(l.dif>0?"+":"")+BRL(l.dif)+"</span>")+"</td></tr>";
-    }).join(""):'<tr><td colspan="6"><div class="empty"><div class="big">Nada casou</div></div></td></tr>';
+        '<td class="num">'+(l.taxaEsp?BRL(l.taxaEsp)+'<div class="t-sub">'+String(l.pctEsp).replace(".",",")+"%</div>":"—")+"</td>"+
+        '<td class="num">'+(l.taxaReal?'<span class="pill '+(l.alertaTaxa?"p-crit":"p-ok")+'">'+BRL(l.taxaReal)+
+            "</span>"+'<div class="t-sub">'+String(l.pctReal).replace(".",",")+"%</div>"
+          :(l.alertaTaxa?'<span class="pill p-crit">sem retenção</span>':"—"))+"</td></tr>";
+    }).join(""):'<tr><td colspan="7"><div class="empty"><div class="big">Nada casou</div></div></td></tr>';
   } else if(clAba==="extrato"){
     h.innerHTML="<th>Data</th><th>Descrição</th><th class=\"num\">Valor</th><th></th>";
     $("cl_count").textContent=d.extrato.length+" sem título";
@@ -10968,6 +11014,13 @@ function renderConcil(){
 async function baixarConciliados(){
   var d=window.__concil;
   if(!d||!d.casou.length){toast("Nada conciliado para baixar.");return;}
+  /* taxa fora do cadastrado: confirma antes de baixar (regra do Wagner, 16/09) */
+  var dv=d.casou.filter(function(l){return l.alertaTaxa;});
+  if(dv.length&&!confirm(dv.length+" lançamento(s) vieram com taxa diferente da cadastrada.\n\n"+
+      dv.map(function(l){
+        return (l.match.pessoa||l.match.descricao||"")+": esperado "+BRL(l.espLiq)+
+          ", veio "+BRL(Math.abs(l.valor));}).join("\n")+
+      "\n\nBaixar assim mesmo, lançando o valor que veio no extrato?"))return;
   var n=0;
   for(var i=0;i<d.casou.length;i++){
     var l=d.casou[i],t=l.match;
@@ -10987,7 +11040,9 @@ async function baixarConciliados(){
     if(houveTaxa){
       var ctTaxa=await centroFixo("Taxa de cartão","Impostos e taxas","saida");
       var mt={id:uid(),loja:lojaAtual,caixaId:d.caixa,data:l.data,tipo:"saida",valor:Math.abs(l.dif),
-        descricao:"Taxa retida · "+(t.pessoa||t.descricao||""),centroId:ctTaxa,
+        descricao:"Taxa retida · "+(t.pessoa||t.descricao||"")+
+          (l.alertaTaxa?" · taxa "+String(l.pctReal).replace(".",",")+"% (cadastrada "+String(l.pctEsp).replace(".",",")+"%)":""),
+        nomePadrao:"Taxa de cartão",taxaEsperada:l.taxaEsp,taxaDivergente:!!l.alertaTaxa,centroId:ctTaxa,
         tituloId:t.id,taxaDe:t.id,por:usuarioAtual};
       movs.push(mt);await grava("movs",mt);
     }
