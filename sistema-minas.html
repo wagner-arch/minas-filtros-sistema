@@ -3271,6 +3271,30 @@ img{max-width:100%}
           <tbody id="ccBody"></tbody>
         </table></div>
       </div>
+
+      <!-- nomes padrão dos lançamentos (pedido do Wagner, 16/09) -->
+      <div class="card flush">
+        <div class="toolbar">
+          <b style="font-size:14px">Nomes padrão dos lançamentos</b>
+          <span class="sp"></span><span class="count" id="pdCount"></span>
+        </div>
+        <p class="help" style="padding:0 22px 12px">
+          O sistema entende que "conserto de carro" e "manutenção de veículo" são a mesma coisa:
+          ele sugere o nome padrão e o centro de custo, e todo lançamento parecido entra igual.
+          Acrescente aqui as palavras que aparecem nos seus extratos.</p>
+        <div class="toolbar" style="padding-top:0">
+          <select id="pdTipo" style="max-width:130px"><option value="saida">Saída</option><option value="entrada">Entrada</option></select>
+          <input id="pdNome" placeholder="Nome padrão · ex.: Manutenção corretiva de veículo" style="max-width:280px">
+          <input id="pdCentro" placeholder="Centro de custo (subgrupo)" list="dlPdCentros" autocomplete="off" style="max-width:220px">
+          <datalist id="dlPdCentros"></datalist>
+          <input id="pdTermos" placeholder="Palavras que levam a ele, separadas por espaço" style="min-width:260px">
+          <button class="btn" type="button" id="pdAdd">Adicionar</button>
+        </div>
+        <div class="tw"><table>
+          <thead><tr><th>Nome padrão</th><th>Centro de custo</th><th>Palavras reconhecidas</th><th></th></tr></thead>
+          <tbody id="pdBody"></tbody>
+        </table></div>
+      </div>
     </section>
 
     <section class="screen" id="s-origens" hidden>
@@ -4160,6 +4184,7 @@ img{max-width:100%}
       <div class="fld"><label for="tt_caixa">Caixa previsto</label><select id="tt_caixa"></select></div>
     </div>
     <div id="tt_prev"></div>
+    <div id="tt_sugestaoCentro"></div>
     <div id="tt_alerta"></div>
     <div class="actions">
       <button class="btn" type="button" id="tt_salvar">Lançar</button>
@@ -4449,6 +4474,7 @@ img{max-width:100%}
       <div class="fld"><label for="mv_centro">Centro de custo <span class="req">*</span></label><select id="mv_centro"></select></div>
     </div>
     <div class="fld" style="margin-top:14px"><label for="mv_desc">Descrição <span class="req">*</span></label><input id="mv_desc"></div>
+    <div id="mv_sugestaoCentro"></div>
     <div id="mv_alerta"></div>
     <div class="actions">
       <button class="btn" type="button" id="mv_ok">Lançar</button>
@@ -5074,6 +5100,8 @@ function col(n){return db?db.collection(n):null;}
 function nomeLoja(){var l=LOJAS.filter(function(x){return x.id===lojaAtual;})[0];return l?l.nome:"";}
 
 async function carregar(){
+  /* dicionário de nomes padrão dos lançamentos: vale mesmo sem banco */
+  PADROES_LANC=JSON.parse(JSON.stringify(SEED_PADROES));
   funcoes=JSON.parse(JSON.stringify(SEED_FUNCOES));
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
@@ -5224,6 +5252,9 @@ async function carregar(){
     multas=mlt.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var usd=await col("usados").limit(500).get();
     usados=usd.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    var pd=await db.doc("config/padroes_lanc").get();
+    if(pd.exists&&pd.data()&&pd.data().lista&&pd.data().lista.length)PADROES_LANC=pd.data().lista;
+    else{PADROES_LANC=JSON.parse(JSON.stringify(SEED_PADROES));await gravarPadroes();}
     var fx=await db.doc("config/faixas_comissao").get();
     if(fx.exists&&fx.data()&&fx.data().lista&&fx.data().lista.length){FAIXAS_COM=fx.data().lista;}
     else{await gravarFaixas();}
@@ -8543,6 +8574,27 @@ function gruposDeCentros(tipo){
   return Object.keys(c).sort(function(a,b){return a.localeCompare(b,"pt-BR");});
 }
 function nomeCentro(c){return c?((c.grupo?c.grupo+" › ":"")+c.nome):"";}
+function renderPadroes(){
+  if(!$("pdBody"))return;
+  var tp=$("pdTipo")?$("pdTipo").value:"saida";
+  $("pdCount").textContent=PADROES_LANC.length+(PADROES_LANC.length===1?" padrão":" padrões");
+  var dl=$("dlPdCentros");
+  if(dl)dl.innerHTML=centrosDoLado(tp).map(function(c){return '<option value="'+esc(c.nome)+'">';}).join("");
+  var b=$("pdBody");b.innerHTML="";
+  var ls=PADROES_LANC.map(function(p,i){return {p:p,i:i};})
+    .filter(function(x){return (x.p.tipo||"saida")===tp;})
+    .sort(function(a,b2){return String(a.p.nome||"").localeCompare(String(b2.p.nome||""),"pt-BR");});
+  if(!ls.length){b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum padrão</div></div></td></tr>';return;}
+  ls.forEach(function(x){
+    b.innerHTML+="<tr><td><b>"+esc(x.p.nome)+"</b></td><td>"+esc(x.p.centro||"—")+"</td>"+
+      '<td><span class="t-sub">'+esc(x.p.termos||"")+"</span></td>"+
+      '<td class="num"><button class="btn mut sm" type="button" data-pdrm="'+x.i+'">Remover</button></td></tr>';
+  });
+  Array.prototype.forEach.call(b.querySelectorAll("[data-pdrm]"),function(bt){
+    bt.onclick=async function(){
+      PADROES_LANC.splice(+bt.getAttribute("data-pdrm"),1);
+      await gravarPadroes();renderPadroes();toast("Padrão removido.");};});
+}
 /* caminho completo da classificação: Saída › Veículos › Combustível */
 function caminhoCentro(c){return c?(((c.tipo||"saida")==="entrada"?"Entrada":"Saída")+" › "+nomeCentro(c)):"";}
 function renderCentros(){
@@ -8785,8 +8837,11 @@ function abrirTitulo(especie){
   opcoesFinanceiro();
   /* o centro começa em branco: quem escolhe é a descrição (histórico) ou o usuário */
   $("tt_centro").value="";
+  $("tt_alerta").__padronizado=null;
   $("tt_desc").onchange=function(){
-    aprenderCentro("tt_desc","tt_centro","tt_alerta",ttEspecie==="receber"?"entrada":"saida");};
+    var lado=(ttEspecie==="receber")?"entrada":"saida";
+    aplicarSugestaoLanc("tt_desc","tt_centro","tt_alerta",lado);
+    aprenderCentro("tt_desc","tt_centro","tt_sugestaoCentro",lado);};
   var rec=(especie==="receber");
   $("tt_titulo").textContent=rec?"Lançar título a receber":"Lançar despesa";
   $("tt_sub").textContent=rec?"Entrada avulsa, fora de pedido.":"Conta a pagar avulsa ou recorrente.";
@@ -8824,7 +8879,8 @@ async function salvarTitulo(){
   for(var i=1;i<=n;i++){
     var t={id:uid(),loja:lojaAtual,especie:ttEspecie,origem:"manual",
       pessoa:pessoa,fornecedorId:(ttEspecie==="pagar"?pid:""),clienteId:(ttEspecie==="receber"?pid:""),
-      descricao:desc,centroId:$("tt_centro").value,caixaId:$("tt_caixa").value,
+      descricao:desc,nomePadrao:($("tt_alerta").__padronizado||""),
+      centroId:$("tt_centro").value,caixaId:$("tt_caixa").value,
       emissao:hojeISO(),vencimento:somaDias($("tt_venc").value,iv*(i-1)),
       valor:(i===n?Math.round((v-p*(n-1))*100)/100:p),
       parcela:i,totalParcelas:n,status:"aberto",valorPago:0,criadoEm:hojeISO(),criadoPor:usuarioAtual};
@@ -8891,7 +8947,10 @@ function abrirMov(modo){
   $("mv_alerta").innerHTML="";
   /* trocar entrada/saída troca a lista de centros de custo */
   $("mv_tipo").onchange=function(){opcoesFinanceiro();aprenderCentro("mv_desc","mv_centro","mv_alerta",$("mv_tipo").value);};
-  $("mv_desc").onchange=function(){aprenderCentro("mv_desc","mv_centro","mv_alerta",$("mv_tipo").value);};
+  $("mv_alerta").__padronizado=null;
+  $("mv_desc").onchange=function(){
+    aplicarSugestaoLanc("mv_desc","mv_centro","mv_alerta",$("mv_tipo").value);
+    aprenderCentro("mv_desc","mv_centro","mv_sugestaoCentro",$("mv_tipo").value);};
   opcoesFinanceiro();
   $("mv_centro").value="";
   $("movModal").hidden=false;
@@ -8914,7 +8973,8 @@ async function salvarMov(){
       $("mv_alerta").innerHTML='<div class="note crit"><b>Escolha o centro de custo.</b> Todo movimento precisa de um — é ele que classifica o valor no fluxo de caixa e na DRE.</div>';
       $("mv_centro").focus();return;}
     var m={id:uid(),loja:lojaAtual,caixaId:cx,data:data,tipo:$("mv_tipo").value,valor:v,
-      descricao:desc,centroId:$("mv_centro").value,por:usuarioAtual};
+      descricao:desc,nomePadrao:($("mv_alerta").__padronizado||""),
+      centroId:$("mv_centro").value,por:usuarioAtual};
     movs.push(m);await grava("movs",m);
     toast("Movimento lançado.");
   }
@@ -10633,20 +10693,27 @@ var PALAVRAS_CC=[
   [/recebiment|deposit|\bpix\b|credito|venda|cliente|cart[aã]o/,"Venda de produto"]
 ];
 function centroSugeridoExtrato(desc,tipo){
-  var lado=(tipo==="entrada")?"entrada":"saida",ch=chaveTexto(desc||"");
-  if(ch){
+  var lado=(tipo==="entrada")?"entrada":"saida",T=termosDe(desc||"");
+  if(T.length){
+    /* o histórico casa por PARECENÇA, não por texto igual: "TARIFA BANCARIA
+       MENSAL" encontra "TARIFA PACOTE DE SERVICOS" (regra do Wagner, 16/09) */
     var votos={},anteriores=movs.filter(function(m){return !m.transfId;}).map(function(m){
-      return {d:m.descricao,c:m.centroId,l:(m.tipo==="entrada"?"entrada":"saida")};})
+      return {d:m.nomePadrao||m.descricao,c:m.centroId,l:(m.tipo==="entrada"?"entrada":"saida")};})
       .concat(titulos.map(function(t){
-        return {d:t.descricao,c:t.centroId,l:(t.especie==="receber"?"entrada":"saida")};}));
+        return {d:t.nomePadrao||t.descricao,c:t.centroId,l:(t.especie==="receber"?"entrada":"saida")};}));
     anteriores.forEach(function(x){
-      if(!x.c||x.l!==lado||chaveTexto(x.d||"")!==ch)return;
-      votos[x.c]=(votos[x.c]||0)+1;});
+      if(!x.c||x.l!==lado||!x.d)return;
+      var s=semelhanca(T,x.d);
+      if(s<0.6)return;
+      votos[x.c]=(votos[x.c]||0)+s;});
     var ks=Object.keys(votos).sort(function(a,b){return votos[b]-votos[a];});
     for(var i=0;i<ks.length;i++){
       var c=centroPor(ks[i]);
-      if(c&&(c.tipo||"saida")===lado)return {id:c.id,por:"pelo histórico: já classifiquei assim antes"};
+      if(c&&(c.tipo||"saida")===lado)return {id:c.id,por:"pelo histórico: lançamento parecido já classificado assim"};
     }
+    /* dicionário de padrões, que entende sinônimos */
+    var sg=sugerirNomeLanc(desc,lado);
+    if(sg&&sg.centroId)return {id:sg.centroId,por:sg.por};
   }
   var n=semAcento(desc||"");
   for(var j=0;j<PALAVRAS_CC.length;j++){
@@ -10659,6 +10726,135 @@ function centroSugeridoExtrato(desc,tipo){
 }
 /* Regra do Wagner (15/09): no primeiro lançamento o usuário escolhe o centro;
    daí em diante, lançamento com a mesma descrição já vem com o mesmo centro. */
+/* ---------- nome padrão do lançamento (regra do Wagner, 16/09) ----------
+   "Conserto de carro" e "manutenção de veículo" são a mesma coisa. O sistema
+   propõe um nome padrão, grava o lançamento com ele e, daí em diante, tudo que
+   se parecer entra com o mesmo nome e o mesmo centro. */
+var PADROES_LANC=[];
+var SEED_PADROES=[
+  {nome:"Manutenção corretiva de veículo",centro:"Manutenção corretiva",tipo:"saida",
+    termos:"conserto consertar reparo oficina mecanica mecanico funilaria retifica autopecas auto pecas guincho bomba embreagem suspensao"},
+  {nome:"Troca de óleo do veículo",centro:"Troca de óleo",tipo:"saida",termos:"oleo lubrificante filtro de oleo troca de oleo lubrificacao"},
+  {nome:"Pneus e alinhamento",centro:"Pneus",tipo:"saida",termos:"pneu pneus borracharia alinhamento balanceamento calibragem roda"},
+  {nome:"Combustível",centro:"Combustível",tipo:"saida",termos:"posto combustivel gasolina alcool etanol diesel abastecimento shell ipiranga petrobras ale"},
+  {nome:"Revisão do veículo",centro:"Manutenção de veículo",tipo:"saida",termos:"revisao concessionaria revisar preventiva"},
+  {nome:"Lavagem do veículo",centro:"Manutenção de veículo",tipo:"saida",termos:"lavagem lavajato lava jato higienizacao polimento"},
+  {nome:"Estacionamento",centro:"Estacionamento",tipo:"saida",termos:"estacionamento vaga garagem zona azul rotativo"},
+  {nome:"Multa de trânsito",centro:"Multas e infrações",tipo:"saida",termos:"multa infracao detran der dnit notificacao transito"},
+  {nome:"IPVA e licenciamento",centro:"Impostos",tipo:"saida",termos:"ipva licenciamento crlv seguro obrigatorio dpvat"},
+  {nome:"Energia elétrica",centro:"Energia, água e telefone",tipo:"saida",termos:"energia cemig luz eletrica conta de luz"},
+  {nome:"Água e esgoto",centro:"Energia, água e telefone",tipo:"saida",termos:"agua copasa saneamento esgoto"},
+  {nome:"Telefone e internet",centro:"Energia, água e telefone",tipo:"saida",termos:"telefone internet vivo claro tim oi banda larga fibra celular"},
+  {nome:"Aluguel",centro:"Aluguel",tipo:"saida",termos:"aluguel locacao imobiliaria condominio iptu sala loja"},
+  {nome:"Folha e encargos",centro:"Folha e encargos",tipo:"saida",termos:"folha salario pagamento funcionario rescisao ferias decimo fgts inss pro labore"},
+  {nome:"Adiantamento salarial",centro:"Folha e encargos",tipo:"saida",termos:"adiantamento vale salarial"},
+  {nome:"Comissão de venda",centro:"Comissões",tipo:"saida",termos:"comissao comissoes premiacao bonus de venda"},
+  {nome:"Marketing e publicidade",centro:"Marketing",tipo:"saida",termos:"marketing publicidade anuncio propaganda facebook instagram google ads midia panfleto grafica"},
+  {nome:"Frete e transporte",centro:"Frete e logística",tipo:"saida",termos:"frete transporte carreto correios sedex entrega motoboy logistica"},
+  {nome:"Compra de mercadoria",centro:"Compra de mercadoria",tipo:"saida",termos:"fornecedor mercadoria compra industria distribuidora atacado nota fiscal de entrada"},
+  {nome:"Impostos e tributos",centro:"Impostos",tipo:"saida",termos:"imposto das simples darf iss icms tributo prefeitura receita federal guia"},
+  {nome:"Tarifa bancária",centro:"Taxa de cartão",tipo:"saida",termos:"tarifa anuidade iof juros pacote de servicos manutencao de conta cesta"},
+  {nome:"Taxa de cartão",centro:"Taxa de cartão",tipo:"saida",termos:"taxa de cartao antecipacao cielo rede getnet stone pagseguro mercado pago adquirente"},
+  {nome:"Material de escritório",centro:"Outras despesas",tipo:"saida",termos:"papelaria escritorio material de expediente toner cartucho papel"},
+  {nome:"Material de limpeza",centro:"Outras despesas",tipo:"saida",termos:"limpeza higiene faxina produto de limpeza"},
+  {nome:"Alimentação da equipe",centro:"Outras despesas",tipo:"saida",termos:"lanche refeicao restaurante padaria almoco cafe supermercado"},
+  {nome:"Ferramenta e equipamento",centro:"Outras despesas",tipo:"saida",termos:"ferramenta equipamento furadeira maquina epi uniforme"},
+  {nome:"Venda de produto",centro:"Venda de produto",tipo:"entrada",termos:"venda cliente pedido recebimento pix recebido deposito credito cartao boleto recebido"},
+  {nome:"Serviço e instalação",centro:"Serviço e instalação",tipo:"entrada",termos:"servico instalacao mao de obra visita tecnica assistencia conserto cobrado"},
+  {nome:"Manutenção periódica",centro:"Manutenção periódica",tipo:"entrada",termos:"manutencao periodica troca de refil refil filtro preventiva do cliente"},
+  {nome:"Outras receitas",centro:"Outras receitas",tipo:"entrada",termos:"estorno reembolso rendimento devolucao recebida"}
+];
+async function gravarPadroes(){if(!db)return;try{await db.doc("config/padroes_lanc").set({lista:PADROES_LANC});}catch(e){console.warn(e);}}
+/* corta plural e terminações que não mudam o sentido: "consertos" = "conserto" */
+function radical(w){
+  w=String(w||"");
+  w=w.replace(/(coes|oes|aes)$/,"ao").replace(/(ns)$/,"m").replace(/(is)$/,"l");
+  w=w.replace(/s$/,"");
+  w=w.replace(/(mente|cao|dade|ismo|ista|agem|ndo|ada|ado|ar|er|ir)$/,"");
+  return w;
+}
+var PARA_LANC={de:1,da:1,do:1,das:1,dos:1,com:1,sem:1,para:1,por:1,pra:1,em:1,no:1,na:1,nos:1,nas:1,
+  "e":1,"o":1,"a":1,"os":1,"as":1,um:1,uma:1,ref:1,referente:1,pagamento:1,pgto:1,pago:1,compra:0,
+  ltda:1,me:1,epp:1,sa:1,cia:1,comercio:1,servicos:0,brasil:1,mg:1};
+function termosDe(s){
+  var t={},ws=semAcento(s).replace(/[0-9]+/g," ").replace(/[^a-z ]+/g," ").split(/\s+/);
+  ws.forEach(function(w){
+    if(w.length<3||PARA_LANC[w]===1)return;
+    t[radical(w)]=1;});
+  return Object.keys(t);
+}
+/* quanto dois textos se parecem: 0 a 1 pelas palavras em comum (Dice) */
+function semelhanca(a,b){
+  var A=(a instanceof Array)?a:termosDe(a),B=(b instanceof Array)?b:termosDe(b);
+  if(!A.length||!B.length)return 0;
+  var m={},n=0;A.forEach(function(w){m[w]=1;});
+  B.forEach(function(w){if(m[w])n++;});
+  return (2*n)/(A.length+B.length);
+}
+function padroesDoLado(lado){
+  return PADROES_LANC.filter(function(p){return !p.tipo||p.tipo===lado;});
+}
+/* o nome ideal do lançamento: primeiro o que já foi lançado parecido, depois o dicionário */
+function sugerirNomeLanc(desc,lado){
+  var d=String(desc||"").trim();if(d.length<3)return null;
+  var T=termosDe(d);if(!T.length)return null;
+  var melhor=null;
+  /* 1) lançamentos anteriores do mesmo lado, preferindo os que já têm nome padrão */
+  var ants=titulos.filter(function(t){return t.loja===lojaAtual&&t.status!=="cancelado";})
+      .map(function(t){return {d:t.nomePadrao||t.descricao,c:t.centroId,
+        l:(t.especie==="receber"?"entrada":"saida"),pad:!!t.nomePadrao};})
+    .concat(movs.filter(function(m){return m.loja===lojaAtual&&!m.transfId;})
+      .map(function(m){return {d:m.nomePadrao||m.descricao,c:m.centroId,
+        l:(m.tipo==="entrada"?"entrada":"saida"),pad:!!m.nomePadrao};}));
+  ants.forEach(function(x){
+    if(!x.d||!x.c||x.l!==lado)return;
+    var s=semelhanca(T,x.d);
+    if(s<0.6)return;
+    var peso=s+(x.pad?0.15:0);
+    if(!melhor||peso>melhor.peso)melhor={peso:peso,score:s,nome:x.d,centroId:x.c,
+      por:"pelo histórico: "+Math.round(s*100)+"% parecido com um lançamento anterior"};
+  });
+  if(melhor)return melhor;
+  /* 2) dicionário de padrões */
+  padroesDoLado(lado).forEach(function(p){
+    var s=semelhanca(T,p.termos+" "+p.nome);
+    /* termo do dicionário dentro da descrição já vale, mesmo em texto longo —
+       e quanto mais termos baterem, mais forte fica (desempata palavra genérica) */
+    var n=termosDe(p.termos).filter(function(w){return T.indexOf(w)>=0;}).length;
+    var sc=Math.max(s,n?Math.min(0.6+0.06*n,0.95):0);
+    if(sc<0.55)return;
+    if(!melhor||sc>melhor.score){
+      var c=centros.filter(function(x){
+        return (x.tipo||"saida")===lado&&semAcento(x.nome)===semAcento(p.centro);})[0];
+      melhor={peso:sc,score:sc,nome:p.nome,centroId:c?c.id:"",padrao:p,
+        por:"pelo dicionário de padrões"};
+    }
+  });
+  return melhor;
+}
+function aplicarSugestaoLanc(idDesc,idCentro,idAlerta,lado){
+  var sg=sugerirNomeLanc($(idDesc).value||"",lado);
+  var alvo=$(idAlerta);
+  if(!sg){if(alvo&&alvo.__sug){alvo.innerHTML="";alvo.__sug=null;}return;}
+  var mesmo=(semAcento(sg.nome)===semAcento($(idDesc).value||""));
+  var sel=$(idCentro),jaTem=sel&&sel.value;
+  if(!alvo)return;
+  alvo.__sug={nome:sg.nome,centroId:sg.centroId,idDesc:idDesc,idCentro:idCentro};
+  var cc=sg.centroId?centroPor(sg.centroId):null;
+  alvo.innerHTML='<div class="note"><b>Sugestão de nome: '+esc(sg.nome)+"</b>"+
+    (cc?" · "+esc(caminhoCentro(cc)):"")+"<br>"+esc(sg.por)+". "+
+    (mesmo?"Já está padronizado.":"")+
+    (mesmo?"":' <button class="btn sm" type="button" data-usarsug="1">Usar este nome</button>')+"</div>";
+  var bt=alvo.querySelector("[data-usarsug]");
+  if(bt)bt.onclick=function(){
+    $(idDesc).value=sg.nome;
+    if(sg.centroId&&sel&&(!jaTem||!sel.value)){sel.value=sg.centroId;}
+    alvo.innerHTML='<div class="note ok"><b>Nome padronizado:</b> '+esc(sg.nome)+
+      (cc?" · "+esc(caminhoCentro(cc)):"")+". Todo lançamento parecido vai entrar assim.</div>";
+    alvo.__padronizado=sg.nome;
+  };
+  if(mesmo)alvo.__padronizado=sg.nome;
+}
 function aprenderCentro(idDesc,idCentro,idAlerta,lado){
   var sel=$(idCentro);if(!sel||sel.value)return;          /* já escolhido: não mexe */
   var sg=centroSugeridoExtrato($(idDesc).value||"",lado);
@@ -10746,6 +10942,8 @@ function renderConcil(){
         $("mv_desc").value=l.desc;
         /* o centro já vem sugerido; sem ele o movimento não salva */
         opcoesFinanceiro();
+        /* e o nome do extrato vira o nome padrão do lançamento */
+        aplicarSugestaoLanc("mv_desc","mv_centro","mv_sugestaoCentro",$("mv_tipo").value);
         var sg=centroSugeridoExtrato(l.desc,$("mv_tipo").value);
         if(sg&&($("mv_centro").value=sg.id)===sg.id){
           $("mv_alerta").innerHTML='<div class="note"><b>Centro de custo preenchido:</b> '+
@@ -18795,7 +18993,7 @@ function render(){
   try{avisarRetiradas();}catch(e){console.warn(e);}
   try{avisarPosseVeiculo();}catch(e){console.warn(e);}
   try{renderFin();}catch(e){console.warn("aprovação financeira",e);}
-  try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
+  try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();try{renderPadroes();}catch(e){}renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
   var sc=$("v_cliente"),atual=sc.value;sc.innerHTML="";
   clientes.filter(function(c){return c.loja===lojaAtual;}).forEach(function(c){
     var o=document.createElement("option");o.value=c.id;o.textContent=c.nome;sc.appendChild(o);});
@@ -19173,7 +19371,20 @@ function ligar(){
     var c={id:uid(),grupo:g,nome:n,tipo:tp};
     centros.push(c);await grava("centros",c);$("ccNome").value="";
     renderCentros();opcoesFinanceiro();toast("Centro de custo "+(tp==="entrada"?"Entrada":"Saída")+" › "+g+" › "+n+" adicionado.");};
-  $("ccTipo").onchange=renderCentros;
+  $("ccTipo").onchange=function(){renderCentros();};
+  $("pdTipo").onchange=renderPadroes;
+  $("pdAdd").onclick=async function(){
+    var nome=$("pdNome").value.trim(),centro=$("pdCentro").value.trim(),termos=$("pdTermos").value.trim();
+    if(!nome||!centro||!termos){toast("Nome padrão, centro de custo e palavras são obrigatórios.");return;}
+    var tp=$("pdTipo").value;
+    if(!centros.some(function(c){return (c.tipo||"saida")===tp&&semAcento(c.nome)===semAcento(centro);})){
+      toast("Não existe o centro de custo "+centro+" em "+(tp==="entrada"?"Entrada":"Saída")+".");return;}
+    if(PADROES_LANC.some(function(p){return semAcento(p.nome)===semAcento(nome)&&(p.tipo||"saida")===tp;})){
+      toast("Já existe esse nome padrão.");return;}
+    PADROES_LANC.push({nome:nome,centro:centro,tipo:tp,termos:semAcento(termos)});
+    await gravarPadroes();
+    $("pdNome").value="";$("pdCentro").value="";$("pdTermos").value="";
+    renderPadroes();toast("Padrão "+nome+" adicionado.");};
   $("ccNome").onkeydown=function(e){if(e.key==="Enter")$("ccAdd").click();};
 
   $("ogAdd").onclick=async function(){
