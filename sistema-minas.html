@@ -2815,6 +2815,7 @@ img{max-width:100%}
             <button type="button" data-r="caixa">Caixa</button>
           </div>
           <span class="sp"></span><span class="count" id="drRel"></span>
+          <button class="btn mut sm" type="button" id="drCentros">Configurações › Centros de Custo</button>
         </div>
       </div>
       <div class="kpis" id="drKpis"></div>
@@ -2891,7 +2892,7 @@ img{max-width:100%}
             <div class="fld"><label for="nf_entrada">Data de entrada</label><input id="nf_entrada" type="date"></div>
             <div class="fld"><label for="nf_frete">Frete</label><input id="nf_frete" type="number" step="0.01" value="0"></div>
             <div class="fld"><label for="nf_desp">Outras despesas</label><input id="nf_desp" type="number" step="0.01" value="0"></div>
-            <div class="fld"><label for="nf_centro">Centro de custo</label><select id="nf_centro"></select></div>
+            <div class="fld"><label for="nf_centro">Centro de custo <span class="req">*</span></label><select id="nf_centro"></select></div>
           </div>
         </div>
         <div class="sect">
@@ -3832,7 +3833,7 @@ img{max-width:100%}
     </div>
     <div class="grid g3" style="margin-top:6px">
       <div class="fld"><label for="es_data">Data</label><input id="es_data" type="date"></div>
-      <div class="fld" id="es_centroWrap" hidden><label for="es_centro">Centro de custo</label><select id="es_centro"></select></div>
+      <div class="fld" id="es_centroWrap" hidden><label for="es_centro">Centro de custo <span class="req">*</span></label><select id="es_centro"></select></div>
       <div class="fld" style="grid-column:span 2"><label for="es_obs">Observação</label><input id="es_obs" placeholder="Motivo, nº do romaneio, quem entregou…"></div>
     </div>
     <div id="es_alerta"></div>
@@ -3998,7 +3999,7 @@ img{max-width:100%}
     <div class="sub" id="tt_sub"></div>
     <div class="grid g2" style="margin-top:14px">
       <div class="fld" id="tt_pessoaWrap"><label for="tt_pessoa" id="tt_lblPessoa">Fornecedor</label><select id="tt_pessoa"></select></div>
-      <div class="fld"><label for="tt_centro">Centro de custo</label><select id="tt_centro"></select></div>
+      <div class="fld"><label for="tt_centro">Centro de custo <span class="req">*</span></label><select id="tt_centro"></select></div>
     </div>
     <div class="fld" style="margin-top:14px"><label for="tt_desc">Descrição <span class="req">*</span></label><input id="tt_desc"></div>
     <div class="grid g3" style="margin-top:14px">
@@ -4054,7 +4055,7 @@ img{max-width:100%}
     <div class="grid g3" style="margin-top:14px">
       <div class="fld"><label for="mv_data">Data <span class="req">*</span></label><input id="mv_data" type="date"></div>
       <div class="fld"><label for="mv_valor">Valor <span class="req">*</span></label><input id="mv_valor" type="number" step="0.01"></div>
-      <div class="fld"><label for="mv_centro">Centro de custo</label><select id="mv_centro"></select></div>
+      <div class="fld"><label for="mv_centro">Centro de custo <span class="req">*</span></label><select id="mv_centro"></select></div>
     </div>
     <div class="fld" style="margin-top:14px"><label for="mv_desc">Descrição <span class="req">*</span></label><input id="mv_desc"></div>
     <div id="mv_alerta"></div>
@@ -7061,12 +7062,16 @@ async function confirmarEstoque(){
   if(org===dst){$("es_alerta").innerHTML='<div class="note crit"><b>Origem e destino não podem ser o mesmo estoque.</b></div>';return;}
   if(esModo==="transf"&&(org===LOC_CONSUMO||dst===LOC_CONSUMO)){
     $("es_alerta").innerHTML='<div class="note crit"><b>Transferência é entre almoxarifado e colaboradores.</b> Para gastar produto na empresa use Lançar consumo — ele pede o centro de custo.</div>';return;}
+  /* consumo interno é despesa: sem centro de custo não sai (regra do Wagner, 15/09) */
+  if(esModo==="consumo"&&!$("es_centro").value){
+    $("es_alerta").innerHTML='<div class="note crit"><b>Escolha o centro de custo do consumo.</b> É ele que classifica a despesa no fluxo de caixa e na DRE.</div>';
+    $("es_centro").focus();return;}
   var doc={transf:"Transferência",consumo:"Consumo interno",mov:"Lançamento manual"}[esModo]||"Movimento";
   for(var i=0;i<esItens.length;i++){
     await lancarMov(esItens[i].pid,esItens[i].qtd,org,dst,doc,obs,data,$("es_centro").value);
   }
   /* consumo interno vira despesa no fluxo, pelo custo total do produto */
-  if(esModo==="consumo"&&$("es_centro").value){
+  if(esModo==="consumo"){
     var valor=esItens.reduce(function(a,i){
       var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{};
       return a+custoTotalDe(p)*i.qtd;},0);
@@ -7488,9 +7493,13 @@ function opcoesFinanceiro(){
   ["tt_caixa","bx_caixa","mv_caixa","mv_dest","cmCaixa","nf_caixa","cl_caixa"].forEach(function(id){
     if($(id))opcoes(id,cx,function(c){return c.id;},function(c){return c.nome;},
       id==="cmCaixa"?"Todos os caixas":null);});
-  ["tt_centro","mv_centro","nf_centro"].forEach(function(id){
-    if($(id))opcoes(id,centrosOrdenados(),function(c){return c.id;},
-      function(c){return caminhoCentro(c);},"— sem centro —");});
+  /* centro de custo é obrigatório e segue a classificação do lançamento:
+     título a receber e entrada só veem centros de Entrada; pagar, saída e nota, de Saída */
+  var ladoTt=(typeof ttEspecie!=="undefined"&&ttEspecie==="receber")?"entrada":"saida";
+  var ladoMv=($("mv_tipo")&&$("mv_tipo").value==="entrada")?"entrada":"saida";
+  [["tt_centro",ladoTt],["mv_centro",ladoMv],["nf_centro","saida"]].forEach(function(par){
+    if($(par[0]))opcoes(par[0],centrosDoLado(par[1]),function(c){return c.id;},
+      function(c){return caminhoCentro(c);},"— escolha o centro de custo —");});
   if($("nf_forn"))opcoes("nf_forn",fornecedores.filter(function(f){return f.status!=="inativo";}),
     function(f){return f.id;},function(f){return f.nome;},null);
   if($("nf_prod"))opcoes("nf_prod",produtos,function(p){return p.id;},function(p){return p.cod+" · "+p.nome;},null);
@@ -7874,6 +7883,52 @@ async function normalizarCentros(){
   }
   return mudou;
 }
+/* NENHUM lançamento pode ficar sem centro de custo (regra do Wagner, 15/09).
+   Os lançamentos automáticos usam este atalho: acha o centro pelo nome dentro
+   da classificação e, se alguém apagou, cria de novo na hora. */
+async function centroFixo(nome,grupo,tipo){
+  var c=centros.filter(function(x){
+    return semAcento(x.nome||"")===semAcento(nome)&&(x.tipo||"saida")===tipo;})[0];
+  if(!c){
+    c={id:uid(),grupo:grupo,nome:nome,tipo:tipo};
+    centros.push(c);await grava("centros",c);
+    try{opcoesFinanceiro();renderCentros();}catch(e){console.warn(e);}
+  }
+  return c.id;
+}
+/* lançamento antigo que ficou sem centro recebe um pela origem — a DRE nunca
+   mostra "sem centro de custo" (regra do Wagner, 15/09) */
+async function centroDaOrigem(t){
+  var esp=(t.especie==="receber"||t.tipo==="entrada")?"entrada":"saida";
+  var o=String(t.origem||"");
+  if(o==="pedido")return await centroFixo("Venda de produto","Receitas","entrada");
+  if(o==="nota")return await centroFixo("Compra de mercadoria","Mercadorias","saida");
+  if(o==="os")return await centroFixo("Serviço e instalação","Receitas","entrada");
+  if(o==="manutencao")return await centroFixo("Manutenção periódica","Receitas","entrada");
+  if(o==="adiantamento")return await centroFixo("Folha e encargos","Pessoal","saida");
+  if(t.taxaDe)return await centroFixo("Taxa de cartão","Impostos e taxas","saida");
+  return esp==="entrada"?await centroFixo("Outras receitas","Receitas","entrada")
+                        :await centroFixo("Outras despesas","Geral","saida");
+}
+async function normalizarLancamentos(){
+  var mudou=0,i;
+  for(i=0;i<titulos.length;i++){
+    if(!titulos[i].centroId){titulos[i].centroId=await centroDaOrigem(titulos[i]);mudou++;
+      if(db)await grava("titulos",titulos[i]);}
+  }
+  for(i=0;i<movs.length;i++){
+    var m=movs[i];
+    if(m.centroId||m.transfId)continue;   /* transferência entre caixas não tem centro: não é resultado */
+    var t=m.tituloId?titulos.filter(function(x){return x.id===m.tituloId;})[0]:null;
+    m.centroId=(t&&t.centroId)?t.centroId:await centroDaOrigem(m);
+    mudou++;if(db)await grava("movs",m);
+  }
+  return mudou;
+}
+/* centros que a classificação permite no lançamento: entrada para receita, saída para despesa */
+function centrosDoLado(tipo){
+  return centrosOrdenados().filter(function(c){return (c.tipo||"saida")===tipo;});
+}
 /* a classificação é Entrada/Saída → Grupo → Subgrupo (regra do Wagner, 15/09) */
 function gruposDeCentros(tipo){
   var c={};centros.forEach(function(x){
@@ -8098,7 +8153,7 @@ function aVista(tipo){
 }
 /* toda venda vira parcelas em contas a receber */
 async function gerarReceberDoPedido(p){
-  var gerados=[];
+  var gerados=[],ccVenda=await centroFixo("Venda de produto","Receitas","entrada");
   (p.formas||[]).forEach(function(f){
     var v=+f.valor||0;if(v<=0)return;
     var n=f.parc||1,parcela=Math.round(v/n*100)/100;
@@ -8106,7 +8161,7 @@ async function gerarReceberDoPedido(p){
       var t={id:uid(),loja:p.loja,especie:"receber",origem:"pedido",
         pedidoId:p.id,docRef:"Pedido "+p.numero,clienteId:p.clienteId,pessoa:p.cliente,
         descricao:f.tipo,formaTipo:f.tipo,
-        centroId:(centros.filter(function(c){return c.nome==="Venda de produto";})[0]||{}).id||"",
+        centroId:ccVenda,
         emissao:p.data,vencimento:somaDias(p.data,30*(i-1)+(aVista(f.tipo)?0:30)),
         valor:(i===n?Math.round((v-parcela*(n-1))*100)/100:parcela),
         parcela:i,totalParcelas:n,status:"aberto",valorPago:0,criadoEm:hojeISO()};
@@ -8122,6 +8177,10 @@ var ttEspecie="pagar";
 function abrirTitulo(especie){
   ttEspecie=especie;
   opcoesFinanceiro();
+  /* o centro começa em branco: quem escolhe é a descrição (histórico) ou o usuário */
+  $("tt_centro").value="";
+  $("tt_desc").onchange=function(){
+    aprenderCentro("tt_desc","tt_centro","tt_alerta",ttEspecie==="receber"?"entrada":"saida");};
   var rec=(especie==="receber");
   $("tt_titulo").textContent=rec?"Lançar título a receber":"Lançar despesa";
   $("tt_sub").textContent=rec?"Entrada avulsa, fora de pedido.":"Conta a pagar avulsa ou recorrente.";
@@ -8146,6 +8205,10 @@ async function salvarTitulo(){
   var desc=$("tt_desc").value.trim(),v=parseFloat($("tt_valor").value)||0;
   if(!desc||!v||!$("tt_venc").value){
     $("tt_alerta").innerHTML='<div class="note crit"><b>Descrição, valor e vencimento são obrigatórios.</b></div>';return;}
+  /* nenhum lançamento sem centro de custo (regra do Wagner, 15/09) */
+  if(!$("tt_centro").value){
+    $("tt_alerta").innerHTML='<div class="note crit"><b>Escolha o centro de custo.</b> Todo lançamento precisa de um — é ele que classifica o valor no fluxo de caixa e na DRE.</div>';
+    $("tt_centro").focus();return;}
   var n=Math.max(1,parseInt($("tt_parc").value,10)||1),iv=Math.max(1,parseInt($("tt_inter").value,10)||30);
   var pid=$("tt_pessoa").value;
   var pessoa=pid?((ttEspecie==="receber"
@@ -8220,6 +8283,11 @@ function abrirMov(modo){
   $("mv_tipoWrap").hidden=(modo==="transf");
   $("mv_data").value=hojeISO();$("mv_valor").value="";$("mv_desc").value="";
   $("mv_alerta").innerHTML="";
+  /* trocar entrada/saída troca a lista de centros de custo */
+  $("mv_tipo").onchange=function(){opcoesFinanceiro();aprenderCentro("mv_desc","mv_centro","mv_alerta",$("mv_tipo").value);};
+  $("mv_desc").onchange=function(){aprenderCentro("mv_desc","mv_centro","mv_alerta",$("mv_tipo").value);};
+  opcoesFinanceiro();
+  $("mv_centro").value="";
   $("movModal").hidden=false;
 }
 async function salvarMov(){
@@ -8236,6 +8304,9 @@ async function salvarMov(){
     movs.push(s);movs.push(e);await grava("movs",s);await grava("movs",e);
     toast("Transferência de "+BRL(v)+" registrada.");
   } else {
+    if(!$("mv_centro").value){
+      $("mv_alerta").innerHTML='<div class="note crit"><b>Escolha o centro de custo.</b> Todo movimento precisa de um — é ele que classifica o valor no fluxo de caixa e na DRE.</div>';
+      $("mv_centro").focus();return;}
     var m={id:uid(),loja:lojaAtual,caixaId:cx,data:data,tipo:$("mv_tipo").value,valor:v,
       descricao:desc,centroId:$("mv_centro").value,por:usuarioAtual};
     movs.push(m);await grava("movs",m);
@@ -8401,7 +8472,8 @@ function calcDRE(de,ate){
     movs.forEach(function(m){
       if(m.loja!==lojaAtual)return;
       if((m.data||"")<de||(m.data||"")>ate)return;
-      if(m.tipo!=="entrada"&&m.tipo!=="saida")return;   /* transferência não é resultado */
+      if(m.transfId)return;   /* transferência entre caixas troca dinheiro de lugar: não é resultado */
+      if(m.tipo!=="entrada"&&m.tipo!=="saida")return;
       por(m.tipo==="entrada"?"ent":"sai",centroPor(m.centroId),+m.valor||0);});
   }
   return r;
@@ -8414,9 +8486,10 @@ function renderDRE(){
   var j=janelaDre(),ja=janelaDreDe(refAnteriorDre(),drPeriodo);
   $("drRel").textContent=j.rot+" · comparado com "+ja.rot;
   if(!$("drData").value)$("drData").value=drRef;
-  $("drNota").textContent=drRegime==="comp"
+  $("drNota").textContent=(drRegime==="comp"
     ?"Competência: cada título do período, pago ou não, na data de vencimento. Títulos cancelados ficam de fora."
-    :"Caixa: o que entrou e saiu de verdade nos caixas do período. Transferência entre caixas não é resultado.";
+    :"Caixa: o que entrou e saiu de verdade nos caixas do período. Transferência entre caixas não é resultado.")+
+    " Todo lançamento tem centro de custo obrigatório — é ele que diz a linha da DRE.";
   var A=calcDRE(j.de,j.ate),B=calcDRE(ja.de,ja.ate);
   var recA=A.totEnt,recB=B.totEnt;
   var cmvA=somaClasseDRE(A,"cmv"),cmvB=somaClasseDRE(B,"cmv");
@@ -8785,6 +8858,10 @@ async function salvarNota(){
   if(!forn||!num||!$("nf_emissao").value){
     $("nf_alerta").innerHTML='<div class="note crit"><b>Fornecedor, número e emissão são obrigatórios.</b></div>';return;}
   if(!nfItens.length){$("nf_alerta").innerHTML='<div class="note crit"><b>Adicione ao menos um item.</b></div>';return;}
+  /* nenhum lançamento sem centro de custo (regra do Wagner, 15/09) */
+  if(!$("nf_centro").value){
+    $("nf_alerta").innerHTML='<div class="note crit"><b>Escolha o centro de custo da nota.</b> É ele que classifica a compra no fluxo de caixa e na DRE.</div>';
+    $("nf_centro").focus();return;}
   var dup=notas.filter(function(n){return n.loja===lojaAtual&&n.fornecedorId===forn&&String(n.numero)===num;})[0];
   if(dup){$("nf_alerta").innerHTML='<div class="note crit"><b>Esta nota já foi lançada</b> para este fornecedor.</div>';return;}
   var r=calcNota();
@@ -8996,6 +9073,67 @@ function lerExtrato(txt){
   });
   return out;
 }
+/* Extrato importado: a linha que casa com um título herda o centro do título.
+   A linha que sobra recebe um centro sugerido — primeiro pelo que já foi
+   classificado com a mesma descrição, depois pelas palavras do extrato
+   (regra do Wagner, 15/09: nunca lançar sem centro de custo). */
+function chaveTexto(s){
+  return semAcento(s).replace(/[0-9]+/g," ").replace(/[^a-z ]+/g," ").split(/\s+/)
+    .filter(function(w){return w.length>3;}).slice(0,4).join(" ");
+}
+var PALAVRAS_CC=[
+  [/tarifa|anuidade|\biof\b|juros|taxa/,"Taxa de cartão"],
+  [/posto|combust|gasolina|etanol|diesel|shell|ipiranga|petrobras/,"Combustível"],
+  [/pneu|borrach|alinhament|balanceam/,"Pneus"],
+  [/\boleo\b|lubrific|troca de oleo/,"Troca de óleo"],
+  [/oficina|mecanic|funilar|auto ?pecas|retifica/,"Manutenção corretiva"],
+  [/aluguel|imobili|locacao|condominio/,"Aluguel"],
+  [/cemig|energia|eletric|copasa|saneament|telefon|internet|vivo|claro|\btim\b|net ?fibra/,"Energia, água e telefone"],
+  [/folha|salario|rescis|ferias|\bfgts\b|\binss\b|pro ?labore|adiantamento|vale/,"Folha e encargos"],
+  [/comiss/,"Comissões"],
+  [/marketing|publicid|anuncio|facebook|instagram|google ?ads|midia|grafica/,"Marketing"],
+  [/frete|transport|correios|sedex|entrega|logist/,"Frete e logística"],
+  [/imposto|\bdas\b|simples|\bdarf\b|\biss\b|\bicms\b|prefeitura|receita federal/,"Impostos"],
+  [/fornecedor|mercadoria|industri|distribuid|atacad/,"Compra de mercadoria"],
+  [/manutencao periodica|refil|filtro/,"Manutenção periódica"],
+  [/instalacao|servico|assistencia/,"Serviço e instalação"],
+  [/recebiment|deposit|\bpix\b|credito|venda|cliente|cart[aã]o/,"Venda de produto"]
+];
+function centroSugeridoExtrato(desc,tipo){
+  var lado=(tipo==="entrada")?"entrada":"saida",ch=chaveTexto(desc||"");
+  if(ch){
+    var votos={},anteriores=movs.filter(function(m){return !m.transfId;}).map(function(m){
+      return {d:m.descricao,c:m.centroId,l:(m.tipo==="entrada"?"entrada":"saida")};})
+      .concat(titulos.map(function(t){
+        return {d:t.descricao,c:t.centroId,l:(t.especie==="receber"?"entrada":"saida")};}));
+    anteriores.forEach(function(x){
+      if(!x.c||x.l!==lado||chaveTexto(x.d||"")!==ch)return;
+      votos[x.c]=(votos[x.c]||0)+1;});
+    var ks=Object.keys(votos).sort(function(a,b){return votos[b]-votos[a];});
+    for(var i=0;i<ks.length;i++){
+      var c=centroPor(ks[i]);
+      if(c&&(c.tipo||"saida")===lado)return {id:c.id,por:"pelo histórico: já classifiquei assim antes"};
+    }
+  }
+  var n=semAcento(desc||"");
+  for(var j=0;j<PALAVRAS_CC.length;j++){
+    if(!PALAVRAS_CC[j][0].test(n))continue;
+    var alvo=centros.filter(function(c2){
+      return (c2.tipo||"saida")===lado&&semAcento(c2.nome)===semAcento(PALAVRAS_CC[j][1]);})[0];
+    if(alvo)return {id:alvo.id,por:"pela descrição do extrato"};
+  }
+  return null;
+}
+/* Regra do Wagner (15/09): no primeiro lançamento o usuário escolhe o centro;
+   daí em diante, lançamento com a mesma descrição já vem com o mesmo centro. */
+function aprenderCentro(idDesc,idCentro,idAlerta,lado){
+  var sel=$(idCentro);if(!sel||sel.value)return;          /* já escolhido: não mexe */
+  var sg=centroSugeridoExtrato($(idDesc).value||"",lado);
+  if(!sg)return;
+  sel.value=sg.id;if(sel.value!==sg.id)return;
+  if($(idAlerta))$(idAlerta).innerHTML='<div class="note"><b>Centro de custo preenchido:</b> '+
+    esc(caminhoCentro(centroPor(sg.id)))+" — "+esc(sg.por)+". Pode trocar se for outro.</div>";
+}
 function conciliar(){
   var cx=$("cl_caixa").value,tol=Math.max(0,parseInt($("cl_tol").value,10)||0);
   var de=$("cl_de").value,ate=$("cl_ate").value;
@@ -9072,7 +9210,16 @@ function renderConcil(){
         $("mv_caixa").value=d.caixa;$("mv_data").value=l.data;
         $("mv_valor").value=Math.abs(l.valor).toFixed(2);
         $("mv_tipo").value=l.valor>0?"entrada":"saida";
-        $("mv_desc").value=l.desc;};});
+        $("mv_desc").value=l.desc;
+        /* o centro já vem sugerido; sem ele o movimento não salva */
+        opcoesFinanceiro();
+        var sg=centroSugeridoExtrato(l.desc,$("mv_tipo").value);
+        if(sg&&($("mv_centro").value=sg.id)===sg.id){
+          $("mv_alerta").innerHTML='<div class="note"><b>Centro de custo preenchido:</b> '+
+            esc(caminhoCentro(centroPor(sg.id)))+" — "+esc(sg.por)+". Confira antes de lançar.</div>";
+        }else{
+          $("mv_alerta").innerHTML='<div class="note warn"><b>Escolha o centro de custo desta linha.</b> Não reconheci a descrição do extrato; na próxima vez eu já sugiro sozinho.</div>';
+        }};});
   } else {
     h.innerHTML="<th>Vencimento</th><th>Espécie</th><th>Pessoa</th><th>Descrição</th><th class=\"num\">Valor</th><th></th>";
     $("cl_count").textContent=d.sistema.length+" sem extrato";
@@ -9107,9 +9254,9 @@ async function baixarConciliados(){
       descricao:"Conciliação · "+l.desc,centroId:t.centroId||"",tituloId:t.id,por:usuarioAtual};
     movs.push(m);await grava("movs",m);
     if(houveTaxa){
-      var ct=centros.filter(function(c){return c.nome==="Taxa de cartão";})[0];
+      var ctTaxa=await centroFixo("Taxa de cartão","Impostos e taxas","saida");
       var mt={id:uid(),loja:lojaAtual,caixaId:d.caixa,data:l.data,tipo:"saida",valor:Math.abs(l.dif),
-        descricao:"Taxa retida · "+(t.pessoa||t.descricao||""),centroId:(ct||{}).id||"",
+        descricao:"Taxa retida · "+(t.pessoa||t.descricao||""),centroId:ctTaxa,
         tituloId:t.id,taxaDe:t.id,por:usuarioAtual};
       movs.push(mt);await grava("movs",mt);
     }
@@ -9701,6 +9848,8 @@ async function gerarDemo(){
     "<br><br>Abra o Dashboard, a Agenda, Pedidos, Contas a Receber, Fluxo de Caixa, Estoques e Cartão de Ponto para ver tudo amarrado.</div>";
   /* os produtos de teste nascem com saldo no cadastro: vira movimento de estoque inicial */
   await migrarEstoqueInicial();
+  /* nenhum lançamento de demonstração pode ficar sem centro de custo */
+  try{await normalizarLancamentos();}catch(eL){console.warn(eL);}
   estadoDemo();render();
   try{renderEstEmpresa();renderEstColab();renderEstConsumo();renderPonto();renderNotas();renderFornec();}catch(e){}
   toast("Dados de teste gerados.");
@@ -9951,7 +10100,8 @@ function adiantAguardandoRecebido(t){
   return !a||a.status!=="recebido";
 }
 async function criarTituloAdiant(a){
-  var ct=(centros.filter(function(c){return /folha|sal[aá]r|pessoal|funcion/i.test(c.nome||"");})[0]||{}).id||"";
+  var ct=(centros.filter(function(c){return (c.tipo||"saida")==="saida"&&/folha|sal[aá]r|pessoal|funcion/i.test(c.nome||"");})[0]||{}).id
+    ||await centroFixo("Folha e encargos","Pessoal","saida");
   var t={id:uid(),loja:a.loja,especie:"pagar",origem:"adiantamento",adiantamentoId:a.id,pessoa:a.colaborador,
     descricao:"Adiantamento salarial · "+a.colaborador+" · "+rotuloComp(a.comp),centroId:ct,caixaId:"",
     emissao:hojeISO(),vencimento:hojeISO(),valor:a.valor,parcela:1,totalParcelas:1,status:"aberto",valorPago:0,
@@ -13326,7 +13476,7 @@ async function registrarManut(){
     var t={id:uid(),loja:lojaAtual,especie:"receber",origem:"manutencao",equipId:e.id,
       clienteId:e.clienteId,pessoa:e.cliente,docRef:"Manut. "+(e.serie||e.pedidoNumero||""),
       descricao:(reg.cobranca==="plano"?"Manutenção · itens já utilizados do plano "+e.plano+" · ":"Manutenção · ")+e.produto,
-      centroId:(centros.filter(function(c){return c.nome==="Manutenção periódica";})[0]||{}).id||"",
+      centroId:await centroFixo("Manutenção periódica","Receitas","entrada"),
       emissao:data,vencimento:data,valor:Math.round(valor*100)/100,
       parcela:1,totalParcelas:1,status:"aberto",valorPago:0,criadoEm:hojeISO()};
     titulos.push(t);await grava("titulos",t);
@@ -13679,7 +13829,7 @@ async function concluirOS(){
     var t={id:uid(),loja:lojaAtual,especie:"receber",origem:"os",osId:o.id,
       clienteId:o.clienteId,pessoa:o.cliente,docRef:"OS "+o.numero,
       descricao:"OS "+o.numero+" · "+osTipoN(o.tipo),
-      centroId:(centros.filter(function(c){return c.nome==="Serviço e instalação";})[0]||{}).id||"",
+      centroId:await centroFixo("Serviço e instalação","Receitas","entrada"),
       emissao:hojeISO(),vencimento:hojeISO(),valor:totalOS(o),
       parcela:1,totalParcelas:1,status:"aberto",valorPago:0,criadoEm:hojeISO()};
     titulos.push(t);await grava("titulos",t);
@@ -17402,6 +17552,7 @@ function ligar(){
         x.setAttribute("aria-current",String(x===b));});
       renderDRE();};});
   $("drData").onchange=function(){drRef=this.value||hojeISO();renderDRE();};
+  $("drCentros").onclick=function(){ir("centros");};
   Array.prototype.forEach.call($("drReg").querySelectorAll("button"),function(b){
     b.onclick=function(){drRegime=b.getAttribute("data-r");
       Array.prototype.forEach.call($("drReg").querySelectorAll("button"),function(x){
@@ -18202,6 +18353,7 @@ function erro(msg){
   /* estoque antigo guardado no produto vira movimento "Estoque inicial", uma vez só */
   try{await normalizarGruposProdutos();}catch(e){console.warn("grupos e subgrupos",e);}
   try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
+  try{await normalizarLancamentos();}catch(e){console.warn("centro de custo dos lançamentos",e);}
   try{await migrarEstoqueInicial();}catch(e){console.warn("estoque inicial",e);}
   /* só agora as funções existem — é aqui que o menu ganha a forma final */
   try{sincronizarEquipe();aplicarPerfil();}catch(e){console.warn(e);}
