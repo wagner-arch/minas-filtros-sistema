@@ -724,6 +724,15 @@ grant select                         on public.perfis to authenticated;
 grant insert, update, delete         on public.perfis to authenticated;  -- so o Administrador passa pela policy
 grant select                         on public.numeradores to authenticated;
 
+-- O service_role (Edge Functions, como a "criar-acesso") precisa do grant EXPLICITO.
+-- Em projeto criado com "Automatically expose new tables" desmarcado, ele nao herda
+-- nada por padrao, e o revoke ... from public acima tira o que viria por heranca:
+-- sem estas tres linhas a funcao cria o usuario no Auth e falha ao gravar o perfil
+-- ("permission denied for table perfis") - defeito pego no teste real de 17/09.
+grant all on public.docs        to service_role;
+grant all on public.perfis      to service_role;
+grant all on public.numeradores to service_role;
+
 -- ---------------------------------------------------------------------
 -- 8.1 docs - SELECT
 -- ---------------------------------------------------------------------
