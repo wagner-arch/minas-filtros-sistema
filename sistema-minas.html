@@ -2739,11 +2739,11 @@ img{max-width:100%}
         <div class="sect" style="margin-top:20px">
           <p class="sect-t">Extrato</p>
           <div class="grid g3">
-            <div class="fld"><label for="cl_arq">Arquivo do extrato</label><input id="cl_arq" type="file" accept=".csv,.txt,.ofx"></div>
+            <div class="fld"><label for="cl_arq">Arquivo do extrato</label><input id="cl_arq" type="file" accept=".csv,.txt,.ofx,.pdf,application/pdf"></div>
             <div class="fld" style="grid-column:span 2"><label for="cl_cola">…ou cole aqui as linhas</label>
               <textarea id="cl_cola" rows="3" placeholder="02/09/2026;RECEBIMENTO CARTAO;1.245,80&#10;02/09/2026;TARIFA;-29,90"></textarea></div>
           </div>
-          <p class="help">Aceita <b>CSV</b> (data ; descrição ; valor), <b>OFX</b> do banco e o CSV de liquidação das operadoras.
+          <p class="help">Aceita <b>PDF</b> do extrato (o que o internet banking gera — foto digitalizada não tem texto), <b>OFX</b> do banco, <b>CSV</b> (data ; descrição ; valor) e o CSV de liquidação das operadoras.
           Valor negativo é saída. O sistema entende data em dd/mm/aaaa ou aaaa-mm-dd, e vírgula ou ponto como decimal.</p>
         </div>
         <div id="cl_alerta"></div>
@@ -10969,6 +10969,159 @@ function dataBR(s){
   m=/^(\d{4})(\d{2})(\d{2})/.exec(s);
   if(m)return m[1]+"-"+m[2]+"-"+m[3];
   return "";
+}
+/* ---------- extrato em PDF (pedido do Wagner, 16/09) ----------
+   O pdf.js (cdnjs, carregado só quando precisa) tira o texto de cada página com a posição. As palavras viram
+   linhas pela altura; cada linha com data e valor vira lançamento. Regras de leitura:
+   - dois valores na linha = valor e saldo (vale o penúltimo); linha de SALDO/TOTAL é ignorada;
+   - saída: sinal "-", sufixo D, ou valor debaixo da coluna Débito/Saída do cabeçalho; C = entrada;
+   - sem data na linha, herda a data do lançamento anterior (banco que só mostra a data no 1º do dia);
+   - data sem ano (dd/mm) pega o ano mais frequente do documento;
+   - linha logo abaixo, sem data e sem valor, completa a descrição (nome de quem pagou/recebeu).
+   PDF digitalizado (foto) não tem texto — aí o aviso pede o PDF do internet banking, OFX ou CSV. */
+var PDFJS_URL="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+var PDFJS_WORKER="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+function carregarPdfJs(){
+  if(window.pdfjsLib)return Promise.resolve(window.pdfjsLib);
+  return new Promise(function(ok,falha){
+    var s=document.createElement("script");
+    s.src=PDFJS_URL;s.async=true;
+    s.onload=function(){
+      if(!window.pdfjsLib){falha(new Error("o leitor de PDF não carregou"));return;}
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc=PDFJS_WORKER;ok(window.pdfjsLib);};
+    s.onerror=function(){falha(new Error("sem internet para carregar o leitor de PDF"));};
+    document.head.appendChild(s);
+  });
+}
+async function linhasDoPdf(buf){
+  var lib=await carregarPdfJs();
+  var doc=await lib.getDocument({data:new Uint8Array(buf)}).promise,todas=[];
+  for(var pg=1;pg<=doc.numPages;pg++){
+    var page=await doc.getPage(pg),tc=await page.getTextContent();
+    var its=tc.items.filter(function(it){return it.str&&it.str.trim();}).map(function(it){
+      return {s:it.str,x:it.transform[4],y:it.transform[5],w:it.width||0,h:Math.abs(it.transform[3])||it.height||8};});
+    its.sort(function(a,b){return (b.y-a.y)||(a.x-b.x);});
+    var linhas=[];
+    its.forEach(function(it){
+      var L=null;
+      for(var k=linhas.length-1;k>=0&&k>=linhas.length-3;k--){if(Math.abs(linhas[k].y-it.y)<=Math.max(2,it.h*0.45)){L=linhas[k];break;}}
+      if(!L){L={y:it.y,h:it.h,its:[]};linhas.push(L);}
+      L.its.push(it);
+    });
+    linhas.forEach(function(L){
+      L.its.sort(function(a,b){return a.x-b.x;});
+      var t="",fim=null;
+      L.its.forEach(function(it){
+        if(fim!=null){var gap=it.x-fim;t+=gap>it.h*1.2?"   ":(gap>it.h*0.15&&!/\s$/.test(t)&&!/^\s/.test(it.s)?" ":"");}
+        it.i=t.length;t+=it.s;fim=it.x+it.w;});
+      todas.push({pg:pg,y:L.y,h:L.h,t:t,its:L.its});
+    });
+  }
+  return todas;
+}
+function lerLinhasExtratoPdf(linhas){
+  var RX_DATA=/^\s*(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-](\d{4}|\d{2}))?(?![\d\/])/;
+  var anos={};
+  linhas.forEach(function(L){(L.t.match(/\b\d{1,2}\/\d{1,2}\/(20\d{2})\b/g)||[]).forEach(function(m){var a=m.slice(-4);anos[a]=(anos[a]||0)+1;});});
+  var anoP=Object.keys(anos).sort(function(a,b){return anos[b]-anos[a];})[0]||String(new Date().getFullYear());
+  function p2(n){return String(n).padStart(2,"0");}
+  var RX_CAB=/saldo|total|p[aá]gina|extrato|per[ií]odo|ag[eê]ncia|conta corrente|lan[cç]amentos|hist[oó]rico/i;
+  var colDeb=null,colCred=null,dataAtual="",P=[];
+  /* 1ª passada: o que cada linha tem (data, valores, texto) */
+  linhas.forEach(function(L){
+    var t=L.t.replace(/ /g," ");
+    if(/d[eé]bito|sa[ií]da/i.test(t)&&/cr[eé]dito|entrada/i.test(t)){
+      /* cabeçalho com colunas de débito e crédito: guarda onde ficam */
+      L.its.forEach(function(it){
+        if(/^\s*(d[eé]bitos?|sa[ií]das?)(\s*\(R\$\))?\s*$/i.test(it.s))colDeb=it.x+it.w/2;
+        if(/^\s*(cr[eé]ditos?|entradas?)(\s*\(R\$\))?\s*$/i.test(it.s))colCred=it.x+it.w/2;});
+      P.push({L:L,cab:true});return;
+    }
+    var md=RX_DATA.exec(t),ini=0,temData=false;
+    if(md){
+      var d=+md[1],m=+md[2],a=md[3]?(md[3].length===2?"20"+md[3]:md[3]):anoP;
+      if(d>=1&&d<=31&&m>=1&&m<=12){dataAtual=a+"-"+p2(m)+"-"+p2(d);ini=md[0].length;temData=true;}
+    }
+    var resto=t.slice(ini),vals=[],mv,RX_VAL=/(-\s*)?(?:R\$\s*)?(\d{1,3}(?:\.\d{3})+|\d+),(\d{2})(?!\d)(\s*-(?!\S)|\s*\(?[DC]\)?(?![A-Za-zÀ-ú]))?/gi;
+    while((mv=RX_VAL.exec(resto))){
+      var suf=(mv[4]||"").replace(/[\s()]/g,"");
+      vals.push({i:ini+mv.index,dig:mv[2]+","+mv[3],v:+(mv[2].replace(/\./g,"")+"."+mv[3]),
+        neg:!!mv[1]||suf==="-"||/^d$/i.test(suf),cred:/^c$/i.test(suf)});
+    }
+    var desc=vals.length?t.slice(ini,vals[0].i):t.slice(ini);
+    desc=desc.replace(/\s+/g," ").trim().replace(/\s+\d{3,}$/,"").trim();
+    P.push({L:L,t:t,data:dataAtual,temData:temData,vals:vals,desc:desc});
+  });
+  /* 2ª passada: lançamento sem descrição na própria linha (descrição quebrada em duas linhas, com a data e o
+     valor no meio) pega o texto colado em cima e embaixo */
+  P.forEach(function(x,k){
+    if(x.cab||!x.vals.length||/[A-Za-zÀ-ú]/.test(x.desc))return;
+    var partes=[];
+    [k-1,k+1].forEach(function(j){
+      var y=P[j];
+      if(!y||y.cab||y.usada||y.vals.length||y.temData||y.L.pg!==x.L.pg)return;
+      if(Math.abs(y.L.y-x.L.y)>x.L.h*1.05||!/[A-Za-zÀ-ú]/.test(y.desc)||RX_CAB.test(y.t))return;
+      y.usada=true;partes[j<k?0:1]=y.desc;});
+    x.desc=[partes[0],x.desc,partes[1]].filter(Boolean).join(" ").trim();
+  });
+  /* 3ª passada: monta os lançamentos */
+  var out=[],ult=null,ultL=null;
+  P.forEach(function(x){
+    if(x.cab||x.usada)return;
+    var L=x.L;
+    if(!x.vals.length){
+      /* continuação da descrição do lançamento de cima (nome de quem pagou/recebeu) */
+      if(ult&&ultL&&!x.temData&&L.pg===ultL.pg&&(ultL.y-L.y)<=L.h*2.4&&/[A-Za-zÀ-ú]/.test(x.t)&&x.t.trim().length<=70&&!RX_CAB.test(x.t)){
+        ult.desc=(ult.desc+" "+x.t.trim()).replace(/\s+/g," ").slice(0,140);ultL=L;}
+      return;
+    }
+    if(!x.data){ult=null;return;}
+    if(/\bsaldo\b|^total|^s\s*a\s*l\s*d\s*o/i.test(x.desc)||!/[A-Za-zÀ-ú]/.test(x.desc)){ult=null;return;}
+    var val=x.vals.length>=2?x.vals[x.vals.length-2]:x.vals[0];
+    var neg=val.neg;
+    if(!neg&&!val.cred&&colDeb!=null&&colCred!=null){
+      var it=L.its.filter(function(i){return i.s.indexOf(val.dig)>=0;})[0];
+      if(it){var cx=it.x+it.w/2;neg=Math.abs(cx-colDeb)<Math.abs(cx-colCred);}
+    }else if(!neg&&!val.cred&&/\b(tarifa|pagamento|pagto|pix enviado|pix emitido|transf(er[eê]ncia)? enviada|d[eé]bito|saque|compra|boleto pago|iof|juros|anuidade)\b/i.test(x.desc)){
+      neg=true;
+    }
+    ult={data:x.data,desc:x.desc||"Lançamento",valor:neg?-val.v:val.v};ultL=L;
+    out.push(ult);
+  });
+  return out;
+}
+async function lerExtratoPdf(f){
+  $("cl_alerta").innerHTML='<div class="note">Lendo o PDF '+esc(f.name)+"…</div>";
+  try{
+    var buf=await f.arrayBuffer();
+    var linhas=await linhasDoPdf(buf);
+    if(!linhas.length){
+      clLinhas=[];
+      $("cl_alerta").innerHTML='<div class="note crit"><b>'+esc(f.name)+" não tem texto.</b> É um extrato digitalizado (foto). "+
+        "Baixe o extrato em PDF direto do internet banking, ou em OFX/CSV, e tente de novo.</div>";
+      return;
+    }
+    clLinhas=lerLinhasExtratoPdf(linhas);
+    if(!clLinhas.length){
+      $("cl_alerta").innerHTML='<div class="note crit"><b>Não achei lançamentos em '+esc(f.name)+".</b> "+
+        "O PDF tem texto, mas nenhuma linha com data e valor. Baixe o extrato em OFX ou CSV no internet banking.</div>";
+      return;
+    }
+    var ent=clLinhas.filter(function(l){return l.valor>0;}),sai=clLinhas.filter(function(l){return l.valor<0;});
+    var soma=function(ls){return ls.reduce(function(a,l){return a+l.valor;},0);};
+    $("cl_alerta").innerHTML='<div class="note ok"><b>'+clLinhas.length+" lançamento(s) lido(s) do PDF "+esc(f.name)+".</b> "+
+      ent.length+" entrada(s) · "+BRL(soma(ent))+" · "+sai.length+" saída(s) · "+BRL(-soma(sai))+
+      ". Confira abaixo, a conta e o período, e clique em conciliar.</div>"+
+      '<div class="tw"><table><thead><tr><th>Data</th><th>Descrição</th><th class="num">Valor</th></tr></thead><tbody>'+
+      clLinhas.slice(0,12).map(function(l){
+        return "<tr><td>"+esc(dataCurta(l.data))+"</td><td>"+esc(l.desc)+'</td><td class="num"><span class="pill '+(l.valor<0?"p-crit":"p-ok")+'">'+BRL(l.valor)+"</span></td></tr>";}).join("")+
+      (clLinhas.length>12?'<tr><td colspan="3" class="t-sub">… e mais '+(clLinhas.length-12)+" lançamento(s)</td></tr>":"")+"</tbody></table></div>";
+  }catch(e){
+    clLinhas=[];
+    var senha=e&&(e.name==="PasswordException"||/password/i.test(e.message||""));
+    $("cl_alerta").innerHTML='<div class="note crit"><b>'+(senha?esc(f.name)+" tem senha.":"Não consegui ler o PDF.")+"</b> "+
+      (senha?"Baixe o extrato sem senha no internet banking.":esc(e&&e.message||String(e))+". Tente o OFX ou o CSV do banco.")+"</div>";
+  }
 }
 function lerExtrato(txt){
   var out=[];
@@ -20209,6 +20362,7 @@ function ligar(){
 
   $("cl_arq").onchange=function(){
     var f=this.files&&this.files[0];if(!f)return;
+    if(/\.pdf$/i.test(f.name)||f.type==="application/pdf"){$("cl_cola").value="";lerExtratoPdf(f);return;}
     var r=new FileReader();
     r.onload=function(){
       clLinhas=lerExtrato(String(r.result));
