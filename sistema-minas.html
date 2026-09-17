@@ -647,6 +647,9 @@
 
   /* ---- Relatórios (v128): folha no modelo do fechamento do LSoft — papel branco nos dois temas ---- */
   .rl-abas{flex-wrap:wrap}
+  .fl-periodo{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .fl-periodo[hidden]{display:none}
+  .fl-periodo label{font-size:13px;color:var(--ink-2)}
   .rel-impressao{display:none}
   .rel-area{margin-top:4px}
   .rel-folha{background:#fff;color:#111;font:12px/1.35 Arial,Helvetica,sans-serif;padding:26px 30px;border-radius:10px;
@@ -2829,13 +2832,20 @@ img{max-width:100%}
       <div class="page-head"><h1>Fluxo de Caixa</h1><p>O que já entrou, o que já saiu e o que está previsto — com o saldo projetado dia a dia.</p></div>
       <div class="card" style="padding:18px 22px">
         <div class="toolbar" style="padding:0">
-          <div class="cal-views" id="flPer">
+          <div class="cal-views" id="flPer" style="flex-wrap:wrap">
+            <button type="button" data-p="dia">Dia</button>
+            <button type="button" data-p="semana">Semana</button>
             <button type="button" data-p="mes" aria-current="true">Mês</button>
             <button type="button" data-p="30">Próximos 30 dias</button>
             <button type="button" data-p="90">Próximos 90 dias</button>
             <button type="button" data-p="ano">Ano</button>
+            <button type="button" data-p="periodo">Período</button>
           </div>
-          <input id="flData" type="date" style="max-width:170px">
+          <input id="flData" type="date" style="max-width:170px" title="Data de referência" aria-label="Data de referência">
+          <span id="flPerWrap" class="fl-periodo" hidden>
+            <label for="flDe">De</label><input id="flDe" type="date" style="max-width:160px">
+            <label for="flAte">até</label><input id="flAte" type="date" style="max-width:160px">
+          </span>
           <span class="sp"></span><span class="count" id="flRel"></span>
         </div>
       </div>
@@ -9505,18 +9515,32 @@ function renderCaixasMov(){
 var flPeriodo="mes",flRef=hojeISO();
 function janelaFluxo(){
   var d=new Date(flRef+"T00:00:00");
+  /* período livre, dia e semana (pedido do Wagner, 16/09: "não tem a opção de escolher o período") */
+  if(flPeriodo==="periodo"){
+    var de=$("flDe").value||flRef,ate=$("flAte").value||de;
+    if(ate<de){var t=de;de=ate;ate=t;}
+    return {de:de,ate:ate,rot:"De "+dataCurta(de)+" a "+dataCurta(ate)};
+  }
+  if(flPeriodo==="dia")return {de:flRef,ate:flRef,rot:"Dia "+dataCurta(flRef)};
+  if(flPeriodo==="semana"){
+    var ini=somaDias(flRef,-((d.getDay()+6)%7)),fim=somaDias(ini,6);
+    return {de:ini,ate:fim,rot:"Semana de "+dataCurta(ini)+" a "+dataCurta(fim)};
+  }
   if(flPeriodo==="mes"){
     var i=new Date(d.getFullYear(),d.getMonth(),1),f=new Date(d.getFullYear(),d.getMonth()+1,0);
     return {de:iso(i),ate:iso(f),rot:MESES[d.getMonth()]+" de "+d.getFullYear()};
   }
-  if(flPeriodo==="30")return {de:iso(d),ate:somaDias(iso(d),30),rot:"De "+iso(d)+" a "+somaDias(iso(d),30)};
-  if(flPeriodo==="90")return {de:iso(d),ate:somaDias(iso(d),90),rot:"De "+iso(d)+" a "+somaDias(iso(d),90)};
+  if(flPeriodo==="30")return {de:iso(d),ate:somaDias(iso(d),30),rot:"De "+dataCurta(iso(d))+" a "+dataCurta(somaDias(iso(d),30))};
+  if(flPeriodo==="90")return {de:iso(d),ate:somaDias(iso(d),90),rot:"De "+dataCurta(iso(d))+" a "+dataCurta(somaDias(iso(d),90))};
   return {de:d.getFullYear()+"-01-01",ate:d.getFullYear()+"-12-31",rot:"Ano de "+d.getFullYear()};
 }
 function renderFluxo(){
   var j=janelaFluxo(),h=hojeISO();
   $("flRel").textContent=j.rot;
   if(!$("flData").value)$("flData").value=flRef;
+  var livre=flPeriodo==="periodo";
+  $("flPerWrap").hidden=!livre;$("flData").hidden=livre;
+  if(livre){if(!$("flDe").value)$("flDe").value=j.de;if(!$("flAte").value)$("flAte").value=j.ate;}
   var real=movs.filter(function(m){return m.loja===lojaAtual&&m.data>=j.de&&m.data<=j.ate;});
   var prev=titulos.filter(function(t){return t.loja===lojaAtual&&t.status==="aberto"&&
     t.vencimento>=j.de&&t.vencimento<=j.ate;});
@@ -9568,7 +9592,7 @@ function renderFluxo(){
   if(!ks.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Sem movimento no período</div></div></td></tr>';return;}
   ks.forEach(function(k){
     var d=dias[k],res=d.e-d.s;acc+=res;
-    b.innerHTML+="<tr><td><b>"+esc(k)+"</b></td>"+
+    b.innerHTML+="<tr><td><b>"+esc(dataCurta(k))+"</b></td>"+
       '<td class="num">'+(d.e?'<span style="color:var(--ok)">'+BRL(d.e)+"</span>":"—")+"</td>"+
       '<td class="num">'+(d.s?'<span style="color:var(--crit)">'+BRL(d.s)+"</span>":"—")+"</td>"+
       '<td class="num">'+(res>=0?"+":"")+BRL(res)+"</td>"+
@@ -20949,11 +20973,18 @@ function ligar(){
   $("mv_fechar").onclick=function(){$("movModal").hidden=true;};
 
   Array.prototype.forEach.call($("flPer").querySelectorAll("button"),function(b){
-    b.onclick=function(){flPeriodo=b.getAttribute("data-p");
+    b.onclick=function(){
+      /* abrir "Período" começa com o intervalo que estava na tela */
+      if(b.getAttribute("data-p")==="periodo"&&flPeriodo!=="periodo"){var jw=janelaFluxo();$("flDe").value=jw.de;$("flAte").value=jw.ate;}
+      flPeriodo=b.getAttribute("data-p");
       Array.prototype.forEach.call($("flPer").querySelectorAll("button"),function(x){
         x.setAttribute("aria-current",String(x===b));});
       renderFluxo();};});
   $("flData").onchange=function(){flRef=this.value||hojeISO();renderFluxo();};
+  /* período livre: mexer no De/Até já passa para "Período" */
+  ["flDe","flAte"].forEach(function(id){$(id).onchange=function(){flPeriodo="periodo";
+    Array.prototype.forEach.call($("flPer").querySelectorAll("button"),function(x){x.setAttribute("aria-current",String(x.getAttribute("data-p")==="periodo"));});
+    renderFluxo();};});
 
   /* DRE: a tabela já vem montada; muda só com o filtro de data (e o regime) */
   Array.prototype.forEach.call($("drPer").querySelectorAll("button"),function(b){
