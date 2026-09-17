@@ -785,6 +785,20 @@ create policy docs_select_minha_biometria on public.docs
 -- Escrita continua so para sou_gestor_rh() (8.2/8.3, colecao restrita).
 -- INTEGRACAO.md: totalRemuneracao, premioAssiduidade e premioDesempenho
 -- devem ler 'remuneracao', nao 'rh'.
+-- Cada colaborador grava a PRÓPRIA foto de referência (pedido do Wagner, 17/09):
+-- sem isto, só o gestor de RH cadastraria foto, e ninguém bateria ponto com
+-- conferência de imagem no primeiro dia.
+drop policy if exists docs_insert_minha_facial on public.docs;
+create policy docs_insert_minha_facial on public.docs
+  for insert to authenticated
+  with check (colecao = 'facial' and public.eh_meu_documento(data));
+
+drop policy if exists docs_update_minha_facial on public.docs;
+create policy docs_update_minha_facial on public.docs
+  for update to authenticated
+  using      (colecao = 'facial' and public.eh_meu_documento(data))
+  with check (colecao = 'facial' and public.eh_meu_documento(data));
+
 drop policy if exists docs_select_minha_remuneracao on public.docs;
 create policy docs_select_minha_remuneracao on public.docs
   for select to authenticated

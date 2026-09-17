@@ -1686,6 +1686,19 @@ img{max-width:100%}
           <button class="btn ghost" type="button" data-b="checkout">Check-out</button>
         </div>
         <div id="po_geo"></div>
+        <div class="sect" id="po_minhaFoto" style="margin-top:20px">
+          <p class="sect-t">Minha foto de referência</p>
+          <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+            <img id="po_facialImg" alt="" style="width:110px;height:110px;object-fit:cover;border-radius:12px;border:1px solid var(--line);display:none">
+            <div style="flex:1;min-width:220px">
+              <div id="po_facialNota"></div>
+              <div class="actions" style="justify-content:flex-start;margin-top:10px">
+                <button class="btn" type="button" id="po_tirarFacial">Tirar minha foto</button>
+                <button class="btn mut" type="button" id="po_apagarFacial" hidden>Apagar minha foto</button>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="tw" style="margin-top:20px"><table>
           <thead><tr><th>Marcação</th><th>Previsto</th><th>Batido</th><th>Diferença</th><th>Localização</th><th>Foto</th></tr></thead>
           <tbody id="po_batidas"></tbody>
@@ -5476,6 +5489,11 @@ async function carregar(){
     if(fu.exists&&fu.data()&&fu.data().lista&&fu.data().lista.length){funcoes=fu.data().lista;}
     else{funcoes=JSON.parse(JSON.stringify(SEED_FUNCOES));await gravarFuncoes();}
     await migrarTelasNovas();
+    /* foto de referência de cada um (coleção própria: cada pessoa grava a sua) */
+    try{
+      var fc=await col("facial").limit(200).get();
+      faciais=fc.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    }catch(eFc){console.warn("facial",eFc);}
     var pt=await col("pontos").limit(2000).get();
     pontos=pt.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var us=await db.doc("config/usuarios").get();
@@ -14028,10 +14046,10 @@ function tirarFoto(){
   else if(sig.media>235)problema="A foto ficou estourada de luz. Evite contraluz.";
   else if(sig.variancia<90)problema="A imagem está quase uniforme — a câmera pode estar tapada ou apontada para a parede.";
   if(camModo==="ponto"){
-    var u=usuarioPor(usuarioAtual)||{};
-    if(u.facial){
-      $("cam_ref").src=u.facial;$("cam_agora").src=camFoto;$("cam_lado").hidden=false;
-      var p=parecenca(u.facialSig,sig);
+    var u=usuarioPor(usuarioAtual)||{},rf=refFacial(usuarioAtual);
+    if(rf.foto){
+      $("cam_ref").src=rf.foto;$("cam_agora").src=camFoto;$("cam_lado").hidden=false;
+      var p=parecenca(rf.sig,sig);
       window.__camPar=p;
       var msg="";
       if(p==null){
@@ -14090,6 +14108,77 @@ function pegarLocal(cb){
       cb(null,err&&err.code===1?"Você não autorizou a localização.":"Não foi possível obter a localização.");},
     {enableHighAccuracy:true,timeout:7000,maximumAge:0});
 }
+/* ================= FOTO DE REFERÊNCIA DE CADA COLABORADOR (v141, 17/09) =================
+   Pedido do Wagner: "todos os usuários conseguirem cadastrar sua foto no sistema para funcionar o reconhecimento
+   facial". Antes a foto vivia em config/usuarios, que só Administrador grava (RLS) — então ninguém cadastrava a
+   própria. Agora cada um tem um documento na coleção "facial" (id "facial:<nome>"), que o banco deixa a própria
+   pessoa gravar e ler, e o gestor de RH também. É conferência de imagem, não reconhecimento facial (decisão dele). */
+var faciais=[];
+function facialDoc(nome){return faciais.filter(function(f){return f.nome===nome;})[0]||null;}
+/* a foto que vale: a que a pessoa cadastrou; se não houver, a antiga do cadastro do colaborador */
+function refFacial(nome){
+  var d=facialDoc(nome);
+  if(d&&d.foto)return {foto:d.foto,sig:d.sig||null,quando:d.quando||"",por:d.por||nome,doc:d};
+  var u=usuarioPor(nome)||{};
+  if(u.facial)return {foto:u.facial,sig:u.facialSig||null,quando:u.facialEm||"",por:"Administrador",doc:null};
+  return {foto:"",sig:null,quando:"",por:"",doc:null};
+}
+function consentimentoFacial(nome){
+  var d=facialDoc(nome)||{},u=usuarioPor(nome)||{};
+  return {aceitou:d.consentiuEm||u.consentiuFacialEm||"",recusou:d.recusouEm||u.recusouFacialEm||""};
+}
+async function salvarFacialDoc(nome,campos){
+  var d=facialDoc(nome);
+  if(!d){d={id:"facial:"+nome,loja:lojaAtual,nome:nome};faciais.push(d);}
+  Object.keys(campos||{}).forEach(function(k){d[k]=campos[k];});
+  d.atualizadoEm=hojeISO()+" "+agoraHM();
+  await grava("facial",d);
+  return d;
+}
+async function salvarMinhaFacial(foto,sig){
+  await salvarFacialDoc(usuarioAtual,{foto:foto,sig:sig,quando:hojeISO()+" "+agoraHM(),por:usuarioAtual});
+  var u=usuarioPor(usuarioAtual);if(u){u.facial=foto;u.facialSig=sig;}   /* memória: telas antigas continuam vendo */
+  renderMinhaFoto();
+  try{renderPonto();}catch(e){}
+}
+function renderMinhaFoto(){
+  var img=$("po_facialImg");if(!img)return;
+  var r=refFacial(usuarioAtual),cons=consentimentoFacial(usuarioAtual);
+  if(r.foto){img.src=r.foto;img.style.display="";}else{img.removeAttribute("src");img.style.display="none";}
+  $("po_apagarFacial").hidden=!r.foto;
+  $("po_tirarFacial").textContent=r.foto?"Tirar outra foto":"Tirar minha foto";
+  $("po_facialNota").innerHTML=r.foto
+    ? '<div class="note ok"><b>Foto cadastrada'+(r.quando?" em "+esc(dataCurta(String(r.quando).slice(0,10)))+" às "+esc(String(r.quando).slice(11)):"")+".</b> "+
+      "Toda batida compara a foto do momento com esta."+(r.por&&r.por!==usuarioAtual?" Cadastrada por "+esc(r.por)+".":"")+"</div>"
+    : '<div class="note warn"><b>Você ainda não cadastrou a sua foto.</b> Sem ela, a batida guarda a imagem mas não tem com o que comparar.</div>';
+  if(cons.recusou)$("po_facialNota").innerHTML+='<div class="note">Você recusou o uso da imagem em '+esc(dataCurta(String(cons.recusou).slice(0,10)))+
+    ". Para voltar a usar a foto, cadastre uma nova aqui.</div>";
+}
+function ligarMinhaFoto(){
+  var bt=$("po_tirarFacial");if(!bt)return;
+  bt.onclick=function(){
+    var cons=consentimentoFacial(usuarioAtual);
+    function tirar(){
+      abrirCamera("cadastro","Minha foto de referência","Rosto centralizado, sem boné e sem óculos escuros, com a luz de frente.",
+        async function(foto,sig){
+          if(!foto)return;
+          await salvarMinhaFacial(foto,sig);
+          toast("Foto cadastrada. A partir da próxima batida, a conferência usa ela.");
+        });
+    }
+    if(!cons.aceitou){
+      pedirConsentimentoImagem(usuarioPor(usuarioAtual)||{nome:usuarioAtual},function(ok){if(ok)tirar();});
+      return;
+    }
+    tirar();
+  };
+  $("po_apagarFacial").onclick=async function(){
+    if(!confirm("Apagar a sua foto de referência? As batidas continuam guardadas."))return;
+    await salvarFacialDoc(usuarioAtual,{foto:"",sig:null,quando:"",por:usuarioAtual});
+    var u=usuarioPor(usuarioAtual);if(u){u.facial="";u.facialSig=null;}
+    renderMinhaFoto();toast("Foto apagada.");
+  };
+}
 /* ---------- consentimento de uso da imagem (LGPD art. 11) ---------- */
 var DIAS_GUARDA_FOTO=90,consCb=null,consUs=null;
 function pedirConsentimentoImagem(u,cb){
@@ -14102,9 +14191,12 @@ async function responderConsentimento(aceitou){
   var u=consUs,cb=consCb;
   $("consModal").hidden=true;consUs=null;consCb=null;
   if(u){
-    if(aceitou)u.consentiuFacialEm=new Date().toISOString();
-    else u.recusouFacialEm=new Date().toISOString();
-    try{await gravarUsuarios();}catch(e){console.warn(e);}
+    var carimbo=new Date().toISOString();
+    if(aceitou)u.consentiuFacialEm=carimbo;else u.recusouFacialEm=carimbo;
+    /* o consentimento é da pessoa: vai no documento dela (config/usuarios só o Administrador grava) */
+    try{await salvarFacialDoc(u.nome||usuarioAtual,aceitou?{consentiuEm:carimbo}:{recusouEm:carimbo});}catch(e){console.warn("consentimento",e);}
+    if(aceitou&&db&&typeof db.registrarConsentimentoFacial==="function"){try{await db.registrarConsentimentoFacial();}catch(e){}}
+    if(!modoBanco()||(perfilBanco&&perfilBanco.funcao==="Administrador")){try{await gravarUsuarios();}catch(e){console.warn(e);}}
   }
   if(cb)cb(aceitou);
 }
@@ -14152,14 +14244,15 @@ async function baterPonto(k){
   /* consentimento de imagem: foto de rosto é dado biométrico (LGPD, art. 11).
      Sem o aceite registrado a batida vale, mas guarda só hora e localização. */
   var u=usuarioPor(quem)||{};
-  if(quem===usuarioAtual&&!u.consentiuFacialEm&&!u.recusouFacialEm){
+  var consF=consentimentoFacial(quem);
+  if(quem===usuarioAtual&&!consF.aceitou&&!consF.recusou){
     pedirConsentimentoImagem(u,function(aceitou){
       if(aceitou)comFoto(u,k,m,j,p,hoje,quem);
       else gravarBatida(u,k,m,j,p,hoje,quem,"",null);
     });
     return;
   }
-  if(u.recusouFacialEm){gravarBatida(u,k,m,j,p,hoje,quem,"",null);return;}
+  if(consF.recusou){gravarBatida(u,k,m,j,p,hoje,quem,"",null);return;}
   comFoto(u,k,m,j,p,hoje,quem);
 }
 function comFoto(u,k,m,j,p,hoje,quem){
@@ -14170,7 +14263,8 @@ function comFoto(u,k,m,j,p,hoje,quem){
   });
 }
 function gravarBatida(u,k,m,j,p,hoje,quem,foto,sig){
-  var par=foto?parecenca(u.facialSig,sig):null;
+  var rfB=refFacial(quem);
+  var par=foto?parecenca(rfB.sig,sig):null;
   var conferir=!!foto&&(par==null||par<FACE_LIMITE);
   $("po_geo").innerHTML='<div class="note">Buscando sua localização…</div>';
   pegarLocal(async function(loc,erro){
@@ -14178,7 +14272,7 @@ function gravarBatida(u,k,m,j,p,hoje,quem,foto,sig){
     var reg=p||{id:uid(),loja:lojaAtual,colaborador:quem,data:hoje,tipo:"normal",criadoEm:hoje};
     reg[k]={hora:hora,lat:loc?loc.lat:null,lng:loc?loc.lng:null,prec:loc?loc.prec:null,
       semGeo:!loc,motivoGeo:erro||"",foto:foto||"",sig:sig||null,
-      parecenca:par,conferirFace:conferir,semFotoRef:!u.facial,semFoto:!foto,
+      parecenca:par,conferirFace:conferir,semFotoRef:!rfB.foto,semFoto:!foto,
       em:new Date().toISOString()};
     if(!p)pontos.push(reg);
     await grava("pontos",reg);
@@ -14197,18 +14291,19 @@ function gravarBatida(u,k,m,j,p,hoje,quem,foto,sig){
       (!foto
         ? '<div class="note warn"><b>Batida sem foto.</b> Você não autorizou o uso da imagem — '+
           "valem a hora e a localização. O Administrador pode mudar isso no seu cadastro.</div>"
-        : (u.facial
+        : (rfB.foto
           ? (conferir
             ? '<div class="note warn"><b>Foto marcada para conferência.</b> A imagem ficou diferente da cadastrada'+
               (par!=null?" (parecença de "+par+"%)":"")+". O Administrador vê as duas lado a lado no histórico.</div>"
             : '<div class="note ok"><b>Foto compatível com a cadastrada'+
               (par!=null?" ("+par+"%)":"")+".</b></div>")
-          : '<div class="note warn"><b>Sem foto de referência no seu cadastro.</b> A batida guardou a imagem, mas não há comparação.</div>'));
+          : '<div class="note warn"><b>Sem foto de referência.</b> Cadastre a sua em <b>Minha foto de referência</b>, aqui no Cartão de Ponto — a batida guardou a imagem, mas não houve comparação.</div>'));
     toast(m.n+" registrado às "+hora+".");
     renderPonto();
   });
 }
 function renderPonto(){
+  try{renderMinhaFoto();}catch(e){}
   var sq=$("poQuem");
   if(!sq.options.length||sq.options.length!==EQUIPE.length){
     var at=sq.value;sq.innerHTML="";
@@ -14336,8 +14431,9 @@ function verFotosDia(quem,data){
   var u=usuarioPor(quem)||{};
   $("fo_titulo").textContent="Batidas de "+quem;
   $("fo_sub").textContent=data+" · confira cada foto com a imagem cadastrada";
-  var ref=u.facial
-    ? '<div class="fo"><img src="'+u.facial+'" alt=""><b>Cadastrada</b><span>foto de referência</span></div>'
+  var refF=refFacial(u.nome||usuarioAtual);
+  var ref=refF.foto
+    ? '<div class="fo"><img src="'+refF.foto+'" alt=""><b>Cadastrada</b><span>foto de referência</span></div>'
     : '<div class="fo"><div class="empty" style="padding:20px 8px"><div class="big">Sem foto</div></div>'+
       "<b>Cadastrada</b><span>não há referência</span></div>";
   var cards=MARCACOES.map(function(m){
@@ -21606,6 +21702,8 @@ function ligar(){
     u.temfilhos=$("u_temfilhos").value;
     u.filhos=(u.temfilhos==="sim")?usFilhos.filter(function(f){return f.nome||f.nasc;}):[];
     u.facial=usFacial;u.facialSig=usFacialSig;
+    /* o Administrador também pode cadastrar a foto de alguém: vai para o documento da pessoa */
+    try{if(usFacial)await salvarFacialDoc(n,{foto:usFacial,sig:usFacialSig,quando:hojeISO()+" "+agoraHM(),por:usuarioAtual});}catch(eFc){console.warn("facial",eFc);}
     if(!editandoUs)USUARIOS.push(u);
     if(nomeAntigo&&nomeAntigo!==n){
       /* renomear mantém o histórico ligado */
@@ -22720,6 +22818,7 @@ function navegacaoBasica(){
   try{ligarWhatsApp();}catch(e){console.warn("whatsapp",e);}
   try{ligarFunil();}catch(e){console.warn("funil",e);}
   try{ligarAcesso();}catch(e){console.warn("acesso",e);}
+  try{ligarMinhaFoto();}catch(e){console.warn("minha foto",e);}
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){
     b.onclick=function(){ir(b.dataset.s);};
   });
