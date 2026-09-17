@@ -4269,6 +4269,47 @@ img{max-width:100%}
     </div>
   </div>
 </div>
+<div class="modal" id="descSolModal" hidden>
+  <div class="box">
+    <h3>Venda abaixo da tabela · pedir autorização</h3>
+    <div class="sub" id="ds_sub"></div>
+    <div class="note warn">Para finalizar, a venda precisa da autorização do Administrador. Ele escolhe a tabela de depreciação que vale para a comissão.</div>
+    <div id="ds_itens"></div>
+    <div class="fld" style="margin-top:14px"><label for="ds_motivo">Motivo do desconto <span class="req">*</span></label>
+      <textarea id="ds_motivo" rows="3" placeholder="Ex.: cliente fecha hoje à vista por R$ 1.700; concorrente ofereceu R$ 1.650"></textarea></div>
+    <div id="ds_alerta"></div>
+    <div class="actions">
+      <button class="btn mut" type="button" id="ds_voltar">Voltar e ajustar o valor</button>
+      <button class="btn" type="button" id="ds_ok">Enviar solicitação e finalizar a venda</button>
+    </div>
+  </div>
+</div>
+<div class="modal" id="descAutModal" hidden>
+  <div class="box">
+    <h3>Autorizar venda abaixo da tabela</h3>
+    <div class="sub" id="da_sub"></div>
+    <div id="da_motivo"></div>
+    <div id="da_itens"></div>
+    <div class="fld" style="margin-top:14px">
+      <label>Tabela de depreciação para a comissão <span class="req">*</span></label>
+      <div class="chips" id="da_tabela">
+        <button type="button" data-f="1" aria-pressed="false">Tabela 100%</button>
+        <button type="button" data-f="0.7" aria-pressed="false">Tabela 70%</button>
+        <button type="button" data-f="0.5" aria-pressed="false">Campanha (50%)</button>
+        <button type="button" data-f="0" aria-pressed="false">Sem comissão</button>
+      </div>
+      <div id="da_previa"></div>
+    </div>
+    <div class="fld" id="da_recWrap" hidden><label for="da_recMotivo">Motivo da recusa <span class="req">*</span></label>
+      <input id="da_recMotivo" placeholder="Ex.: valor mínimo para este aparelho é R$ 1.790"></div>
+    <div id="da_alerta"></div>
+    <div class="actions">
+      <button class="btn mut" type="button" id="da_fechar">Fechar</button>
+      <button class="btn ghost" type="button" id="da_recusar">Recusar</button>
+      <button class="btn" type="button" id="da_ok">Autorizar</button>
+    </div>
+  </div>
+</div>
 
 <!-- devolução do purificador usado ao almoxarifado -->
 <div class="modal" id="usadoModal" hidden>
@@ -6297,7 +6338,7 @@ function calcular(){
   $("pt_v").textContent=(pontos*.6).toFixed(1).replace(".",",")+" pts";
   $("pt_i").textContent=(pontos*.2).toFixed(1).replace(".",",")+" pts";
   try{atualizarEtapas();}catch(e){}
-  $("v_alerta").innerHTML=abaixo?'<div class="note crit"><b>Abaixo da tabela de campanha.</b> Este pedido exige aprovação do Admin, e o item entra com faturamento zerado — não soma comissão nem ajuda a subir de faixa no mês.</div>':"";
+  $("v_alerta").innerHTML=abaixo?'<div class="note crit"><b>Abaixo da tabela.</b> Ao finalizar, você escreve o motivo e a autorização é pedida ao Administrador. Até ele autorizar, o item entra com faturamento zerado; ao autorizar, ele escolhe a tabela que vale para a comissão (100%, 70%, campanha ou sem comissão).</div>':"";
 
   var temPlano=itens.some(function(i){return i.garantia&&i.garantia!=="Bronze";});
   var temImagem=$("v_imagem").value==="sim";
@@ -6487,6 +6528,9 @@ async function salvarPedido(){
      deu um purificador usado; o usado vai para o estoque do vendedor depois que ele confirmar o recebimento */
   var trocaV=formas.filter(function(f){return f.tipo===FORMA_TROCA;}).reduce(function(a,f){return a+(+f.valor||0);},0);
   trocaResp=trocaV>0?{tem:true,viaForma:true,valor:Math.round(trocaV*100)/100,serie:"",quando:hojeISO()+" "+agoraHM(),por:usuarioAtual}:null;
+  /* venda abaixo da tabela (regra do Wagner, 16/09): o vendedor pede a autorização com o motivo antes de finalizar */
+  if(r.abaixo&&!descSolResp){abrirSolDesconto(recalcPedido(itens,formas));return;}
+  var solDesc=r.abaixo?descSolResp:null;descSolResp=null;
   var cli=cliSel;
   var arquivos=ANEXOS.filter(function(a){return a.dados;}).map(function(a){return a.dados;});
   var anexados=arquivos.map(function(a){return a.nome;});
@@ -6502,7 +6546,7 @@ async function salvarPedido(){
     obs:$("v_obs").value.trim(),usoImagem:$("v_imagem").value,anexos:anexados,arquivos:arquivos,assinado:true,assinaturaImg:assinaturaParaDoc(),
     abaixoTabela:!!r.abaixo,status:etapaVenda({abaixoTabela:!!r.abaixo,instalacao:$("v_idata").value}),
     instalacao:$("v_idata").value?($("v_idata").value+" "+($("v_ihora").value||"")):"",
-    troca:trocaResp||null,
+    troca:trocaResp||null,solicitacaoDesconto:solDesc,
     creditoPlano:(credV>0?montarCreditoPlano(cliSel.id,credV):null)};
   /* pedido das peças e serviços de uma OS interna (regra do Wagner, 14/09) */
   var osDoPed=pedOrigemOS,ativContatoOS=pedOSAtiv,msgOSFim="",servAtendPed=pedOSServAtend;
@@ -6532,6 +6576,11 @@ async function salvarPedido(){
     try{avisarPosseVeiculo();}catch(e){}},1800);
   pedidos.push(ped);
   if(db){try{await col("pedidos").doc(ped.id).set(ped);}catch(e){console.warn(e);}}
+  if(solDesc){
+    registrarEvento(ped,"Autorização de desconto solicitada: "+solDesc.motivo);
+    setTimeout(function(){toast("Venda abaixo da tabela: a solicitação de autorização do pedido "+ped.numero+" foi enviada ao Administrador.");
+      try{avisarDescontos();}catch(e){}},3600);
+  }
   /* purificador usado da troca: requisição para o vendedor confirmar que recebeu (entra no estoque dele) */
   var reqTroca=null;
   try{reqTroca=await registrarTrocaDaVenda(ped);if(reqTroca&&db)await col("pedidos").doc(ped.id).set(ped);}catch(eU){console.warn(eU);}
@@ -7749,7 +7798,7 @@ function localDaVenda(p){
 /* ainda não aprovada (venda antiga encerrada antes da aprovação existir conta como aprovada) */
 function vendaPendente(p){return p.status!=="Cancelada"&&!p.aprovado&&!(p.aprovado===undefined&&p.encerrada);}
 function etapaVenda(p){
-  if(p.abaixoTabela&&!p.descontoAutorizado)return "Aguardando aprovação de desconto";
+  if(p.abaixoTabela&&!p.descontoAutorizado)return p.descontoRecusado?"Venda com desconto recusado":"Aguardando aprovação de desconto";
   if(p.instalacao&&!p.instaladoEm)return "Aguardando instalação";
   return "Aguardando aprovação financeira";
 }
@@ -11686,7 +11735,8 @@ async function gerarDemo(){
   var v5=await ped(4,cj,"Wagner","Wagner","Wagner",
     [{pid:pC.id,nome:pC.nome,cod:pC.cod,qtd:1,valor:3900,serie:"WZ-0091",pontos:+pC.pontos||0,garantia:"Ouro"}],
     [{tipo:"Cartão de Crédito Sipag",valor:3900,parc:12}],dias(-8),
-    {status:"Aguardando aprovação de desconto",obs:"Cliente pediu abatimento — abaixo da tabela de campanha."});
+    {status:"Aguardando aprovação de desconto",abaixoTabela:true,obs:"Cliente pediu abatimento — abaixo da tabela de campanha.",
+     solicitacaoDesconto:{motivo:"Cliente fecha hoje se o gerador sair por R$ 3.900 em 12× — concorrente ofereceu parecido.",por:"Wagner",quando:dias(-8)+" 15:20"}});
   /* venda cancelada */
   var v6=await ped(5,c4,"Veronica Aparecida Marques","Veronica Aparecida Marques","",
     [{pid:pB.id,nome:pB.nome,cod:pB.cod,qtd:4,valor:150,serie:"",pontos:+pB.pontos||0,garantia:"Bronze"}],
@@ -12392,7 +12442,13 @@ function abaRemuneracao(k){
   $("fat_comp").hidden=(k!=="extrato");
 }
 /* ================= REMUNERAÇÃO DO COLABORADOR (extrato do mês, regras do Wagner, 12/09) ================= */
-function valorDepreciadoPedido(p){return +(p.depreciado!=null?p.depreciado:p.base)||0;}
+function valorDepreciadoPedido(p){
+  var d=+(p.depreciado!=null?p.depreciado:p.base)||0,a=p.descontoAutorizado;
+  /* venda abaixo da tabela: o depreciado dos itens abaixo entra pela tabela que o Administrador escolheu
+     ao autorizar (100%, 70%, campanha 50% ou sem comissão) — regra do Wagner, 16/09 */
+  if(a&&a.fator!=null&&+a.depAbaixo>0)d-=(+a.depAbaixo)*(1-(+a.fator));
+  return Math.max(0,d);
+}
 function produtoMaisCaro(p){
   var it=(p.itens||[]).filter(function(i){return !ehPlano(i);})
     .sort(function(a,b){return (+b.valor||0)-(+a.valor||0);})[0];
@@ -12448,6 +12504,7 @@ function textoRegrasRem(){
     '<div class="note"><b>6. Adiantamento salarial.</b> Até '+ADIANT_PCT+"% do salário fixo no mês, solicitado até o dia "+ADIANT_DIA+
       " (depois, só com liberação do administrador). Quando o colaborador toca em Recebido, o valor é descontado do total a receber do mês.</div>"+
     '<div class="note"><b>7. Multa de trânsito.</b> A multa lançada na aba Veículos com desconto em folha entra como desconto do <b>condutor que respondia pelo veículo na data e hora da infração</b> — pela entrega aceita e assinada. Multa contestada pelo condutor não desconta enquanto a contestação estiver aberta.</div>'+
+    '<div class="note"><b>8. Venda abaixo da tabela.</b> Só entra depois da autorização do Administrador, que escolhe a tabela de depreciação: o valor depreciado dos itens abaixo da tabela conta × 100%, × 70%, × 50% (campanha) ou não conta (sem comissão). Ex.: depreciado de R$ 1.500 abaixo da tabela, autorizado na tabela 70% → conta R$ 1.050.</div>'+
     '<p class="help">Valores e regras dos benefícios em Configurações › Benefícios; adiantamento na aba Adiantamento desta tela; multas na aba Veículos.</p>';
 }
 function renderExtratoRem(){
@@ -16615,7 +16672,7 @@ function calcOrc(){
     "</tbody></table></div>"+
     '<p class="help">Faturamento individual, não comissão. O percentual de comissão só sai no fechamento do mês, pela faixa que o total acumulado alcançar. Se este mesmo colaborador prospectar, vender e instalar, ele acumula os três.</p>';
   $("or_alerta").innerHTML=abaixo
-    ? '<div class="note crit"><b>Item abaixo da tabela.</b> Neste valor e nesta condição de pagamento, o item entra com faturamento <b>zerado</b> — não paga comissão, não soma pontos e não ajuda a subir de faixa no mês. Se virar venda, exige aprovação do Administrador.</div>'
+    ? '<div class="note crit"><b>Item abaixo da tabela.</b> Neste valor e nesta condição de pagamento, o item entra com faturamento <b>zerado</b> — não paga comissão, não soma pontos e não ajuda a subir de faixa no mês. Se virar venda, o vendedor pede a autorização com o motivo e o Administrador escolhe a tabela da comissão.</div>'
     : (base>0&&base<dep*0.9
       ? '<div class="note warn"><b>Parte dos itens caiu para 70% ou campanha.</b> Depreciado '+BRL(dep)+", mas só "+BRL(base)+" entram como faturamento.</div>"
       : "");
@@ -17047,7 +17104,10 @@ async function virarVenda(o){
 
 /* ---------- detalhe do pedido · encerrar · reabrir com autorização ---------- */
 var pedAberto=null,pedRasc=null,avisoAjuste="";
-function recalcPedido(itens,formas){
+/* fatorAbaixo: tabela escolhida pelo Administrador ao autorizar a venda abaixo da tabela (regra do Wagner, 16/09);
+   sem ele, o item abaixo da tabela entra zerado */
+function fatorDesc(p){return (p&&p.descontoAutorizado&&p.descontoAutorizado.fator!=null)?+p.descontoAutorizado.fator:null;}
+function recalcPedido(itens,formas,fatorAbaixo){
   var total=itens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
   var soma=0,dep=0;
   formas.forEach(function(f){
@@ -17056,15 +17116,18 @@ function recalcPedido(itens,formas){
     dep+=(coef?(v/n)/coef:0);
   });
   var somaCheia=itens.reduce(function(a,i){if(i.planoCobre)return a;var p=produtos.filter(function(x){return x.id===i.pid;})[0];return a+(((p&&+p.cheia)||0)*(i.qtd||1));},0);
-  var base=0,pontos=0,abaixo=false;
+  var base=0,pontos=0,abaixo=false,depAbaixo=0,linhas=[];
   itens.forEach(function(i){
     if(i.planoCobre)return;   /* coberto pelo plano: sem custo, fora da faixa e da comissão */
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
     var q=somaCheia>0?(((+p.cheia||0)*(i.qtd||1))/somaCheia):(itens.length?1/itens.length:0);
     var depI=dep*q,unit=depI/(i.qtd||1),fx=faixa(unit,p);
-    base+=depI*fx.f;pontos+=(+i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;
+    var f=(fx.f===0&&fatorAbaixo!=null)?+fatorAbaixo:fx.f;
+    base+=depI*f;pontos+=(+i.pontos||0)*(i.qtd||1)*f;
+    if(fx.f===0){abaixo=true;depAbaixo+=depI;}
+    linhas.push({i:i,p:p,depI:depI,unit:unit,fx:fx});
   });
-  return {total:total,dep:dep,base:base,pontos:pontos,abaixo:abaixo,soma:soma,
+  return {total:total,dep:dep,base:base,pontos:pontos,abaixo:abaixo,depAbaixo:depAbaixo,linhas:linhas,soma:soma,
     dif:Math.round((total-soma)*100)/100};
 }
 function precisaAutorizar(p){
@@ -17093,7 +17156,7 @@ function abrirPedido(p){
 }
 function renderPedDet(){
   var p=pedAberto;if(!p)return;
-  var ed=editavel(p),r=recalcPedido(pedRasc.itens,pedRasc.formas);
+  var ed=editavel(p),r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p));
   var papeis=[{p:"Prospector",q:p.prospector,f:.2},{p:"Vendedor",q:p.vendedor,f:.6},
     {p:"Instalador",q:p.instalador||p.vendedor,f:.2}];
   var tb=$("pd_trio");tb.innerHTML="";
@@ -17187,11 +17250,17 @@ function renderPedDet(){
     if(p.devolucaoFin)av+='<div class="note warn"><b>Devolvida pelo financeiro</b> ('+esc(p.devolucaoFin.por)+", "+
       esc(p.devolucaoFin.quando)+"): "+esc(p.devolucaoFin.motivo)+"</div>";
     av+='<div class="note"><b>'+esc(stp)+".</b> "+
-      (stp.indexOf("desconto")>=0?"Venda abaixo da tabela: o desconto precisa ser autorizado antes de seguir.":
+      (p.descontoRecusado&&!p.descontoAutorizado?"Desconto recusado por "+esc(p.descontoRecusado.por)+": "+esc(p.descontoRecusado.motivo)+
+         ". Ajuste os valores e toque em Salvar alterações — se continuar abaixo da tabela, escreva o motivo e a autorização é pedida de novo.":
+       stp.indexOf("desconto")>=0?"Venda abaixo da tabela: o Administrador precisa autorizar e escolher a tabela da comissão antes de seguir."+
+         (p.solicitacaoDesconto?"<br>Motivo de "+esc(p.solicitacaoDesconto.por)+": "+esc(p.solicitacaoDesconto.motivo):""):
        stp.indexOf("instalação")>=0?"Abra a instalação para ver a venda, incluir o que foi usado a mais, escrever as observações e finalizar — a venda vai para a Aprovação Financeira.":
        "O estoque está só reservado. A baixa, as parcelas e a comissão acontecem quando o financeiro aprovar o recebimento.")+"</div>";
-    if(stp.indexOf("desconto")>=0&&pode("aprovarDesconto"))
+    if(stp.indexOf("esconto")>=0&&pode("aprovarDesconto"))
       ac+='<button class="btn" type="button" id="pd_desconto">Autorizar desconto</button>';
+    if(p.descontoAutorizado&&p.descontoAutorizado.tabela)
+      av+='<div class="note ok"><b>Desconto autorizado</b> por '+esc(p.descontoAutorizado.por)+" · "+esc(p.descontoAutorizado.tabela)+
+        " na comissão: a venda conta "+BRL(valorDepreciadoPedido(p))+" (depreciado "+BRL(p.depreciado)+").</div>";
     if(stp.indexOf("instalação")>=0)
       ac+='<button class="btn" type="button" id="pd_instalado">Abrir a instalação</button>';
     if(stp==="Aguardando aprovação financeira"&&pode("aprovarFinanceiro"))
@@ -17234,7 +17303,7 @@ function ligarPedDet(){
   function on(id,fn){var e=$(id);if(e)e.onclick=fn;}
   on("pd_pdf",function(){abrirDocVenda(p);});
   on("pd_zap",function(){enviarVendaWhatsApp(p,$("pd_zap"));});
-  on("pd_desconto",async function(){await autorizarDesconto(p);renderPedDet();});
+  on("pd_desconto",function(){abrirAutDesconto(p);});
   on("pd_instalado",async function(){await concluirInstalacao(p);renderPedDet();});
   on("pd_irfin",function(){
     pedAberto=null;$("pedDet").hidden=true;$("pedLista").hidden=false;
@@ -17277,9 +17346,17 @@ function ligarPedDet(){
     pedRasc={itens:JSON.parse(JSON.stringify(p.itens||[])),formas:JSON.parse(JSON.stringify(p.formas||[]))};
     gravarPedido(p);toast("Alterações descartadas — venda reencerrada.");renderPedDet();render();});
   on("pd_salvar",async function(){
-    var r=recalcPedido(pedRasc.itens,pedRasc.formas);
+    var r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p));
     if(!pedRasc.itens.length){toast("A venda precisa de ao menos um item.");return;}
     if(r.dif!==0){toast("A soma das formas não bate com o total.");return;}
+    /* abaixo da tabela sem autorização (ou com o desconto recusado): pede de novo, com o motivo */
+    var novaSol=null,emEtapa=!p.encerrada&&p.status!=="Cancelada";
+    if(emEtapa&&r.abaixo&&!p.descontoAutorizado&&(p.descontoRecusado||!p.solicitacaoDesconto)){
+      var mt=prompt("Os itens continuam abaixo da tabela. Escreva o motivo do desconto para pedir a autorização ao Administrador:",
+        (p.solicitacaoDesconto&&p.solicitacaoDesconto.motivo)||"");
+      if(mt===null||!mt.trim()){toast("Sem o motivo a solicitação não é enviada — ajuste o valor ou escreva o motivo.");return;}
+      novaSol={motivo:mt.trim(),por:usuarioAtual,quando:hojeISO()+" "+agoraHM(),reenvio:!!p.descontoRecusado};
+    }
     var antes={base:+p.base||0,pontos:+p.pontos||0,total:+p.total||0};
     var motivo=(p.reabertura?p.reabertura.motivo:"edição antes do encerramento");
     p.historico=(p.historico||[]);
@@ -17289,6 +17366,13 @@ function ligarPedDet(){
       autorizaram:(p.reabertura?p.reabertura.precisa.map(function(x){return x.quem;}):[])});
     p.itens=pedRasc.itens.slice();p.formas=pedRasc.formas.slice();
     p.total=r.total;p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
+    if(p.descontoAutorizado)p.descontoAutorizado.depAbaixo=Math.round((r.depAbaixo||0)*100)/100;
+    if(emEtapa){
+      p.abaixoTabela=!!r.abaixo;
+      if(!r.abaixo)p.descontoRecusado=null;
+      if(novaSol){p.solicitacaoDesconto=novaSol;p.descontoRecusado=null;registrarEvento(p,"Autorização de desconto solicitada: "+novaSol.motivo);}
+      if(/^Aguardando|desconto/.test(p.status||""))p.status=etapaVenda(p);
+    }
     var ajEst=0;
     if(p.encerrada){
       p.reabertura=null;p.status=(p.aprovado?"Aprovada":"Encerrada")+" · alterada";
@@ -17408,15 +17492,171 @@ async function devolverVenda(p){
   toast("Pedido "+p.numero+" devolvido para "+(responsavelVenda(p)||"o responsável")+".");
   render();return true;
 }
-async function autorizarDesconto(p){
+/* ---------- venda abaixo da tabela (regra do Wagner, 16/09) ----------
+   Ao finalizar, o vendedor pede a autorização com o motivo. O aviso chega a quem aprova desconto (Administrador),
+   que autoriza escolhendo a TABELA DE DEPRECIAÇÃO da comissão — o depreciado dos itens abaixo da tabela entra
+   × 100%, × 70%, × 50% (campanha) ou zerado — ou recusa com o motivo; recusado, o vendedor ajusta o valor ou
+   pede de novo em Pedidos › Salvar alterações. */
+var TABELAS_DESC=[{f:1,n:"Tabela 100%"},{f:.7,n:"Tabela 70%"},{f:.5,n:"Campanha (50%)"},{f:0,n:"Sem comissão"}];
+var descSolResp=null,descAutPed=null,descAutFator=null,descLigado=false;
+function nomeTabelaDesc(f){return (TABELAS_DESC.filter(function(t){return t.f===+f;})[0]||{n:""}).n;}
+function htmlItensAbaixo(r){
+  var ls=((r&&r.linhas)||[]).filter(function(x){return x.fx.f===0;});
+  if(!ls.length)return "";
+  return '<div class="tw"><table><thead><tr><th>Item abaixo da tabela</th><th class="num">Vendido</th><th class="num">Depreciado</th>'+
+    '<th class="num">Tabela 100%</th><th class="num">Tabela 70%</th><th class="num">Campanha</th></tr></thead><tbody>'+
+    ls.map(function(x){var p=x.p||{};
+      return "<tr><td>"+(x.i.qtd||1)+"× "+esc(x.i.nome)+'</td><td class="num">'+BRL(+x.i.valor||0)+'</td><td class="num"><b>'+BRL(x.unit)+"</b></td>"+
+        '<td class="num">'+BRL(+p.cheia||0)+'</td><td class="num">'+(+p.campanha?BRL(+p.campanha):"—")+'</td><td class="num">'+
+        ((p.campativa==="sim"&&+p.minimo)?BRL(+p.minimo):"—")+"</td></tr>";}).join("")+
+    "</tbody></table></div>"+
+    '<p class="help">Depreciado = valor à vista equivalente pela forma de pagamento, por unidade — é ele que se compara com as tabelas.</p>';
+}
+/* a venda inteira na janela da autorização (pedido do Wagner: "preciso ver a venda completa e com observação") */
+function htmlVendaCompletaDesc(p){
+  var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
+  var formas=(p.formas||[]).filter(function(f){return +f.valor>0;});
+  var pr=String(p.instalacao||"").split(" ");
+  return '<div class="sect"><p class="sect-t">Venda completa · pedido '+esc(p.numero)+" · "+esc(dataCurta(p.data))+(p.hora?" "+esc(p.hora):"")+"</p>"+
+    '<div class="note"><b>Cliente:</b> '+esc(p.cliente||"—")+(c.doc?" · "+esc(c.doc):"")+(c.tel?" · "+esc(c.tel):"")+
+      (c.cidade?" · "+esc(c.cidade)+(c.uf?"/"+esc(c.uf):""):"")+
+      "<br><b>Prospector:</b> "+esc(p.prospector||"—")+" · <b>Vendedor:</b> "+esc(p.vendedor||"—")+" · <b>Instalador:</b> "+esc(p.instalador||p.vendedor||"—")+"</div>"+
+    '<div class="tw"><table><thead><tr><th>Produto</th><th class="num">Qtd</th><th class="num">Unitário</th><th class="num">Total</th></tr></thead><tbody>'+
+    (p.itens||[]).map(function(i){
+      return "<tr><td>"+esc(i.nome)+'<div class="t-sub">'+esc(i.cod||"")+(i.serie?" · série "+esc(i.serie):"")+(i.garantia?" · garantia "+esc(i.garantia):"")+"</div></td>"+
+        '<td class="num">'+(i.qtd||1)+'</td><td class="num">'+BRL(+i.valor||0)+'</td><td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td></tr>";}).join("")+
+    '<tr><td colspan="3" style="text-align:left"><b>Total da venda</b></td><td class="num"><b>'+BRL(p.total)+"</b></td></tr></tbody></table></div>"+
+    '<div class="note" style="margin-top:8px"><b>Forma de pagamento:</b> '+
+      (formas.length?formas.map(function(f){return esc(f.tipo||"—")+" "+(f.parc||1)+"× · "+BRL(f.valor);}).join(" + "):"—")+
+      "<br><b>Depreciado (à vista equivalente):</b> "+BRL(p.depreciado)+
+      "<br><b>Instalação:</b> "+(p.instalacao?esc(dataCurta(pr[0]))+(pr[1]?" às "+esc(pr[1]):"")+" · "+esc(respInstalacao(p)||"—"):"sem instalação futura")+
+      "<br><b>Observação da venda:</b> "+(p.obs?esc(p.obs).replace(/\n/g,"<br>"):"—")+"</div>"+
+    (function(){try{return htmlAnexosMini(p)||"";}catch(e){return "";}})()+"</div>";
+}
+function ligarDesconto(){
+  if(descLigado)return;descLigado=true;
+  $("ds_voltar").onclick=function(){$("descSolModal").hidden=true;descSolResp=null;irEtapa(2);};
+  $("ds_ok").onclick=function(){
+    var m=$("ds_motivo").value.trim();
+    if(!m){$("ds_alerta").innerHTML='<div class="note crit">Escreva o motivo do desconto — é o que o Administrador vai ler para autorizar.</div>';return;}
+    descSolResp={motivo:m,por:usuarioAtual,quando:hojeISO()+" "+agoraHM()};
+    $("descSolModal").hidden=true;salvarPedido();
+  };
+  Array.prototype.forEach.call($("da_tabela").querySelectorAll("button"),function(b){
+    b.onclick=function(){
+      descAutFator=+b.getAttribute("data-f");
+      Array.prototype.forEach.call($("da_tabela").querySelectorAll("button"),function(x){x.setAttribute("aria-pressed",x===b?"true":"false");});
+      previaAutDesconto();
+    };});
+  $("da_fechar").onclick=function(){$("descAutModal").hidden=true;descAutPed=null;};
+  $("da_ok").onclick=async function(){
+    var p=descAutPed;if(!p)return;
+    if(descAutFator==null){$("da_alerta").innerHTML='<div class="note crit">Escolha a tabela de depreciação da comissão.</div>';return;}
+    $("descAutModal").hidden=true;
+    await autorizarDesconto(p,descAutFator);descAutPed=null;
+    if(pedAberto===p)renderPedDet();
+  };
+  $("da_recusar").onclick=async function(){
+    var p=descAutPed;if(!p)return;
+    if($("da_recWrap").hidden){$("da_recWrap").hidden=false;$("da_recusar").textContent="Confirmar a recusa";$("da_recMotivo").focus();return;}
+    var m=$("da_recMotivo").value.trim();
+    if(!m){$("da_alerta").innerHTML='<div class="note crit">Escreva o motivo da recusa — o vendedor vai ler para ajustar a venda.</div>';return;}
+    $("descAutModal").hidden=true;
+    await recusarDesconto(p,m);descAutPed=null;
+    if(pedAberto===p)renderPedDet();
+  };
+}
+function abrirSolDesconto(r){
+  ligarDesconto();
+  var cli=clientes.filter(function(c){return c.id===$("v_cliente").value;})[0];
+  $("ds_sub").textContent=(cli?cli.nome+" · ":"")+"vendedor "+($("v_vend").value||usuarioAtual)+" · total "+BRL(r.total);
+  $("ds_itens").innerHTML=htmlItensAbaixo(r);
+  $("ds_motivo").value="";$("ds_alerta").innerHTML="";
+  $("descSolModal").hidden=false;
+}
+function abrirAutDesconto(p){
+  if(!pode("aprovarDesconto")){toast("Só quem aprova venda abaixo da tabela autoriza o desconto.");return;}
+  ligarDesconto();
+  descAutPed=p;descAutFator=null;
+  var r=recalcPedido(p.itens||[],p.formas||[]),s=p.solicitacaoDesconto;
+  $("da_sub").textContent="Pedido "+p.numero+" · "+p.cliente+" · vendedor "+(p.vendedor||"—")+" · total "+BRL(p.total)+" · depreciado "+BRL(r.dep);
+  $("da_motivo").innerHTML=s
+    ? '<div class="note warn"><b>Motivo de '+esc(s.por)+"</b> ("+esc(dataCurta(s.quando))+String(s.quando||"").slice(10)+"): "+esc(s.motivo)+"</div>"
+    : '<div class="note">Venda lançada antes da solicitação com motivo — sem motivo registrado.</div>';
+  $("da_itens").innerHTML=htmlVendaCompletaDesc(p)+htmlItensAbaixo(r);
+  Array.prototype.forEach.call($("da_tabela").querySelectorAll("button"),function(x){x.setAttribute("aria-pressed","false");});
+  $("da_previa").innerHTML='<p class="help">A tabela define quanto do depreciado dos itens abaixo da tabela ('+BRL(r.depAbaixo)+") entra na comissão, nas metas e na folha.</p>";
+  $("da_recWrap").hidden=true;$("da_recMotivo").value="";$("da_recusar").textContent="Recusar";$("da_alerta").innerHTML="";
+  $("descAutModal").hidden=false;
+}
+function previaAutDesconto(){
+  var p=descAutPed;if(!p||descAutFator==null)return;
+  var r=recalcPedido(p.itens||[],p.formas||[],descAutFator),conta=r.dep-r.depAbaixo*(1-descAutFator);
+  $("da_alerta").innerHTML="";
+  $("da_previa").innerHTML='<div class="note ok"><b>'+esc(nomeTabelaDesc(descAutFator))+":</b> a venda conta "+BRL(conta)+
+    " na comissão, nas metas e na folha ("+BRL(r.depAbaixo)+" abaixo da tabela × "+Math.round(descAutFator*100)+"%"+
+    (r.dep-r.depAbaixo>0.004?" + "+BRL(r.dep-r.depAbaixo)+" dos demais itens":"")+"). Vendedor (60%): "+BRL(conta*.6)+".</div>";
+}
+async function autorizarDesconto(p,fator){
   if(!pode("aprovarDesconto")){toast("Só quem aprova venda abaixo da tabela autoriza o desconto.");return false;}
-  if((p.status||"").indexOf("desconto")<0)return false;
-  p.abaixoTabela=true;p.descontoAutorizado={por:usuarioAtual,quando:iso(new Date())};
+  if((p.status||"").indexOf("esconto")<0)return false;
+  if(fator==null){abrirAutDesconto(p);return false;}
+  var r=recalcPedido(p.itens||[],p.formas||[],fator),tab=nomeTabelaDesc(fator);
+  p.abaixoTabela=true;
+  p.descontoAutorizado={por:usuarioAtual,quando:hojeISO()+" "+agoraHM(),tabela:tab,fator:+fator,depAbaixo:Math.round(r.depAbaixo*100)/100};
+  p.descontoRecusado=null;
+  p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
   p.status=etapaVenda(p);
-  registrarEvento(p,"Desconto autorizado");
+  registrarEvento(p,"Desconto autorizado · "+tab+" na comissão");
   await gravarPedido(p);
-  toast("Desconto do pedido "+p.numero+" autorizado · agora: "+p.status.toLowerCase()+".");
+  toast("Desconto do pedido "+p.numero+" autorizado · "+tab+" na comissão · agora: "+p.status.toLowerCase()+".");
   render();return true;
+}
+async function recusarDesconto(p,motivo){
+  if(!pode("aprovarDesconto"))return false;
+  p.descontoRecusado={por:usuarioAtual,quando:hojeISO()+" "+agoraHM(),motivo:motivo};
+  p.status=etapaVenda(p);
+  registrarEvento(p,"Desconto recusado: "+motivo);
+  await gravarPedido(p);
+  toast("Desconto do pedido "+p.numero+" recusado. "+(p.vendedor||"O vendedor")+" recebe o aviso para ajustar a venda.");
+  render();return true;
+}
+/* aviso flutuante: quem aprova vê as solicitações; o vendedor vê a resposta */
+function avisarDescontos(){
+  var el=$("avisoDesconto");
+  if(!el){
+    el=document.createElement("button");el.type="button";el.id="avisoDesconto";el.className="aviso-retirada";el.hidden=true;
+    el.style.bottom="134px";
+    document.body.appendChild(el);
+    el.onclick=async function(){
+      el.hidden=true;el.__visto=el.__chave;
+      if(el.__modo==="aprovar"){if(el.__ped)abrirAutDesconto(el.__ped);return;}
+      var ls=el.__resp||[];
+      for(var i=0;i<ls.length;i++){
+        var x=ls[i].descontoRecusado||ls[i].descontoAutorizado;if(x)x.vistoVendedor=true;await gravarPedido(ls[i]);}
+      if(ls[0]){ir("pedidos");try{abrirPedido(ls[0]);}catch(e){}}
+    };
+  }
+  var pend=pode("aprovarDesconto")?pedidos.filter(function(p){
+    return p.loja===lojaAtual&&!p.encerrada&&p.status!=="Cancelada"&&p.abaixoTabela&&!p.descontoAutorizado&&!p.descontoRecusado;}):[];
+  var resp=pedidos.filter(function(p){
+    if(p.loja!==lojaAtual||p.vendedor!==usuarioAtual)return false;
+    var x=p.descontoRecusado||(p.descontoAutorizado&&p.descontoAutorizado.fator!=null?p.descontoAutorizado:null);
+    return x&&!x.vistoVendedor&&x.por!==usuarioAtual;});
+  var txt="";
+  if(pend.length){
+    el.__modo="aprovar";el.__ped=pend[0];
+    txt="🔔 "+(pend.length===1?"Venda abaixo da tabela aguardando sua autorização · pedido "+pend[0].numero+" ("+(pend[0].vendedor||"—")+")"
+      :pend.length+" vendas abaixo da tabela aguardando sua autorização");
+  }else if(resp.length){
+    el.__modo="resposta";el.__resp=resp;
+    var p0=resp[0];
+    txt="🔔 "+(p0.descontoRecusado?"Desconto recusado · pedido "+p0.numero+": "+p0.descontoRecusado.motivo
+      :"Desconto autorizado · pedido "+p0.numero+" · "+p0.descontoAutorizado.tabela+" na comissão")+(resp.length>1?" (+"+(resp.length-1)+")":"");
+  }
+  el.__chave=txt+"|"+usuarioAtual+"|"+lojaAtual;
+  el.textContent=txt;
+  el.hidden=!txt||el.__visto===el.__chave;
 }
 /* ================= INSTALAÇÃO (pedido do Wagner, 12/09) =================
    A venda com instalação futura aparece na agenda de quem instala. A janela da
@@ -17432,8 +17672,9 @@ var instAberta=null,instPag={tipo:""},instModo="";
 /* produto incluído na instalação faz parte da venda (regra do Wagner, 12/09): total,
    depreciação, base de comissão e pontos são recalculados */
 function atualizarTotaisPedido(p){
-  var r=recalcPedido(p.itens||[],p.formas||[]);
+  var r=recalcPedido(p.itens||[],p.formas||[],fatorDesc(p));
   p.total=r.total;p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
+  if(p.descontoAutorizado)p.descontoAutorizado.depAbaixo=Math.round((r.depAbaixo||0)*100)/100;
   return r;
 }
 /* modo "venda": a mesma janela, só leitura — o financeiro vê a venda completa para aprovar
@@ -18311,7 +18552,7 @@ function renderFin(){
       }).join("")+"</tbody></table></div>"
     : '<div class="empty"><div class="big">Nada parado antes do financeiro</div></div>';
   Array.prototype.forEach.call($("finAntes").querySelectorAll("[data-findesc]"),function(bt){
-    bt.onclick=async function(){var p=porId(bt.getAttribute("data-findesc"));if(p)await autorizarDesconto(p);};});
+    bt.onclick=function(){var p=porId(bt.getAttribute("data-findesc"));if(p)abrirAutDesconto(p);};});
   Array.prototype.forEach.call($("finAntes").querySelectorAll("[data-fininst]"),function(bt){
     bt.onclick=async function(){var p=porId(bt.getAttribute("data-fininst"));if(p)await concluirInstalacao(p);};});
 
@@ -19398,6 +19639,7 @@ function render(){
   renderClientes();renderProdutos();renderPedidos();renderAgenda();
   try{if(!$("s-aniver").hidden)renderAniversariantes();}catch(e){console.warn(e);}
   try{avisarRetiradas();}catch(e){console.warn(e);}
+  try{avisarDescontos();}catch(e){console.warn(e);}
   try{avisarPosseVeiculo();}catch(e){console.warn(e);}
   try{renderFin();}catch(e){console.warn("aprovação financeira",e);}
   try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();try{renderPadroes();}catch(e){}renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
