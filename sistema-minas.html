@@ -790,6 +790,7 @@
     color:#fff;padding:12px 22px;border-radius:10px;font-size:14px;z-index:99;box-shadow:var(--shadow-lg)}
   .toast[hidden]{display:none}
   .banner{background:var(--warn-bg);color:var(--warn);padding:11px 20px;font-size:13.5px;text-align:center}
+  .banner.banner-erro{background:var(--crit);color:#fff;cursor:pointer;font-weight:600}
   .banner[hidden]{display:none}
 
   @media screen and (max-width:820px){
@@ -1015,7 +1016,8 @@ img{max-width:100%}
     <div class="login-logo" id="loginLogo" role="img" aria-label="Minas Filtros"></div>
     <h1>Sistema de Gestão</h1>
     <p class="login-sub" id="lg_sub">Entre com o seu usuário para começar</p>
-    <div class="fld"><label for="lg_user">Usuário</label><select id="lg_user"></select></div>
+    <div class="fld" id="lg_userWrap"><label for="lg_user">Usuário</label><select id="lg_user"></select></div>
+    <div class="fld" id="lg_emailWrap" hidden><label for="lg_email">E-mail</label><input id="lg_email" type="email" inputmode="email" autocomplete="username" placeholder="seu@email.com.br"></div>
     <div class="fld" style="margin-top:14px"><label for="lg_senha" id="lg_lblSenha">Senha</label>
       <input id="lg_senha" type="password" autocomplete="current-password" placeholder="••••"></div>
     <div class="fld" id="lg_confWrap" style="margin-top:14px" hidden><label for="lg_senha2">Repita a senha</label>
@@ -3794,6 +3796,7 @@ img{max-width:100%}
         <p class="help">Preenche o sistema inteiro com um cenário coerente para você conferir se tudo está amarrado: clientes, leads, orçamentos, vendas, notas, estoque, títulos, caixa, ponto e metas. Tudo fica marcado como teste e sai de uma vez.</p>
         <div id="dt_estado"></div>
         <div class="actions">
+          <p class="help" id="dt_banco" hidden>Com o banco de dados ligado, o gerador de dados de teste fica desligado para não misturar exemplo com cadastro real.</p>
           <button class="btn" type="button" id="dtGerar">Gerar dados de teste</button>
           <button class="btn mut" type="button" id="dtLimpar">Apagar dados de teste</button>
         </div>
@@ -4981,11 +4984,52 @@ img{max-width:100%}
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
+<script src="supabase/adapter.js?v=133"></script>
 <script>
 (function(){
 "use strict";
 var BRL=function(n){return "R$ "+(Number(n)||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});};
 var $=function(id){return document.getElementById(id);};
+/* ================= BANCO DE DADOS (v133, 17/09 — teste real do Wagner) =================
+   Supabase (São Paulo). Só a chave PÚBLICA (publishable/anon) fica aqui: sem login ela não lê nem grava nada
+   (RLS em public.docs exige perfil ativo). Login por e-mail e senha do Supabase Auth; quem a pessoa é no sistema
+   (nome, função, loja) vem de public.perfis. Sem as constantes o sistema volta ao modo demonstração. */
+var SUPABASE_URL="https://clnccthtvfuetmfwuanu.supabase.co";
+var SUPABASE_CHAVE="sb_publishable_d4fzLYOX1QobjBlxXOnhUg_evOgwcw-";
+var perfilBanco=null;
+/* os testes automáticos rodam no modo demonstração (window.MODO_DEMO_MF antes do sistema) */
+function modoBanco(){return !window.MODO_DEMO_MF&&!!(SUPABASE_URL&&SUPABASE_CHAVE);}
+function bancoCarregado(){return !!(window.supabase&&window.criarDbSupabase);}
+/* banner vermelho: gravação que não entrou (sem internet, sessão vencida ou sem permissão) */
+function estadoBanco(ok,erro){
+  var b=$("offline");if(!b)return;
+  if(ok){if(b.__banco){b.hidden=true;b.__banco=false;b.classList.remove("banner-erro");}return;}
+  b.__banco=true;b.classList.add("banner-erro");
+  b.textContent="Atenção: o último registro NÃO foi gravado no banco — "+((erro&&erro.message)||"falha de conexão")+
+    ". Confira a internet e refaça a operação. (toque para fechar)";
+  b.hidden=false;
+  b.onclick=function(){try{db.reconhecerFalha();}catch(e){}b.hidden=true;b.__banco=false;};
+}
+/* número de pedido, orçamento, OS e cliente: o banco entrega o próximo (sem repetir entre dois usuários);
+   sem banco, o maior número já usado + 1 */
+async function numeroNovo(tipo,lista,base){
+  if(db&&modoBanco()&&typeof db.proximoNumero==="function"){
+    try{return await db.proximoNumero(lojaAtual,tipo);}catch(e){console.warn("numeração",e);}
+  }
+  var max=base-1;
+  (lista||[]).forEach(function(x){if(x.loja===lojaAtual){var n=parseInt(x.numero,10);if(n>max)max=n;}});
+  return max+1;
+}
+/* código do cliente (MF-01002…) pelo contador do banco — dois atendentes não geram o mesmo código */
+async function codigoClienteNovo(){
+  var pre={mf:"MF",wf:"WF",dv:"DV"}[lojaAtual]||"CL";
+  if(db&&modoBanco()&&typeof db.proximoNumero==="function"){
+    try{var n=await db.proximoNumero(lojaAtual,"cliente");return pre+"-"+String(n+1).padStart(5,"0");}catch(e){console.warn("código do cliente",e);}
+  }
+  return proxCodigo();
+}
 /* Coeficientes reais — planilha da empresa. Editáveis em Configurações. */
 function seqUm(n){var a={};for(var i=1;i<=n;i++)a[i]=1;return a;}
 function seq(arr,ini){var a={},s=ini||1;arr.forEach(function(v,i){a[s+i]=v;});return a;}
@@ -5161,192 +5205,9 @@ function modeloContratoPlano(linhaTitulo){
 var CONTRATO_PREMIUM_I=modeloContratoPlano("## {{contrato_titulo}}");
 var CONTRATO_PREMIUM_II=modeloContratoPlano("{{contrato_titulo}}");
 
+/* catálogo inicial: só os itens que o sistema usa por dentro. Os 201 produtos do CRM antigo saíram em 17/09
+   (pedido do Wagner: começar o teste real com o sistema zerado e cadastrar os produtos do zero) */
 var SEED=[
- {cod:"PMF104",nome:"Acquaflex Libell Hermetico Branco Cinza 127 V/60 HZ",pop:"Acquaflex Libell Hermetico",marca:"Libell",grupo:"Purificadores",un:"UN",cheia:1000.00,campanha:950.00,minimo:880.00,campativa:"nao",custo:480.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF085",nome:"Blue Branco Com Ozonio 127",pop:"Blue Branco Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1360.00,campanha:1292.00,minimo:1196.80,campativa:"nao",custo:652.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF085-SITE",nome:"Blue Branco Com Ozonio 127 Site",pop:"Blue Branco Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1258.00,campanha:1195.10,minimo:1107.04,campativa:"nao",custo:603.84,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF085-INST",nome:"Blue Branco Com Ozonio 127V Inst",pop:"Blue Branco Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1460.00,campanha:1387.00,minimo:1284.80,campativa:"nao",custo:700.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF085-2",nome:"Blue Branco Com Ozonio 127V Inst- Combo",pop:"Blue Branco Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1000.00,campanha:950.00,minimo:880.00,campativa:"nao",custo:480.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF101",nome:"Blue Branco Com Ozonio 220V",pop:"Blue Branco Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1360.00,campanha:1292.00,minimo:1196.80,campativa:"nao",custo:652.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF086",nome:"Blue Preto Com Ozonio 127 Site",pop:"Blue Preto Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1258.00,campanha:1195.10,minimo:1107.04,campativa:"nao",custo:603.84,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF086-2",nome:"Blue Preto Com Ozonio 127V",pop:"Blue Preto Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1360.00,campanha:1292.00,minimo:1196.80,campativa:"nao",custo:652.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF086-INST",nome:"Blue Preto Com Ozonio 127V Inst",pop:"Blue Preto Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1460.00,campanha:1387.00,minimo:1284.80,campativa:"nao",custo:700.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF086-3",nome:"Blue Preto Com Ozonio 127V Inst- Combo",pop:"Blue Preto Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1000.00,campanha:950.00,minimo:880.00,campativa:"nao",custo:480.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF088",nome:"Blue Preto Com Ozonio 220V",pop:"Blue Preto Com",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1360.00,campanha:1292.00,minimo:1196.80,campativa:"nao",custo:652.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF095",nome:"Purificador - Emprestimo - Everest",pop:"Purificador - Emprestimo",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1350.00,campanha:1282.50,minimo:1188.00,campativa:"nao",custo:648.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF001",nome:"Purificador Agua Everest Baby Branco (n)",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:34500.00,campanha:32775.00,minimo:30360.00,campativa:"nao",custo:16560.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:33},
- {cod:"PMF002",nome:"Purificador Agua Everest Baby Cereja (n)",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:34500.00,campanha:32775.00,minimo:30360.00,campativa:"nao",custo:16560.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:15},
- {cod:"PMF003",nome:"Purificador Agua Everest Baby Preto (n)",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:34500.00,campanha:32775.00,minimo:30360.00,campativa:"nao",custo:16560.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:30},
- {cod:"PMF004",nome:"Purificador Agua Everest Fit (n) 127V/60 HZ Branco",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF005",nome:"Purificador Agua Everest Fit (n) 127V/60HZ Cereja",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF006",nome:"Purificador Agua Everest Fit (n) 127V/60HZ New Black",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF007",nome:"Purificador Agua Everest Fit (n) 127V/60HZ Prata",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF008",nome:"Purificador Agua Everest Slim (n) 127V/60HZ Branco",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF008-INST",nome:"Purificador Agua Everest Slim (n) 127V/60HZ Branco Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF009",nome:"Purificador Agua Everest Slim (n) 127V/60HZ Cereja",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF010",nome:"Purificador Agua Everest Slim (n) 127V/60HZ New Black",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF010-INST",nome:"Purificador Agua Everest Slim (n) 127V/60HZ New Black Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF011",nome:"Purificador Agua Everest Slim (n) 127V/60HZ Prata",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:2},
- {cod:"PMF011-INST",nome:"Purificador Agua Everest Slim (n) 127V/60HZ Prata Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF073",nome:"Purificador Agua Everest Slim (n) 220V/60HZ New Black",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF073-INST",nome:"Purificador Agua Everest Slim (n) 220V/60HZ New Black Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF012",nome:"Purificador Agua Everest Star (n) 127V/60HZ Branco",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:16},
- {cod:"PMF012-INST",nome:"Purificador Agua Everest Star (n) 127V/60HZ Branco Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF013",nome:"Purificador Agua Everest Star (n) 127V/60HZ Cereja",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:11},
- {cod:"PMF013-INST",nome:"Purificador Agua Everest Star (n) 127V/60HZ Cereja Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF014",nome:"Purificador Agua Everest Star (n) 127V/60HZ New Black",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:25},
- {cod:"PMF014-INST",nome:"Purificador Agua Everest Star (n) 127V/60HZ New Black Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF015",nome:"Purificador Agua Everest Star (n) 127V/60HZ Prata",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:18},
- {cod:"PMF015-INST",nome:"Purificador Agua Everest Star (n) 127V/60HZ Prata Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF016",nome:"Purificador Agua Everest Star (n) 220V/60HZ Branco",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:3},
- {cod:"PMF016-INST",nome:"Purificador Agua Everest Star (n) 220V/60HZ Branco Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF017",nome:"Purificador Agua Everest Star (n) 220V/60HZ Cereja",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:2},
- {cod:"PMF017-INST",nome:"Purificador Agua Everest Star (n) 220V/60HZ Cereja Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF018",nome:"Purificador Agua Everest Star (n) 220V/60HZ New Black",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:5},
- {cod:"PMF018-INST",nome:"Purificador Agua Everest Star (n) 220V/60HZ New Black Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF019",nome:"Purificador Agua Everest Star (n) 220V/60HZ Prata",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:9},
- {cod:"PMF019-INST",nome:"Purificador Agua Everest Star (n) 220V/60HZ Prata Inst",pop:"Purificador Agua Everest",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1300.00,campanha:1235.00,minimo:1144.00,campativa:"nao",custo:624.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF062",nome:"Purificador Aquanature Cinza",pop:"Purificador Aquanature Cinza",marca:"Quantic Life",grupo:"Purificadores",un:"UN",cheia:1409.10,campanha:1338.64,minimo:1240.01,campativa:"nao",custo:676.37,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF020",nome:"Purificador Aquanature PH+ Branco",pop:"Purificador Aquanature PH+",marca:"Quantic Life",grupo:"Purificadores",un:"UN",cheia:1299.00,campanha:1234.05,minimo:1143.12,campativa:"nao",custo:623.52,pontos:100,manut:180,gar:12,serie:"sim",estoque:2},
- {cod:"PMF021",nome:"Purificador Aquazon 127V PH+ Branco",pop:"Purificador Aquazon 127V",marca:"Quantic Life",grupo:"Purificadores",un:"UN",cheia:1310.00,campanha:1244.50,minimo:1152.80,campativa:"nao",custo:628.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:13},
- {cod:"PMF021-INST",nome:"Purificador Aquazon 127V PH+ Branco Inst",pop:"Purificador Aquazon 127V",marca:"Quantic Life",grupo:"Purificadores",un:"UN",cheia:1460.00,campanha:1387.00,minimo:1284.80,campativa:"nao",custo:700.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF022",nome:"Purificador Aquazon 220V PH+ Branco",pop:"Purificador Aquazon 220V",marca:"Quantic Life",grupo:"Purificadores",un:"UN",cheia:1310.00,campanha:1244.50,minimo:1152.80,campativa:"nao",custo:628.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:9},
- {cod:"PMF022-INST",nome:"Purificador Aquazon 220V PH+ Branco Inst",pop:"Purificador Aquazon 220V",marca:"Quantic Life",grupo:"Purificadores",un:"UN",cheia:1460.00,campanha:1387.00,minimo:1284.80,campativa:"nao",custo:700.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF063",nome:"Purificador Aquazon PH+ 127V Cinza",pop:"Purificador Aquazon PH+",marca:"Quantic Life",grupo:"Purificadores",un:"UN",cheia:1310.00,campanha:1244.50,minimo:1152.80,campativa:"nao",custo:628.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF063-INST",nome:"Purificador Aquazon PH+ 127V Cinza Inst",pop:"Purificador Aquazon PH+",marca:"Quantic Life",grupo:"Purificadores",un:"UN",cheia:1460.00,campanha:1387.00,minimo:1284.80,campativa:"nao",custo:700.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF064",nome:"Purificador Aquazon PH+ 220V Cinza",pop:"Purificador Aquazon PH+",marca:"Quantic Life",grupo:"Purificadores",un:"UN",cheia:1310.00,campanha:1244.50,minimo:1152.80,campativa:"nao",custo:628.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF023",nome:"F023",pop:"F023  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:25000.00,campanha:23750.00,minimo:22000.00,campativa:"nao",custo:12000.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:154},
- {cod:"PMF089",nome:"Purificador DE Agua Everest Plus 127V/ 60HZ Prata",pop:"Purificador DE Agua",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1499.00,campanha:1424.05,minimo:1319.12,campativa:"nao",custo:719.52,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF090",nome:"Purificador DE Agua Everest Plus 127V/ 60HZ Preto",pop:"Purificador DE Agua",marca:"Minas Filtros",grupo:"Purificadores",un:"UN",cheia:1499.00,campanha:1424.05,minimo:1319.12,campativa:"nao",custo:719.52,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF096",nome:"Purificador DE Agua Everest Plus 220V/ 60HZ Branco",pop:"Purificador DE Agua",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1499.00,campanha:1424.05,minimo:1319.12,campativa:"nao",custo:719.52,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF102",nome:"Purificador Desmineralizador 5 Estagios C/ Tanque Bivolt Inst",pop:"Purificador Desmineralizador 5",marca:"Nyc DO Brasil",grupo:"Purificadores",un:"UN",cheia:2170.00,campanha:2061.50,minimo:1909.60,campativa:"nao",custo:1041.60,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF109",nome:"Purificador Everest Foz Cinza Claro 127V/ 60HZ",pop:"Purificador Everest Foz",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1700.00,campanha:1615.00,minimo:1496.00,campativa:"nao",custo:816.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF110",nome:"Purificador Everest Foz Grafite 127V/ 60HZ",pop:"Purificador Everest Foz",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:1700.00,campanha:1615.00,minimo:1496.00,campativa:"nao",custo:816.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF098",nome:"Purificador Everest Star Semi Novo",pop:"Purificador Everest Star",marca:"Everest",grupo:"Purificadores",un:"UN",cheia:90000.00,campanha:85500.00,minimo:79200.00,campativa:"nao",custo:43200.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF024",nome:"F024",pop:"F024  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:1100.00,campanha:1045.00,minimo:968.00,campativa:"nao",custo:528.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF025",nome:"F025",pop:"F025  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:1100.00,campanha:1045.00,minimo:968.00,campativa:"nao",custo:528.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF026",nome:"F026",pop:"F026  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:1100.00,campanha:1045.00,minimo:968.00,campativa:"nao",custo:528.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF106",nome:"Purificador HE Oxi Mg+ H2 Branco 127V",pop:"Purificador HE Oxi",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2600.00,campanha:2470.00,minimo:2288.00,campativa:"nao",custo:1248.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF106-2",nome:"Purificador HE Oxi Mg+ H2 Branco 127V Base Troca",pop:"Purificador HE Oxi",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2500.00,campanha:2375.00,minimo:2200.00,campativa:"nao",custo:1200.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF107",nome:"Purificador HE Oxi Mg+ H2 Prata 127V",pop:"Purificador HE Oxi",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2600.00,campanha:2470.00,minimo:2288.00,campativa:"nao",custo:1248.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF107-TROCA",nome:"Purificador HE Oxi Mg+ H2 Prata 127V Base DE Troca",pop:"Purificador HE Oxi",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2500.00,campanha:2375.00,minimo:2200.00,campativa:"nao",custo:1200.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF108",nome:"Purificador HE Oxi Mg+ H2 Preto 127V",pop:"Purificador HE Oxi",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2600.00,campanha:2470.00,minimo:2288.00,campativa:"nao",custo:1248.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF108-TROCA",nome:"Purificador HE Oxi Mg+ H2 Preto 127V Base Troca",pop:"Purificador HE Oxi",marca:"Minas Filtros",grupo:"Purificadores",un:"UN",cheia:2500.00,campanha:2375.00,minimo:2200.00,campativa:"nao",custo:1200.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF027",nome:"F027",pop:"F027  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:99900.00,campanha:94905.00,minimo:87912.00,campativa:"nao",custo:47952.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF028",nome:"F028",pop:"F028  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:99900.00,campanha:94905.00,minimo:87912.00,campativa:"nao",custo:47952.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF029",nome:"F029",pop:"F029  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:99900.00,campanha:94905.00,minimo:87912.00,campativa:"nao",custo:47952.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF030",nome:"F030",pop:"F030  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:1199.00,campanha:1139.05,minimo:1055.12,campativa:"nao",custo:575.52,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF031",nome:"F031",pop:"F031  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:1199.00,campanha:1139.05,minimo:1055.12,campativa:"nao",custo:575.52,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF032",nome:"F032",pop:"F032  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:1199.00,campanha:1139.05,minimo:1055.12,campativa:"nao",custo:575.52,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF033",nome:"F033",pop:"F033  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:1199.00,campanha:1139.05,minimo:1055.12,campativa:"nao",custo:575.52,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF096-2",nome:"Purificador Maxfilter Semi Novo Petit",pop:"Purificador Maxfilter Semi",marca:"Maxfilter",grupo:"Purificadores",un:"UN",cheia:95400.00,campanha:90630.00,minimo:83952.00,campativa:"nao",custo:45792.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:10},
- {cod:"PMF034",nome:"F034",pop:"F034  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:23900.00,campanha:22705.00,minimo:21032.00,campativa:"nao",custo:11472.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF065",nome:"Purificador Platinum Flex Branco 127V",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1550.00,campanha:1472.50,minimo:1364.00,campativa:"nao",custo:744.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF065-INST",nome:"Purificador Platinum Flex Branco 127V Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1650.00,campanha:1567.50,minimo:1452.00,campativa:"nao",custo:792.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF067",nome:"Purificador Platinum Flex Branco 127V PH+",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1700.00,campanha:1615.00,minimo:1496.00,campativa:"nao",custo:816.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF067-INST",nome:"Purificador Platinum Flex Branco 127V PH+ Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2160.00,campanha:2052.00,minimo:1900.80,campativa:"nao",custo:1036.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF067-INSTTROCA",nome:"Purificador Platinum Flex Branco 127V PH+ Inst Troca",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1860.00,campanha:1767.00,minimo:1636.80,campativa:"nao",custo:892.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF067-SITE",nome:"Purificador Platinum Flex Branco 127V PH+ Site",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2039.00,campanha:1937.05,minimo:1794.32,campativa:"nao",custo:978.72,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF067-TROCA",nome:"Purificador Platinum Flex Branco 127V PH+ Troca",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1860.00,campanha:1767.00,minimo:1636.80,campativa:"nao",custo:892.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF065-SITE",nome:"Purificador Platinum Flex Branco 127V Site",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1670.00,campanha:1586.50,minimo:1469.60,campativa:"nao",custo:801.60,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF069",nome:"Purificador Platinum Flex Branco 220V",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1760.00,campanha:1672.00,minimo:1548.80,campativa:"nao",custo:844.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF069-INST",nome:"Purificador Platinum Flex Branco 220V Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1760.00,campanha:1672.00,minimo:1548.80,campativa:"nao",custo:844.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF071",nome:"Purificador Platinum Flex Branco 220V PH+",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2060.00,campanha:1957.00,minimo:1812.80,campativa:"nao",custo:988.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF071-INST",nome:"Purificador Platinum Flex Branco 220V PH+ Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2160.00,campanha:2052.00,minimo:1900.80,campativa:"nao",custo:1036.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF071-INSTTROCA",nome:"Purificador Platinum Flex Branco 220V PH+ Inst Troca",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1860.00,campanha:1767.00,minimo:1636.80,campativa:"nao",custo:892.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF071-SITE",nome:"Purificador Platinum Flex Branco 220V PH+ Site",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1660.00,campanha:1577.00,minimo:1460.80,campativa:"nao",custo:796.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF071-TROCA",nome:"Purificador Platinum Flex Branco 220V PH+ Troca",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1860.00,campanha:1767.00,minimo:1636.80,campativa:"nao",custo:892.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF073-2",nome:"Purificador Platinum Flex Branco Com Ozonio 127V",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1900.00,campanha:1805.00,minimo:1672.00,campativa:"nao",custo:912.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF075",nome:"Purificador Platinum Flex Branco Com Ozonio 127V PH+",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1810.00,campanha:1719.50,minimo:1592.80,campativa:"nao",custo:868.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF077",nome:"Purificador Platinum Flex Branco Com Ozonio 220V",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1900.00,campanha:1805.00,minimo:1672.00,campativa:"nao",custo:912.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF079",nome:"Purificador Platinum Flex Branco Com Ozonio 220V PH+",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1810.00,campanha:1719.50,minimo:1592.80,campativa:"nao",custo:868.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF081",nome:"Purificador Platinum Flex Prata 127V",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1550.00,campanha:1472.50,minimo:1364.00,campativa:"nao",custo:744.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF081-INST",nome:"Purificador Platinum Flex Prata 127V Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1650.00,campanha:1567.50,minimo:1452.00,campativa:"nao",custo:792.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF082",nome:"Purificador Platinum Flex Prata 127V PH+",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1700.00,campanha:1615.00,minimo:1496.00,campativa:"nao",custo:816.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF082-INST",nome:"Purificador Platinum Flex Prata 127V PH+ Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2160.00,campanha:2052.00,minimo:1900.80,campativa:"nao",custo:1036.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF082-INSTTROCA",nome:"Purificador Platinum Flex Prata 127V PH+ Inst Troca",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1860.00,campanha:1767.00,minimo:1636.80,campativa:"nao",custo:892.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF082-SITE",nome:"Purificador Platinum Flex Prata 127V PH+ Site",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2039.00,campanha:1937.05,minimo:1794.32,campativa:"nao",custo:978.72,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF082-TROCA",nome:"Purificador Platinum Flex Prata 127V PH+ Troca",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1860.00,campanha:1767.00,minimo:1636.80,campativa:"nao",custo:892.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF081-SITE",nome:"Purificador Platinum Flex Prata 127V Site",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1670.00,campanha:1586.50,minimo:1469.60,campativa:"nao",custo:801.60,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF066",nome:"Purificador Platinum Flex Preto/kromanox 127V",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1550.00,campanha:1472.50,minimo:1364.00,campativa:"nao",custo:744.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF066-INST",nome:"Purificador Platinum Flex Preto/kromanox 127V Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1650.00,campanha:1567.50,minimo:1452.00,campativa:"nao",custo:792.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF068",nome:"Purificador Platinum Flex Preto/kromanox 127V PH+",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1700.00,campanha:1615.00,minimo:1496.00,campativa:"nao",custo:816.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF068-INST",nome:"Purificador Platinum Flex Preto/kromanox 127V PH+ Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2160.00,campanha:2052.00,minimo:1900.80,campativa:"nao",custo:1036.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF068-INSTTROCA",nome:"Purificador Platinum Flex Preto/kromanox 127V PH+ Inst Troca",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1760.00,campanha:1672.00,minimo:1548.80,campativa:"nao",custo:844.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF068-SITE",nome:"Purificador Platinum Flex Preto/kromanox 127V PH+ Site",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2039.00,campanha:1937.05,minimo:1794.32,campativa:"nao",custo:978.72,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF068-TROCA",nome:"Purificador Platinum Flex Preto/kromanox 127V PH+ Troca",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1860.00,campanha:1767.00,minimo:1636.80,campativa:"nao",custo:892.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF066-SITE",nome:"Purificador Platinum Flex Preto/kromanox 127V Site",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1670.00,campanha:1586.50,minimo:1469.60,campativa:"nao",custo:801.60,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF070",nome:"Purificador Platinum Flex Preto/kromanox 220V",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1760.00,campanha:1672.00,minimo:1548.80,campativa:"nao",custo:844.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF070-INST",nome:"Purificador Platinum Flex Preto/kromanox 220V Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1760.00,campanha:1672.00,minimo:1548.80,campativa:"nao",custo:844.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF072",nome:"Purificador Platinum Flex Preto/kromanox 220V PH+",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2060.00,campanha:1957.00,minimo:1812.80,campativa:"nao",custo:988.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF072-INST",nome:"Purificador Platinum Flex Preto/kromanox 220V PH+ Inst",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2160.00,campanha:2052.00,minimo:1900.80,campativa:"nao",custo:1036.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF072-SITE",nome:"Purificador Platinum Flex Preto/kromanox 220V PH+ Site",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1660.00,campanha:1577.00,minimo:1460.80,campativa:"nao",custo:796.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF072-TROCA",nome:"Purificador Platinum Flex Preto/kromanox 220V PH+ Troca",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1860.00,campanha:1767.00,minimo:1636.80,campativa:"nao",custo:892.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF074",nome:"Purificador Platinum Flex Preto/kromanox Com Ozonio 127V",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1900.00,campanha:1805.00,minimo:1672.00,campativa:"nao",custo:912.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF076",nome:"Purificador Platinum Flex Preto/kromanox Com Ozonio 127V PH+",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1810.00,campanha:1719.50,minimo:1592.80,campativa:"nao",custo:868.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF078",nome:"Purificador Platinum Flex Preto/kromanox Com Ozonio 220V",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1900.00,campanha:1805.00,minimo:1672.00,campativa:"nao",custo:912.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF080",nome:"Purificador Platinum Flex Preto/kromanox Com Ozonio 220V PH+",pop:"Purificador Platinum Flex",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1810.00,campanha:1719.50,minimo:1592.80,campativa:"nao",custo:868.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF099",nome:"Purificador Platinum Flex Seminovo",pop:"Purificador Platinum Flex",marca:"Minas Filtros",grupo:"Purificadores",un:"UN",cheia:1000.00,campanha:950.00,minimo:880.00,campativa:"nao",custo:480.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF035",nome:"Purificador Platinum HE 127V Branco",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2115.00,campanha:2009.25,minimo:1861.20,campativa:"nao",custo:1015.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:16},
- {cod:"PMF036",nome:"Purificador Platinum HE 127V Branco Com Ozonio",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF036-INST",nome:"Purificador Platinum HE 127V Branco Com Ozonio Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2810.00,campanha:2669.50,minimo:2472.80,campativa:"nao",custo:1348.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF036-SITE",nome:"Purificador Platinum HE 127V Branco Com Ozonio Site",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF036-TROCA",nome:"Purificador Platinum HE 127V Branco Com Ozonio Troca",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2300.00,campanha:2185.00,minimo:2024.00,campativa:"nao",custo:1104.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF035-INST",nome:"Purificador Platinum HE 127V Branco Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2265.00,campanha:2151.75,minimo:1993.20,campativa:"nao",custo:1087.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF037",nome:"Purificador Platinum HE 127V Inox (preto)",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2115.00,campanha:2009.25,minimo:1861.20,campativa:"nao",custo:1015.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:34},
- {cod:"PMF038",nome:"Purificador Platinum HE 127V Inox (preto) Com Ozonio",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF038-INST",nome:"Purificador Platinum HE 127V Inox (preto) Com Ozonio Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2810.00,campanha:2669.50,minimo:2472.80,campativa:"nao",custo:1348.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF038-SITE",nome:"Purificador Platinum HE 127V Inox (preto) Com Ozonio Site",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF038-TROCA",nome:"Purificador Platinum HE 127V Inox (preto) Com Ozonio Troca",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2300.00,campanha:2185.00,minimo:2024.00,campativa:"nao",custo:1104.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF037-INST",nome:"Purificador Platinum HE 127V Inox (preto) Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2265.00,campanha:2151.75,minimo:1993.20,campativa:"nao",custo:1087.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF056",nome:"Purificador Platinum HE 127V Prata",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2115.00,campanha:2009.25,minimo:1861.20,campativa:"nao",custo:1015.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF057",nome:"Purificador Platinum HE 127V Prata Com Ozonio",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF057-INST",nome:"Purificador Platinum HE 127V Prata Com Ozonio Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2810.00,campanha:2669.50,minimo:2472.80,campativa:"nao",custo:1348.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF057-SITE",nome:"Purificador Platinum HE 127V Prata Com Ozonio Site",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF057-TROCA",nome:"Purificador Platinum HE 127V Prata Com Ozonio Troca",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2300.00,campanha:2185.00,minimo:2024.00,campativa:"nao",custo:1104.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF056-INST",nome:"Purificador Platinum HE 127V Prata Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2265.00,campanha:2151.75,minimo:1993.20,campativa:"nao",custo:1087.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF039",nome:"Purificador Platinum HE 127V Vermelho",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2115.00,campanha:2009.25,minimo:1861.20,campativa:"nao",custo:1015.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:4},
- {cod:"PMF040",nome:"Purificador Platinum HE 127V Vermelho Com Ozonio",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:9},
- {cod:"PMF040-INST",nome:"Purificador Platinum HE 127V Vermelho Com Ozonio Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2810.00,campanha:2669.50,minimo:2472.80,campativa:"nao",custo:1348.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF040-SITE",nome:"Purificador Platinum HE 127V Vermelho Com Ozonio Site",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF040-TROCA",nome:"Purificador Platinum HE 127V Vermelho Com Ozonio Troca",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2300.00,campanha:2185.00,minimo:2024.00,campativa:"nao",custo:1104.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF039-INST",nome:"Purificador Platinum HE 127V Vermelho Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2265.00,campanha:2151.75,minimo:1993.20,campativa:"nao",custo:1087.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF041",nome:"Purificador Platinum HE 220V Branco",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2115.00,campanha:2009.25,minimo:1861.20,campativa:"nao",custo:1015.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:6},
- {cod:"PMF042",nome:"Purificador Platinum HE 220V Branco Com Ozonio",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2710.00,campanha:2574.50,minimo:2384.80,campativa:"nao",custo:1300.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:8},
- {cod:"PMF042-INST",nome:"Purificador Platinum HE 220V Branco Com Ozonio Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2810.00,campanha:2669.50,minimo:2472.80,campativa:"nao",custo:1348.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF042-SITE",nome:"Purificador Platinum HE 220V Branco Com Ozonio Site",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2460.00,campanha:2337.00,minimo:2164.80,campativa:"nao",custo:1180.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF042-TROCA",nome:"Purificador Platinum HE 220V Branco Com Ozonio Troca",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2300.00,campanha:2185.00,minimo:2024.00,campativa:"nao",custo:1104.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF041-INST",nome:"Purificador Platinum HE 220V Branco Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2265.00,campanha:2151.75,minimo:1993.20,campativa:"nao",custo:1087.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF043",nome:"Purificador Platinum HE 220V Inox Preto",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2115.00,campanha:2009.25,minimo:1861.20,campativa:"nao",custo:1015.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:8},
- {cod:"PMF044",nome:"Purificador Platinum HE 220V Inox Preto Com Ozonio",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2710.00,campanha:2574.50,minimo:2384.80,campativa:"nao",custo:1300.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:2},
- {cod:"PMF044-SITE",nome:"Purificador Platinum HE 220V Inox Preto Com Ozonio Site",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2460.00,campanha:2337.00,minimo:2164.80,campativa:"nao",custo:1180.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF044-TROCA",nome:"Purificador Platinum HE 220V Inox Preto Com Ozonio Troca",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2300.00,campanha:2185.00,minimo:2024.00,campativa:"nao",custo:1104.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF043-INST",nome:"Purificador Platinum HE 220V Inox Preto Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2265.00,campanha:2151.75,minimo:1993.20,campativa:"nao",custo:1087.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF058",nome:"Purificador Platinum HE 220V Prata",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2115.00,campanha:2009.25,minimo:1861.20,campativa:"nao",custo:1015.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF059",nome:"Purificador Platinum HE 220V Prata Com Ozonio",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2710.00,campanha:2574.50,minimo:2384.80,campativa:"nao",custo:1300.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF059-INST",nome:"Purificador Platinum HE 220V Prata Com Ozonio Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2810.00,campanha:2669.50,minimo:2472.80,campativa:"nao",custo:1348.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF059-SITE",nome:"Purificador Platinum HE 220V Prata Com Ozonio Site",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2460.00,campanha:2337.00,minimo:2164.80,campativa:"nao",custo:1180.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF059-TROCA",nome:"Purificador Platinum HE 220V Prata Com Ozonio Troca",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2300.00,campanha:2185.00,minimo:2024.00,campativa:"nao",custo:1104.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF058-INST",nome:"Purificador Platinum HE 220V Prata Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2265.00,campanha:2151.75,minimo:1993.20,campativa:"nao",custo:1087.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF045",nome:"Purificador Platinum HE 220V Vermelho",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2115.00,campanha:2009.25,minimo:1861.20,campativa:"nao",custo:1015.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:3},
- {cod:"PMF046",nome:"Purificador Platinum HE 220V Vermelho Com Ozonio",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2710.00,campanha:2574.50,minimo:2384.80,campativa:"nao",custo:1300.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:2},
- {cod:"PMF046-INST",nome:"Purificador Platinum HE 220V Vermelho Com Ozonio Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2810.00,campanha:2669.50,minimo:2472.80,campativa:"nao",custo:1348.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF046-SITE",nome:"Purificador Platinum HE 220V Vermelho Com Ozonio Site",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2460.00,campanha:2337.00,minimo:2164.80,campativa:"nao",custo:1180.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF046-TROCA",nome:"Purificador Platinum HE 220V Vermelho Com Ozonio Troca",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2300.00,campanha:2185.00,minimo:2024.00,campativa:"nao",custo:1104.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF045-INST",nome:"Purificador Platinum HE 220V Vermelho Inst",pop:"Purificador Platinum HE",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2265.00,campanha:2151.75,minimo:1993.20,campativa:"nao",custo:1087.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF036-INSTTROCA",nome:"Purificador Platinum Heoxi 127V Branco Inst Troca",pop:"Purificador Platinum Heoxi",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF038-INSTTROCA",nome:"Purificador Platinum Heoxi 127V Inox (preto) Inst Troca",pop:"Purificador Platinum Heoxi",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF057-INSTTROCA",nome:"Purificador Platinum Heoxi 127V Prata Inst Troca",pop:"Purificador Platinum Heoxi",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF040-INSTTROCA",nome:"Purificador Platinum Heoxi 127V Vermelho Inst Troca",pop:"Purificador Platinum Heoxi",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:2400.00,campanha:2280.00,minimo:2112.00,campativa:"nao",custo:1152.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF060",nome:"Purificador Pury Branco 127V C Eficiencia ( Eletrico)",pop:"Purificador Pury Branco",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1590.00,campanha:1510.50,minimo:1399.20,campativa:"nao",custo:763.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF091",nome:"Purificador Pury Compact 127V Branco",pop:"Purificador Pury Compact",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1160.00,campanha:1102.00,minimo:1020.80,campativa:"nao",custo:556.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF091-INST",nome:"Purificador Pury Compact 127V Branco Inst",pop:"Purificador Pury Compact",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1259.00,campanha:1196.05,minimo:1107.92,campativa:"nao",custo:604.32,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF091-2",nome:"Purificador Pury Compact 127V Branco- Combo",pop:"Purificador Pury Compact",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1000.00,campanha:950.00,minimo:880.00,campativa:"nao",custo:480.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF092",nome:"Purificador Pury Compact 127V Preto/cinza",pop:"Purificador Pury Compact",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1160.00,campanha:1102.00,minimo:1020.80,campativa:"nao",custo:556.80,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF092-INST",nome:"Purificador Pury Compact 127V Preto/cinza Inst",pop:"Purificador Pury Compact",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1259.00,campanha:1196.05,minimo:1107.92,campativa:"nao",custo:604.32,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF092-2",nome:"Purificador Pury Compact 127V Preto/cinza- Combo",pop:"Purificador Pury Compact",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1000.00,campanha:950.00,minimo:880.00,campativa:"nao",custo:480.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF105",nome:"Purificador Pury Compact Seminovo",pop:"Purificador Pury Compact",marca:"Minas Filtros",grupo:"Purificadores",un:"UN",cheia:1000.00,campanha:950.00,minimo:880.00,campativa:"nao",custo:480.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF061",nome:"Purificador Pury Inox 127V C Eficiencia (eletrico)",pop:"Purificador Pury Inox",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1590.00,campanha:1510.50,minimo:1399.20,campativa:"nao",custo:763.20,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
  {cod:"PLANO-PI",nome:"PLANO PREMIUM I",pop:"Plano Premium I",marca:"Minas Filtros",grupo:"Planos",un:"UN",cheia:600.00,campanha:550.00,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:12,serie:"nao",estoque:0,contrato:"PLANO PREMIUM I TOP GELADO",vigencia:12,garantia:"Premium I",grupos:["Purificadores"],contratoTexto:CONTRATO_PREMIUM_I},
  {cod:"PLANO-PII",nome:"PLANO PREMIUM II",pop:"Plano Premium II",marca:"Minas Filtros",grupo:"Planos",un:"UN",cheia:250.00,campanha:230.00,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:12,serie:"nao",estoque:0,contrato:"(PREMIUM II)",vigencia:12,garantia:"Premium II",grupos:["Purificadores"],contratoTexto:CONTRATO_PREMIUM_II},
  /* serviço cobrado na OS externa quando o cliente não aprova o conserto (regra do Wagner, 14/09) — valor ajustável em Produtos */
@@ -5354,22 +5215,6 @@ var SEED=[
  /* purificador usado que o cliente dá na troca: entra no estoque do vendedor pela forma "Desconto de Troca" e
     ele devolve ao almoxarifado no dia seguinte (regra do Wagner, 16/09) — não aparece na venda */
  {cod:"USADO-TROCA",nome:"Purificador Usado Pego na Troca",pop:"Purificador usado da troca",marca:"Diversas",grupo:"Usados na troca",subgrupo:"Purificador usado",un:"UN",cheia:0,campanha:0,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
- {cod:"PMF103",nome:"Purificador Top Life - Plano Premium",pop:"Purificador Top Life",marca:"Minas Filtros",grupo:"Planos",un:"UN",cheia:0.00,campanha:0.00,minimo:0.00,campativa:"nao",custo:0.00,pontos:20,manut:0,gar:12,serie:"nao",estoque:0},
- {cod:"PMF000",nome:"Purificador Top Life Heoxi Seminovo Inst",pop:"Purificador Top Life",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1600.00,campanha:1520.00,minimo:1408.00,campativa:"nao",custo:768.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF000-2",nome:"Purificador Top Life Heoxi Seminovo Inst- Combo",pop:"Purificador Top Life",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1900.00,campanha:1805.00,minimo:1672.00,campativa:"nao",custo:912.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF047",nome:"Purificador Vivax Max 127V/60HZ Domestico Branco",pop:"Purificador Vivax Max",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF048",nome:"Purificador Vivax Max 127V/60HZ Domestico Prata",pop:"Purificador Vivax Max",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:1200.00,campanha:1140.00,minimo:1056.00,campativa:"nao",custo:576.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF049",nome:"F049",pop:"F049  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:24900.00,campanha:23655.00,minimo:21912.00,campativa:"nao",custo:11952.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF050",nome:"F050",pop:"F050  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:29000.00,campanha:27550.00,minimo:25520.00,campativa:"nao",custo:13920.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF051",nome:"F051",pop:"F051  ",marca:"Ibbl",grupo:"Purificadores",un:"UN",cheia:30000.00,campanha:28500.00,minimo:26400.00,campativa:"nao",custo:14400.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:48},
- {cod:"PMF052",nome:"Purificador Water Flex Ice Branco 127V Alcalino",pop:"Purificador Water Flex",marca:"Water Flex",grupo:"Purificadores",un:"UN",cheia:1700.00,campanha:1615.00,minimo:1496.00,campativa:"nao",custo:816.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF052-INST",nome:"Purificador Water Flex Ice Branco 127V Alcalino Inst",pop:"Purificador Water Flex",marca:"Water Flex",grupo:"Purificadores",un:"UN",cheia:1850.00,campanha:1757.50,minimo:1628.00,campativa:"nao",custo:888.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF053",nome:"Purificador Water Flex Ice Branco 127V Carbon",pop:"Purificador Water Flex",marca:"Water Flex",grupo:"Purificadores",un:"UN",cheia:1500.00,campanha:1425.00,minimo:1320.00,campativa:"nao",custo:720.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF053-INST",nome:"Purificador Water Flex Ice Branco 127V Carbon Inst",pop:"Purificador Water Flex",marca:"Water Flex",grupo:"Purificadores",un:"UN",cheia:1650.00,campanha:1567.50,minimo:1452.00,campativa:"nao",custo:792.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF054",nome:"Purificador Water Flex Ice Preto 127V Alcalino",pop:"Purificador Water Flex",marca:"Water Flex",grupo:"Purificadores",un:"UN",cheia:1700.00,campanha:1615.00,minimo:1496.00,campativa:"nao",custo:816.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF054-INST",nome:"Purificador Water Flex Ice Preto 127V Alcalino Inst",pop:"Purificador Water Flex",marca:"Water Flex",grupo:"Purificadores",un:"UN",cheia:1850.00,campanha:1757.50,minimo:1628.00,campativa:"nao",custo:888.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
- {cod:"PMF055",nome:"Purificador Water Flex Ice Preto 127V Carbon",pop:"Purificador Water Flex",marca:"Water Flex",grupo:"Purificadores",un:"UN",cheia:1500.00,campanha:1425.00,minimo:1320.00,campativa:"nao",custo:720.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:1},
- {cod:"PMF055-INST",nome:"Purificador Water Flex Ice Preto 127V Carbon Inst",pop:"Purificador Water Flex",marca:"Water Flex",grupo:"Purificadores",un:"UN",cheia:1650.00,campanha:1567.50,minimo:1452.00,campativa:"nao",custo:792.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
 ];
 
 function toast(m){var t=$("toast");t.textContent=m;t.hidden=false;setTimeout(function(){t.hidden=true;},2800);}
@@ -5496,6 +5341,7 @@ async function carregar(){
     var us=await db.doc("config/usuarios").get();
     if(us.exists&&us.data()&&us.data().lista&&us.data().lista.length){USUARIOS=us.data().lista;}
     else{await gravarUsuarios();}
+    await mesclarPerfisBanco();
     sincronizarEquipe();
     var og=await db.doc("config/origens").get();
     if(og.exists&&og.data()&&og.data().lista&&og.data().lista.length){ORIGENS=og.data().lista;}
@@ -6757,7 +6603,7 @@ async function salvarPedido(){
   var cli=cliSel;
   var arquivos=ANEXOS.filter(function(a){return a.dados;}).map(function(a){return a.dados;});
   var anexados=arquivos.map(function(a){return a.nome;});
-  var ped={id:uid(),loja:lojaAtual,numero:(pedidos.filter(function(p){return p.loja===lojaAtual;}).length+20801),
+  var ped={id:uid(),loja:lojaAtual,numero:(await numeroNovo("pedido",pedidos,20801)),
     data:hojeISO(),hora:agoraHM(),
     cliente:cli?cli.nome:"—",clienteId:cli?cli.id:"",
     prospector:$("v_prosp").value,vendedor:$("v_vend").value,
@@ -17269,7 +17115,7 @@ async function salvarOS(){
   var nome=$("os_nome").value.trim(),tel=$("os_tel").value.trim();
   if(!validarAberturaOS())return null;
   var o=editandoOS||{id:uid(),loja:lojaAtual,
-    numero:(ordens.filter(function(x){return x.loja===lojaAtual;}).length+3001),
+    numero:(await numeroNovo("os",ordens,3001)),
     historico:[],criadoEm:hojeISO(),criadoPor:usuarioAtual,atendente:usuarioAtual};
   var novo=!editandoOS;
   var statusAntes=o.status;
@@ -17550,7 +17396,7 @@ async function criarAtividadeTecnicoOS(){
 /* "Abrir OS para o cliente" nas ações do atendimento/atividade: a OS já nasce gravada, com o cliente (regra do Wagner, 14/09) */
 async function criarOSDaAcao(a,c){
   if(!c||!c.id)c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
-  var o={id:uid(),loja:lojaAtual,numero:(ordens.filter(function(x){return x.loja===lojaAtual;}).length+3001),
+  var o={id:uid(),loja:lojaAtual,numero:(await numeroNovo("os",ordens,3001)),
     historico:[],criadoEm:hojeISO(),criadoPor:usuarioAtual,atendente:usuarioAtual,
     cliente:c.nome||a.cliente||"",clienteId:c.id||a.clienteId||"",tel:c.tel||a.tel||"",doc:c.doc||a.doc||"",email:c.email||"",
     endereco:[c.rua,c.num,c.comp,c.bairro].filter(Boolean).join(", "),cidade:[c.cidade||a.cidade,c.uf].filter(Boolean).join("/"),
@@ -17880,7 +17726,7 @@ async function salvarOrc(){
   if(!orcItens.length){$("or_alerta").innerHTML='<div class="note crit"><b>Adicione ao menos um item.</b></div>';return null;}
   var r=calcOrc();
   var o=editandoOrc||{id:uid(),loja:lojaAtual,situacao:"aberto",
-    numero:(orcamentos.filter(function(x){return x.loja===lojaAtual;}).length+1001),
+    numero:(await numeroNovo("orcamento",orcamentos,1001)),
     data:iso(new Date())};
   o.cliente=nome;o.clienteId=orcCli?orcCli.id:"";
   o.tel=$("or_tel").value.trim();o.email=$("or_email").value.trim();o.cidade=$("or_cidade").value.trim();o.doc=$("or_doc").value.trim();
@@ -18048,7 +17894,7 @@ function naConferirCadastro(){
   };
 }
 async function naCriarLead(nome){
-  var c={id:uid(),loja:lojaAtual,codigo:proxCodigo(),criadoEm:iso(new Date()),
+  var c={id:uid(),loja:lojaAtual,codigo:(await codigoClienteNovo()),criadoEm:iso(new Date()),
     criadoPor:usuarioAtual,tipo:"Pessoa Física",
     origem:$("na_origem").value||(naCtx&&naCtx.origem)||"",origemEm:iso(new Date()),
     tipoPrimeiroAtend:naTipos[0]||"",primeiroAtendEm:iso(new Date()),
@@ -20118,7 +19964,7 @@ async function salvarAtend(){
         "são o mínimo para alguém conseguir voltar a falar com ele. "+
         'Se quiser registrar tudo agora, use <b>Abrir cadastro completo do lead</b>.</div>';
       return;}
-    var c={id:uid(),loja:lojaAtual,codigo:proxCodigo(),tipo:"Pessoa Física",
+    var c={id:uid(),loja:lojaAtual,codigo:(await codigoClienteNovo()),tipo:"Pessoa Física",
       nome:nome,sexo:$("at_sexo").value,tel:tel,
       doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
       uf:$("at_uf").value.trim().toUpperCase(),origem:$("at_origem").value,origemEm:iso(new Date()),
@@ -22179,6 +22025,7 @@ function ajustarLogin(){
     : "Esqueceu a senha? O Administrador zera em Configurações › Usuários.";
 }
 async function entrarSistema(){
+  if(modoBanco())return entrarBanco();
   var nome=$("lg_user").value,u=usuarioPor(nome);
   if(!u){$("lg_alerta").innerHTML='<div class="note crit"><b>Usuário não encontrado.</b></div>';return;}
   var s1=$("lg_senha").value;
@@ -22202,6 +22049,8 @@ async function entrarSistema(){
   toast("Bem-vindo, "+nome.split(" ")[0]+".");
 }
 function sairSistema(){
+  /* com banco: encerra a sessão no aparelho e volta à tela de entrada */
+  if(modoBanco()&&db){(async function(){try{await db.auth.sair();}catch(e){}location.reload();})();return;}
   $("login").hidden=false;
   montarLogin();
   $("lg_senha").focus();
@@ -22233,16 +22082,71 @@ function navegacaoBasica(){
     };
   });
 }
-function erro(msg){
-  var b=$("offline");b.hidden=false;
-  b.textContent="Algo falhou ao carregar: "+msg+" — o menu continua funcionando.";
+/* ---------- entrada pelo banco (v133, 17/09) ----------
+   Com o Supabase ligado a tela de entrada pede e-mail e senha (Supabase Auth). A sessão fica guardada no aparelho:
+   abrir o site de novo entra direto. Sem perfil ativo em public.perfis, o login é recusado com o motivo. */
+function alertaLogin(t){$("lg_alerta").innerHTML='<div class="note crit"><b>'+esc(t)+"</b></div>";}
+function prepararLoginBanco(){
+  $("lg_userWrap").hidden=true;$("lg_confWrap").hidden=true;$("lg_emailWrap").hidden=false;
+  $("lg_lblSenha").textContent="Senha";
+  $("lg_sub").textContent="Entre com o seu e-mail e a sua senha";
+  $("lg_entrar").textContent="Entrar";
+  var sl=$("lg_loja");
+  if(!sl.options.length)LOJAS.forEach(function(l){var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;sl.appendChild(o);});
+  sl.value=lojaAtual;
+  $("lg_pe").innerHTML="A loja escolhida vale para o Administrador; os demais entram na loja do próprio cadastro. "+
+    "Esqueceu a senha? O Administrador troca no painel do banco (Supabase › Authentication › Users).";
+  try{prepararLogo(function(b,branca){var e=$("loginLogo");if(e&&b)enquadrar(e,b,branca||LOGO);});}catch(e){}
+  $("lg_email").onkeydown=function(e){if(e.key==="Enter")$("lg_senha").focus();};
 }
-(async function(){
-  navegacaoBasica();
-  try{montarSelects();}catch(e){erro("montarSelects: "+e.message);}
-  try{ligar();}catch(e){erro("ligar: "+e.message);}
-  try{db=await claude.use("db");}catch(e){db=null;}
-  if(!db&&$("offline").hidden)$("offline").hidden=false;
+async function entrarBanco(){
+  var em=$("lg_email").value.trim(),se=$("lg_senha").value,bt=$("lg_entrar");
+  if(!em||!se){alertaLogin("Informe o e-mail e a senha.");return;}
+  if(!db){alertaLogin("Não consegui carregar o banco de dados. Confira a internet e recarregue a página.");return;}
+  bt.disabled=true;bt.textContent="Entrando…";$("lg_alerta").innerHTML="";
+  try{await db.auth.entrar(em,se);}
+  catch(e){
+    bt.disabled=false;bt.textContent="Entrar";
+    alertaLogin((e&&e.message)||"Não foi possível entrar.");$("lg_senha").value="";$("lg_senha").focus();return;
+  }
+  bt.textContent="Carregando o sistema…";
+  try{await entrarComPerfil();}finally{bt.disabled=false;bt.textContent="Entrar";}
+}
+async function entrarComPerfil(){
+  var p=null;
+  try{p=await db.perfil();}catch(e){alertaLogin("Não consegui ler o seu cadastro no banco: "+((e&&e.message)||e));$("login").hidden=false;return false;}
+  if(!p||p.ativo===false){
+    alertaLogin(p?"Seu usuário está desativado. Fale com o Administrador."
+      :"Seu login existe, mas ainda não foi liberado no sistema. Peça ao Administrador para criar o seu perfil.");
+    try{await db.auth.sair();}catch(e){}
+    $("login").hidden=false;return false;
+  }
+  perfilBanco=p;usuarioAtual=p.nome;
+  var escolhida=$("lg_loja").value;
+  lojaAtual=(p.funcao==="Administrador"&&escolhida)?escolhida:(p.loja||escolhida||"mf");
+  db.lojaPadrao=lojaAtual;
+  try{$("loja").value=lojaAtual;}catch(e){}
+  $("login").hidden=true;
+  try{await db.registrarAcesso();}catch(e){}
+  await continuarBoot();
+  /* quem opera é quem entrou: o seletor de operador do topo fica travado */
+  try{var su=$("usuario");su.value=usuarioAtual;su.disabled=true;}catch(e){}
+  try{aplicarPerfil();}catch(e){}
+  toast("Bem-vindo, "+String(p.nome).split(" ")[0]+". Dados gravados no banco.");
+  return true;
+}
+/* a equipe vem dos perfis do banco: função e situação de lá valem sobre o cadastro antigo */
+async function mesclarPerfisBanco(){
+  if(!db||!modoBanco()||typeof db.perfis!=="function")return;
+  var ps=[];
+  try{ps=await db.perfis(false);}catch(e){console.warn("perfis",e);return;}
+  ps.forEach(function(p){
+    var u=USUARIOS.filter(function(x){return x.nome===p.nome;})[0];
+    if(!u){u={nome:p.nome};USUARIOS.push(u);}
+    u.perfil=p.funcao;u.ativo=p.ativo!==false;if(p.loja)u.loja=p.loja;u.temLogin=true;
+  });
+}
+async function continuarBoot(){
   try{await carregar();}catch(e){erro("carregar: "+e.message);}
   /* estoque antigo guardado no produto vira movimento "Estoque inicial", uma vez só */
   try{await normalizarGruposProdutos();}catch(e){console.warn("grupos e subgrupos",e);}
@@ -22252,11 +22156,41 @@ function erro(msg){
   try{await migrarEstoqueInicial();}catch(e){console.warn("estoque inicial",e);}
   /* só agora as funções existem — é aqui que o menu ganha a forma final */
   try{sincronizarEquipe();aplicarPerfil();}catch(e){console.warn(e);}
-  try{montarLogin();estadoDemo();}catch(e){console.warn(e);}
+  if(modoBanco()){
+    try{$("dtGerar").hidden=true;$("dt_banco").hidden=false;estadoDemo();}catch(e){}
+  }else{
+    try{montarLogin();estadoDemo();}catch(e){console.warn(e);}
+  }
   try{opcoesProduto();renderFormas();render();}catch(e){erro("render: "+e.message);}
   try{ouvirPedidos();}catch(e){console.warn(e);}
   try{var nEq=await sincronizarEquipamentos();if(nEq){renderManut();console.log(nEq+" equipamento(s) criados de vendas antigas");}}catch(e){console.warn(e);}
   try{await limparFotosAntigas();}catch(e){console.warn(e);}
+}
+function erro(msg){
+  var b=$("offline");b.hidden=false;
+  b.textContent="Algo falhou ao carregar: "+msg+" — o menu continua funcionando.";
+}
+(async function(){
+  navegacaoBasica();
+  try{montarSelects();}catch(e){erro("montarSelects: "+e.message);}
+  try{ligar();}catch(e){erro("ligar: "+e.message);}
+  /* banco de dados real (v133): nada carrega antes do login — as tabelas só respondem a quem entrou */
+  if(modoBanco()){
+    $("offline").hidden=true;
+    prepararLoginBanco();
+    $("login").hidden=false;
+    if(!bancoCarregado()){alertaLogin("Não consegui carregar o banco de dados (sem internet?). Recarregue a página.");return;}
+    try{db=window.criarDbSupabase(SUPABASE_URL,SUPABASE_CHAVE,{aoEstado:estadoBanco});}
+    catch(e){alertaLogin("Banco de dados: "+e.message);return;}
+    var sessao=null;
+    try{sessao=await db.auth.sessao();}catch(e){}
+    if(sessao)await entrarComPerfil();
+    else{try{$("lg_email").focus();}catch(e){}}
+    return;
+  }
+  try{db=await claude.use("db");}catch(e){db=null;}
+  if(!db&&$("offline").hidden)$("offline").hidden=false;
+  await continuarBoot();
 })();
 })();
 </script>
