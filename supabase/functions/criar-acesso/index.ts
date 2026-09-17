@@ -1,4 +1,4 @@
-// Edge Function "criar-acesso" — Sistema Minas Filtros (v138, 17/09)
+// Edge Function "criar-acesso" — Sistema Minas Filtros (v140, 17/09)
 //
 // PARA QUE SERVE
 //   O Administrador cadastra o colaborador e a SENHA de acesso pela própria tela
@@ -11,8 +11,9 @@
 //   Edge Functions › Deploy a new function › Via Editor
 //   Nome: criar-acesso        (exatamente assim)
 //   Cole este arquivo inteiro e clique em Deploy.
-//   Em "Function Configuration", deixe "Verify JWT" LIGADO ou desligado: a
-//   função confere o usuário por conta própria.
+//   Em Settings, DESLIGUE "Verify JWT with legacy secret": a função confere o
+//   usuário por conta própria, e o token novo do Supabase não é assinado pela
+//   chave legada.
 //
 // O QUE ELA FAZ
 //   1. lê o token de quem chamou (o login do sistema) e descobre o user_id;
@@ -47,8 +48,11 @@ Deno.serve(async (req) => {
 
   const URL_PROJ = Deno.env.get("SUPABASE_URL")!;
   const CHAVE_ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
-  const CHAVE_ADMIN = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  if (!URL_PROJ || !CHAVE_ADMIN) return resposta({ erro: "Função sem as variáveis do projeto." }, 500);
+  // projeto com as chaves novas pode não ter a service_role legada: aceita as duas
+  const CHAVE_ADMIN = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SECRET_KEY") || "";
+  if (!URL_PROJ || !CHAVE_ADMIN) {
+    return resposta({ erro: "A função está sem a chave de administrador do projeto (service_role/secret). Em Edge Functions › Secrets, crie SUPABASE_SECRET_KEY com a Secret key do projeto." }, 500);
+  }
 
   // ---- quem está chamando? ----
   const autorizacao = req.headers.get("Authorization") || "";
@@ -62,14 +66,25 @@ Deno.serve(async (req) => {
 
   const admin = createClient(URL_PROJ, CHAVE_ADMIN, { auth: { persistSession: false } });
 
-  const { data: perfilQuemChama } = await admin
+  // o próprio usuário lê o perfil dele (a RLS permite): assim um problema na chave de
+  // administrador não vira "você não é Administrador"
+  const { data: perfilQuemChama, error: erroPerfilQuemChama } = await comoUsuario
     .from("perfis")
     .select("nome, funcao, ativo")
     .eq("user_id", dadosUsuario.user.id)
     .maybeSingle();
 
-  if (!perfilQuemChama || perfilQuemChama.ativo === false || perfilQuemChama.funcao !== "Administrador") {
-    return resposta({ erro: "Só o Administrador cadastra acesso de colaborador." }, 403);
+  if (erroPerfilQuemChama) {
+    return resposta({ erro: "Não consegui ler o seu perfil no banco: " + erroPerfilQuemChama.message }, 500);
+  }
+  if (!perfilQuemChama) {
+    return resposta({ erro: "O seu login não tem perfil em public.perfis — rode o insert do primeiro Administrador." }, 403);
+  }
+  if (perfilQuemChama.ativo === false) {
+    return resposta({ erro: "O seu perfil está inativo." }, 403);
+  }
+  if (perfilQuemChama.funcao !== "Administrador") {
+    return resposta({ erro: 'Só o Administrador cadastra acesso: o seu perfil está como "' + perfilQuemChama.funcao + '".' }, 403);
   }
 
   // ---- o que foi pedido ----
@@ -92,7 +107,8 @@ Deno.serve(async (req) => {
   // ---- o e-mail já existe? ----
   let idUsuario = "";
   let criado = false;
-  const { data: lista } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 });
+  const { data: lista, error: erroLista } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 });
+  if (erroLista) return resposta({ erro: "A chave de administrador da função não está valendo: " + erroLista.message }, 500);
   const achado = (lista?.users || []).find((u) => String(u.email || "").toLowerCase() === email);
 
   if (achado) {
