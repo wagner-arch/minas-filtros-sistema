@@ -2491,7 +2491,6 @@ img{max-width:100%}
             <button type="button" data-t="meu" aria-current="true">Meu Estoque</button>
             <button type="button" data-t="receber">Requisições a Receber</button>
             <button type="button" data-t="devolver">Devoluções</button>
-            <button type="button" data-t="usados">Usados na troca</button>
             <button type="button" data-t="hist">Histórico de movimentações</button>
           </div>
           <input id="ecBusca" placeholder="Buscar produto">
@@ -4758,7 +4757,10 @@ var SEED_FORMAS=[
   {nome:"Locação",coef:seqUm(24)},
   /* direito não usado do plano virando abatimento: não deprecia e não gera título,
      porque o dinheiro entrou na venda do plano (regra do Wagner, 16/09) */
-  {nome:"Crédito Plano Premium Refil",coef:{1:1}}
+  {nome:"Crédito Plano Premium Refil",coef:{1:1}},
+  /* purificador usado dado pelo cliente como parte do pagamento: não gera título a receber e põe o usado
+     no estoque do vendedor (regra do Wagner, 16/09) */
+  {nome:"Desconto de Troca",coef:{1:1}}
 ];
 function formaPor(nome){return formasPgto.filter(function(f){return f.nome===nome;})[0]||formasPgto[0]||{nome:"",coef:{1:1}};}
 function coefDe(nome,n){var f=formaPor(nome);return f.coef[n]||null;}
@@ -5085,6 +5087,9 @@ var SEED=[
  {cod:"PLANO-PII",nome:"PLANO PREMIUM II",pop:"Plano Premium II",marca:"Minas Filtros",grupo:"Planos",un:"UN",cheia:250.00,campanha:230.00,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:12,serie:"nao",estoque:0,contrato:"(PREMIUM II)",vigencia:12,garantia:"Premium II",grupos:["Purificadores"],contratoTexto:CONTRATO_PREMIUM_II},
  /* serviço cobrado na OS externa quando o cliente não aprova o conserto (regra do Wagner, 14/09) — valor ajustável em Produtos */
  {cod:"SRV-ATEND",nome:"Serviço de atendimento técnico",pop:"Serviço de atendimento",marca:"Minas Filtros",grupo:"Serviços",un:"UN",cheia:100.00,campanha:100.00,minimo:100.00,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
+ /* purificador usado que o cliente dá na troca: entra no estoque do vendedor pela forma "Desconto de Troca" e
+    ele devolve ao almoxarifado no dia seguinte (regra do Wagner, 16/09) — não aparece na venda */
+ {cod:"USADO-TROCA",nome:"Purificador Usado Pego na Troca",pop:"Purificador usado da troca",marca:"Diversas",grupo:"Usados na troca",subgrupo:"Purificador usado",un:"UN",cheia:0,campanha:0,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
  {cod:"PMF103",nome:"Purificador Top Life - Plano Premium",pop:"Purificador Top Life",marca:"Minas Filtros",grupo:"Planos",un:"UN",cheia:0.00,campanha:0.00,minimo:0.00,campativa:"nao",custo:0.00,pontos:20,manut:0,gar:12,serie:"nao",estoque:0},
  {cod:"PMF000",nome:"Purificador Top Life Heoxi Seminovo Inst",pop:"Purificador Top Life",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1600.00,campanha:1520.00,minimo:1408.00,campativa:"nao",custo:768.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
  {cod:"PMF000-2",nome:"Purificador Top Life Heoxi Seminovo Inst- Combo",pop:"Purificador Top Life",marca:"Top Life",grupo:"Purificadores",un:"UN",cheia:1900.00,campanha:1805.00,minimo:1672.00,campativa:"nao",custo:912.00,pontos:100,manut:180,gar:12,serie:"sim",estoque:0},
@@ -5133,6 +5138,8 @@ async function carregar(){
     if(antigo)antigo.nome=FORMA_CREDITO;
     if(!formasPgto.some(function(f){return f.nome===FORMA_CREDITO;})){
       formasPgto.push({nome:FORMA_CREDITO,coef:{1:1}});antigo=true;}
+    if(!formasPgto.some(function(f){return f.nome===FORMA_TROCA;})){
+      formasPgto.push({nome:FORMA_TROCA,coef:{1:1}});antigo=true;}
     if(antigo)await gravarFormas();
   }catch(e){console.warn("formas",e);}
   try{
@@ -5156,6 +5163,12 @@ async function carregar(){
     if(srvSeed&&!produtos.some(function(x){return x.cod==="SRV-ATEND";})){
       var nsv=JSON.parse(JSON.stringify(srvSeed));nsv.id="srv-atend";
       await col("produtos").doc(nsv.id).set(nsv);produtos.push(nsv);
+    }
+    /* purificador usado pego na troca: garante na base já gravada */
+    var usdSeed=SEED.filter(function(x){return x.cod==="USADO-TROCA";})[0];
+    if(usdSeed&&!produtos.some(function(x){return x.cod==="USADO-TROCA";})){
+      var nus=JSON.parse(JSON.stringify(usdSeed));nus.id="usado-troca";
+      await col("produtos").doc(nus.id).set(nus);produtos.push(nus);
     }
     /* planos gravados antes do cadastro de planos: completa o nome na venda e o contrato pelo modelo */
     for(var bp=0;bp<produtos.length;bp++){
@@ -5800,7 +5813,7 @@ function notaCampanha(){
 function opcoesProduto(){
   var s=$("v_prod"),atual=s.value;s.innerHTML="";
   /* plano não é escolhido como produto: entra sozinho pela garantia do item */
-  var ativos=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos";});
+  var ativos=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos"&&p.cod!=="USADO-TROCA";});
   ativos.forEach(function(p){var o=document.createElement("option");o.value=p.id;o.textContent=p.cod+" · "+p.nome+"   "+BRL(p.cheia);s.appendChild(o);});
   if(!ativos.length){var o=document.createElement("option");o.textContent="— nenhum produto ativo —";s.appendChild(o);}
   if(atual&&ativos.some(function(p){return p.id===atual;}))s.value=atual;
@@ -6014,7 +6027,48 @@ function addItem(){
    realmente o cliente tem o plano premium". O direito não usado (o refil, por
    exemplo) vira crédito na venda do purificador novo: o purificador sai pelo
    preço de tabela, a comissão não cai e o direito é baixado no plano. */
-var FORMA_CREDITO="Crédito Plano Premium Refil";
+var FORMA_CREDITO="Crédito Plano Premium Refil",FORMA_TROCA="Desconto de Troca";
+/* ---------- troca de purificador pela forma de pagamento (regra do Wagner, 16/09; substitui a pergunta da v117) ----------
+   Venda com "Desconto de Troca" → nasce a requisição origem "troca" do produto USADO-TROCA para o vendedor, que
+   confirma "recebi na troca" (entra no estoque dele, vindo de "troca"). No dia seguinte ele devolve ao almoxarifado
+   (Meu Estoque › Devolver → estoquista recebe de volta). Com usado de ontem ou antes em poder dele, a reposição trava. */
+function produtoUsadoTroca(){
+  return produtos.filter(function(p){return p.cod==="USADO-TROCA";})[0]||null;
+}
+function usadoTrocaDoColab(quem){
+  var pu=produtoUsadoTroca(),loc=locColab(quem);
+  if(!pu)return {saldo:0,desde:"",atrasado:false};
+  var ent=[],sai=0;
+  movEst.forEach(function(m){
+    if(m.loja!==lojaAtual||m.produtoId!==pu.id)return;
+    if(m.destino===loc)for(var k=0;k<(+m.qtd||0);k++)ent.push(m.data||"");
+    if(m.origem===loc)sai+=(+m.qtd||0);
+  });
+  ent.sort();
+  var pend=ent.slice(sai),h=hojeISO();
+  return {saldo:pend.length,desde:pend[0]||"",atrasado:!!(pend.length&&pend[0]<h)};
+}
+async function registrarTrocaDaVenda(ped){
+  if(!ped||!ped.troca||!ped.troca.tem)return null;
+  var pu=produtoUsadoTroca();if(!pu)return null;
+  var quem=ped.vendedor||usuarioAtual;
+  var r={id:uid(),loja:ped.loja,tipo:"requisicao",origem:"troca",colaborador:quem,data:hojeISO(),
+    itens:[{pid:pu.id,nome:pu.nome,cod:pu.cod,qtd:1,atendida:1}],
+    obs:"Pego na troca · Pedido "+ped.numero+" · "+BRL(ped.troca.valor)+" de desconto de troca",
+    status:"separada",separadaPor:"troca na venda",separadaEm:hojeISO(),
+    pedidoId:ped.id,pedidoNumero:ped.numero,cliente:ped.cliente,criadoPor:usuarioAtual,criadoEm:hojeISO()};
+  requisicoes.push(r);await grava("requisicoes",r);
+  ped.troca.requisicaoId=r.id;
+  return r;
+}
+/* depois da venda: abre o estoque do vendedor já perguntando se recebeu o usado */
+function abrirRecebimentoTroca(r){
+  if(!r)return;
+  ir("estColab");
+  var ab=$("ecAbas")&&$("ecAbas").querySelector('[data-t="receber"]');if(ab)ab.click();
+  try{if(!$("ecQuem").disabled){$("ecQuem").value=r.colaborador;renderEstColab();}}catch(e){}
+  abrirReposicaoItem(r.id,0);
+}
 function valorDoDireito(d){
   /* o direito aponta produtos cadastrados; vale o mais caro deles pelo preço de tabela */
   var ids=(d&&d.produtos)||[];
@@ -6429,9 +6483,10 @@ async function salvarPedido(){
     if(credV>limite+0.001){
       toast("O crédito do plano é de no máximo "+BRL(limite)+" para "+cliSel.nome+".");irEtapa(3);return;}
   }
-  /* regra do Wagner (16/09): venda de purificador só fecha depois de responder
-     se entrou usado na troca e se o vendedor aceita o usado no estoque dele */
-  if(!trocaResp&&vendaTemPurificador(itens)){abrirTroca(salvarPedido);return;}
+  /* troca (regra do Wagner, 16/09): não há mais pergunta — a forma "Desconto de Troca" é que diz que o cliente
+     deu um purificador usado; o usado vai para o estoque do vendedor depois que ele confirmar o recebimento */
+  var trocaV=formas.filter(function(f){return f.tipo===FORMA_TROCA;}).reduce(function(a,f){return a+(+f.valor||0);},0);
+  trocaResp=trocaV>0?{tem:true,viaForma:true,valor:Math.round(trocaV*100)/100,serie:"",quando:hojeISO()+" "+agoraHM(),por:usuarioAtual}:null;
   var cli=cliSel;
   var arquivos=ANEXOS.filter(function(a){return a.dados;}).map(function(a){return a.dados;});
   var anexados=arquivos.map(function(a){return a.nome;});
@@ -6477,9 +6532,9 @@ async function salvarPedido(){
     try{avisarPosseVeiculo();}catch(e){}},1800);
   pedidos.push(ped);
   if(db){try{await col("pedidos").doc(ped.id).set(ped);}catch(e){console.warn(e);}}
-  /* purificador usado da troca: passa a responder pelo aparelho quem vendeu */
-  var usadoNovo=null;
-  try{usadoNovo=await registrarUsadoDaVenda(ped);}catch(eU){console.warn(eU);}
+  /* purificador usado da troca: requisição para o vendedor confirmar que recebeu (entra no estoque dele) */
+  var reqTroca=null;
+  try{reqTroca=await registrarTrocaDaVenda(ped);if(reqTroca&&db)await col("pedidos").doc(ped.id).set(ped);}catch(eU){console.warn(eU);}
   trocaResp=null;
   if(osDoPed){
     osDoPed.pedidoId=ped.id;osDoPed.itensOS=JSON.parse(JSON.stringify(ped.itens));osDoPed.formasOS=JSON.parse(JSON.stringify(ped.formas));
@@ -6592,6 +6647,13 @@ async function salvarPedido(){
         toast("Pedido "+ped.numero+" lançado. "+(msgOSFim?msgOSFim+" ":"")+"Agora finalize a atividade de contato: escreva o que foi resolvido com o cliente.");},450);};
   }else if(osDoPed&&msgOSFim){
     setTimeout(function(){toast(msgOSFim);},2600);
+  }
+  /* venda com Desconto de Troca: fechada a janela do envio, abre o estoque do vendedor para confirmar o usado */
+  if(reqTroca){
+    var antesTroca=vendaOkDepois;
+    vendaOkDepois=function(){
+      if(antesTroca)antesTroca();
+      setTimeout(function(){abrirRecebimentoTroca(reqTroca);},antesTroca?900:300);};
   }
   /* finalizou a venda: janela com "Enviar Pedido Venda para cliente via WhatsApp" */
   abrirVendaOk(ped);
@@ -6900,6 +6962,7 @@ function nomeLocal(l){
   if(l&&l.indexOf("colab:")===0)return l.slice(6);
   if(l&&l.indexOf("loja:")===0)return "Loja "+nomeLojaId(l.slice(5));
   if(l==="venda")return "Venda ao cliente";
+  if(l==="troca")return "Troca com o cliente";
   if(l==="fornecedor")return "Fornecedor";
   if(l==="ajuste")return "Ajuste";
   return l||"—";
@@ -7077,6 +7140,8 @@ function colabsComEstoque(){
   EQUIPE.forEach(function(n){if(m[n]===undefined&&["Vendedor","Instalador","Prospector"].indexOf(perfilDe(n))>=0)m[n]=1;});
   /* quem está com purificador usado da troca responde por ele mesmo sem ter estoque */
   usados.forEach(function(u){if(u.loja===lojaAtual&&u.vendedor&&u.status!=="no_almoxarifado")m[u.vendedor]=1;});
+  /* quem vendeu com Desconto de Troca precisa confirmar o usado mesmo sem ter estoque ainda */
+  requisicoes.forEach(function(r){if(r.loja===lojaAtual&&r.origem==="troca"&&r.status!=="concluida"&&r.colaborador)m[r.colaborador]=1;});
   return Object.keys(m).sort(function(a,b){return a.localeCompare(b,"pt-BR");});
 }
 async function lancarMov(pid,qtd,origem,destino,doc,obs,data,centroId){
@@ -7946,7 +8011,7 @@ function renderEstEmpresa(){
         :'<span class="pill p-ok">concluída</span>';
       b.innerHTML+="<tr><td>"+esc(r.data)+"</td>"+
         "<td>"+(r.tipo==="retirada"?'<span class="pill p-crit">Retirada p/ venda</span><div class="t-sub">'+esc(origemRetiradaNome(r))+"</div>"
-          :r.tipo==="requisicao"?'<span class="pill p-acc">Requisição</span>'
+          :r.tipo==="requisicao"?(r.origem==="troca"?'<span class="pill p-warn">Pego na troca</span><div class="t-sub">purificador usado do cliente</div>':'<span class="pill p-acc">Requisição</span>')
           :r.tipo==="usado"?'<span class="pill p-warn">Usado da troca</span><div class="t-sub">sai da responsabilidade do vendedor</div>'
           :'<span class="pill p-warn">Devolução</span>')+"</td>"+
         "<td>"+esc(r.colaborador)+"</td>"+
@@ -8038,24 +8103,34 @@ function abrirReposicaoItem(rid,idx){
   var ped=r.pedidoId?pedidos.filter(function(p){return p.id===r.pedidoId;})[0]:null;
   var cli=(ped&&ped.cliente)||r.cliente||"";
   $("rp_sub").textContent=(r.colaborador||"")+" · "+(r.obs||"Requisição");
-  $("rp_perg").textContent="Você recebeu "+(alvo.length>1?"estes produtos":"este produto")+" do almoxarifado? Pode adicionar no seu estoque?";
+  var ehTroca=r.origem==="troca";
+  $("rp_perg").textContent=ehTroca
+    ? "Você recebeu do cliente o purificador usado na troca? Pode acrescentar no seu estoque?"
+    : "Você recebeu "+(alvo.length>1?"estes produtos":"este produto")+" do almoxarifado? Pode adicionar no seu estoque?";
   $("rp_det").innerHTML=alvo.map(function(i){var it=r.itens[i];return "<b>"+(it.atendida||it.qtd)+"× "+esc(it.nome)+"</b>";}).join("<br>")+
     (cli?"<br>Cliente: <b>"+esc(cli)+"</b>"+(ped?" · pedido "+esc(ped.numero):""):"")+
-    (r.status==="pendente"?'<br><span class="t-sub">O almoxarifado ainda não marcou esta reposição como separada.</span>':"");
+    (ehTroca?'<br><span class="t-sub">Ele fica sob sua responsabilidade: no dia seguinte, devolva ao almoxarifado (Meu Estoque › Devolver).</span>':"")+
+    (!ehTroca&&r.status==="pendente"?'<br><span class="t-sub">O almoxarifado ainda não marcou esta reposição como separada.</span>':"");
+  $("rp_sim").textContent=ehTroca?"Sim, recebi na troca — acrescentar ao meu estoque":"Sim, recebi — adicionar ao meu estoque";
   $("repModal").hidden=false;
 }
 async function confirmarReposicaoItens(){
   var x=repPend;if(!x)return;
   var r=x.r,nomes=[];
-  /* regra do Wagner (16/09): para repor o estoque, antes devolve o usado ao almoxarifado */
-  if(r.tipo==="requisicao"&&usadosPendentes(r.colaborador).length){
-    $("repModal").hidden=true;
-    abrirUsados(r.colaborador,true);
+  /* regra do Wagner (16/09): o usado pego na troca volta ao almoxarifado no dia seguinte — com usado de ontem ou
+     antes em poder do colaborador, a reposição fica travada até ele devolver */
+  var ehTrocaR=r.origem==="troca";
+  var ut=usadoTrocaDoColab(r.colaborador);
+  if(r.tipo==="requisicao"&&!ehTrocaR&&ut.atrasado){
+    $("repModal").hidden=true;repPend=null;
+    toast("Antes de receber a reposição, devolva ao almoxarifado o purificador usado pego na troca em "+dataCurta(ut.desde)+
+      " (Meu Estoque › Devolver).");
     return;
   }
   for(var k=0;k<x.idx.length;k++){
     var it=r.itens[x.idx[k]];if(!it||it.recebido)continue;
-    await lancarMov(it.pid,it.atendida||it.qtd,LOC_EMPRESA,locColab(r.colaborador),"Requisição",r.obs,hojeISO(),"");
+    await lancarMov(it.pid,it.atendida||it.qtd,ehTrocaR?"troca":LOC_EMPRESA,locColab(r.colaborador),
+      ehTrocaR?"Pego na troca":"Requisição",r.obs,hojeISO(),"");
     it.recebido=true;it.recebidoEm=hojeISO();it.recebidoPor=usuarioAtual;
     nomes.push((it.atendida||it.qtd)+"× "+it.nome);
   }
@@ -8065,7 +8140,9 @@ async function confirmarReposicaoItens(){
   }
   await grava("requisicoes",r);
   $("repModal").hidden=true;repPend=null;
-  toast((nomes.join(", ")||"Produto")+" no estoque de "+r.colaborador+".");
+  toast(ehTrocaR
+    ? "Purificador usado da troca no estoque de "+r.colaborador+". Devolva ao almoxarifado amanhã (Meu Estoque › Devolver)."
+    : (nomes.join(", ")||"Produto")+" no estoque de "+r.colaborador+".");
   renderEstEmpresa();renderEstColab();renderProdutos();
 }
 
@@ -8101,8 +8178,10 @@ function renderEstColab(){
       (receber.length?"var(--warn)":"inherit")+'">'+receber.length+"</div></div>"+
     '<div class="kpi"><div class="l">Devoluções em aberto</div><div class="v">'+
       devol.filter(function(r){return r.status==="pendente";}).length+"</div></div>"+
-    '<div class="kpi"><div class="l">Usados em seu poder</div><div class="v" style="color:'+
-      (usadosPendentes(quem).length?"var(--warn)":"inherit")+'">'+usadosPendentes(quem).length+"</div></div>";
+    (function(){var ut=usadoTrocaDoColab(quem);
+      return '<div class="kpi"><div class="l">Usados da troca em seu poder</div><div class="v" style="color:'+
+        (ut.atrasado?"var(--crit)":(ut.saldo?"var(--warn)":"inherit"))+'">'+ut.saldo+"</div>"+
+        (ut.saldo?'<div class="l" style="margin-top:4px">'+(ut.atrasado?"devolver hoje · desde "+dataCurta(ut.desde):"devolver amanhã")+"</div>":"")+"</div>";})();
 
   var h=$("ecHead"),b=$("ecBody");b.innerHTML="";
   if(ecAba==="meu"){
@@ -8113,7 +8192,9 @@ function renderEstColab(){
     if(!l1.length){b.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Estoque vazio</div>Use <b>Requisitar produto</b> para pedir ao almoxarifado.</div></td></tr>';return;}
     l1.forEach(function(p){
       var s=saldoEm(p.id,loc),rs=reserv[p.id]||0,dp=s-rs;
-      b.innerHTML+='<tr><td><div class="t-main">'+esc(p.nome)+'</div><div class="t-sub"><code>'+esc(p.cod)+"</code></div></td>"+
+      var utRow=(p.cod==="USADO-TROCA"&&s>0)?usadoTrocaDoColab(quem):null;
+      b.innerHTML+='<tr><td><div class="t-main">'+esc(p.nome)+'</div><div class="t-sub"><code>'+esc(p.cod)+"</code>"+
+        (utRow?' <span class="pill '+(utRow.atrasado?"p-crit":"p-warn")+'">'+(utRow.atrasado?"atrasado: devolver hoje":"devolver ao almoxarifado amanhã")+"</span>":"")+"</div></td>"+
         '<td class="num"><b>'+s+'</b></td><td class="num">'+(rs||"—")+"</td>"+
         '<td class="num"><span class="pill '+(dp<0?"p-crit":(dp>0?"p-ok":"p-mut"))+'">'+dp+"</span></td>"+
         '<td class="num">'+estEmpresaDe(p)+"</td>"+
@@ -8167,7 +8248,8 @@ function renderEstColab(){
             ? '<div class="t-sub" style="margin:0 0 6px">✔ '+(i.atendida||i.qtd)+"× "+esc(i.nome)+" · recebido</div>"
             : '<button type="button" class="btn sm ghost rep-item" data-rq="'+r.id+'" data-ri="'+ix+'">'+(i.atendida||i.qtd)+"× "+esc(i.nome)+"</button>";
         }).join("")+"</td>"+
-        "<td>"+(r.status==="pendente"?'<span class="pill p-warn">aguardando entrega do almoxarifado</span>':
+        "<td>"+(r.origem==="troca"?'<span class="pill p-warn">pego na troca — confirme que recebeu</span>':
+          r.status==="pendente"?'<span class="pill p-warn">aguardando entrega do almoxarifado</span>':
           '<span class="pill p-acc">separada por '+esc(r.separadaPor||"—")+"</span>")+"</td>"+
         '<td class="num">'+(faltam>1?'<button class="btn sm" type="button" data-ecr="'+r.id+'">Aceitar tudo</button>':"")+"</td></tr>";
     });
@@ -9010,6 +9092,7 @@ async function gerarReceberDoPedido(p){
   (p.formas||[]).forEach(function(f){
     var v=+f.valor||0;if(v<=0)return;
     if(f.tipo===FORMA_CREDITO)return;   /* já tratado acima: não gera parcela a receber */
+    if(f.tipo===FORMA_TROCA)return;     /* o cliente pagou com o purificador usado: não há dinheiro a receber */
     var n=f.parc||1,parcela=Math.round(v/n*100)/100;
     for(var i=1;i<=n;i++){
       var t={id:uid(),loja:p.loja,especie:"receber",origem:"pedido",
@@ -11942,21 +12025,19 @@ async function gerarDemo(){
     log.push("entrega assinada, vistoria do mês com avaria e multa descontada na folha do Guilherme");
     var nv=await lancarVagasDoMes();
     if(nv)log.push("vaga de estacionamento do mês lançada em Contas a Pagar");
-    /* purificador usado que entrou na troca e ainda está com a vendedora */
+    /* purificador usado pego na troca ontem e ainda com a vendedora (fluxo do Desconto de Troca) */
     var pedTroca=pedidos.filter(function(p){return p.demo&&p.vendedor==="Carol";})[0]||pedidos.filter(function(p){return p.demo;})[0];
-    if(pedTroca){
-      var uu={id:uid(),demo:true,loja:L,pedidoId:pedTroca.id,pedidoNumero:pedTroca.numero,
-        clienteId:pedTroca.clienteId,cliente:pedTroca.cliente,vendedor:pedTroca.vendedor||"Carol",
-        marca:"Latina",modelo:"PA355 Bebedouro",serie:"LT-99214",situacao:"funcionando_ressalva",
-        obs:"Carcaça riscada, torneira frouxa, filtro vencido",data:pedTroca.data,
-        status:"com_vendedor",destino:"",criadoEm:pedTroca.data,criadoPor:"Carol"};
-      usados.push(uu);await grava("usados",uu);
-      if(!pedTroca.troca){
-        pedTroca.troca={tem:true,marca:uu.marca,modelo:uu.modelo,serie:uu.serie,situacao:uu.situacao,
-          obs:uu.obs,aceita:true,destino:"",quando:pedTroca.data+" 10:00",por:uu.vendedor};
-        await grava("pedidos",pedTroca);
-      }
-      log.push("purificador usado da troca em poder da "+uu.vendedor);
+    var puT=produtoUsadoTroca();
+    if(pedTroca&&puT){
+      var vdT=pedTroca.vendedor||"Carol",ontem=somaDias(hoje,-1);
+      var mT=await lancarMov(puT.id,1,"troca",locColab(vdT),"Pego na troca","Pego na troca · Pedido "+pedTroca.numero,ontem,"");
+      mT.demo=true;await grava("movest",mT);
+      var rqT={id:uid(),demo:true,loja:L,tipo:"requisicao",origem:"troca",colaborador:vdT,data:ontem,
+        itens:[{pid:puT.id,nome:puT.nome,cod:puT.cod,qtd:1,atendida:1,recebido:true,recebidoEm:ontem,recebidoPor:vdT}],
+        obs:"Pego na troca · Pedido "+pedTroca.numero,status:"concluida",separadaPor:"troca na venda",separadaEm:ontem,
+        recebidaPor:vdT,recebidaEm:ontem,pedidoId:pedTroca.id,pedidoNumero:pedTroca.numero,cliente:pedTroca.cliente,criadoPor:vdT,criadoEm:ontem};
+      requisicoes.push(rqT);await grava("requisicoes",rqT);
+      log.push("purificador usado pego na troca ontem, ainda no estoque da "+vdT+" (devolução atrasada)");
     }
   }catch(eV){console.warn("frota demo",eV);}
   /* nenhum lançamento de demonstração pode ficar sem centro de custo */
