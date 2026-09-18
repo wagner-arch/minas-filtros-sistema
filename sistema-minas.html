@@ -4373,7 +4373,10 @@ img{max-width:100%}
     <div class="actions">
       <button class="btn" type="button" id="ip_ok">Importar</button>
       <button class="btn mut" type="button" id="ip_fechar">Fechar</button>
+      <span class="sp" style="flex:1"></span>
+      <button class="btn mut" type="button" id="ip_apagar" hidden>Apagar os importados</button>
     </div>
+    <p class="help">Com <b>cabeçalho</b> na primeira linha o arquivo pode trazer também grupo, subgrupo, custo, tabela cheia, campanha, mínimo, pontos, garantia, manutenção e série — em qualquer ordem. Nomes aceitos: código, nome, barras, marca, quantidade, unidade, grupo, subgrupo, custo, cheia, campanha, mínimo, pontos, garantia, manutenção, série.</p>
   </div>
 </div>
 
@@ -6142,14 +6145,84 @@ function produtoIncompleto(p){
   return !!p.completar||p.grupo===GRUPO_COMPLETAR||!(+p.cheia>0);
 }
 var UNID_IMP=/^(UN|UND|UNID|PC|PÇ|CX|MT|M|KG|LT|PT|JG|CJ|RL)$/i;
+/* cabeçalho opcional: com ele o arquivo pode trazer grupo, preços, pontos, garantia e série
+   em qualquer ordem (regra do Wagner, 18/09: "vou subir com os preços também") */
+var COLS_IMP=[
+  ["cod",/^(cod|codigo|codmf|codigomf|produto|item)$/],
+  ["nome",/^(nome|descricao|produtonome|nomeproduto)$/],
+  ["barras",/^(barras|codbarras|codigodebarras|codigobarras|gtin|ean)$/],
+  ["marca",/^(marca|fabricante)$/],
+  ["qtd",/^(qtd|quantidade|estoque|saldo)$/],
+  ["un",/^(un|und|unid|unidade)$/],
+  ["grupo",/^(grupo|categoria|linha)$/],
+  ["subgrupo",/^(subgrupo|sub|subcategoria)$/],
+  ["custo",/^(custo|precocusto|valorcusto)$/],
+  ["frete",/^(frete)$/],
+  ["cheia",/^(cheia|tabelacheia|preco|precovenda|venda|valor|tabela|tabela100|cem|100)$/],
+  ["campanha",/^(campanha|tabelacampanha|tabela70|setenta|70|baixa)$/],
+  ["minimo",/^(minimo|precominimo|promocao|tabelaminima)$/],
+  ["pontos",/^(pontos|ponto)$/],
+  ["manut",/^(manut|manutencao|manutencaodias|dias)$/],
+  ["gar",/^(gar|garantia|garantiameses|meses)$/],
+  ["serie",/^(serie|numerodeserie|temserie)$/],
+  ["pop",/^(pop|apelido|nomepopular)$/]
+];
+function chaveCol(s){return semAcento(String(s||"")).toLowerCase().replace(/[^a-z0-9]/g,"");}
+function mapaCabecalhoImport(c){
+  var m={},achou=0;
+  c.forEach(function(t,i){
+    var k=chaveCol(t);if(!k)return;
+    for(var j=0;j<COLS_IMP.length;j++){
+      if(COLS_IMP[j][1].test(k)&&m[COLS_IMP[j][0]]==null){m[COLS_IMP[j][0]]=i;achou++;return;}
+    }
+  });
+  return (m.cod!=null&&m.nome!=null&&achou>=3)?m:null;
+}
+function numImp(s){
+  var t=String(s==null?"":s).replace(/[R$\s]/g,"");
+  if(!t)return 0;
+  if(/,\d{1,3}$/.test(t))t=t.replace(/\./g,"").replace(",",".");
+  else t=t.replace(/,/g,"");
+  return parseFloat(t)||0;
+}
+function partesLinhaImport(l){
+  var c=l.split(/\t|;/);
+  if(c.length<2)c=l.split("|");
+  return c.map(function(x){return String(x).replace(/\s+/g," ").trim();});
+}
 function linhasImportProduto(txt){
-  var itens=[],ruins=[];
-  String(txt||"").replace(/^﻿/,"").split(/\r?\n/).forEach(function(linha){
+  var itens=[],ruins=[],mapa=null;
+  var linhas=String(txt||"").replace(/^﻿/,"").split(/\r?\n/);
+  /* só a PRIMEIRA linha com conteúdo pode ser o cabeçalho */
+  for(var i=0;i<linhas.length;i++){
+    if(!linhas[i].trim())continue;
+    mapa=mapaCabecalhoImport(partesLinhaImport(linhas[i].trim()));
+    break;
+  }
+  linhas.forEach(function(linha,idx){
     var l=linha.trim();
     if(!l)return;
-    var c=l.split(/\t|;/);
-    if(c.length<2)c=l.split("|");
-    c=c.map(function(x){return String(x).replace(/\s+/g," ").trim();}).filter(function(x){return x!=="";});
+    var bruto=partesLinhaImport(l);
+    if(mapa){
+      if(mapaCabecalhoImport(bruto))return;                 /* pula a linha do cabeçalho */
+      var g=function(k){return mapa[k]==null?"":String(bruto[mapa[k]]==null?"":bruto[mapa[k]]).trim();};
+      var codH=g("cod"),nomeH=g("nome");
+      if(!codH&&!nomeH)return;
+      if(!nomeH){ruins.push(l);return;}
+      var unH=(g("un")||"UN").toUpperCase();
+      if(unH==="UND"||unH==="UNID")unH="UN";
+      if(unH==="M")unH="MT";
+      var brH=g("barras").replace(/\D/g,"");
+      itens.push({cod:codH,nome:nomeH,barras:(/^[0-9]{8,14}$/.test(brH)?brH:""),marca:g("marca"),
+        un:unH,qtd:Math.round(numImp(g("qtd"))),pop:g("pop"),
+        grupo:g("grupo"),subgrupo:g("subgrupo"),
+        custo:numImp(g("custo")),frete:numImp(g("frete")),
+        cheia:numImp(g("cheia")),campanha:numImp(g("campanha")),minimo:numImp(g("minimo")),
+        pontos:numImp(g("pontos")),manut:numImp(g("manut")),gar:numImp(g("gar")),
+        serie:(/^(s|sim|1|x|true)$/i.test(g("serie"))?"sim":"nao")});
+      return;
+    }
+    var c=bruto.filter(function(x){return x!=="";});
     if(c.length<2)return;
     var cod=c[0],nome=c[1];
     if(!/\d/.test(cod)||/^(produto|c[óo]digo|cod)$/i.test(cod))return;   /* cabeçalho */
@@ -6163,11 +6236,67 @@ function linhasImportProduto(txt){
     }
     if(un==="UND"||un==="UNID")un="UN";
     if(un==="M")un="MT";
-    var q=parseFloat(String(est).replace(/\./g,"").replace(",","."))||0;
     if(!nome){ruins.push(l);return;}
-    itens.push({cod:cod,nome:nome,barras:barras,marca:marca,un:un||"UN",qtd:Math.round(q)});
+    itens.push({cod:cod,nome:nome,barras:barras,marca:marca,un:un||"UN",qtd:Math.round(numImp(est))});
   });
-  return {itens:itens,ruins:ruins};
+  return {itens:itens,ruins:ruins,cabecalho:!!mapa};
+}
+/* ---------- apagar em massa o que foi importado (pedido dele, 18/09: "cadastrei os produtos e
+     gostaria de apagá-los em massa porque vou subir com os preços também") ---------- */
+function produtosImportados(){
+  return produtos.filter(function(p){return p.importado;});
+}
+/* produto que já foi usado em venda, orçamento, OS ou em qualquer movimento que não seja o da
+   própria importação NÃO é apagado — apagar deixaria o histórico apontando para o vazio */
+function usoDoProduto(pid){
+  var usos=0;
+  pedidos.forEach(function(p){(p.itens||[]).forEach(function(i){if(i.pid===pid)usos++;});});
+  orcamentos.forEach(function(o){(o.itens||[]).forEach(function(i){if(i.pid===pid)usos++;});});
+  ordens.forEach(function(o){((o.itensOS||[]).concat(o.pecas||[])).forEach(function(i){if(i&&i.pid===pid)usos++;});});
+  movEst.forEach(function(m){if(m.produtoId===pid&&m.doc!==DOC_IMPORT)usos++;});
+  return usos;
+}
+var DOC_IMPORT="Importação da lista";
+async function apagarProdutosImportados(){
+  var lista=produtosImportados();
+  if(!lista.length){$("ip_alerta").innerHTML='<div class="note"><b>Não há produto importado para apagar.</b></div>';return;}
+  var podem=[],presos=[];
+  lista.forEach(function(p){(usoDoProduto(p.id)?presos:podem).push(p);});
+  if(!podem.length){
+    $("ip_alerta").innerHTML='<div class="note crit"><b>Nenhum pode ser apagado:</b> os '+presos.length+
+      " produto(s) importado(s) já foram usados em venda, orçamento, OS ou movimento de estoque.</div>";return;}
+  if(!confirm("Apagar "+podem.length+" produto(s) importado(s) e o estoque que entrou com eles?\n\n"+
+    (presos.length?presos.length+" ficam, porque já foram usados em venda, orçamento, OS ou movimento.\n\n":"")+
+    "Isto não tem volta."))return;
+  var bt=$("ip_apagar");bt.disabled=true;$("ip_ok").disabled=true;$("ip_fechar").disabled=true;
+  var apagados=0,movs=0;
+  for(var i=0;i<podem.length;i++){
+    var p=podem[i];
+    try{
+      /* primeiro o movimento de estoque da importação, senão sobra saldo de produto que não existe */
+      var meus=movEst.filter(function(m){return m.produtoId===p.id&&m.doc===DOC_IMPORT;});
+      for(var j=0;j<meus.length;j++){
+        await apaga("movest",meus[j].id);
+        movEst.splice(movEst.indexOf(meus[j]),1);movs++;
+      }
+      await apaga("produtos",p.id);
+      produtos.splice(produtos.indexOf(p),1);apagados++;
+    }catch(e){console.warn("apagar",p.cod,e);}
+    if(i%10===0||i===podem.length-1)
+      $("ip_alerta").innerHTML='<div class="note"><b>Apagando '+(i+1)+" de "+podem.length+"…</b> deixe esta janela aberta até terminar.</div>";
+  }
+  bt.disabled=false;$("ip_ok").disabled=false;$("ip_fechar").disabled=false;
+  $("ip_alerta").innerHTML='<div class="note ok"><b>'+apagados+" produto(s) apagado(s)</b> e "+movs+" movimento(s) de estoque da importação."+
+    (presos.length?" <b>"+presos.length+"</b> ficaram porque já foram usados em venda, orçamento, OS ou movimento.":"")+
+    " Pode subir a lista de novo, agora com os preços.</div>";
+  opcoesProduto();renderProdutos();atualizarBotaoApagarImport();
+  toast(apagados+" produto(s) importado(s) apagado(s).");
+}
+function atualizarBotaoApagarImport(){
+  var bt=$("ip_apagar");if(!bt)return;
+  var n=produtosImportados().length;
+  bt.hidden=!n;
+  bt.textContent="Apagar os "+n+" produto(s) importado(s)";
 }
 var impLidos=null;
 function previaImport(){
@@ -6182,19 +6311,27 @@ function previaImport(){
   impLidos.novos=novos;impLidos.jaTem=jaTem;
   if(!r.itens.length){$("ip_previa").innerHTML=$("ip_texto").value.trim()
     ?'<div class="note crit"><b>Não reconheci nenhuma linha.</b> Cada linha precisa começar pelo código do produto.</div>':"";return;}
+  var comPreco=r.itens.some(function(i){return +i.cheia>0;});
+  var semPreco=novos.filter(function(i){return !(+i.cheia>0);}).length;
   var amostra=novos.slice(0,6).map(function(i){
     return "<tr><td>"+esc(i.cod)+"</td><td>"+esc(i.nome)+"</td><td>"+esc(i.barras||"—")+"</td><td>"+esc(i.marca||"—")+
-      '</td><td class="num">'+i.qtd+"</td><td>"+esc(i.un)+"</td></tr>";}).join("");
-  $("ip_previa").innerHTML='<div class="note'+(novos.length?" ok":" warn")+'"><b>'+r.itens.length+" linha(s) lida(s)</b> · <b>"+
+      '</td><td class="num">'+i.qtd+"</td><td>"+esc(i.un)+"</td>"+
+      (comPreco?"<td>"+esc(i.grupo||GRUPO_COMPLETAR)+'</td><td class="num">'+(+i.cheia>0?BRL(i.cheia):"—")+
+        '</td><td class="num">'+(+i.campanha>0?BRL(i.campanha):"—")+"</td>":"")+"</tr>";}).join("");
+  $("ip_previa").innerHTML='<div class="note'+(novos.length?" ok":" warn")+'"><b>'+r.itens.length+" linha(s) lida(s)</b>"+
+    (r.cabecalho?" pelo cabeçalho do arquivo":"")+" · <b>"+
     novos.length+"</b> produto(s) novo(s)"+(jaTem.length?" · "+jaTem.length+" já cadastrado(s), que serão pulados":"")+
     (repete.length?" · "+repete.length+" código(s) repetido(s) no arquivo":"")+
-    (r.ruins.length?" · "+r.ruins.length+" linha(s) sem nome":"")+"</div>"+
-    (novos.length?'<div class="tw"><table><thead><tr><th>Código</th><th>Nome</th><th>Barras</th><th>Marca</th><th class="num">Qtd</th><th>Un.</th></tr></thead><tbody>'+
+    (r.ruins.length?" · "+r.ruins.length+" linha(s) sem nome":"")+
+    (comPreco&&semPreco?" · "+semPreco+" sem preço, que ficam como <b>completar cadastro</b>":"")+"</div>"+
+    (novos.length?'<div class="tw"><table><thead><tr><th>Código</th><th>Nome</th><th>Barras</th><th>Marca</th><th class="num">Qtd</th><th>Un.</th>'+
+      (comPreco?'<th>Grupo</th><th class="num">100%</th><th class="num">70%</th>':"")+"</tr></thead><tbody>"+
       amostra+"</tbody></table></div>"+(novos.length>6?'<p class="help">… e mais '+(novos.length-6)+" produto(s).</p>":""):"");
 }
 function abrirImportProdutos(){
   $("ip_texto").value="";$("ip_arqNome").textContent="";$("ip_previa").innerHTML="";$("ip_alerta").innerHTML="";
   $("ip_estoque").checked=true;impLidos=null;
+  atualizarBotaoApagarImport();
   $("impModal").hidden=false;
 }
 async function importarProdutos(){
@@ -6207,25 +6344,33 @@ async function importarProdutos(){
   for(var i=0;i<novos.length;i++){
     var n=novos[i];
     try{
-      var p={id:uid(),cod:n.cod,nome:n.nome,pop:"",marca:n.marca,grupo:GRUPO_COMPLETAR,subgrupo:GRUPO_COMPLETAR,
-        un:n.un,barras:n.barras,cheia:0,campanha:0,minimo:0,campativa:"nao",
-        custo:0,frete:0,ipi:0,st:0,federais:0,icms:0,pontos:0,manut:0,gar:0,
-        serie:"nao",status:"ativo",estmin:{},local:{},estoqueMigrado:true,
-        importado:true,completar:true,criadoEm:hojeISO(),criadoPor:usuarioAtual};
+      var grupo=(n.grupo||"").trim()||GRUPO_COMPLETAR;
+      var p={id:uid(),cod:n.cod,nome:n.nome,pop:n.pop||"",marca:n.marca,
+        grupo:grupo,subgrupo:(n.subgrupo||"").trim()||GRUPO_COMPLETAR,
+        un:n.un,barras:n.barras,
+        cheia:+n.cheia||0,campanha:+n.campanha||0,minimo:+n.minimo||0,campativa:"nao",
+        custo:+n.custo||0,frete:+n.frete||0,ipi:0,st:0,federais:0,icms:0,
+        pontos:+n.pontos||0,manut:+n.manut||0,gar:+n.gar||0,
+        serie:(n.serie==="sim"?"sim":"nao"),status:"ativo",estmin:{},local:{},estoqueMigrado:true,
+        importado:true,criadoEm:hojeISO(),criadoPor:usuarioAtual};
+      p.completar=(grupo===GRUPO_COMPLETAR||!(+p.cheia>0));
       produtos.push(p);
       if(db)await col("produtos").doc(p.id).set(p);
-      if(comEst&&n.qtd>0)await lancarMov(p.id,n.qtd,"ajuste",LOC_EMPRESA,"Importação da lista","Quantidade da lista importada",hojeISO(),"");
+      if(comEst&&n.qtd>0)await lancarMov(p.id,n.qtd,"ajuste",LOC_EMPRESA,DOC_IMPORT,"Quantidade da lista importada",hojeISO(),"");
       feitos++;
     }catch(e){erros++;console.warn("importar",n.cod,e);}
     if(i%10===0||i===novos.length-1)
       $("ip_alerta").innerHTML='<div class="note"><b>Gravando '+(i+1)+" de "+novos.length+"…</b> deixe esta janela aberta até terminar.</div>";
   }
   bt.disabled=false;$("ip_fechar").disabled=false;
+  var faltam=novos.filter(function(n){return !((+n.cheia>0)&&(n.grupo||"").trim());}).length;
   $("ip_alerta").innerHTML='<div class="note ok"><b>'+feitos+" produto(s) importado(s).</b>"+
     (erros?" "+erros+" não gravaram — veja o aviso vermelho do topo.":"")+
-    ' Eles estão em <b>'+GRUPO_COMPLETAR+"</b> e aparecem como <b>completar cadastro</b> até terem grupo e preço."+
+    (faltam?" <b>"+faltam+"</b> ficaram em <b>"+GRUPO_COMPLETAR+"</b>, marcados <b>completar cadastro</b>, até terem grupo e preço — esses não aparecem na venda.":
+            " Todos vieram com grupo e preço, e já aparecem na venda.")+
     (comEst?" A quantidade entrou como estoque da loja.":"")+"</div>";
   impLidos=null;$("ip_texto").value="";$("ip_previa").innerHTML="";
+  atualizarBotaoApagarImport();
   opcoesProduto();renderProdutos();
   toast(feitos+" produto(s) importado(s).");
 }
@@ -6234,6 +6379,7 @@ function ligarImportProdutos(){
   bt.onclick=abrirImportProdutos;
   $("ip_fechar").onclick=function(){$("impModal").hidden=true;};
   $("ip_ok").onclick=importarProdutos;
+  $("ip_apagar").onclick=apagarProdutosImportados;
   $("ip_texto").oninput=previaImport;
   $("ip_arqBt").onclick=function(){$("ip_arq").click();};
   $("ip_arq").onchange=function(){
