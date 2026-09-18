@@ -4021,7 +4021,7 @@ img{max-width:100%}
           <button class="btn" type="button" id="pgtoNovo">Nova forma</button>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Forma</th><th class="num">Parcelas</th><th class="num">Menor coeficiente</th><th>Deprecia?</th></tr></thead>
+          <thead><tr><th>Forma</th><th class="num">Parcelas</th><th class="num">Menor coeficiente</th><th>Deprecia?</th><th>Recebimento</th><th>Cai em</th></tr></thead>
           <tbody id="pgtoBody"></tbody>
         </table></div>
       </div>
@@ -4030,6 +4030,18 @@ img{max-width:100%}
         <h2 id="pgtoTitulo">Nova forma de pagamento</h2>
         <div class="grid g2" style="margin-bottom:22px">
           <div class="fld"><label for="pg_nome">Nome <span class="req">*</span></label><input id="pg_nome"></div>
+        </div>
+        <div class="sect" id="pg_secCredito">
+          <p class="sect-t">Onde o dinheiro cai</p>
+          <div class="grid g3">
+            <div class="fld"><label for="pg_caixa">Caixa que recebe o crédito</label><select id="pg_caixa"></select></div>
+            <div class="fld"><label for="pg_receb">Modalidade</label><select id="pg_receb">
+              <option value="recorrente">Recorrente — parcela a parcela, no vencimento</option>
+              <option value="antecipada">Antecipada — tudo de uma vez, já com a taxa descontada</option>
+            </select></div>
+            <div class="fld"><label for="pg_dias">Dias até o crédito cair</label><input id="pg_dias" type="number" step="1" min="0" placeholder="automático"></div>
+          </div>
+          <div id="pg_recebNota"></div>
         </div>
         <div class="sect">
           <p class="sect-t">Coeficientes por parcela</p>
@@ -5195,6 +5207,11 @@ var SEED_FORMAS=[
   {nome:"Cartão de Crédito Sipag",coef:seq(C_SIPAG)},
   {nome:"Cartão de Crédito Stone",coef:seq(C_STONE)},
   {nome:"Cartão de Crédito Moderninha",coef:seq(C_MODERNINHA)},
+  /* Máquina de Rendimentos: o crédito cai ANTECIPADO, no mesmo dia da venda, no banco Ascicred
+     (regra do Wagner, 18/09). Os coeficientes começam iguais aos da Sipag e ficam marcados
+     "conferir" até alguém salvar a forma com a tabela real da operadora. */
+  {nome:"Máquina de Rendimentos",coef:seq(C_SIPAG),recebimento:"antecipada",
+    caixaNome:"Ascicred",caixaId:"",diasCredito:0,conferir:true},
   {nome:"Santander",coef:seq(C_SANTANDER,3)},
   {nome:"Boleto Loja",coef:seq(C_BOLETO)},
   {nome:"Promissória",coef:seq(C_BOLETO.slice(0,10))},
@@ -5400,6 +5417,12 @@ async function carregar(){
       formasPgto.push({nome:FORMA_CREDITO,coef:{1:1}});antigo=true;}
     if(!formasPgto.some(function(f){return f.nome===FORMA_TROCA;})){
       formasPgto.push({nome:FORMA_TROCA,coef:{1:1}});antigo=true;}
+    /* Máquina de Rendimentos: crédito ANTECIPADO no banco Ascicred (regra do Wagner, 18/09).
+       Os coeficientes nascem iguais aos da Sipag só para não ficar sem tabela — ficam marcados
+       "conferir" até alguém abrir a forma e salvar com os números da operadora. */
+    if(!formasPgto.some(function(f){return f.nome===FORMA_RENDIMENTOS;})){
+      formasPgto.push({nome:FORMA_RENDIMENTOS,coef:seq(C_SIPAG),recebimento:"antecipada",
+        caixaNome:"Ascicred",caixaId:"",diasCredito:0,conferir:true});antigo=true;}
     if(antigo)await gravarFormas();
   }catch(e){console.warn("formas",e);}
   try{
@@ -5512,6 +5535,7 @@ async function carregar(){
         nc.id=uid();nc.loja=lojaAtual;nc.saldo=0;nc.status="ativo";nc.dataSaldo=hojeISO();
         caixas.push(nc);await grava("caixas",nc);}
     }
+    await amarrarCaixasDasFormas();
     var ccs=await col("centros").limit(200).get();
     centros=ccs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     if(!centros.length){
@@ -6297,6 +6321,7 @@ function addItem(){
    exemplo) vira crédito na venda do purificador novo: o purificador sai pelo
    preço de tabela, a comissão não cai e o direito é baixado no plano. */
 var FORMA_CREDITO="Crédito Plano Premium Refil",FORMA_TROCA="Desconto de Troca";
+var FORMA_RENDIMENTOS="Máquina de Rendimentos";
 /* ---------- troca de purificador pela forma de pagamento (regra do Wagner, 16/09; substitui a pergunta da v117) ----------
    Venda com "Desconto de Troca" → nasce a requisição origem "troca" do produto USADO-TROCA para o vendedor, que
    confirma "recebi na troca" (entra no estoque dele, vindo de "troca"). No dia seguinte ele devolve ao almoxarifado
@@ -9155,6 +9180,8 @@ async function salvarCaixaCad(){
   if(c.padrao==="sim")caixas.forEach(function(x){if(x!==c&&x.loja===c.loja)x.padrao="nao";});
   if(!editandoCx)caixas.push(c);
   await grava("caixas",c);editandoCx=null;
+  /* forma de pagamento que esperava este caixa (a Ascicred da Máquina de Rendimentos) já se amarra */
+  try{await amarrarCaixasDasFormas();}catch(e){console.warn(e);}
   $("cxForm").hidden=true;$("cxLista").hidden=false;
   renderCadCaixas();opcoesFinanceiro();toast("Caixa "+c.codigo+" · "+c.nome+" salvo.");
 }
@@ -9414,8 +9441,11 @@ function linhaTitulo(t,especie){
   var s=sitTitulo(t);
   var ct=centroPor(t.centroId);
   var cols=especie==="receber"
-    ? "<td>"+esc(t.pessoa||"—")+"</td><td>"+esc(t.descricao||"—")+"</td>"+
-      "<td>"+(t.totalParcelas>1?(t.parcela+"/"+t.totalParcelas):"única")+"</td>"
+    ? "<td>"+esc(t.pessoa||"—")+"</td><td>"+esc(t.descricao||"—")+
+      /* antecipada: um crédito só, líquido, no dia da venda (regra do Wagner, 18/09) */
+      (t.antecipada?'<div class="t-sub"><span class="pill p-acc">antecipado</span> cai '+BRL(liquidoEsperado(t))+
+        " em "+esc((caixas.filter(function(z){return z.id===t.caixaId;})[0]||{}).nome||"conta não informada")+"</div>":"")+"</td>"+
+      "<td>"+(t.antecipada?(t.totalParcelas>1?t.totalParcelas+"× no cartão":"única"):(t.totalParcelas>1?(t.parcela+"/"+t.totalParcelas):"única"))+"</td>"
     : "<td>"+esc(t.pessoa||"—")+"</td><td>"+esc(t.descricao||"—")+
       (t.totalParcelas>1?' <span class="pill p-mut">'+t.parcela+"/"+t.totalParcelas+"</span>":"")+"</td>"+
       "<td>"+esc(ct?ct.nome:"—")+"</td>";
@@ -9479,6 +9509,49 @@ function aVista(tipo){
   var s=(tipo||"").toLowerCase();
   return /din|pix|esp[ée]cie|d[ée]bito|transfer/.test(s);
 }
+/* ---------- origem do crédito e modalidade da forma de pagamento (regras do Wagner, 18/09) ----------
+   Cada forma diz EM QUE CAIXA o crédito cai e COMO ele cai:
+   · recorrente  = uma parcela por mês, cada uma no seu vencimento (cartão parcelado comum, boleto, carnê);
+   · antecipada  = a operadora credita TUDO no mesmo dia em que o cartão passou, já com a taxa
+                   descontada — é o caso da Máquina de Rendimentos, que cai na Ascicred.
+   Em qualquer uma das duas, a entrada só existe no sistema DEPOIS da aprovação do financeiro:
+   é a aprovação que cria as parcelas (gerarReceberDoPedido roda dentro de aprovarVenda). */
+function recebimentoForma(tipo){
+  var f=formaPor(tipo);
+  return f.recebimento==="antecipada"?"antecipada":"recorrente";
+}
+function ehAntecipada(tipo){return recebimentoForma(tipo)==="antecipada";}
+function caixaDaForma(tipo){
+  var f=formaPor(tipo);
+  if(f.caixaId){var c=caixas.filter(function(x){return x.id===f.caixaId;})[0];if(c)return c;}
+  /* caixa ainda não cadastrado quando a forma nasceu: acha pelo nome escrito na forma */
+  if(f.caixaNome){
+    var alvo=chaveNomeCaixa(f.caixaNome);
+    return daLoja(caixas).filter(function(x){
+      return chaveNomeCaixa(x.nome)===alvo||chaveNomeCaixa(x.banco||"")===alvo;})[0]||null;
+  }
+  return null;
+}
+function chaveNomeCaixa(s){return semAcento(String(s||"")).toLowerCase().replace(/[^a-z0-9]/g,"");}
+/* o caixa pode ser cadastrado depois da forma (a Ascicred, por exemplo):
+   assim que ele existir, a forma guarda o id e o nome solto sai */
+async function amarrarCaixasDasFormas(){
+  var mudou=false;
+  formasPgto.forEach(function(f){
+    if(f.caixaId||!f.caixaNome)return;
+    var c=caixaDaForma(f.nome);
+    if(c){f.caixaId=c.id;f.caixaNome="";mudou=true;}
+  });
+  if(mudou)await gravarFormas();
+}
+/* dias entre a venda e o crédito: o que estiver cadastrado na forma vale;
+   sem cadastro, antecipada cai no mesmo dia e o resto segue a regra antiga */
+function diasCreditoForma(tipo){
+  var f=formaPor(tipo);
+  if(f.diasCredito!=null&&f.diasCredito!=="")return Math.max(0,parseInt(f.diasCredito,10)||0);
+  if(ehAntecipada(tipo))return 0;
+  return aVista(tipo)?0:30;
+}
 /* toda venda vira parcelas em contas a receber */
 async function gerarReceberDoPedido(p){
   var gerados=[],ccVenda=await centroFixo("Venda de produto","Receitas","entrada");
@@ -9500,12 +9573,27 @@ async function gerarReceberDoPedido(p){
     if(f.tipo===FORMA_CREDITO)return;   /* já tratado acima: não gera parcela a receber */
     if(f.tipo===FORMA_TROCA)return;     /* o cliente pagou com o purificador usado: não há dinheiro a receber */
     var n=f.parc||1,parcela=Math.round(v/n*100)/100;
+    var cxF=caixaDaForma(f.tipo),dias=diasCreditoForma(f.tipo);
+    /* ANTECIPADA: a operadora credita tudo de uma vez, já com a taxa descontada.
+       Um título só, pelo valor cheio (é o que o cliente pagou no cartão); o que o banco
+       credita é o depreciado, e a diferença vira a taxa na conciliação. */
+    if(ehAntecipada(f.tipo)){
+      var ta={id:uid(),loja:p.loja,especie:"receber",origem:"pedido",
+        pedidoId:p.id,docRef:"Pedido "+p.numero,clienteId:p.clienteId,pessoa:p.cliente,
+        descricao:f.tipo+" · crédito antecipado"+(n>1?" ("+n+"× no cartão)":""),formaTipo:f.tipo,
+        centroId:ccVenda,caixaId:(cxF||{}).id||"",
+        emissao:p.data,vencimento:somaDias(p.data,dias),
+        valor:Math.round(v*100)/100,
+        parcela:1,totalParcelas:n,antecipada:true,
+        status:"aberto",valorPago:0,criadoEm:hojeISO()};
+      titulos.push(ta);gerados.push(ta);return;
+    }
     for(var i=1;i<=n;i++){
       var t={id:uid(),loja:p.loja,especie:"receber",origem:"pedido",
         pedidoId:p.id,docRef:"Pedido "+p.numero,clienteId:p.clienteId,pessoa:p.cliente,
         descricao:f.tipo,formaTipo:f.tipo,
-        centroId:ccVenda,
-        emissao:p.data,vencimento:somaDias(p.data,30*(i-1)+(aVista(f.tipo)?0:30)),
+        centroId:ccVenda,caixaId:(cxF||{}).id||"",
+        emissao:p.data,vencimento:somaDias(p.data,30*(i-1)+dias),
         valor:(i===n?Math.round((v-parcela*(n-1))*100)/100:parcela),
         parcela:i,totalParcelas:n,status:"aberto",valorPago:0,criadoEm:hojeISO()};
       titulos.push(t);gerados.push(t);
@@ -18746,8 +18834,13 @@ async function aprovarVenda(p,caixaId){
        e o aparelho novo entra na lista (regra do Wagner, 14/09) */
     var rman={baixadas:0,trocas:0};
     try{rman=await manutencaoPelaVenda(p);}catch(eM){console.warn(eM);}
+    /* antecipadas: dizer em quanto e em que conta o dinheiro cai (regra do Wagner, 18/09) */
+    var ants=parcelas.filter(function(t){return t.antecipada;});
+    var txtAnt=ants.length?(" · crédito antecipado de "+BRL(ants.reduce(function(a,t){return a+liquidoEsperado(t);},0))+
+      " em "+(ants.map(function(t){return (caixas.filter(function(z){return z.id===t.caixaId;})[0]||{}).nome||"conta não informada";})
+        .filter(function(v,i,l){return l.indexOf(v)===i;}).join(", "))):"";
     toast("Pedido "+p.numero+" aprovado · estoque de "+nomeLocal(loc)+" baixado · "+
-      parcelas.length+" parcela(s) no Contas a Receber"+
+      parcelas.length+" parcela(s) no Contas a Receber"+txtAnt+
       (rman.trocas?" · manutenção periódica baixada em "+rman.trocas+" aparelho"+(rman.trocas===1?"":"s"):"")+
       /* resultado da troca de aparelho com plano (regra do Wagner, 16/09) */
       (rman.plano&&rman.plano.para?" · plano "+rman.plano.para.plano+" migrado de "+(rman.plano.de.serie||rman.plano.de.produto||"")+
@@ -22587,16 +22680,20 @@ function renderPgto(){
   var lista=formasPgto.filter(function(f){return !q||f.nome.toLowerCase().indexOf(q)>=0;});
   $("pgtoCount").textContent=lista.length+(lista.length===1?" forma":" formas");
   var b=$("pgtoBody");b.innerHTML="";
-  if(!lista.length){b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhuma forma cadastrada</div>Use o botão <b>Nova forma</b> acima para criar a primeira.</div></td></tr>';return;}
+  if(!lista.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma forma cadastrada</div>Use o botão <b>Nova forma</b> acima para criar a primeira.</div></td></tr>';return;}
   lista.forEach(function(f){
     var ks=Object.keys(f.coef).map(Number).sort(function(a,b2){return a-b2;});
     var menor=ks.length?Math.min.apply(null,ks.map(function(k){return f.coef[k];})):1;
     var deprecia=ks.some(function(k){return f.coef[k]!==1;});
+    var ant=f.recebimento==="antecipada",cx=caixaDaForma(f.nome);
     var tr=document.createElement("tr");tr.className="clickable";
-    tr.innerHTML='<td><div class="t-main">'+esc(f.nome)+"</div></td>"+
+    tr.innerHTML='<td><div class="t-main">'+esc(f.nome)+"</div>"+
+        (f.conferir?'<div class="t-sub"><span class="pill p-crit">conferir os coeficientes com a operadora</span></div>':"")+"</td>"+
       '<td class="num">'+(ks.length?(ks[0]+"× a "+ks[ks.length-1]+"×"):"—")+"</td>"+
       '<td class="num">'+(menor?menor.toFixed(4).replace(".",","):"—")+"</td>"+
-      "<td>"+(deprecia?'<span class="pill p-warn">sim</span>':'<span class="pill p-ok">não</span>')+"</td>";
+      "<td>"+(deprecia?'<span class="pill p-warn">sim</span>':'<span class="pill p-ok">não</span>')+"</td>"+
+      "<td>"+(ant?'<span class="pill p-acc">antecipada</span>':'<span class="pill p-mut">recorrente</span>')+"</td>"+
+      "<td>"+(cx?esc(cx.nome):(f.caixaNome?'<span class="pill p-crit">'+esc(f.caixaNome)+" — cadastre o caixa</span>":'<span class="mut">— não informado —</span>'))+"</td>";
     tr.onclick=function(){abrirPgto(f);};b.appendChild(tr);
   });
 }
@@ -22606,10 +22703,33 @@ function abrirPgto(f){
   $("pgtoTitulo").textContent=f?("Editar · "+f.nome):"Nova forma de pagamento";
   $("pg_nome").value=f?f.nome:"";
   $("pgtoExcluir").style.display=f?"":"none";
+  opcoes("pg_caixa",caixasRel(),function(c){return c.id;},
+    function(c){return (c.codigo?c.codigo+" · ":"")+c.nome+(c.banco?" ("+c.banco+")":"");},"— não informado —");
+  var cxF=f?caixaDaForma(f.nome):null;
+  $("pg_caixa").value=(f&&f.caixaId)||(cxF||{}).id||"";
+  $("pg_receb").value=(f&&f.recebimento==="antecipada")?"antecipada":"recorrente";
+  $("pg_dias").value=(f&&f.diasCredito!=null&&f.diasCredito!=="")?f.diasCredito:"";
+  $("pg_receb").onchange=notaRecebimentoPg;
+  $("pg_caixa").onchange=notaRecebimentoPg;
+  $("pg_dias").oninput=notaRecebimentoPg;
+  notaRecebimentoPg();
   pgLinhas=[];
   if(f){Object.keys(f.coef).map(Number).sort(function(a,b){return a-b;}).forEach(function(k){pgLinhas.push({n:k,c:f.coef[k]});});}
   else{pgLinhas=[{n:1,c:1}];}
   renderPgLinhas();
+}
+function notaRecebimentoPg(){
+  var ant=$("pg_receb").value==="antecipada",cx=$("pg_caixa").value;
+  var nome=(caixas.filter(function(c){return c.id===cx;})[0]||{}).nome||"";
+  var d=$("pg_dias").value===""?null:Math.max(0,parseInt($("pg_dias").value,10)||0);
+  var quando=ant?(d?("em "+d+" dia"+(d===1?"":"s")):"no mesmo dia da venda")
+                :(d===null?"a cada 30 dias, a primeira 30 dias depois da venda":("a cada 30 dias, a primeira "+(d?d+" dia"+(d===1?"":"s")+" depois":"no dia")+" da venda"));
+  $("pg_recebNota").innerHTML='<div class="note'+(ant?" ok":"")+'"><b>'+(ant?"Antecipada":"Recorrente")+":</b> "+
+    (ant?"a operadora credita <b>o valor depreciado</b> (já com a taxa descontada) de uma vez, "+quando+
+         ", mesmo quando o cliente parcelou. O sistema lança <b>um só recebimento</b>."
+        :"o dinheiro entra <b>parcela a parcela</b>, "+quando+".")+
+    (nome?" O crédito cai em <b>"+esc(nome)+"</b>.":' <b>Escolha o caixa que recebe o crédito</b> — sem ele o dinheiro fica sem conta e a conciliação não acha o lançamento.')+
+    " O recebimento só entra no sistema <b>depois da aprovação do financeiro</b>.</div>";
 }
 function renderPgLinhas(){
   var b=$("pg_linhas");b.innerHTML="";
@@ -22635,8 +22755,16 @@ async function salvarPgto(){
   if(dup){toast("Já existe uma forma com esse nome.");return;}
   var coef={};pgLinhas.forEach(function(l){if(l.n>0&&l.c>0)coef[l.n]=l.c;});
   if(!Object.keys(coef).length){toast("Cadastre ao menos uma parcela com coeficiente.");return;}
-  if(editandoPg){editandoPg.nome=nome;editandoPg.coef=coef;}
-  else{formasPgto.push({nome:nome,coef:coef});}
+  var extra={caixaId:$("pg_caixa").value||"",
+    recebimento:($("pg_receb").value==="antecipada"?"antecipada":"recorrente"),
+    diasCredito:($("pg_dias").value===""?"":Math.max(0,parseInt($("pg_dias").value,10)||0))};
+  if(editandoPg){
+    editandoPg.nome=nome;editandoPg.coef=coef;
+    Object.keys(extra).forEach(function(k){editandoPg[k]=extra[k];});
+    if(extra.caixaId)editandoPg.caixaNome="";
+    editandoPg.conferir=false;   /* salvou conferindo: o aviso de taxa a checar sai */
+  }
+  else{var novo={nome:nome,coef:coef};Object.keys(extra).forEach(function(k){novo[k]=extra[k];});formasPgto.push(novo);}
   await gravarFormas();
   editandoPg=null;$("pgtoForm").hidden=true;$("pgtoLista").hidden=false;
   toast("Forma de pagamento salva.");renderPgto();renderFormas();calcular();
