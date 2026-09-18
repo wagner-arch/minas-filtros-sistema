@@ -2371,6 +2371,14 @@ img{max-width:100%}
             <div class="fld"><label for="at_tel">Telefone <span class="req">*</span></label><input id="at_tel"></div>
             <div class="fld"><label for="at_origem">Origem do contato <span class="req" id="at_reqOrigem">*</span></label><select id="at_origem"></select>
               <div class="help" id="at_origemAjuda"></div></div>
+            <!-- origem "Indicação" tem que dizer QUEM indicou (regra do Wagner, 18/09) -->
+            <div class="fld" id="at_indicWrap" style="position:relative" hidden>
+              <label for="at_indicBusca">Quem indicou <span class="req">*</span></label>
+              <input id="at_indicBusca" autocomplete="off" placeholder="Nome, telefone ou código de quem indicou">
+              <input id="at_indicado" type="hidden">
+              <div class="auto" id="at_indicSug" hidden></div>
+              <div class="help" id="at_indicAjuda">Ele ganha a estrela quando este contato comprar.</div>
+            </div>
           </div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="at_sexo">Sexo</label>
@@ -6455,6 +6463,7 @@ async function importarProdutos(){
         cheia:+n.cheia||0,campanha:+n.campanha||0,minimo:+n.minimo||0,campativa:"nao",
         custo:+n.custo||0,frete:+n.frete||0,ipi:0,st:0,federais:0,icms:0,
         pontos:+n.pontos||0,manut:+n.manut||0,gar:+n.gar||0,
+        /* série só quando o ARQUIVO disser: marcar por conta própria travava a venda (18/09) */
         serie:(n.serie==="sim"?"sim":"nao"),status:"ativo",estmin:{},local:{},estoqueMigrado:true,
         importado:true,criadoEm:hojeISO(),criadoPor:usuarioAtual};
       p.completar=(grupo===GRUPO_COMPLETAR||!(+p.cheia>0));
@@ -6946,7 +6955,14 @@ function addItem(){
     try{$("v_serie").focus();}catch(e){}
     return;
   }
-  if(!(+p.manut)&&p.serie==="sim"&&temSerieGrupo(p)&&!serie){toast("Número de série é obrigatório neste produto.");return;}
+  /* série: continua sendo pedida, mas NÃO trava a venda (regra do Wagner, 18/09: "tem que ser
+     simples"). Só o item com plano de garantia exige mesmo — o plano é amarrado pela série. */
+  if(!(+p.manut)&&p.serie==="sim"&&temSerieGrupo(p)&&!serie){
+    var gar=$("v_gar")?$("v_gar").value:"";
+    var comPlano=!!(gar&&gar!=="Bronze"&&planoDaGarantia(gar));
+    if(comPlano){toast("Com plano "+gar+", o número de série é obrigatório — é por ele que o plano fica amarrado ao aparelho.");return;}
+    if(!confirm("Este produto costuma ter número de série e ele não foi informado.\n\nIncluir assim mesmo?"))return;
+  }
   /* sem estoque disponível para quem entrega: pergunta de onde retirar (regra do Wagner, 14/09) */
   if(!addItem.__retiradaOk){
     var faltaEst=faltaEstoqueVenda(p,qtd);
@@ -21342,6 +21358,44 @@ function ajustarOrigemAt(){
     ? "Registrada no primeiro cadastro — não muda."
     : (c?"Este cadastro ainda não tem origem: escolha agora, ela fica gravada."
         :"Primeiro contato: por onde ele chegou. Fica gravada no cadastro.");
+  ajustarIndicadorAt();
+}
+/* "Indicação" sem dizer quem indicou não vale: a estrela do indicador depende disso
+   (regra do Wagner, 18/09) */
+function ehOrigemIndicacao(v){return /indica/i.test(semAcento(String(v||"")));}
+function ajustarIndicadorAt(){
+  var w=$("at_indicWrap");if(!w)return;
+  var c=clienteVinc,origem=$("at_origem").value;
+  var mostra=ehOrigemIndicacao(origem);
+  w.hidden=!mostra;
+  if(!mostra){$("at_indicado").value="";$("at_indicBusca").value="";$("at_indicSug").hidden=true;return;}
+  /* cadastro que já tem indicador: mostra quem foi e não deixa trocar por aqui */
+  if(c&&c.indicado){
+    var q=clientes.filter(function(x){return x.id===c.indicado;})[0];
+    $("at_indicado").value=c.indicado;
+    $("at_indicBusca").value=(q&&q.nome)||"";
+    $("at_indicBusca").readOnly=true;
+    $("at_indicAjuda").textContent="Registrado no cadastro — para trocar, use a ficha do cliente.";
+  }else{
+    $("at_indicBusca").readOnly=false;
+    $("at_indicAjuda").textContent="Ele ganha a estrela quando este contato comprar.";
+  }
+}
+function buscarIndicadorAt(){
+  var box=$("at_indicSug");
+  var achados=achaCliente($("at_indicBusca").value).filter(function(c){
+    return !clienteVinc||c.id!==clienteVinc.id;});
+  if(!achados.length){box.hidden=true;return;}
+  box.innerHTML="";
+  achados.forEach(function(c){
+    var b=document.createElement("button");b.type="button";
+    b.innerHTML=linhaSugestao(c);
+    b.onclick=function(){
+      $("at_indicado").value=c.id;$("at_indicBusca").value=c.nome;box.hidden=true;
+      toast(c.nome+" ganha a estrela quando este contato comprar.");};
+    box.appendChild(b);
+  });
+  box.hidden=false;
 }
 function achaCliente(q){
   /* procura por nome, telefone, documento ou código — o vendedor digita o que tiver na mão */
@@ -21494,6 +21548,8 @@ async function salvarAtend(){
     if(!temSobrenome(nome))faltaLead.push("sobrenome");
     if(!$("at_cidade").value.trim())faltaLead.push("cidade");
     if(!$("at_origem").value)faltaLead.push("origem");
+    /* veio por indicação: sem dizer quem indicou, o indicador não ganha a estrela */
+    if(ehOrigemIndicacao($("at_origem").value)&&!$("at_indicado").value)faltaLead.push("quem indicou");
     if(faltaLead.length){
       $("at_alerta").innerHTML='<div class="note crit"><b>Falta preencher: '+faltaLead.join(" · ")+
         ".</b> Este contato não tem cadastro e vai nascer como lead — nome e sobrenome, telefone, cidade, origem e tipo de atendimento "+
@@ -21508,6 +21564,7 @@ async function salvarAtend(){
       comp:$("at_comp").value.trim(),ref:$("at_ref").value.trim(),
       tipoend:$("at_tipoend").value||"urbano",geo:$("at_geo").value.trim(),
       geoOrigem:($("at_geo").value&&$("at_geo").__geoExato===$("at_geo").value)?"exato":($("at_geo").value?"endereco":""),
+      indicado:($("at_indicado").value||""),
       tipoPrimeiroAtend:tiposSel[0]||"",primeiroAtendEm:iso(new Date()),
       criadoEm:iso(new Date()),criadoPor:usuarioAtual,criadoVia:"atendimento"};
     clientes.push(c);clienteVinc=c;leadNovo=c;
@@ -22873,6 +22930,10 @@ function ligar(){
   $("ldNovo").onclick=function(){ir("atend");abrirAtend(null);};
   $("c_indicBusca").oninput=function(){$("c_indicado").value="";buscarIndicador();};
   $("c_indicBusca").onblur=function(){setTimeout(function(){$("c_indicSug").hidden=true;},180);};
+  /* mesma busca no Atendimento, quando a origem é Indicação (18/09) */
+  $("at_origem").addEventListener("change",ajustarIndicadorAt);
+  $("at_indicBusca").oninput=function(){$("at_indicado").value="";buscarIndicadorAt();};
+  $("at_indicBusca").onblur=function(){setTimeout(function(){$("at_indicSug").hidden=true;},180);};
   $("in_fechar").onclick=function(){$("indicModal").hidden=true;inCli=null;};
   $("ac_fechar").onclick=function(){$("acoesModal").hidden=true;acReg=null;};
 
