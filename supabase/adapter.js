@@ -1048,6 +1048,41 @@
       return r.data || null;
     };
 
+    /* -------------------- gravação em LOTE (importações) -------------------
+       Importar 24 mil clientes um a um seria uma requisição por cliente — horas.
+       Aqui vai tudo em blocos de 500 no mesmo upsert: ~50 requisições.
+       Devolve {gravados, blocos}. Erro em um bloco estoura como qualquer gravação,
+       e os blocos anteriores JÁ ESTÃO gravados (a importação continua de onde parou,
+       porque quem chama pula o que já existe). */
+    adapter.gravarVarios = async function (colecao, lista, ops) {
+      if (!ehTexto(colecao)) throw new Error("gravarVarios(): informe a coleção.");
+      if (!Array.isArray(lista)) throw new Error("gravarVarios(): informe uma lista de objetos.");
+      var campo = campoLojaDe(colecao);
+      var linhas = lista.map(function (obj) {
+        if (obj === null || typeof obj !== "object" || !ehTexto(obj.id)) {
+          throw new Error("gravarVarios(" + colecao + "): todo objeto precisa de id.");
+        }
+        var corpo = {};
+        Object.keys(obj).forEach(function (k) { if (obj[k] !== undefined) corpo[k] = obj[k]; });
+        var loja = null;
+        if (campo) loja = ehTexto(corpo[campo]) ? corpo[campo] : (ehTexto(adapter.lojaPadrao) ? adapter.lojaPadrao : null);
+        return { colecao: colecao, id: corpo.id, loja: loja, data: corpo };
+      });
+      var tam = (ops && +ops.bloco > 0) ? Math.min(+ops.bloco, 1000) : 500;
+      var gravados = 0, blocos = 0;
+      for (var i = 0; i < linhas.length; i += tam) {
+        var parte = linhas.slice(i, i + tam);
+        conferir(
+          await sb.from(TABELA).upsert(parte, { onConflict: "colecao,id" }),
+          "gravar " + parte.length + " de " + colecao,
+          true
+        );
+        gravados += parte.length; blocos++;
+        if (ops && typeof ops.aoAndar === "function") { try { ops.aoAndar(gravados, linhas.length); } catch (e) {} }
+      }
+      return { gravados: gravados, blocos: blocos };
+    };
+
     /* -------------------- superfície principal ---------------------------- */
     adapter.collection = refColecao;
     adapter.doc = refCaminho;

@@ -1169,6 +1169,7 @@ img{max-width:100%}
           </select>
           <span class="sp"></span>
           <span class="count" id="cliCount"></span>
+          <button class="btn ghost" type="button" id="cliImportar">Importar clientes</button>
         </div>
         <div class="tw"><table>
           <thead><tr><th>Cliente</th><th>Documento</th><th>Endereço</th><th>Mídia de origem</th><th class="num">Indicações</th><th>Cadastro</th></tr></thead>
@@ -1505,7 +1506,10 @@ img{max-width:100%}
         <div>
           <div class="card vstep" data-s="1">
             <h2>Cliente e papéis</h2>
-            <div class="fld" style="margin-bottom:16px"><label for="v_cliente">Cliente <span class="req">*</span></label><select id="v_cliente"></select></div>
+            <div class="fld" style="margin-bottom:16px"><label for="v_cliente">Cliente <span class="req">*</span></label>
+              <input id="v_cliBusca" placeholder="Buscar por nome, CPF ou telefone" autocomplete="off" style="margin-bottom:8px">
+              <select id="v_cliente"></select>
+              <p class="help" id="v_cliNota"></p></div>
             <div id="v_cadAviso" style="margin-bottom:14px"></div>
             <div class="grid g3">
               <div class="fld"><label for="v_prosp">Prospector · 20%</label><select id="v_prosp"></select></div>
@@ -4354,6 +4358,29 @@ img{max-width:100%}
   </div>
 </div>
 
+<div class="modal" id="impcModal" hidden>
+  <div class="box" style="width:min(760px,100%)">
+    <h3>Importar a base de clientes</h3>
+    <div class="sub">Um cliente por linha. A <b>primeira linha é o cabeçalho</b> com o nome das colunas — em qualquer ordem; o que não existir fica em branco.</div>
+    <div class="actions" style="justify-content:flex-start;margin:14px 0 10px">
+      <button class="btn ghost" type="button" id="ic_arqBt">Escolher o arquivo…</button>
+      <input type="file" id="ic_arq" accept=".csv,.txt" class="os-foto-in">
+      <span class="count" id="ic_arqNome"></span>
+    </div>
+    <div class="fld"><label for="ic_texto">…ou cole as linhas aqui</label>
+      <textarea id="ic_texto" rows="5" placeholder="Nome;CPF/CNPJ;Telefone;Cidade;UF;Bairro;Rua;Nº;CEP"></textarea></div>
+    <div id="ic_previa"></div>
+    <div id="ic_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="ic_ok">Importar</button>
+      <button class="btn mut" type="button" id="ic_fechar">Fechar</button>
+      <span class="sp" style="flex:1"></span>
+      <button class="btn mut" type="button" id="ic_apagar" hidden>Apagar os importados</button>
+    </div>
+    <p class="help">Colunas aceitas: <b>código, nome, tipo, CPF/CNPJ, RG/IE, nascimento, sexo, telefone, celular, e-mail, profissão, apelido, CEP, rua, número, complemento, bairro, cidade, UF, origem, referência, geolocalização e observação</b>. Quem entra por aqui já nasce <b>cliente</b> — não passa pelo Atendimento — e fica marcado como importado. Repetido (mesmo CPF/CNPJ, ou mesmo nome e telefone) é pulado.</p>
+  </div>
+</div>
+
 <div class="modal" id="impModal" hidden>
   <div class="box" style="width:min(720px,100%)">
     <h3>Importar lista de produtos</h3>
@@ -5176,7 +5203,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=133"></script>
+<script src="supabase/adapter.js?v=145"></script>
 <script>
 (function(){
 "use strict";
@@ -5454,7 +5481,7 @@ async function carregar(){
     if(antigo)await gravarFormas();
   }catch(e){console.warn("formas",e);}
   try{
-    var cs=await col("clientes").limit(500).get();
+    var cs=await col("clientes").limit(30000).get();
     clientes=cs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var ps=await col("produtos").limit(3000).get();
     produtos=ps.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
@@ -5669,10 +5696,15 @@ function renderClientes(){
       return false;})
     .sort(function(a,b){return (a.nome||"").localeCompare(b.nome||"","pt-BR");});
   var nLead=lista.filter(ehLead).length;
-  $("cliCount").textContent=lista.length+(lista.length===1?" cadastro":" cadastros")+
-    (nLead?" · "+nLead+" lead"+(nLead===1?"":"s"):"");
+  /* base importada tem dezenas de milhares: desenhar todas as linhas trava o navegador.
+     Mostra as primeiras TETO_CLI e manda usar a busca (v145). */
+  var TETO_CLI=300,total=lista.length,cortou=total>TETO_CLI;
+  if(cortou)lista=lista.slice(0,TETO_CLI);
+  $("cliCount").textContent=total+(total===1?" cadastro":" cadastros")+
+    (nLead?" · "+nLead+" lead"+(nLead===1?"":"s"):"")+
+    (cortou?" · mostrando "+TETO_CLI:"");
   var b=$("cliBody");b.innerHTML="";
-  if(!lista.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum cliente ainda</div>Use o botão <b>+ Novo</b> no topo para cadastrar o primeiro.</div></td></tr>';return;}
+  if(!total){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum cliente ainda</div>Use o botão <b>+ Novo</b> no topo para cadastrar o primeiro.</div></td></tr>';return;}
   lista.forEach(function(c){
     var f=faltantes(c),ind=estrelasDe(c.id),indTot=indicadosPor(c.id).length;
     var tr=document.createElement("tr");tr.className="clickable";
@@ -6185,10 +6217,30 @@ function numImp(s){
   else t=t.replace(/,/g,"");
   return parseFloat(t)||0;
 }
+/* separa a linha em colunas. Arquivo exportado de sistema vem com aspas em volta do
+   campo ("MARIA CRISTINA SILVA") e pode ter ponto e vírgula DENTRO das aspas — daí o laço. */
 function partesLinhaImport(l){
-  var c=l.split(/\t|;/);
-  if(c.length<2)c=l.split("|");
-  return c.map(function(x){return String(x).replace(/\s+/g," ").trim();});
+  var s=String(l);
+  if(s.indexOf('"')<0){
+    var c=s.split(/\t|;/);
+    if(c.length<2)c=s.split("|");
+    return c.map(function(x){return String(x).replace(/\s+/g," ").trim();});
+  }
+  var sep=(s.indexOf(";")>=0)?";":((s.indexOf("\t")>=0)?"\t":"|");
+  var out=[],cur="",aspas=false;
+  for(var i=0;i<s.length;i++){
+    var ch=s.charAt(i);
+    if(ch==="\\"&&s.charAt(i+1)==='"'){cur+='"';i++;continue;}   /* \" exportado por alguns sistemas */
+    if(aspas){
+      if(ch==='"'){if(s.charAt(i+1)==='"'){cur+='"';i++;}else aspas=false;}
+      else cur+=ch;
+    }
+    else if(ch==='"')aspas=true;
+    else if(ch===sep){out.push(cur);cur="";}
+    else cur+=ch;
+  }
+  out.push(cur);
+  return out.map(function(x){return String(x).replace(/\s+/g," ").trim();});
 }
 function linhasImportProduto(txt){
   var itens=[],ruins=[],mapa=null;
@@ -6387,6 +6439,281 @@ function ligarImportProdutos(){
     $("ip_arqNome").textContent=f.name;
     var r=new FileReader();
     r.onload=function(){$("ip_texto").value=String(r.result||"");previaImport();};
+    r.readAsText(f,"utf-8");
+  };
+}
+/* ================= IMPORTAR A BASE DE CLIENTES (v145, 18/09) =================
+   Regra antiga do Wagner, agora usada: quem entra pela importação NASCE CLIENTE, sem passar
+   pelo Atendimento (`ehLead` já devolve false para `c.importado`), com `criadoVia:"importacao"`.
+   Cadastro incompleto aparece no filtro "Cadastro incompleto" da própria tela de Clientes.
+   São 24 mil linhas: a gravação vai em BLOCO pelo adapter (db.gravarVarios), senão seriam
+   24 mil requisições. */
+var COLS_CLI=[
+  ["codigo",/^(codigo|cod|codigocliente|codcliente|id)$/],
+  ["nome",/^(nome|cliente|razaosocial|nomecompleto|nomerazao)$/],
+  ["tipo",/^(tipo|pessoa|tipopessoa|pfpj)$/],
+  ["doc",/^(doc|cpf|cnpj|cpfcnpj|documento|cpfoucnpj)$/],
+  ["rg",/^(rg|identidade|inscricaoestadual|ie|rgie|rgouie)$/],
+  ["nasc",/^(nasc|nascimento|datanascimento|aniversario|datadenascimento)$/],
+  ["sexo",/^(sexo|genero)$/],
+  ["tel",/^(tel|telefone|fone|telefone1|contato)$/],
+  ["tel2",/^(celular|whatsapp|telefone2|tel2|cel)$/],
+  ["email",/^(email|mail|correio)$/],
+  ["prof",/^(prof|profissao|ocupacao)$/],
+  ["apelido",/^(apelido|fantasia|nomefantasia|nomefantasiaapelido|fantasiaapelido)$/],
+  ["cep",/^(cep|codigopostal)$/],
+  ["rua",/^(rua|endereco|logradouro|avenida)$/],
+  ["num",/^(num|numero|nro|n)$/],
+  ["comp",/^(comp|complemento|apto|apartamento)$/],
+  ["bairro",/^(bairro|distrito)$/],
+  ["cidade",/^(cidade|municipio|localidade)$/],
+  ["uf",/^(uf|estado)$/],
+  ["origem",/^(origem|midia|midiaorigem|comoconheceu|fonte)$/],
+  ["ref",/^(ref|referencia|pontodereferencia|comochegar)$/],
+  ["geo",/^(geo|geolocalizacao|coordenadas|latlng|localizacao)$/],
+  ["obs",/^(obs|observacao|observacoes|anotacao|nota|notas)$/]
+];
+/* o arquivo costuma ter Telefone, Telefone 2 e Celular: guarda TODAS as colunas de
+   telefone e, na leitura, vale a primeira preenchida — senão perde-se o número de quem
+   só tem celular */
+var RE_TEL_CLI=/^(tel|telefone|fone|telefone1|telefone2|tel2|tel3|celular|cel|celular2|whatsapp|zap|contato)$/;
+function mapaCabecalhoCli(c){
+  var m={},achou=0,tels=[];
+  c.forEach(function(t,i){
+    var k=chaveCol(t);if(!k)return;
+    if(RE_TEL_CLI.test(k))tels.push(i);
+    for(var j=0;j<COLS_CLI.length;j++){
+      if(COLS_CLI[j][1].test(k)&&m[COLS_CLI[j][0]]==null){m[COLS_CLI[j][0]]=i;achou++;return;}
+    }
+  });
+  if(tels.length)m.__tels=tels;
+  return (m.nome!=null&&achou>=2)?m:null;
+}
+function soDig(s){return String(s||"").replace(/\D/g,"");}
+/* a data pode vir 31/12/1980, 1980-12-31 ou 0000-00-00 (que é "não tem") */
+function dataImport(s){
+  var t=String(s||"").trim();
+  if(!t||/^0{2,4}[\/\-.]0{1,2}[\/\-.]0{1,4}$/.test(t))return "";
+  var m=t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if(m){
+    var a=m[3].length===2?((+m[3]>30?"19":"20")+m[3]):m[3];
+    if(+a<1900)return "";
+    return a+"-"+("0"+m[2]).slice(-2)+"-"+("0"+m[1]).slice(-2);}
+  m=t.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);
+  if(m&&+m[1]>=1900)return m[1]+"-"+("0"+m[2]).slice(-2)+"-"+("0"+m[3]).slice(-2);
+  return "";
+}
+function telImport(s){
+  var d=soDig(s);
+  if(d.length>11&&d.indexOf("55")===0)d=d.slice(2);
+  if(d.length===11)return "("+d.slice(0,2)+") "+d.slice(2,7)+"-"+d.slice(7);
+  if(d.length===10)return "("+d.slice(0,2)+") "+d.slice(2,6)+"-"+d.slice(6);
+  return String(s||"").trim();
+}
+function chaveCliente(c){
+  var d=soDig(c.doc);
+  if(d.length===11||d.length===14)return "doc:"+d;
+  return "nt:"+semAcento(String(c.nome||"")).toLowerCase().replace(/\s+/g," ").trim()+"|"+soDig(c.tel);
+}
+/* Um registro pode ocupar DUAS linhas quando o campo tem quebra de linha dentro das aspas
+   (endereço "RUA X<quebra>AP 2"). Sem juntar, o cadastro entra pela metade — sem cidade nem
+   UF — e a outra metade vira lixo. Junta enquanto as aspas estiverem abertas. */
+function registrosImport(txt,ncols){
+  var linhas=String(txt||"").replace(/^﻿/,"").split(/\r?\n/),out=[],buf="";
+  var alvo=(+ncols>1)?(+ncols-1):0;
+  function abertas(s){return ((s.match(/"/g)||[]).length%2)===1;}
+  function sep(s){return (s.match(/;/g)||[]).length;}
+  linhas.forEach(function(l){
+    if(!buf){buf=l;return;}
+    /* só é continuação quando as aspas ficaram abertas E ainda faltam colunas: com as colunas
+       completas, aspas ímpares são aspas soltas no meio do texto (D"AVILA), não quebra de linha */
+    if(abertas(buf)&&(!alvo||sep(buf)<alvo)&&buf.length<4000){buf+=" "+l;return;}
+    out.push(buf);buf=l;
+  });
+  if(buf)out.push(buf);
+  return out;
+}
+function linhasImportCliente(txt){
+  var itens=[],mapa=null,ncols=0;
+  /* o cabeçalho nunca quebra linha: ele dá o número de colunas que separa um registro do outro */
+  var cruas=String(txt||"").replace(/^﻿/,"").split(/\r?\n/);
+  for(var k=0;k<cruas.length;k++){
+    if(!cruas[k].trim())continue;
+    var cab=partesLinhaImport(cruas[k].trim());
+    mapa=mapaCabecalhoCli(cab);ncols=cab.length;break;
+  }
+  var linhas=registrosImport(txt,ncols);
+  if(!mapa)return {itens:[],semCabecalho:true};
+  linhas.forEach(function(linha){
+    var l=linha.trim();if(!l)return;
+    var b=partesLinhaImport(l);
+    if(mapaCabecalhoCli(b))return;                       /* a própria linha do cabeçalho */
+    var g=function(k){return mapa[k]==null?"":String(b[mapa[k]]==null?"":b[mapa[k]]).replace(/\s+/g," ").trim();};
+    var nome=g("nome");
+    if(!nome)return;
+    var doc=soDig(g("doc")),tipoTxt=semAcento(g("tipo")).toLowerCase();
+    var pj=(doc.length===14)||/juri|pj|empresa|cnpj/.test(tipoTxt);
+    var tel="";
+    (mapa.__tels||[]).forEach(function(ix){
+      if(tel)return;
+      var v=String(b[ix]==null?"":b[ix]).trim();
+      if(soDig(v).length>=8)tel=v;
+    });
+    if(!tel)tel=g("tel")||g("tel2");
+    itens.push({codigo:g("codigo"),nome:nome,tipo:(pj?"Pessoa Jurídica":"Pessoa Física"),
+      doc:g("doc"),rg:g("rg"),nasc:dataImport(g("nasc")),
+      sexo:(/^f/i.test(g("sexo"))?"Feminino":(/^m/i.test(g("sexo"))?"Masculino":"")),
+      tel:telImport(tel),email:g("email").toLowerCase(),prof:g("prof"),apelido:g("apelido"),
+      cep:g("cep"),rua:g("rua"),num:g("num"),comp:g("comp"),bairro:g("bairro"),
+      cidade:g("cidade"),uf:g("uf").toUpperCase().slice(0,2),
+      origem:g("origem"),ref:g("ref"),geo:g("geo"),obs:g("obs")});
+  });
+  return {itens:itens};
+}
+var impcLidos=null;
+function previaImportCli(){
+  var r=linhasImportCliente($("ic_texto").value);
+  impcLidos=r;
+  if(r.semCabecalho){
+    $("ic_previa").innerHTML=$("ic_texto").value.trim()
+      ?'<div class="note crit"><b>Não achei o cabeçalho.</b> A primeira linha precisa dizer o nome das colunas — pelo menos <b>Nome</b> e mais uma (Telefone, CPF, Cidade…).</div>':"";
+    return;}
+  if(!r.itens.length){$("ic_previa").innerHTML='<div class="note crit"><b>Nenhuma linha com nome.</b></div>';return;}
+  var vistos={},novos=[],repete=0,jaTem=0;
+  clientes.forEach(function(c){vistos[chaveCliente(c)]="base";});
+  r.itens.forEach(function(c){
+    var k=chaveCliente(c);
+    if(vistos[k]){if(vistos[k]==="base")jaTem++;else repete++;return;}
+    vistos[k]="novo";novos.push(c);
+  });
+  impcLidos.novos=novos;
+  var semTel=novos.filter(function(c){return !soDig(c.tel);}).length;
+  var semCidade=novos.filter(function(c){return !c.cidade;}).length;
+  var amostra=novos.slice(0,6).map(function(c){
+    return "<tr><td>"+esc(c.nome)+"</td><td>"+esc(c.doc||"—")+"</td><td>"+esc(c.tel||"—")+"</td><td>"+
+      esc((c.cidade||"—")+(c.uf?"/"+c.uf:""))+"</td><td>"+esc(c.bairro||"—")+"</td></tr>";}).join("");
+  $("ic_previa").innerHTML='<div class="note'+(novos.length?" ok":" warn")+'"><b>'+r.itens.length+" linha(s) lida(s)</b> · <b>"+
+    novos.length+"</b> cliente(s) novo(s)"+(jaTem?" · "+jaTem+" já cadastrado(s)":"")+
+    (repete?" · "+repete+" repetido(s) no arquivo":"")+"</div>"+
+    ((semTel||semCidade)?'<div class="note warn">'+(semTel?"<b>"+semTel+"</b> sem telefone. ":"")+
+      (semCidade?"<b>"+semCidade+"</b> sem cidade. ":"")+
+      "Entram assim mesmo e ficam no filtro <b>Cadastro incompleto</b> — para tirar pedido vai faltar completar.</div>":"")+
+    (novos.length?'<div class="tw"><table><thead><tr><th>Nome</th><th>CPF/CNPJ</th><th>Telefone</th><th>Cidade</th><th>Bairro</th></tr></thead><tbody>'+
+      amostra+"</tbody></table></div>"+(novos.length>6?'<p class="help">… e mais '+(novos.length-6)+" cliente(s).</p>":""):"");
+}
+function abrirImportClientes(){
+  $("ic_texto").value="";$("ic_arqNome").textContent="";$("ic_previa").innerHTML="";$("ic_alerta").innerHTML="";
+  impcLidos=null;atualizarBotaoApagarCli();
+  $("impcModal").hidden=false;
+}
+async function importarClientes(){
+  if(!impcLidos)previaImportCli();
+  var novos=(impcLidos&&impcLidos.novos)||[];
+  if(!novos.length){$("ic_alerta").innerHTML='<div class="note crit"><b>Nada para importar.</b></div>';return;}
+  var bt=$("ic_ok");bt.disabled=true;$("ic_fechar").disabled=true;
+  var agora=iso(new Date()),lista=[],feitos=0;
+  /* o numerador do banco é consultado UMA vez; o resto é sequencial local */
+  var seq=0;
+  try{if(modoBanco()&&db&&typeof db.proximoNumero==="function")seq=await db.proximoNumero(lojaAtual,"cliente");}catch(e){seq=0;}
+  var pre={mf:"MF",wf:"WF",dv:"DV"}[lojaAtual]||"CL";
+  novos.forEach(function(n){
+    var c={id:uid(),loja:lojaAtual,
+      codigo:(n.codigo||(pre+"-"+("0000"+(++seq)).slice(-5))),
+      criadoEm:agora,criadoPor:usuarioAtual,criadoVia:"importacao",importado:true,
+      tipo:n.tipo,origem:n.origem||"",origemEm:(n.origem?agora:"")};
+    ["nome","doc","rg","nasc","sexo","tel","email","prof","apelido","cep","rua","num","comp","bairro","cidade","uf","ref","geo"]
+      .forEach(function(k){c[k]=n[k]||"";});
+    if(c.geo)c.geoOrigem="importado";
+    if(n.obs)c.notas=[{quando:agora.slice(0,16).replace("T"," "),por:usuarioAtual,texto:"Observação da base antiga: "+n.obs}];
+    lista.push(c);
+  });
+  $("ic_alerta").innerHTML='<div class="note"><b>Gravando '+lista.length+" cliente(s)…</b> deixe esta janela aberta até terminar.</div>";
+  try{
+    if(db&&typeof db.gravarVarios==="function"){
+      await db.gravarVarios("clientes",lista,{aoAndar:function(f,t){
+        $("ic_alerta").innerHTML='<div class="note"><b>Gravando '+f+" de "+t+"…</b> deixe esta janela aberta até terminar.</div>";}});
+      feitos=lista.length;
+    } else {
+      for(var i=0;i<lista.length;i++){
+        if(db)await col("clientes").doc(lista[i].id).set(lista[i]);
+        feitos++;
+        if(i%20===0)$("ic_alerta").innerHTML='<div class="note"><b>Gravando '+(i+1)+" de "+lista.length+"…</b></div>";
+      }
+    }
+    lista.slice(0,feitos).forEach(function(c){clientes.push(c);});
+  }catch(e){
+    console.warn("importar clientes",e);
+    lista.slice(0,feitos).forEach(function(c){clientes.push(c);});
+    bt.disabled=false;$("ic_fechar").disabled=false;
+    $("ic_alerta").innerHTML='<div class="note crit"><b>A gravação parou:</b> '+esc((e&&e.message)||e)+
+      " O que já entrou está gravado — importe o mesmo arquivo de novo, que ele pula os repetidos.</div>";
+    atualizarBotaoApagarCli();renderClientes();return;
+  }
+  bt.disabled=false;$("ic_fechar").disabled=false;
+  $("ic_alerta").innerHTML='<div class="note ok"><b>'+feitos+" cliente(s) importado(s).</b> "+
+    "Todos entraram como <b>clientes</b>, não como leads. O que estiver faltando aparece no filtro <b>Cadastro incompleto</b>.</div>";
+  impcLidos=null;$("ic_texto").value="";$("ic_previa").innerHTML="";
+  atualizarBotaoApagarCli();renderClientes();
+  toast(feitos+" cliente(s) importado(s).");
+}
+function clientesImportados(){
+  return clientes.filter(function(c){return c.importado&&c.loja===lojaAtual;});
+}
+/* cliente com atendimento, pedido, orçamento ou OS não é apagado */
+function usoDoCliente(cid){
+  var n=0;
+  pedidos.forEach(function(p){if(p.clienteId===cid)n++;});
+  orcamentos.forEach(function(o){if(o.clienteId===cid)n++;});
+  ordens.forEach(function(o){if(o.clienteId===cid)n++;});
+  atendimentos.forEach(function(a){if(a.clienteId===cid)n++;});
+  return n;
+}
+async function apagarClientesImportados(){
+  var lista=clientesImportados();
+  if(!lista.length){$("ic_alerta").innerHTML='<div class="note"><b>Não há cliente importado para apagar.</b></div>';return;}
+  var podem=[],presos=[];
+  lista.forEach(function(c){(usoDoCliente(c.id)?presos:podem).push(c);});
+  if(!podem.length){
+    $("ic_alerta").innerHTML='<div class="note crit"><b>Nenhum pode ser apagado:</b> os '+presos.length+
+      " cliente(s) importado(s) já têm atendimento, pedido, orçamento ou OS.</div>";return;}
+  if(!confirm("Apagar "+podem.length+" cliente(s) importado(s)?\n\n"+
+    (presos.length?presos.length+" ficam, porque já têm atendimento, pedido, orçamento ou OS.\n\n":"")+
+    "Isto não tem volta."))return;
+  var bt=$("ic_apagar");bt.disabled=true;$("ic_ok").disabled=true;$("ic_fechar").disabled=true;
+  var apagados=0;
+  for(var i=0;i<podem.length;i++){
+    try{
+      await apaga("clientes",podem[i].id);
+      var ix=clientes.indexOf(podem[i]);if(ix>=0)clientes.splice(ix,1);
+      apagados++;
+    }catch(e){console.warn("apagar cliente",e);}
+    if(i%20===0||i===podem.length-1)
+      $("ic_alerta").innerHTML='<div class="note"><b>Apagando '+(i+1)+" de "+podem.length+"…</b></div>";
+  }
+  bt.disabled=false;$("ic_ok").disabled=false;$("ic_fechar").disabled=false;
+  $("ic_alerta").innerHTML='<div class="note ok"><b>'+apagados+" cliente(s) apagado(s).</b>"+
+    (presos.length?" <b>"+presos.length+"</b> ficaram porque já têm movimento.":"")+"</div>";
+  atualizarBotaoApagarCli();renderClientes();
+  toast(apagados+" cliente(s) importado(s) apagado(s).");
+}
+function atualizarBotaoApagarCli(){
+  var bt=$("ic_apagar");if(!bt)return;
+  var n=clientesImportados().length;
+  bt.hidden=!n;bt.textContent="Apagar os "+n+" cliente(s) importado(s)";
+}
+function ligarImportClientes(){
+  var bt=$("cliImportar");if(!bt)return;
+  bt.onclick=abrirImportClientes;
+  $("ic_fechar").onclick=function(){$("impcModal").hidden=true;};
+  $("ic_ok").onclick=importarClientes;
+  $("ic_apagar").onclick=apagarClientesImportados;
+  $("ic_texto").oninput=previaImportCli;
+  $("ic_arqBt").onclick=function(){$("ic_arq").click();};
+  $("ic_arq").onchange=function(){
+    var f=this.files&&this.files[0];if(!f)return;
+    $("ic_arqNome").textContent=f.name;
+    var r=new FileReader();
+    r.onload=function(){$("ic_texto").value=String(r.result||"");previaImportCli();};
     r.readAsText(f,"utf-8");
   };
 }
@@ -21807,12 +22134,46 @@ function render(){
   try{renderFin();}catch(e){console.warn("aprovação financeira",e);}
   try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();try{renderPadroes();}catch(e){}renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
   try{notaCreditoPlano();}catch(e){}
-  var sc=$("v_cliente"),atual=sc.value;sc.innerHTML="";
-  clientes.filter(function(c){return c.loja===lojaAtual;}).forEach(function(c){
-    var o=document.createElement("option");o.value=c.id;o.textContent=c.nome;sc.appendChild(o);});
-  if(!sc.options.length){var o=document.createElement("option");o.textContent="— cadastre um cliente primeiro —";sc.appendChild(o);}
-  if(atual)sc.value=atual;
+  opcoesClienteVenda();
   calcular();
+}
+/* A base importada tem dezenas de milhares de clientes: uma lista com todos travaria a
+   tela a cada desenho. Mostra os 300 mais recentes e o resto vem pela busca (v145). */
+var TETO_CLI_VENDA=300;
+function opcoesClienteVenda(){
+  var sc=$("v_cliente");if(!sc)return;
+  var atual=sc.value;
+  var q=semAcento((($("v_cliBusca")||{}).value)||"").toLowerCase().trim();
+  var num=q.replace(/\D/g,"");
+  var base=clientes.filter(function(c){return c.loja===lojaAtual;});
+  var lista=base.filter(function(c){
+    if(!q)return true;
+    if(semAcento(c.nome||"").toLowerCase().indexOf(q)>=0)return true;
+    if(num.length>=3){
+      if((c.doc||"").replace(/\D/g,"").indexOf(num)>=0)return true;
+      if((c.tel||"").replace(/\D/g,"").indexOf(num)>=0)return true;
+    }
+    return false;});
+  var total=lista.length;
+  lista=lista.slice().sort(function(a,b){return String(b.criadoEm||"").localeCompare(String(a.criadoEm||""));}).slice(0,TETO_CLI_VENDA);
+  /* o cliente já escolhido nunca some da lista */
+  if(atual&&!lista.some(function(c){return c.id===atual;})){
+    var ja=base.filter(function(c){return c.id===atual;})[0];
+    if(ja)lista.unshift(ja);
+  }
+  sc.innerHTML="";
+  lista.forEach(function(c){
+    var o=document.createElement("option");o.value=c.id;
+    o.textContent=c.nome+(c.cidade?" · "+c.cidade:"")+(c.tel?" · "+c.tel:"");
+    sc.appendChild(o);});
+  if(!sc.options.length){
+    var o2=document.createElement("option");
+    o2.textContent=q?"— nenhum cliente com esse dado —":"— cadastre um cliente primeiro —";
+    sc.appendChild(o2);}
+  if(atual)sc.value=atual;
+  var nota=$("v_cliNota");
+  if(nota)nota.textContent=(total>lista.length)
+    ?(total+" clientes nesta loja · mostrando "+lista.length+" — use a busca acima"):"";
 }
 var telaAtual="";
 function ir(s){
@@ -22681,6 +23042,7 @@ function ligar(){
   $("v_voltar").onclick=function(){irEtapa(etapa-1);};
   $("v_avancar").onclick=function(){if(podeIrEtapa(etapa+1))irEtapa(etapa+1);};
   $("v_cliente").onchange=function(){atualizarEtapas();try{renderFormas();notaCreditoPlano();}catch(e){}};
+  $("v_cliBusca").oninput=function(){opcoesClienteVenda();};
   irEtapa(1);
   $("cal_ant").onclick=function(){moverCal(-1);};
   $("cal_prox").onclick=function(){moverCal(1);};
@@ -23238,6 +23600,7 @@ function navegacaoBasica(){
   try{ligarAcesso();}catch(e){console.warn("acesso",e);}
   try{ligarMinhaFoto();}catch(e){console.warn("minha foto",e);}
   try{ligarImportProdutos();}catch(e){console.warn("importar produtos",e);}
+  try{ligarImportClientes();}catch(e){console.warn("importar clientes",e);}
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){
     b.onclick=function(){ir(b.dataset.s);};
   });
