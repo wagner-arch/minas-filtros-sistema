@@ -1389,6 +1389,8 @@ img{max-width:100%}
           <select id="prodGrupo" style="max-width:200px"></select>
           <select id="prodSub" style="max-width:200px"></select>
           <span class="count" id="prodCount"></span>
+          <span class="sp"></span>
+          <button class="btn ghost" type="button" id="prodImportar">Importar lista</button>
         </div>
         <div class="tw"><table>
           <thead><tr><th>Produto</th><th>Grupo · Subgrupo</th><th class="num">Estoque</th><th class="num">Custo</th><th class="num">Frete</th><th class="num">100%</th><th class="num">70%</th><th class="num">Campanha</th><th class="num">Pontos</th><th>Série</th><th>Manutenção</th></tr></thead>
@@ -4352,6 +4354,29 @@ img{max-width:100%}
   </div>
 </div>
 
+<div class="modal" id="impModal" hidden>
+  <div class="box" style="width:min(720px,100%)">
+    <h3>Importar lista de produtos</h3>
+    <div class="sub">Uma linha por produto, separada por <b>;</b> — código, nome, código de barras, marca, quantidade e unidade. Campos que faltarem ficam em branco.</div>
+    <div class="actions" style="justify-content:flex-start;margin:14px 0 10px">
+      <button class="btn ghost" type="button" id="ip_arqBt">Escolher o arquivo…</button>
+      <input type="file" id="ip_arq" accept=".csv,.txt" class="os-foto-in">
+      <span class="count" id="ip_arqNome"></span>
+    </div>
+    <div class="fld"><label for="ip_texto">…ou cole as linhas aqui</label>
+      <textarea id="ip_texto" rows="5" placeholder="000049;VALVULA DE PRESSAO 1/4 X 1/4;6015011161132;NYC;17,00;PC"></textarea></div>
+    <label class="chk" style="display:flex;gap:9px;align-items:center;margin:8px 0">
+      <input type="checkbox" id="ip_estoque" checked> Lançar a quantidade como estoque inicial desta loja
+    </label>
+    <div id="ip_previa"></div>
+    <div id="ip_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="ip_ok">Importar</button>
+      <button class="btn mut" type="button" id="ip_fechar">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="retModal" hidden>
   <div class="box" style="width:min(560px,100%)">
     <h3>Produto sem estoque disponível</h3>
@@ -5428,7 +5453,7 @@ async function carregar(){
   try{
     var cs=await col("clientes").limit(500).get();
     clientes=cs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var ps=await col("produtos").limit(500).get();
+    var ps=await col("produtos").limit(3000).get();
     produtos=ps.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     if(!produtos.length){
       for(var i=0;i<SEED.length;i++){var p=JSON.parse(JSON.stringify(SEED[i]));p.id="p"+i;await col("produtos").doc(p.id).set(p);produtos.push(p);}
@@ -5549,7 +5574,7 @@ async function carregar(){
     titulos=ts2.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var ms2=await col("movs").limit(1000).get();
     movs=ms2.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var me=await col("movest").limit(2000).get();
+    var me=await col("movest").limit(6000).get();
     movEst=me.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var rq=await col("requisicoes").limit(500).get();
     requisicoes=rq.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
@@ -6012,7 +6037,10 @@ function renderProdutos(){
     var estCls=est<0?"p-crit":((mn>0&&est<mn)?"p-warn":"p-mut");
     var inativo=(p.status||"ativo")==="inativo";
     if(inativo)tr.style.opacity=".55";
-    tr.innerHTML='<td><div class="t-main">'+esc(p.nome)+(inativo?' <span class="pill p-mut">inativo</span>':"")+'</div><div class="t-sub"><code>'+esc(p.cod)+"</code> · "+esc(p.marca||"—")+"</div></td>"+
+    tr.innerHTML='<td><div class="t-main">'+esc(p.nome)+(inativo?' <span class="pill p-mut">inativo</span>':"")+
+        /* importado sem preço: some da venda até o cadastro ser completado (v143) */
+        (!inativo&&produtoIncompleto(p)?' <span class="pill p-crit">completar cadastro</span>':"")+
+        '</div><div class="t-sub"><code>'+esc(p.cod)+"</code> · "+esc(p.marca||"—")+"</div></td>"+
       '<td><div class="t-main">'+esc(p.grupo||"—")+'</div><div class="t-sub">'+esc(p.subgrupo||"sem subgrupo")+"</div></td>"+
       '<td class="num"><span class="pill '+estCls+'">'+est+"</span></td>"+
       '<td class="num">'+(p.custo?BRL(p.custo):"—")+'</td><td class="num">'+(p.frete?BRL(p.frete):"—")+"</td>"+
@@ -6103,10 +6131,124 @@ function notaCampanha(){
 }
 
 /* pedido */
+/* ================= IMPORTAR LISTA DE PRODUTOS (v143, 18/09) =================
+   Pedido do Wagner: subir a lista inteira do CRM antigo com o que o arquivo tem (código, nome,
+   código de barras, marca, quantidade e unidade) e completar o cadastro depois, um por um.
+   O que falta (grupo, preços, pontos, garantia, série) fica marcado "completar cadastro":
+   o produto aparece no estoque, mas NÃO entra na lista de venda enquanto não tiver preço —
+   senão daria para vender a R$ 0,00 sem ninguém perceber. */
+var GRUPO_COMPLETAR="A classificar";
+function produtoIncompleto(p){
+  return !!p.completar||p.grupo===GRUPO_COMPLETAR||!(+p.cheia>0);
+}
+var UNID_IMP=/^(UN|UND|UNID|PC|PÇ|CX|MT|M|KG|LT|PT|JG|CJ|RL)$/i;
+function linhasImportProduto(txt){
+  var itens=[],ruins=[];
+  String(txt||"").replace(/^﻿/,"").split(/\r?\n/).forEach(function(linha){
+    var l=linha.trim();
+    if(!l)return;
+    var c=l.split(/\t|;/);
+    if(c.length<2)c=l.split("|");
+    c=c.map(function(x){return String(x).replace(/\s+/g," ").trim();}).filter(function(x){return x!=="";});
+    if(c.length<2)return;
+    var cod=c[0],nome=c[1];
+    if(!/\d/.test(cod)||/^(produto|c[óo]digo|cod)$/i.test(cod))return;   /* cabeçalho */
+    var k=c.length-1,un="",est="";
+    if(UNID_IMP.test(c[k])){un=c[k].toUpperCase();k--;}
+    if(k>=2&&/^[0-9.]*[0-9]([,.][0-9]{1,3})?$/.test(c[k])){est=c[k];k--;}
+    var barras="",marca="";
+    for(var j=2;j<=k;j++){
+      if(/^[0-9]{8,14}$/.test(c[j])&&!barras)barras=c[j];
+      else if(!/^sem gtin$/i.test(c[j]))marca=marca+(marca?" ":"")+c[j];
+    }
+    if(un==="UND"||un==="UNID")un="UN";
+    if(un==="M")un="MT";
+    var q=parseFloat(String(est).replace(/\./g,"").replace(",","."))||0;
+    if(!nome){ruins.push(l);return;}
+    itens.push({cod:cod,nome:nome,barras:barras,marca:marca,un:un||"UN",qtd:Math.round(q)});
+  });
+  return {itens:itens,ruins:ruins};
+}
+var impLidos=null;
+function previaImport(){
+  var r=linhasImportProduto($("ip_texto").value);
+  impLidos=r;
+  var novos=[],repete=[],jaTem=[],vistos={};
+  r.itens.forEach(function(i){
+    if(vistos[i.cod]){repete.push(i);return;}
+    vistos[i.cod]=true;
+    (produtos.some(function(p){return String(p.cod)===String(i.cod);})?jaTem:novos).push(i);
+  });
+  impLidos.novos=novos;impLidos.jaTem=jaTem;
+  if(!r.itens.length){$("ip_previa").innerHTML=$("ip_texto").value.trim()
+    ?'<div class="note crit"><b>Não reconheci nenhuma linha.</b> Cada linha precisa começar pelo código do produto.</div>':"";return;}
+  var amostra=novos.slice(0,6).map(function(i){
+    return "<tr><td>"+esc(i.cod)+"</td><td>"+esc(i.nome)+"</td><td>"+esc(i.barras||"—")+"</td><td>"+esc(i.marca||"—")+
+      '</td><td class="num">'+i.qtd+"</td><td>"+esc(i.un)+"</td></tr>";}).join("");
+  $("ip_previa").innerHTML='<div class="note'+(novos.length?" ok":" warn")+'"><b>'+r.itens.length+" linha(s) lida(s)</b> · <b>"+
+    novos.length+"</b> produto(s) novo(s)"+(jaTem.length?" · "+jaTem.length+" já cadastrado(s), que serão pulados":"")+
+    (repete.length?" · "+repete.length+" código(s) repetido(s) no arquivo":"")+
+    (r.ruins.length?" · "+r.ruins.length+" linha(s) sem nome":"")+"</div>"+
+    (novos.length?'<div class="tw"><table><thead><tr><th>Código</th><th>Nome</th><th>Barras</th><th>Marca</th><th class="num">Qtd</th><th>Un.</th></tr></thead><tbody>'+
+      amostra+"</tbody></table></div>"+(novos.length>6?'<p class="help">… e mais '+(novos.length-6)+" produto(s).</p>":""):"");
+}
+function abrirImportProdutos(){
+  $("ip_texto").value="";$("ip_arqNome").textContent="";$("ip_previa").innerHTML="";$("ip_alerta").innerHTML="";
+  $("ip_estoque").checked=true;impLidos=null;
+  $("impModal").hidden=false;
+}
+async function importarProdutos(){
+  if(!impLidos)previaImport();
+  var novos=(impLidos&&impLidos.novos)||[];
+  if(!novos.length){$("ip_alerta").innerHTML='<div class="note crit"><b>Nada para importar.</b></div>';return;}
+  var comEst=$("ip_estoque").checked,bt=$("ip_ok");
+  bt.disabled=true;$("ip_fechar").disabled=true;
+  var feitos=0,erros=0;
+  for(var i=0;i<novos.length;i++){
+    var n=novos[i];
+    try{
+      var p={id:uid(),cod:n.cod,nome:n.nome,pop:"",marca:n.marca,grupo:GRUPO_COMPLETAR,subgrupo:GRUPO_COMPLETAR,
+        un:n.un,barras:n.barras,cheia:0,campanha:0,minimo:0,campativa:"nao",
+        custo:0,frete:0,ipi:0,st:0,federais:0,icms:0,pontos:0,manut:0,gar:0,
+        serie:"nao",status:"ativo",estmin:{},local:{},estoqueMigrado:true,
+        importado:true,completar:true,criadoEm:hojeISO(),criadoPor:usuarioAtual};
+      produtos.push(p);
+      if(db)await col("produtos").doc(p.id).set(p);
+      if(comEst&&n.qtd>0)await lancarMov(p.id,n.qtd,"ajuste",LOC_EMPRESA,"Importação da lista","Quantidade da lista importada",hojeISO(),"");
+      feitos++;
+    }catch(e){erros++;console.warn("importar",n.cod,e);}
+    if(i%10===0||i===novos.length-1)
+      $("ip_alerta").innerHTML='<div class="note"><b>Gravando '+(i+1)+" de "+novos.length+"…</b> deixe esta janela aberta até terminar.</div>";
+  }
+  bt.disabled=false;$("ip_fechar").disabled=false;
+  $("ip_alerta").innerHTML='<div class="note ok"><b>'+feitos+" produto(s) importado(s).</b>"+
+    (erros?" "+erros+" não gravaram — veja o aviso vermelho do topo.":"")+
+    ' Eles estão em <b>'+GRUPO_COMPLETAR+"</b> e aparecem como <b>completar cadastro</b> até terem grupo e preço."+
+    (comEst?" A quantidade entrou como estoque da loja.":"")+"</div>";
+  impLidos=null;$("ip_texto").value="";$("ip_previa").innerHTML="";
+  opcoesProduto();renderProdutos();
+  toast(feitos+" produto(s) importado(s).");
+}
+function ligarImportProdutos(){
+  var bt=$("prodImportar");if(!bt)return;
+  bt.onclick=abrirImportProdutos;
+  $("ip_fechar").onclick=function(){$("impModal").hidden=true;};
+  $("ip_ok").onclick=importarProdutos;
+  $("ip_texto").oninput=previaImport;
+  $("ip_arqBt").onclick=function(){$("ip_arq").click();};
+  $("ip_arq").onchange=function(){
+    var f=this.files&&this.files[0];if(!f)return;
+    $("ip_arqNome").textContent=f.name;
+    var r=new FileReader();
+    r.onload=function(){$("ip_texto").value=String(r.result||"");previaImport();};
+    r.readAsText(f,"utf-8");
+  };
+}
 function opcoesProduto(){
   var s=$("v_prod"),atual=s.value;s.innerHTML="";
-  /* plano não é escolhido como produto: entra sozinho pela garantia do item */
-  var ativos=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos"&&p.cod!=="USADO-TROCA";});
+  /* plano não é escolhido como produto: entra sozinho pela garantia do item;
+     produto importado sem preço também fica de fora até o cadastro ser completado (v143) */
+  var ativos=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos"&&p.cod!=="USADO-TROCA"&&!produtoIncompleto(p);});
   ativos.forEach(function(p){var o=document.createElement("option");o.value=p.id;o.textContent=p.cod+" · "+p.nome+"   "+BRL(p.cheia);s.appendChild(o);});
   if(!ativos.length){var o=document.createElement("option");o.textContent="— nenhum produto ativo —";s.appendChild(o);}
   if(atual&&ativos.some(function(p){return p.id===atual;}))s.value=atual;
@@ -22346,6 +22488,8 @@ function ligar(){
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
     ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){p[k]=parseFloat($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
+    /* produto importado deixa de ser "a completar" quando ganha grupo de verdade e preço (v143) */
+    p.completar=(grupo===GRUPO_COMPLETAR||!(+p.cheia>0));
     p.estmin=p.estmin||{};p.local=p.local||{};p.estoqueMigrado=true;
     var qv=$("p_estoque").value, mv=$("p_estmin").value;
     p.estmin[lojaAtual]=(mv===""?0:parseFloat(mv)||0);
@@ -22947,6 +23091,7 @@ function navegacaoBasica(){
   try{ligarFunil();}catch(e){console.warn("funil",e);}
   try{ligarAcesso();}catch(e){console.warn("acesso",e);}
   try{ligarMinhaFoto();}catch(e){console.warn("minha foto",e);}
+  try{ligarImportProdutos();}catch(e){console.warn("importar produtos",e);}
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){
     b.onclick=function(){ir(b.dataset.s);};
   });
