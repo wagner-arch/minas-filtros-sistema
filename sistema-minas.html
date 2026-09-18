@@ -4369,10 +4369,21 @@ img{max-width:100%}
     </div>
     <div class="fld"><label for="ic_texto">…ou cole as linhas aqui</label>
       <textarea id="ic_texto" rows="5" placeholder="Nome;CPF/CNPJ;Telefone;Cidade;UF;Bairro;Rua;Nº;CEP"></textarea></div>
+    <div class="grid g3" style="margin:6px 0 2px">
+      <div class="fld"><label for="ic_bloco">Gravar de quantos em quantos</label>
+        <select id="ic_bloco">
+          <option value="100" selected>100 por vez</option>
+          <option value="250">250 por vez</option>
+          <option value="500">500 por vez</option>
+        </select></div>
+      <div class="fld"><label for="ic_ate">Parar depois de quantos (vazio = todos)</label>
+        <input id="ic_ate" type="number" min="100" step="100" placeholder="todos"></div>
+    </div>
     <div id="ic_previa"></div>
     <div id="ic_alerta"></div>
     <div class="actions">
       <button class="btn" type="button" id="ic_ok">Importar</button>
+      <button class="btn mut" type="button" id="ic_parar" hidden>Parar aqui</button>
       <button class="btn mut" type="button" id="ic_fechar">Fechar</button>
       <span class="sp" style="flex:1"></span>
       <button class="btn mut" type="button" id="ic_apagar" hidden>Apagar os importados</button>
@@ -6570,7 +6581,7 @@ function linhasImportCliente(txt){
   });
   return {itens:itens};
 }
-var impcLidos=null;
+var impcLidos=null,impcParar=false;
 function previaImportCli(){
   var r=linhasImportCliente($("ic_texto").value);
   impcLidos=r;
@@ -6603,7 +6614,9 @@ function previaImportCli(){
 }
 function abrirImportClientes(){
   $("ic_texto").value="";$("ic_arqNome").textContent="";$("ic_previa").innerHTML="";$("ic_alerta").innerHTML="";
-  impcLidos=null;atualizarBotaoApagarCli();
+  impcLidos=null;impcParar=false;
+  $("ic_parar").hidden=true;$("ic_parar").textContent="Parar aqui";
+  atualizarBotaoApagarCli();
   $("impcModal").hidden=false;
 }
 async function importarClientes(){
@@ -6627,31 +6640,38 @@ async function importarClientes(){
     if(n.obs)c.notas=[{quando:agora.slice(0,16).replace("T"," "),por:usuarioAtual,texto:"Observação da base antiga: "+n.obs}];
     lista.push(c);
   });
-  $("ic_alerta").innerHTML='<div class="note"><b>Gravando '+lista.length+" cliente(s)…</b> deixe esta janela aberta até terminar.</div>";
+  /* de N em N: cada bloco é uma gravação só, a tela mostra o andamento entre um e outro
+     e o botão "Parar aqui" encerra no fim do bloco. O que já entrou fica gravado, e
+     importar o mesmo arquivo de novo continua de onde parou (os repetidos são pulados). */
+  var bloco=Math.max(50,parseInt(($("ic_bloco")||{}).value,10)||100);
+  var teto=parseInt(($("ic_ate")||{}).value,10)||0;
+  if(teto>0&&teto<lista.length)lista=lista.slice(0,teto);
+  impcParar=false;$("ic_parar").hidden=false;
+  $("ic_alerta").innerHTML='<div class="note"><b>Gravando '+lista.length+" cliente(s), de "+bloco+" em "+bloco+"…</b></div>";
   try{
-    if(db&&typeof db.gravarVarios==="function"){
-      await db.gravarVarios("clientes",lista,{aoAndar:function(f,t){
-        $("ic_alerta").innerHTML='<div class="note"><b>Gravando '+f+" de "+t+"…</b> deixe esta janela aberta até terminar.</div>";}});
-      feitos=lista.length;
-    } else {
-      for(var i=0;i<lista.length;i++){
-        if(db)await col("clientes").doc(lista[i].id).set(lista[i]);
-        feitos++;
-        if(i%20===0)$("ic_alerta").innerHTML='<div class="note"><b>Gravando '+(i+1)+" de "+lista.length+"…</b></div>";
-      }
+    for(var i=0;i<lista.length;i+=bloco){
+      if(impcParar)break;
+      var parte=lista.slice(i,i+bloco);
+      if(db&&typeof db.gravarVarios==="function")await db.gravarVarios("clientes",parte,{bloco:bloco});
+      else if(db){for(var j=0;j<parte.length;j++)await col("clientes").doc(parte[j].id).set(parte[j]);}
+      parte.forEach(function(c){clientes.push(c);});
+      feitos+=parte.length;
+      $("ic_alerta").innerHTML='<div class="note"><b>Gravados '+feitos+" de "+lista.length+"…</b> "+
+        "pode acompanhar; o botão <b>Parar aqui</b> encerra no fim do bloco.</div>";
+      await new Promise(function(r){setTimeout(r,0);});   /* deixa a tela respirar entre os blocos */
     }
-    lista.slice(0,feitos).forEach(function(c){clientes.push(c);});
   }catch(e){
     console.warn("importar clientes",e);
-    lista.slice(0,feitos).forEach(function(c){clientes.push(c);});
-    bt.disabled=false;$("ic_fechar").disabled=false;
-    $("ic_alerta").innerHTML='<div class="note crit"><b>A gravação parou:</b> '+esc((e&&e.message)||e)+
-      " O que já entrou está gravado — importe o mesmo arquivo de novo, que ele pula os repetidos.</div>";
+    bt.disabled=false;$("ic_fechar").disabled=false;$("ic_parar").hidden=true;
+    $("ic_alerta").innerHTML='<div class="note crit"><b>A gravação parou em '+feitos+":</b> "+esc((e&&e.message)||e)+
+      " O que já entrou está gravado — importe o mesmo arquivo de novo, que ele continua de onde parou.</div>";
     atualizarBotaoApagarCli();renderClientes();return;
   }
-  bt.disabled=false;$("ic_fechar").disabled=false;
+  bt.disabled=false;$("ic_fechar").disabled=false;$("ic_parar").hidden=true;
+  var faltam=((impcLidos&&impcLidos.novos)||[]).length-feitos;
   $("ic_alerta").innerHTML='<div class="note ok"><b>'+feitos+" cliente(s) importado(s).</b> "+
-    "Todos entraram como <b>clientes</b>, não como leads. O que estiver faltando aparece no filtro <b>Cadastro incompleto</b>.</div>";
+    "Todos entraram como <b>clientes</b>, não como leads. O que estiver faltando aparece no filtro <b>Cadastro incompleto</b>."+
+    (faltam>0?" <b>Faltam "+faltam+"</b> — importe o mesmo arquivo de novo que ele continua de onde parou.":"")+"</div>";
   impcLidos=null;$("ic_texto").value="";$("ic_previa").innerHTML="";
   atualizarBotaoApagarCli();renderClientes();
   toast(feitos+" cliente(s) importado(s).");
@@ -6706,6 +6726,7 @@ function ligarImportClientes(){
   bt.onclick=abrirImportClientes;
   $("ic_fechar").onclick=function(){$("impcModal").hidden=true;};
   $("ic_ok").onclick=importarClientes;
+  $("ic_parar").onclick=function(){impcParar=true;this.textContent="Parando…";};
   $("ic_apagar").onclick=apagarClientesImportados;
   $("ic_texto").oninput=previaImportCli;
   $("ic_arqBt").onclick=function(){$("ic_arq").click();};
