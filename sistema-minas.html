@@ -2043,6 +2043,27 @@ img{max-width:100%}
           </div>
         </div>
 
+        <!-- ATENDIMENTO EM CAMPO: a tela que o técnico vê na casa do cliente (regra do Wagner, 18/09:
+             "está muito extensa para a operação do técnico em campo... tem que ser simples") -->
+        <div class="sect" id="os_secCampo" hidden>
+          <p class="sect-t">Atendimento do técnico</p>
+          <div id="oc_nota"></div>
+          <div class="fld" style="margin-top:12px"><label for="oc_problema">O que você encontrou <span class="req">*</span></label>
+            <textarea id="oc_problema" rows="3" placeholder="O que estava acontecendo no equipamento"></textarea></div>
+          <div class="fld"><label for="oc_obs">Observações técnicas</label>
+            <textarea id="oc_obs" rows="2" placeholder="O que o atendimento precisa saber deste caso"></textarea></div>
+          <div id="oc_alerta"></div>
+          <p class="help" style="margin:16px 0 8px"><b>E agora?</b></p>
+          <div class="actions" style="flex-direction:column;align-items:stretch;gap:10px">
+            <button class="btn" type="button" id="oc_resolvi">Resolvi agora — lançar peças e cobrar</button>
+            <button class="btn ghost" type="button" id="oc_levei">Levei o equipamento para a loja</button>
+            <button class="btn mut" type="button" id="oc_pendente">Não resolvi — o atendimento resolve depois</button>
+          </div>
+          <div class="actions" style="justify-content:flex-start;margin-top:14px">
+            <button class="btn mut sm" type="button" id="oc_completa">Ver a OS completa</button>
+          </div>
+        </div>
+
         <!-- ETAPA 2: diagnóstico do técnico, só com a OS aberta (pedido do Wagner, 14/09) -->
         <div class="sect" id="os_secDiag">
           <p class="sect-t">2 · Diagnóstico técnico</p>
@@ -5472,6 +5493,9 @@ var SEED=[
  /* purificador usado que o cliente dá na troca: entra no estoque do vendedor pela forma "Desconto de Troca" e
     ele devolve ao almoxarifado no dia seguinte (regra do Wagner, 16/09) — não aparece na venda */
  {cod:"USADO-TROCA",nome:"Purificador Usado Pego na Troca",pop:"Purificador usado da troca",marca:"Diversas",grupo:"Usados na troca",subgrupo:"Purificador usado",un:"UN",cheia:0,campanha:0,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
+ /* equipamento do cliente que o técnico traz da visita: fica no estoque DELE até a OS ser
+    concluída e o produto devolvido (regra do Wagner, 18/09) */
+ {cod:"OS-CLIENTE",nome:"Equipamento de Cliente em Análise",pop:"Equipamento do cliente",marca:"Diversas",grupo:"Equipamentos de cliente",subgrupo:"Em análise",un:"UN",cheia:0,campanha:0,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
 ];
 
 function toast(m){var t=$("toast");t.textContent=m;t.hidden=false;setTimeout(function(){t.hidden=true;},2800);}
@@ -5541,6 +5565,12 @@ async function carregar(){
     if(usdSeed&&!produtos.some(function(x){return x.cod==="USADO-TROCA";})){
       var nus=JSON.parse(JSON.stringify(usdSeed));nus.id="usado-troca";
       await col("produtos").doc(nus.id).set(nus);produtos.push(nus);
+    }
+    /* equipamento de cliente trazido pelo técnico: garante na base já gravada */
+    var oscSeed=SEED.filter(function(x){return x.cod==="OS-CLIENTE";})[0];
+    if(oscSeed&&!produtos.some(function(x){return x.cod==="OS-CLIENTE";})){
+      var noc=JSON.parse(JSON.stringify(oscSeed));noc.id="os-cliente";
+      await col("produtos").doc(noc.id).set(noc);produtos.push(noc);
     }
     /* planos gravados antes do cadastro de planos: completa o nome na venda e o contrato pelo modelo */
     for(var bp=0;bp<produtos.length;bp++){
@@ -6792,7 +6822,7 @@ function opcoesProduto(){
   var s=$("v_prod"),atual=s.value;s.innerHTML="";
   /* plano não é escolhido como produto: entra sozinho pela garantia do item;
      produto importado sem preço também fica de fora até o cadastro ser completado (v143) */
-  var ativos=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos"&&p.cod!=="USADO-TROCA"&&!produtoIncompleto(p);});
+  var ativos=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos"&&p.cod!=="USADO-TROCA"&&p.cod!=="OS-CLIENTE"&&!produtoIncompleto(p);});
   ativos.forEach(function(p){var o=document.createElement("option");o.value=p.id;o.textContent=p.cod+" · "+p.nome+"   "+BRL(p.cheia);s.appendChild(o);});
   if(!ativos.length){var o=document.createElement("option");o.textContent="— nenhum produto ativo —";s.appendChild(o);}
   if(atual&&ativos.some(function(p){return p.id===atual;}))s.value=atual;
@@ -7547,6 +7577,8 @@ async function salvarPedido(){
       }else{
         osDoPed.status="entregue";osDoPed.concluidaEm=hojeISO();osDoPed.concluidaPor=usuarioAtual;
         osDoPed.entrega=hojeISO();
+        /* equipamento que o técnico trouxe sai do estoque dele ao finalizar a OS (v151) */
+        try{await baixarEquipClienteOS(osDoPed);}catch(eq){console.warn(eq);}
         if(osDoPed.local==="externo"){
           osDoPed.clienteNaoAprovou=!!servAtendPed;
           osDoPed.retiradoPor=(servAtendPed?"Cliente não aprovou o serviço · cobrado o serviço de atendimento":"Serviço realizado na casa do cliente")+" · pedido "+ped.numero;
@@ -16363,6 +16395,100 @@ function resumoProcessoOS(o,fase){
   return l.join("\n");
 }
 /* contato do atendente criado pelo sistema: "orcamento" logo depois do diagnóstico, "retirada" quando o serviço fica pronto */
+/* ---------- as três saídas do técnico em campo (v151) ---------- */
+function renderCampoOS(){
+  var o=editandoOS,sec=$("os_secCampo");if(!sec)return;
+  var externo=!!(o&&o.local==="externo");
+  var fim=!!(o&&["concluida","entregue","cancelada"].indexOf(o.status)>=0);
+  var simples=externo&&!fim&&!osCompletaAberta;
+  sec.hidden=!(externo&&!fim);
+  if(externo&&!fim){
+    $("oc_problema").value=o.laudo||"";
+    $("oc_obs").value=o.infoTec||"";
+    var comigo=o.equipNaLoja?" <b>O equipamento está com "+esc(o.equipNaLojaPor||"o técnico")+"</b> desde "+esc(dataCurta(o.equipNaLojaEm||""))+".":"";
+    $("oc_nota").innerHTML='<div class="note"><b>OS '+o.numero+" · "+esc(o.cliente||"")+".</b> "+
+      "Escreva o que encontrou e escolha como este atendimento termina."+comigo+"</div>";
+    $("oc_levei").hidden=!!o.equipNaLoja;
+    $("oc_completa").textContent=osCompletaAberta?"Esconder a OS completa":"Ver a OS completa";
+  }
+  /* na OS externa o resto da tela só aparece quando ele pedir */
+  ["os_secDiag","os_secValores","os_secSit","os_etapas"].forEach(function(id){
+    var el=$(id);if(!el)return;
+    if(simples)el.hidden=true;
+  });
+}
+async function salvarCampoOS(o){
+  if(!$("oc_problema").value.trim()){
+    $("oc_alerta").innerHTML='<div class="note crit"><b>Escreva o que você encontrou no equipamento.</b></div>';
+    try{$("oc_problema").focus();}catch(e){}return false;}
+  $("oc_alerta").innerHTML="";
+  o.laudo=$("oc_problema").value.trim();
+  o.infoTec=$("oc_obs").value.trim();
+  if(!o.reparo)o.reparo=o.laudo;             /* o campo do fluxo antigo continua preenchido */
+  if(!o.diagnosticoEm){o.diagnosticoEm=hojeISO();o.diagnosticoPor=usuarioAtual;}
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Atendimento em campo: "+o.laudo});
+  await grava("ordens",o);
+  return true;
+}
+/* 1) resolveu na hora: vai direto para o pedido, onde lança peças, serviços e pagamento */
+async function campoResolvi(){
+  var o=editandoOS;if(!o)return;
+  if(!await salvarCampoOS(o))return;
+  await concluirAtivTecOS(o);
+  abrirPedidoDaOS(o,"tecnico");
+}
+/* 2) trouxe o equipamento: entra no estoque do técnico e a OS fica pendente */
+async function campoLevei(){
+  var o=editandoOS;if(!o)return;
+  if(!await salvarCampoOS(o))return;
+  var quem=o.tecnico||usuarioAtual;
+  o.equipNaLoja=true;o.equipNaLojaPor=quem;o.equipNaLojaEm=hojeISO();
+  o.status="analise";
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,
+    texto:"Equipamento trazido para a loja — entrou no estoque de "+quem+" até a OS ser concluída"});
+  try{await movEquipCliente(o,quem,true);}catch(e){console.warn(e);}
+  await grava("ordens",o);
+  await concluirAtivTecOS(o);
+  if(!o.atividadeContatoId)await criarContatoAtendenteOS(o,"orcamento");
+  await grava("ordens",o);
+  renderCampoOS();ajustarEtapasOS();render();
+  toast("OS "+o.numero+": equipamento no seu estoque e contato criado para o atendimento.");
+}
+/* 3) não resolveu: o atendimento assume o caso */
+async function campoPendente(){
+  var o=editandoOS;if(!o)return;
+  if(!await salvarCampoOS(o))return;
+  o.status="aprovacao";
+  await grava("ordens",o);
+  await concluirAtivTecOS(o);
+  if(!o.atividadeContatoId)await criarContatoAtendenteOS(o,"orcamento");
+  await grava("ordens",o);
+  renderCampoOS();ajustarEtapasOS();render();
+  toast("OS "+o.numero+" pendente · contato criado para "+(o.atendente||"o atendimento")+".");
+}
+/* a visita do técnico se encerra em qualquer uma das três saídas */
+async function concluirAtivTecOS(o){
+  var at=ativTecDaOS(o);
+  if(!at||at.status==="finalizado")return;
+  at.status="finalizado";at.situacao="realizado";at.concluidaEm=hojeISO();
+  at.resultado="Diagnóstico em campo: "+(o.laudo||"");
+  if(db){try{await col("atendimentos").doc(at.id).set(at);}catch(e){console.warn(e);}}
+}
+/* OS fechada: o equipamento do cliente sai do estoque do técnico */
+async function baixarEquipClienteOS(o){
+  if(!o||!o.equipNaLoja)return;
+  await movEquipCliente(o,o.equipNaLojaPor||o.tecnico||usuarioAtual,false);
+  o.equipNaLoja=false;o.equipDevolvidoEm=hojeISO();
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,
+    texto:"Equipamento devolvido ao cliente — saiu do estoque de "+(o.equipNaLojaPor||o.tecnico||"")});
+}
+function ligarCampoOS(){
+  if(!$("oc_resolvi"))return;
+  $("oc_resolvi").onclick=campoResolvi;
+  $("oc_levei").onclick=campoLevei;
+  $("oc_pendente").onclick=campoPendente;
+  $("oc_completa").onclick=function(){osCompletaAberta=!osCompletaAberta;renderCampoOS();ajustarEtapasOS();};
+}
 async function criarContatoAtendenteOS(o,fase){
   var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
   var hora=horaDaqui(10),quem=o.atendente||o.criadoPor||usuarioAtual;
@@ -17977,7 +18103,7 @@ function renderOS(){
   });
 }
 function abrirOS(o,ctx){
-  editandoOS=o||null;osOrigemAtiv=(ctx&&ctx.atividade)||null;osCli=null;
+  editandoOS=o||null;osOrigemAtiv=(ctx&&ctx.atividade)||null;osCli=null;osCompletaAberta=false;
   $("osLista").hidden=true;$("osForm").hidden=false;$("osImpressao").hidden=true;
   var sp=$("os_prod");sp.innerHTML="";
   var vazio=document.createElement("option");vazio.value="";vazio.textContent="— escolher —";sp.appendChild(vazio);
@@ -18197,6 +18323,7 @@ async function concluirOS(){
   var o=await salvarOS();if(!o)return;
   o.status="concluida";o.concluidaEm=hojeISO();o.concluidaPor=usuarioAtual;
   o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"OS concluída · "+BRL(totalOS(o))});
+  try{await baixarEquipClienteOS(o);}catch(eq){console.warn(eq);}
   await grava("ordens",o);
   /* a atividade que gerou esta OS se encerra junto */
   var msg="OS "+o.numero+" concluída.";
@@ -18451,6 +18578,38 @@ function tecnicoSugeridoOS(o){
   if(EQUIPE.indexOf(usuarioAtual)>=0)return usuarioAtual;
   return "";
 }
+/* ================= ATENDIMENTO DO TÉCNICO EM CAMPO (v151, 18/09) =================
+   Regra do Wagner: "a OS está muito extensa para a operação do técnico em campo; tem que ser
+   simples, rápida e prática". Na OS externa a tela mostra só o que ele precisa — o que
+   encontrou, observações e três saídas — e o resto fica atrás de "Ver a OS completa".
+   Saída 2 ("levei o equipamento para a loja"): o aparelho do cliente entra no ESTOQUE DO
+   TÉCNICO e só sai quando a OS for concluída e o produto devolvido (regra dele, 18/09). */
+var osCompletaAberta=false;
+function produtoEquipCliente(){
+  return produtos.filter(function(p){return p.cod==="OS-CLIENTE";})[0]||null;
+}
+function equipDeClienteDoColab(quem){
+  var pe=produtoEquipCliente();if(!pe)return {saldo:0,ordens:[]};
+  var loc=locColab(quem),saldo=0,ords={};
+  movEst.forEach(function(m){
+    if(m.produtoId!==pe.id||m.loja!==lojaAtual)return;
+    var n=+m.qtd||0;
+    if(m.destino===loc){saldo+=n;if(m.osId)ords[m.osId]=(ords[m.osId]||0)+n;}
+    if(m.origem===loc){saldo-=n;if(m.osId)ords[m.osId]=(ords[m.osId]||0)-n;}
+  });
+  return {saldo:saldo,ordens:Object.keys(ords).filter(function(k){return ords[k]>0;})};
+}
+/* o aparelho entra (leva) ou sai (devolve) do estoque do técnico, sempre amarrado à OS */
+async function movEquipCliente(o,quem,entra){
+  var pe=produtoEquipCliente();if(!pe||!o)return null;
+  var loc=locColab(quem);
+  var m={id:uid(),loja:lojaAtual,produtoId:pe.id,qtd:1,
+    origem:entra?"cliente":loc,destino:entra?loc:"cliente",
+    doc:"OS "+o.numero,obs:(entra?"Equipamento recolhido na visita: ":"Equipamento devolvido ao cliente: ")+
+      [o.equipamento,o.serie].filter(Boolean).join(" · ")+" · "+(o.cliente||""),
+    centroId:"",osId:o.id,data:hojeISO(),por:usuarioAtual,em:new Date().toISOString()};
+  movEst.push(m);await grava("movest",m);return m;
+}
 function podeTecnicoOS(o){return !!o&&(ehGestor()||!o.tecnico||o.tecnico===usuarioAtual);}
 function ajustarEtapasOS(){
   var o=editandoOS,tec=podeTecnicoOS(o);
@@ -18476,6 +18635,8 @@ function ajustarEtapasOS(){
     : '<div class="note">Lance a mão de obra, as peças e produtos com as quantidades e outros custos. Em seguida, <b>Gerar orçamento</b>.</div>');
   $("osVerOrc").hidden=!orc;
   renderPedOS();
+  /* OS externa: a tela do técnico em campo manda no que aparece (v151) */
+  try{renderCampoOS();}catch(e){console.warn("campo",e);}
 }
 async function salvarDiagnosticoOS(){
   var o=editandoOS;if(!o)return;
@@ -23747,6 +23908,7 @@ function navegacaoBasica(){
   try{ligarMinhaFoto();}catch(e){console.warn("minha foto",e);}
   try{ligarImportProdutos();}catch(e){console.warn("importar produtos",e);}
   try{ligarImportClientes();}catch(e){console.warn("importar clientes",e);}
+  try{ligarCampoOS();}catch(e){console.warn("campo os",e);}
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){
     b.onclick=function(){ir(b.dataset.s);};
   });
