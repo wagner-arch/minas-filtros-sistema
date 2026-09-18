@@ -1167,6 +1167,13 @@ img{max-width:100%}
             <option value="lead">Só leads</option>
             <option value="incompleto">Cadastro incompleto</option>
           </select>
+          <select id="cliPorPag" style="max-width:160px" title="Registros por página">
+            <option value="10">10 por página</option>
+            <option value="25">25 por página</option>
+            <option value="50" selected>50 por página</option>
+            <option value="100">100 por página</option>
+            <option value="300">300 por página</option>
+          </select>
           <span class="sp"></span>
           <span class="count" id="cliCount"></span>
           <button class="btn ghost" type="button" id="cliImportar">Importar clientes</button>
@@ -1175,6 +1182,13 @@ img{max-width:100%}
           <thead><tr><th>Cliente</th><th>Documento</th><th>Endereço</th><th>Mídia de origem</th><th class="num">Indicações</th><th>Cadastro</th></tr></thead>
           <tbody id="cliBody"></tbody>
         </table></div>
+        <div class="toolbar" id="cliPaginacao" hidden>
+          <button class="btn mut sm" type="button" id="cliPrimeira">« Primeira</button>
+          <button class="btn mut sm" type="button" id="cliAnt">‹ Anterior</button>
+          <span class="count" id="cliPagInfo"></span>
+          <button class="btn mut sm" type="button" id="cliProx">Próxima ›</button>
+          <button class="btn mut sm" type="button" id="cliUltima">Última »</button>
+        </div>
       </div>
 
       <div class="card" id="cliForm" hidden>
@@ -5663,10 +5677,18 @@ function faltantes(c){
   /* o que falta para este cadastro poder virar venda */
   return faltamObrig(c,"cliente");
 }
+/* com 22 mil cadastros isto roda 22 mil vezes a cada tecla digitada na busca: o texto
+   fica guardado no próprio cadastro e só é remontado quando ele muda (v148) */
 function textoBusca(c){
-  return [c.nome,c.apelido,c.doc,c.tel,c.email,c.codigo,c.rua,c.num,c.comp,c.bairro,c.cidade,c.uf,c.cep,
+  var chave=(c.nome||"")+"|"+(c.tel||"")+"|"+(c.doc||"")+"|"+(c.cidade||"")+"|"+(c.rua||"");
+  if(c.__bk===chave&&c.__bt!=null)return c.__bt;
+  var t=[c.nome,c.apelido,c.doc,c.tel,c.email,c.codigo,c.rua,c.num,c.comp,c.bairro,c.cidade,c.uf,c.cep,
           c.conjnome,c.conjtel,c.respNome,c.comprasNome]
     .filter(Boolean).join(" ").toLowerCase();
+  try{Object.defineProperty(c,"__bt",{value:t,writable:true,enumerable:false,configurable:true});
+      Object.defineProperty(c,"__bk",{value:chave,writable:true,enumerable:false,configurable:true});}
+  catch(e){}
+  return t;
 }
 function encherFiltro(sel,valores,rot){
   var s=$(sel),atual=s.value;s.innerHTML="";
@@ -5678,6 +5700,7 @@ function unicos(lista,campo){
   var m={};lista.forEach(function(c){var v=(c[campo]||"").trim();if(v)m[v]=1;});
   return Object.keys(m).sort(function(a,b){return a.localeCompare(b,"pt-BR");});
 }
+var cliPag=1;
 function renderClientes(){
   var base=clientes.filter(function(c){return c.loja===lojaAtual;});
   /* os filtros de endereço se encadeiam: bairro só mostra os da cidade escolhida, e assim por diante */
@@ -5707,13 +5730,25 @@ function renderClientes(){
       return false;})
     .sort(function(a,b){return (a.nome||"").localeCompare(b.nome||"","pt-BR");});
   var nLead=lista.filter(ehLead).length;
-  /* base importada tem dezenas de milhares: desenhar todas as linhas trava o navegador.
-     Mostra as primeiras TETO_CLI e manda usar a busca (v145). */
-  var TETO_CLI=300,total=lista.length,cortou=total>TETO_CLI;
-  if(cortou)lista=lista.slice(0,TETO_CLI);
+  /* registros por página, como no sistema antigo (pedido dele, 18/09): com 22 mil cadastros,
+     desenhar tudo de uma vez trava o navegador */
+  var total=lista.length;
+  var porPag=Math.max(10,parseInt(($("cliPorPag")||{}).value,10)||50);
+  var paginas=Math.max(1,Math.ceil(total/porPag));
+  if(cliPag>paginas)cliPag=paginas;
+  if(cliPag<1)cliPag=1;
+  var ini=(cliPag-1)*porPag;
+  lista=lista.slice(ini,ini+porPag);
   $("cliCount").textContent=total+(total===1?" cadastro":" cadastros")+
-    (nLead?" · "+nLead+" lead"+(nLead===1?"":"s"):"")+
-    (cortou?" · mostrando "+TETO_CLI:"");
+    (nLead?" · "+nLead+" lead"+(nLead===1?"":"s"):"");
+  var pg=$("cliPaginacao");
+  if(pg){
+    pg.hidden=(total<=porPag);
+    $("cliPagInfo").textContent="página "+cliPag+" de "+paginas+" · mostrando "+
+      (total?(ini+1):0)+" a "+Math.min(ini+porPag,total);
+    $("cliPrimeira").disabled=$("cliAnt").disabled=(cliPag<=1);
+    $("cliProx").disabled=$("cliUltima").disabled=(cliPag>=paginas);
+  }
   var b=$("cliBody");b.innerHTML="";
   if(!total){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum cliente ainda</div>Use o botão <b>+ Novo</b> no topo para cadastrar o primeiro.</div></td></tr>';return;}
   lista.forEach(function(c){
@@ -20502,11 +20537,17 @@ async function atualizarFunilCliente(cid,motivo){
 /* abertura: leads e clientes com movimento nos últimos 90 dias ganham o cartão que faltar */
 async function sincronizarFunil(){
   var limite=somaDias(hojeISO(),-90),feitos=0;
+  /* quem tem movimento recente sai de listas pequenas (orçamentos e atendimentos), não de
+     uma varredura por cliente: com 22 mil cadastros aquilo era 22 mil × 22 mil (v148) */
+  var mov={};
+  orcamentos.forEach(function(o){if(o.clienteId&&String(o.data||"")>=limite)mov[o.clienteId]=true;});
+  atendimentos.forEach(function(a){
+    if(a.clienteId&&a.natureza!=="atividade"&&String(a.data||"").slice(0,10)>=limite)mov[a.clienteId]=true;});
   for(var i=0;i<clientes.length;i++){
     var c=clientes[i];if(c.loja&&c.loja!==lojaAtual)continue;
-    var ativo=String(c.criadoEm||"").slice(0,10)>=limite||
-      orcamentos.some(function(o){return o.clienteId===c.id&&String(o.data||"")>=limite;})||
-      atendimentos.some(function(a){return a.clienteId===c.id&&String(a.data||"").slice(0,10)>=limite&&a.natureza!=="atividade";});
+    /* base antiga importada NÃO entra no funil por ter sido cadastrada hoje: ela é histórico,
+       não contato novo. Só entra quando tiver orçamento ou atendimento de verdade. */
+    var ativo=mov[c.id]||(!c.importado&&String(c.criadoEm||"").slice(0,10)>=limite);
     if(!ativo)continue;
     var antes=negocios.length;
     var nn=await atualizarFunilCliente(c.id,"");
@@ -22927,8 +22968,14 @@ function ligar(){
         x.setAttribute("aria-current",String(x===b));});
       renderIndicacoes();};});
 
-  $("cliBusca").oninput=renderClientes;
-  ["cliCidade","cliBairro","cliRua","cliQual"].forEach(function(id){$(id).onchange=renderClientes;});
+  /* mexeu na busca ou num filtro: volta para a primeira página */
+  $("cliBusca").oninput=function(){cliPag=1;renderClientes();};
+  ["cliCidade","cliBairro","cliRua","cliQual","cliPorPag"].forEach(function(id){
+    $(id).onchange=function(){cliPag=1;renderClientes();};});
+  $("cliPrimeira").onclick=function(){cliPag=1;renderClientes();};
+  $("cliAnt").onclick=function(){cliPag--;renderClientes();};
+  $("cliProx").onclick=function(){cliPag++;renderClientes();};
+  $("cliUltima").onclick=function(){cliPag=1e9;renderClientes();};
   $("c_temconj").onchange=toggleConj;
   /* CPF/CNPJ conferido enquanto digita: cadastro, cônjuge, orçamento e OS */
   ["c_doc","c_conjcpf","or_doc","os_doc"].forEach(function(id){
