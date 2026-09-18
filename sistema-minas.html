@@ -1520,10 +1520,11 @@ img{max-width:100%}
         <div>
           <div class="card vstep" data-s="1">
             <h2>Cliente e papéis</h2>
-            <div class="fld" style="margin-bottom:16px"><label for="v_cliente">Cliente <span class="req">*</span></label>
-              <input id="v_cliBusca" placeholder="Buscar por nome, CPF ou telefone" autocomplete="off" style="margin-bottom:8px">
-              <select id="v_cliente"></select>
-              <p class="help" id="v_cliNota"></p></div>
+            <div class="fld" style="margin-bottom:16px;position:relative"><label for="v_cliBusca">Cliente <span class="req">*</span></label>
+              <input id="v_cliBusca" placeholder="Nome, CPF, telefone ou código do cliente" autocomplete="off">
+              <div class="auto" id="v_cliSug" hidden></div>
+              <select id="v_cliente" style="display:none"></select>
+              <div id="v_cliNota"></div></div>
             <div id="v_cadAviso" style="margin-bottom:14px"></div>
             <div class="grid g3">
               <div class="fld"><label for="v_prosp">Prospector · 20%</label><select id="v_prosp"></select></div>
@@ -7689,6 +7690,7 @@ async function salvarPedido(){
 }
 function limparPedido(){
   itens=[];formas=[{tipo:"Cartão de Crédito Sipag",valor:0,parc:12}];try{irEtapa(1);}catch(e){}
+  try{escolherClienteVenda(null);$("v_cliBusca").value="";}catch(e){}
   $("v_idata").value="";$("v_ihora").value="";$("v_obs").value="";$("v_imagem").value="sim";
   ANEXOS.forEach(function(a){a.arquivo="";a.dados=null;});
   limparAssinatura();renderFormas();renderAnexos();
@@ -16039,7 +16041,7 @@ function pedidoDaAtividade(a){
 async function abrirPedidoPelaVenda(a,texto){
   var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
   ir("venda");
-  try{if(c.id){$("v_cliente").value=c.id;atualizarEtapas();}
+  try{if(c.id){escolherClienteVenda(c);atualizarEtapas();}
     if(a.colaborador)$("v_vend").value=a.colaborador;calcular();}catch(e){}
   pedOrigemAtiv=a;
   await registrarAcaoAtiv(a,"pedido","","",texto);
@@ -16213,7 +16215,7 @@ function abrirAcoes(a){
         toast("OS "+osAc.numero+" aberta para "+(a.cliente||"o cliente")+". Confira o produto e a alegação e, na Atividade do técnico, escolha interno ou externo, o técnico, a data e a hora.");
       } else if(k==="venda"){
         ir("venda");
-        try{if(c.id){$("v_cliente").value=c.id;atualizarEtapas();}
+        try{if(c.id){escolherClienteVenda(c);atualizarEtapas();}
           if(a.colaborador)$("v_vend").value=a.colaborador;calcular();}catch(e){}
         pedOrigemAtiv=a;
         await registrarAcaoAtiv(a,"pedido","","","Pedido iniciado a partir desta atividade");
@@ -16334,7 +16336,7 @@ function abrirPedidoDaOS(o,modo,ativ,opc){
   try{limparPedido();}catch(e){}
   pedOrigemOS=o;pedOSModo=modo||"tecnico";pedOSAtiv=ativ||null;
   var atd=o.atendente||o.criadoPor||usuarioAtual;
-  try{$("v_cliente").value=c.id;$("v_prosp").value=atd;$("v_vend").value=atd;}catch(e){}
+  try{escolherClienteVenda(c);$("v_prosp").value=atd;$("v_vend").value=atd;}catch(e){}
   /* instalação futura, se houver, sugere o técnico da OS como responsável */
   try{if(o.tecnico&&[].slice.call($("v_iresp").options).some(function(x){return (x.value||x.textContent)===o.tecnico;}))$("v_iresp").value=o.tecnico;}catch(e){}
   itens=JSON.parse(JSON.stringify(o.itensOS||[]));
@@ -16907,7 +16909,7 @@ function hcNovo(k){
       colaborador:usuarioAtual,dias:1,obs:"",nota:"<b>Nova atividade para "+esc(c.nome||"")+".</b> Agende o próximo contato."});
   }else if(k==="venda"){
     ir("venda");
-    try{$("v_cliente").value=c.id;atualizarEtapas();calcular();}catch(e){}
+    try{escolherClienteVenda(c);atualizarEtapas();calcular();}catch(e){}
   }else if(k==="orcam"){
     ir("orcam");abrirOrc(null);preencherOrcDoCliente(c);
   }else if(k==="os"){
@@ -19335,7 +19337,7 @@ async function virarVenda(o){
   o.situacao="convertido";o.convertidoEm=iso(new Date());
   if(db){try{await col("orcamentos").doc(o.id).set(o);}catch(e){console.warn(e);}}
   render();ir("venda");
-  try{$("v_cliente").value=c.id;atualizarEtapas();}catch(e){}
+  try{escolherClienteVenda(c);atualizarEtapas();}catch(e){}
   try{$("v_vend").value=o.vendedor;}catch(e){}
   calcular();
   toast("Orçamento "+o.numero+" carregado no pedido. Falta série, garantia e assinatura.");
@@ -22442,43 +22444,51 @@ function render(){
   opcoesClienteVenda();
   calcular();
 }
-/* A base importada tem dezenas de milhares de clientes: uma lista com todos travaria a
-   tela a cada desenho. Mostra os 300 mais recentes e o resto vem pela busca (v145). */
-var TETO_CLI_VENDA=300;
-function opcoesClienteVenda(){
+/* UM campo só para escolher o cliente (v154): digita, aparece a lista, toca no nome.
+   A caixa de seleção continua existindo escondida, porque é dela que o resto do sistema
+   lê o cliente escolhido — o vendedor não vê duas coisas para a mesma escolha. */
+function clienteDaVenda(){
+  var id=($("v_cliente")||{}).value;
+  return id?clientes.filter(function(c){return c.id===id;})[0]||null:null;
+}
+function escolherClienteVenda(c){
   var sc=$("v_cliente");if(!sc)return;
-  var atual=sc.value;
-  var q=semAcento((($("v_cliBusca")||{}).value)||"").toLowerCase().trim();
-  var num=q.replace(/\D/g,"");
-  var base=clientes.filter(function(c){return c.loja===lojaAtual;});
-  var lista=base.filter(function(c){
-    if(!q)return true;
-    if(semAcento(c.nome||"").toLowerCase().indexOf(q)>=0)return true;
-    if(num.length>=3){
-      if((c.doc||"").replace(/\D/g,"").indexOf(num)>=0)return true;
-      if((c.tel||"").replace(/\D/g,"").indexOf(num)>=0)return true;
-    }
-    return false;});
-  var total=lista.length;
-  lista=lista.slice().sort(function(a,b){return String(b.criadoEm||"").localeCompare(String(a.criadoEm||""));}).slice(0,TETO_CLI_VENDA);
-  /* o cliente já escolhido nunca some da lista */
-  if(atual&&!lista.some(function(c){return c.id===atual;})){
-    var ja=base.filter(function(c){return c.id===atual;})[0];
-    if(ja)lista.unshift(ja);
-  }
   sc.innerHTML="";
-  lista.forEach(function(c){
-    var o=document.createElement("option");o.value=c.id;
-    o.textContent=c.nome+(c.cidade?" · "+c.cidade:"")+(c.tel?" · "+c.tel:"");
-    sc.appendChild(o);});
-  if(!sc.options.length){
-    var o2=document.createElement("option");
-    o2.textContent=q?"— nenhum cliente com esse dado —":"— cadastre um cliente primeiro —";
-    sc.appendChild(o2);}
-  if(atual)sc.value=atual;
-  var nota=$("v_cliNota");
-  if(nota)nota.textContent=(total>lista.length)
-    ?(total+" clientes nesta loja · mostrando "+lista.length+" — use a busca acima"):"";
+  if(c){var o=document.createElement("option");o.value=c.id;o.textContent=c.nome;sc.appendChild(o);sc.value=c.id;}
+  $("v_cliSug").hidden=true;
+  ev(sc,"change");
+  opcoesClienteVenda();
+}
+function ev(el,t){if(el)el.dispatchEvent(new Event(t,{bubbles:true}));}
+function opcoesClienteVenda(){
+  var inp=$("v_cliBusca"),nota=$("v_cliNota");if(!inp||!nota)return;
+  var c=clienteDaVenda();
+  if(c){
+    if(document.activeElement!==inp)inp.value=c.nome;
+    nota.innerHTML='<div class="note ok" style="margin-top:8px"><b>'+esc(c.nome)+"</b>"+
+      (c.codigo?" · "+esc(c.codigo):"")+(c.cidade?" · "+esc(c.cidade):"")+(c.tel?" · "+esc(c.tel):"")+
+      ' <button class="btn mut sm" type="button" id="v_cliTrocar" style="margin-left:10px">Trocar</button></div>';
+    var bt=$("v_cliTrocar");
+    if(bt)bt.onclick=function(){escolherClienteVenda(null);$("v_cliBusca").value="";$("v_cliBusca").focus();};
+  }else{
+    nota.innerHTML='<div class="note" style="margin-top:8px">Digite o nome, o CPF, o telefone ou o código e toque no cliente na lista.</div>';
+  }
+}
+function buscarClienteVenda(){
+  var box=$("v_cliSug"),q=($("v_cliBusca").value||"").trim();
+  if(q.length<2){box.hidden=true;return;}
+  var achados=achaCliente(q).slice(0,8);
+  if(!achados.length){
+    box.innerHTML='<button type="button" disabled>Nenhum cliente com esse dado</button>';
+    box.hidden=false;return;}
+  box.innerHTML="";
+  achados.forEach(function(c){
+    var b=document.createElement("button");b.type="button";
+    b.innerHTML=linhaSugestao(c);
+    b.onclick=function(){$("v_cliBusca").value=c.nome;escolherClienteVenda(c);};
+    box.appendChild(b);
+  });
+  box.hidden=false;
 }
 var telaAtual="";
 function ir(s){
@@ -23281,7 +23291,7 @@ function ligar(){
     if(voltaAtend){voltarDoLead(c);}
     else if(voltaVenda){
       voltaVenda=false;ir("venda");
-      try{$("v_cliente").value=c.id;atualizarEtapas();calcular();}catch(e){}
+      try{escolherClienteVenda(c);atualizarEtapas();calcular();}catch(e){}
       toast("Cadastro de "+c.nome+" completo — continue o pedido.");
     }
   };
@@ -23357,7 +23367,12 @@ function ligar(){
   $("v_voltar").onclick=function(){irEtapa(etapa-1);};
   $("v_avancar").onclick=function(){if(podeIrEtapa(etapa+1))irEtapa(etapa+1);};
   $("v_cliente").onchange=function(){atualizarEtapas();try{renderFormas();notaCreditoPlano();}catch(e){}};
-  $("v_cliBusca").oninput=function(){opcoesClienteVenda();};
+  $("v_cliBusca").oninput=function(){
+    /* mexeu no campo: o cliente escolhido sai, para não ficar um nome na tela e outro no pedido */
+    if($("v_cliente").value)escolherClienteVenda(null);
+    buscarClienteVenda();};
+  $("v_cliBusca").onblur=function(){setTimeout(function(){$("v_cliSug").hidden=true;opcoesClienteVenda();},200);};
+  $("v_cliBusca").onfocus=function(){if(this.value.length>=2)buscarClienteVenda();};
   irEtapa(1);
   $("cal_ant").onclick=function(){moverCal(-1);};
   $("cal_prox").onclick=function(){moverCal(1);};
