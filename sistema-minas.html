@@ -331,6 +331,10 @@
   .lixo{background:none;border:0;cursor:pointer;font-size:15px;line-height:1;
     padding:2px 6px 2px 0;color:var(--ink-3);vertical-align:baseline}
   .lixo:hover{color:var(--crit)}
+  /* lixeira de apagar o registro inteiro — só o Administrador a vê (regra dele, 20/09) */
+  .lixo-reg{background:none;border:1px solid var(--linha);border-radius:8px;cursor:pointer;
+    font-size:15px;line-height:1;padding:7px 9px;color:var(--ink-3);margin-left:6px}
+  .lixo-reg:hover{color:#fff;background:var(--crit);border-color:var(--crit)}
   .lnk-cli{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--accent);
     cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:2px}
   .lnk-cli:hover{opacity:.8}
@@ -1547,7 +1551,11 @@ img{max-width:100%}
             <p class="help" style="margin:-6px 0 14px">Escolha a forma <b>antes</b> dos itens: o valor de cada produto já sai calculado para esta forma, na tabela cheia.</p>
             <div id="v_creditoNota"></div>
             <div id="v_formas"></div>
-            <button class="btn ghost sm" type="button" id="v_addForma" style="margin-top:12px">Adicionar forma de pagamento</button>
+            <div class="actions" style="justify-content:flex-start;margin-top:12px">
+              <button class="btn ghost sm" type="button" id="v_addForma">Adicionar forma de pagamento</button>
+              <!-- entrada do purificador usado: não paga comissão (regra do Wagner, 20/09) -->
+              <button class="btn ghost sm" type="button" id="v_addTroca">Desconto de troca</button>
+            </div>
             <div class="calc" style="margin-top:20px">
               <div class="r"><span>Total do pedido</span><span id="o_total">—</span></div>
               <div class="r"><span>Somado nas formas</span><span id="o_formas">—</span></div>
@@ -1642,6 +1650,8 @@ img{max-width:100%}
             <div class="calc">
               <div class="r"><span>Valor depreciado</span><span id="c_dep">—</span></div>
               <div class="formula" id="c_formula">—</div>
+              <!-- o Desconto de troca sai da base: purificador usado não gera comissão (20/09) -->
+              <div class="r" id="c_trocaR" hidden><span>− Desconto de troca</span><span id="c_troca">—</span></div>
               <div class="r sep big"><span>Base de comissão</span><span id="c_base">—</span></div>
             </div>
             <div class="split">
@@ -6034,6 +6044,68 @@ var DADOS_TRAVADOS=[["c_nome","nome"],["c_doc","doc"],["c_rg","rg"]];
 function clienteTravado(c){return !!(c&&c.id&&!ehLead(c));}
 /* só o Administrador corrige nome, CPF/CNPJ e RG de cliente (regra de 12/09) */
 function ehAdministrador(){return perfilDe(usuarioAtual)==="Administrador";}
+
+/* ================= APAGAR UM REGISTRO (regra do Wagner, 20/09) =================
+   "no campo de atendimentos, agendamentos, atividades, pedidos, OS, na frente de cada uma tenha uma
+   lixeira para apagar esse campo, mas somente para o administrador conseguir realizar esse comando."
+   A lixeira só é desenhada para quem tem perfil Administrador, e apagarRegistro confere de novo antes
+   de mexer em qualquer coisa — ninguém apaga forçando a DOM. Apaga o registro, não desfaz o que ele
+   gerou: título, estoque e comissão de um pedido aprovado continuam lançados, e o aviso diz isso
+   antes de confirmar. */
+var APAGAVEIS={
+  atendimento:{colecao:"atendimentos",nome:"este atendimento",
+    lista:function(){return atendimentos;},guardar:function(l){atendimentos=l;},
+    rotulo:function(a){return (a.cliente||"sem cliente")+" · "+dataCurta(a.data);}},
+  atividade:{colecao:"atendimentos",nome:"esta atividade",
+    lista:function(){return atendimentos;},guardar:function(l){atendimentos=l;},
+    rotulo:function(a){return (a.cliente||"sem cliente")+" · "+dataCurta(a.data)+(a.inicio?" às "+a.inicio:"");}},
+  pedido:{colecao:"pedidos",nome:"este pedido",
+    lista:function(){return pedidos;},guardar:function(l){pedidos=l;},
+    rotulo:function(p){return "nº "+p.numero+" · "+(p.cliente||"")+" · "+BRL(p.total);},
+    alerta:function(p){
+      if(p.status==="Cancelada")return "";
+      return p.aprovado
+        ? "Este pedido JÁ FOI APROVADO no financeiro: o título a receber, a baixa de estoque e a comissão do mês continuam lançados depois de apagar."
+        : "";}},
+  os:{colecao:"ordens",nome:"esta OS",
+    lista:function(){return ordens;},guardar:function(l){ordens=l;},
+    rotulo:function(o){return "nº "+o.numero+" · "+(o.cliente||"");},
+    alerta:function(o){return o.pedidoId?"Esta OS tem pedido lançado; o pedido continua no sistema.":"";}}
+};
+function htmlLixeira(tipo,id){
+  if(!ehAdministrador())return "";
+  return ' <button class="lixo-reg" type="button" data-apagar="'+tipo+":"+id+
+    '" title="Apagar este registro" aria-label="Apagar este registro">&#128465;</button>';
+}
+async function apagarRegistro(tipo,id){
+  if(!ehAdministrador()){toast("Só o Administrador pode apagar registros.");return;}
+  var cfg=APAGAVEIS[tipo];if(!cfg)return;
+  var r=cfg.lista().filter(function(x){return x.id===id;})[0];
+  if(!r){toast("Este registro já não existe.");render();return;}
+  var av=cfg.alerta?(cfg.alerta(r)||""):"";
+  if(!confirm("Apagar "+cfg.nome+"?\n\n"+cfg.rotulo(r)+"\n\n"+(av?av+"\n\n":"")+
+    "Isso não pode ser desfeito."))return;
+  cfg.guardar(cfg.lista().filter(function(x){return x.id!==id;}));
+  await apaga(cfg.colecao,id);
+  registrarAcessoApagou(tipo,r);
+  toast("Registro apagado.");
+  render();
+}
+/* fica o rastro de quem apagou o quê, no console e no acesso do dia */
+function registrarAcessoApagou(tipo,r){
+  try{console.warn("apagado por "+usuarioAtual+": "+tipo+" "+(r.numero||r.id));}catch(e){}
+}
+/* um clique só, em captura, atende todas as lixeiras de linha do sistema */
+function ligarLixeiras(){
+  document.addEventListener("click",function(ev){
+    var el=ev.target&&ev.target.closest?ev.target.closest("[data-apagar]"):null;
+    if(!el)return;
+    ev.preventDefault();ev.stopPropagation();
+    var p=String(el.getAttribute("data-apagar")||"").split(":");
+    if(p.length<2)return;
+    apagarRegistro(p[0],p.slice(1).join(":"));
+  },true);
+}
 function travarDadosPessoais(c){
   var cli=clienteTravado(c),adm=ehAdministrador(),bloq=cli&&!adm;
   DADOS_TRAVADOS.forEach(function(x){
@@ -7124,6 +7196,13 @@ function addItem(){
    preço de tabela, a comissão não cai e o direito é baixado no plano. */
 var FORMA_CREDITO="Crédito Plano Premium Refil",FORMA_TROCA="Desconto de Troca";
 var FORMA_RENDIMENTOS="Máquina de Rendimentos";
+/* Quanto da venda foi pago com o purificador usado. Esse valor NÃO gera base de comissão
+   (regra do Wagner, 20/09: "esse pagamento não pode gerar base de cálculo para comissão do
+   vendedor"), mas continua no total do pedido e na faixa de cada item. */
+function trocaDasFormas(formas){
+  return centavos((formas||[]).reduce(function(a,f){
+    return a+((f&&f.tipo===FORMA_TROCA)?(+f.valor||0):0);},0));
+}
 /* ---------- troca de purificador pela forma de pagamento (regra do Wagner, 16/09; substitui a pergunta da v117) ----------
    Venda com "Desconto de Troca" → nasce a requisição origem "troca" do produto USADO-TROCA para o vendedor, que
    confirma "recebi na troca" (entra no estoque dele, vindo de "troca"). No dia seguinte ele devolve ao almoxarifado
@@ -7417,6 +7496,13 @@ function calcular(){
     itens=itens.filter(function(x){return x!==it&&!(it.vinculo&&x.planoDe===it.vinculo);});
     render();};});
 
+  /* Desconto de troca não gera comissão (regra do Wagner, 20/09): o que o cliente pagou com o
+     purificador usado sai da base, mas continua contando no total e na faixa do item — o
+     vendedor não é punido por aceitar a troca, só não ganha comissão sobre ela. */
+  var trocaCom=trocaDasFormas(formas);
+  if(trocaCom>0)base=Math.max(0,base-trocaCom);
+  $("c_trocaR").hidden=!(trocaCom>0);
+  $("c_troca").textContent="− "+BRL(trocaCom);
   $("c_base").textContent=BRL(base);
   $("r_p").textContent=BRL(base*.2);$("r_v").textContent=BRL(base*.6);$("r_i").textContent=BRL(base*.2);
   $("pt_p").textContent=(pontos*.2).toFixed(1).replace(".",",")+" pts";
@@ -8044,7 +8130,8 @@ function renderPedidos(){
       "<td>"+esc(p.cliente)+"</td><td>"+((p.formas||[]).filter(function(f){return +f.valor>0;}).map(function(f){return f.parc+"× "+f.tipo.split(" ")[0];}).join(" + ")||"—")+"</td>"+
       '<td class="num">'+BRL(p.total)+'</td><td class="num">'+BRL(p.depreciado)+'</td><td class="num"><b>'+BRL(p.base)+"</b></td>"+
       '<td><span class="pill '+cls+'">'+esc(p.status)+"</span>"+
-      (pend?' <span class="pill p-warn">autorização pendente</span>':"")+"</td>";
+      (pend?' <span class="pill p-warn">autorização pendente</span>':"")+
+      htmlLixeira("pedido",p.id)+"</td>";
     tr.onclick=function(){abrirPedido(p);};
     b.appendChild(tr);
   });
@@ -14593,6 +14680,8 @@ function valorDepreciadoPedido(p){
   /* venda abaixo da tabela: o depreciado dos itens abaixo entra pela tabela que o Administrador escolheu
      ao autorizar (100%, 70%, campanha 50% ou sem comissão) — regra do Wagner, 16/09 */
   if(a&&a.fator!=null&&+a.depAbaixo>0)d-=(+a.depAbaixo)*(1-(+a.fator));
+  /* o que o cliente pagou com o purificador usado não gera comissão (regra do Wagner, 20/09) */
+  d-=trocaDasFormas(p.formas);
   return Math.max(0,d);
 }
 function produtoMaisCaro(p){
@@ -16158,13 +16247,12 @@ function situacaoDe(a){
 /* "Vendido" só vale com o pedido lançado — sem pedido não há parcela, baixa de
    estoque, manutenção futura, e o lead nunca vira cliente */
 function ehVendido(lista){return (lista||[]).some(function(m){return /^vend/i.test(m);});}
-function pedidoDaAtividade(a){
+/* pedido que nasceu DESTE registro (regra do Wagner, 20/09: "todo atendimento finalizado como
+   Vendido deve abrir o pedido para esse cliente"). Outro pedido do mesmo cliente no mesmo dia
+   não conta mais — antes contava, e o atendimento fechava sem abrir a venda. */
+function pedidoDoRegistro(a){
   if(!a)return null;
-  var desde=[a.data||"",(a.criadoEm||"").slice(0,10)].filter(Boolean).sort()[0]||"";
-  return pedidos.filter(function(p){
-    if(p.origemAtiv&&p.origemAtiv===a.id)return true;
-    return !!a.clienteId&&p.clienteId===a.clienteId&&(p.data||"")>=desde;
-  }).sort(function(x,y){return ((y.data||"")+(y.hora||"")).localeCompare((x.data||"")+(x.hora||""));})[0]||null;
+  return pedidos.filter(function(p){return p.origemAtiv&&p.origemAtiv===a.id&&p.status!=="Cancelada";})[0]||null;
 }
 /* abre a venda com o cliente e o vendedor já escolhidos; o pedido salvo fecha a origem */
 async function abrirPedidoPelaVenda(a,texto){
@@ -16178,7 +16266,7 @@ async function abrirPedidoPelaVenda(a,texto){
 }
 function fmAjustarVendido(){
   var pi=fmReg?pedidoDaInstalacaoAtiv(fmReg):null;
-  var precisa=!!(fmReg&&ehVendido(fmMotivos)&&!pedidoDaAtividade(fmReg)&&!pi);
+  var precisa=!!(fmReg&&ehVendido(fmMotivos)&&!pedidoDoRegistro(fmReg)&&!pi);
   var inst=!!(pi&&!pi.instaladoEm&&fmMotivos.indexOf("Instalação concluída")>=0);
   $("fm_ok").textContent=precisa?"Lançar o pedido":(inst?"Concluir e finalizar a instalação":"Concluir atividade");
   $("fm_alerta").innerHTML=precisa
@@ -16229,7 +16317,7 @@ async function confirmarFinalizar(){
       toast("Venda da OS "+osV.numero+": lance a forma de pagamento e a entrega e finalize o pedido. Depois a atividade é finalizada.");
       return;
     }
-    var pedV=pedidoDaAtividade(a)||pedidoDaInstalacaoAtiv(a);
+    var pedV=pedidoDoRegistro(a)||pedidoDaInstalacaoAtiv(a);
     if(!pedV){
       /* guarda o que foi escrito: o pedido salvo conclui a atividade com isso */
       a.fechoPendente={motivos:fmMotivos.slice(),texto:txt,retorno:fmRetorno};
@@ -16801,7 +16889,8 @@ function renderAtividades(){
       "<td>"+esc(a.obs||"—")+"</td>"+
       "<td>"+sit+"</td>"+
       '<td class="num"><button class="btn '+(trava||!podeEd?"mut":"ghost")+' sm" type="button" data-avr="'+a.id+'">Ver detalhes</button>'+
-        (trava?' <span class="pill p-mut">bloqueada</span>':"")+"</td>";
+        (trava?' <span class="pill p-mut">bloqueada</span>':"")+
+        htmlLixeira("atividade",a.id)+"</td>";
     tr.onclick=function(ev){
       if(ev.target.getAttribute("data-avr"))return;
       abrirDetalhes(a);};
@@ -18237,7 +18326,7 @@ function renderOS(){
       "<td>"+esc(o.abertura?dataCurta(o.abertura):"—")+(o.hora?'<div class="t-sub">'+esc(o.hora)+"</div>":"")+"</td>"+
       "<td>"+(o.prazo?esc(o.prazo)+(atras?' <span class="pill p-crit">atrasada</span>':""):"—")+"</td>"+
       '<td class="num">'+BRL(totalOS(o))+"</td>"+
-      '<td><span class="pill '+st.cls+'">'+st.n+"</span></td>";
+      '<td><span class="pill '+st.cls+'">'+st.n+"</span>"+htmlLixeira("os",o.id)+"</td>";
     tr.onclick=function(){abrirOS(o);};b.appendChild(tr);
   });
 }
@@ -19497,8 +19586,13 @@ function recalcPedido(itens,formas,fatorAbaixo){
     if(fx.f===0){abaixo=true;depAbaixo+=depI;}
     linhas.push({i:i,p:p,depI:depI,unit:unit,fx:fx});
   });
+  /* o que o cliente pagou com o purificador usado sai da base (regra do Wagner, 20/09):
+     a faixa de cada item continua sendo a do valor cheio — a troca não empurra a venda
+     para baixo da tabela, só não gera comissão. */
+  var troca=trocaDasFormas(formas);
+  if(troca>0)base=Math.max(0,base-troca);
   return {total:total,dep:dep,base:base,pontos:pontos,abaixo:abaixo,depAbaixo:depAbaixo,linhas:linhas,soma:soma,
-    dif:Math.round((total-soma)*100)/100};
+    troca:troca,dif:Math.round((total-soma)*100)/100};
 }
 function precisaAutorizar(p){
   var out=[],vistos={};
@@ -21817,7 +21911,8 @@ function renderAtend(){
       "<td>"+esc(a.colaborador||"—")+"</td>"+
       "<td>"+sit+"</td>"+
       '<td class="num"><button class="btn '+(trava||!podeEd?"mut":"ghost")+' sm" type="button" data-real="'+a.id+'">Ver detalhes</button>'+
-        (trava?' <span class="pill p-mut">bloqueada</span>':"")+"</td>";
+        (trava?' <span class="pill p-mut">bloqueada</span>':"")+
+        htmlLixeira(a.natureza==="atividade"?"atividade":"atendimento",a.id)+"</td>";
     tr.onclick=function(ev){
       if(ev.target.getAttribute("data-real"))return;
       abrirDetalhes(a);};
@@ -21956,7 +22051,7 @@ function renderChipsMotivos(){
   });
 }
 function atAjustarVendido(){
-  var precisa=!!(atendPend&&ehVendido(motivosSel)&&!pedidoDaAtividade(atendPend));
+  var precisa=!!(atendPend&&ehVendido(motivosSel)&&!pedidoDoRegistro(atendPend));
   $("at_fechaAlerta").innerHTML=precisa
     ? '<div class="note warn"><b>Vendido pede o pedido lançado.</b> Ao finalizar, a venda abre com o cliente já escolhido. O atendimento fecha sozinho quando o pedido for salvo.</div>'
     : "";
@@ -21986,7 +22081,7 @@ async function fecharAtend(comFutura){
     $("at_fechaAlerta").innerHTML='<div class="note crit"><b>Informe a data da atividade futura.</b></div>';
     $("at_futuraBloco").hidden=false;return;}
   /* Vendido sem pedido não fecha: abre a venda, e o pedido salvo fecha o atendimento */
-  if(ehVendido(motivosSel)&&!pedidoDaAtividade(atendPend)){
+  if(ehVendido(motivosSel)&&!pedidoDoRegistro(atendPend)){
     var pend=atendPend;
     pend.fechoPendente={motivos:motivosSel.slice(),completo:completoSel,texto:""};
     if(comFutura)await agendarFuturaDoAtend(pend);
@@ -22298,7 +22393,9 @@ function renderCalendario(){
     var hd='<div class="dia-lista">';
     doDia2.forEach(function(e){
       hd+='<div class="hora"><div class="h">'+(e.hora||"—")+(e.fim?"<br>"+e.fim:"")+'</div><div class="evs">'+
-        '<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'"><b>'+esc(e.cliente||"—")+"</b><span>"+esc(e.rot)+(e.tipo?" · "+esc(e.tipo):"")+(e.quem?" · "+esc(e.quem):"")+"</span></div></div></div>";
+        '<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'"><b>'+esc(e.cliente||"—")+"</b><span>"+esc(e.rot)+(e.tipo?" · "+esc(e.tipo):"")+(e.quem?" · "+esc(e.quem):"")+"</span></div>"+
+        /* lixeira do agendamento, só para o Administrador (regra dele, 20/09) */
+        (e.id&&e.id.indexOf("ped:")!==0?htmlLixeira("atividade",e.id):"")+"</div></div>";
     });
     area.innerHTML=hd+"</div>";ligarEventosCal();
   }
@@ -23531,6 +23628,24 @@ function ligar(){
     formas.forEach(function(f){f.__auto=false;});
     formas.push({tipo:"Dinheiro",valor:Math.max(0,Math.round((tot-soma)*100)/100),parc:1,__auto:false});
     renderFormas();calcular();};
+  /* Desconto de troca: entra como forma de pagamento com valor zerado, para o vendedor digitar
+     quanto vale o usado. Esse valor NÃO entra na base de comissão (regra dele, 20/09). */
+  $("v_addTroca").onclick=function(){
+    var ja=formas.filter(function(f){return f.tipo===FORMA_TROCA;})[0];
+    if(ja){toast("Este pedido já tem Desconto de troca — informe o valor no campo dele.");}
+    else{
+      formas.forEach(function(f){f.__auto=false;});
+      formas.push({tipo:FORMA_TROCA,valor:0,parc:1,__auto:false});
+      renderFormas();calcular();
+      toast("Informe quanto vale o purificador usado. Esse valor não gera comissão.");
+    }
+    /* leva o cursor para o valor da troca */
+    setTimeout(function(){
+      var ix=-1;formas.forEach(function(f,i){if(f.tipo===FORMA_TROCA)ix=i;});
+      var inp=ix>=0?$("v_formas").querySelectorAll('[data-f="valor"]')[ix]:null;
+      if(inp){try{inp.focus();inp.select();}catch(e){}}
+    },60);
+  };
   ["v_vend","v_idata","v_inst"].forEach(function(id){$(id).addEventListener("change",function(){ajustarInstalador();calcular();});});
   $("v_idata").addEventListener("input",ajustarInstalador);
   $("v_salvar").onclick=salvarPedido;$("v_limpar").onclick=function(){limparPedido();render();};
@@ -24124,6 +24239,7 @@ function navegacaoBasica(){
   try{ligarImportClientes();}catch(e){console.warn("importar clientes",e);}
   try{ligarCampoOS();}catch(e){console.warn("campo os",e);}
   try{ligarCamposValor();}catch(e){console.warn("campos de valor",e);}
+  try{ligarLixeiras();}catch(e){console.warn("lixeiras",e);}
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){
     b.onclick=function(){ir(b.dataset.s);};
   });
