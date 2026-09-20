@@ -7709,7 +7709,11 @@ function calcular(){
   $("c_formula").textContent=partes.length?partes.join("  +  "):"—";
 
   /* item coberto pelo plano sai sem custo: fora da divisão do valor, da faixa e da comissão */
-  var somaCheia=itens.reduce(function(a,i){if(i.planoCobre)return a;var p=produtos.filter(function(x){return x.id===i.pid;})[0];return a+(((p&&+p.cheia)||0)*(i.qtd||1));},0);
+  /* o depreciado do pedido é repartido entre os itens **pelo valor vendido de cada um**
+     (regra dele, 20/09: "o bom é ser proporcional conforme o valor de cada produto"). Antes era
+     proporcional à TABELA CHEIA, e aí o desconto dado num item derrubava a venda inteira para
+     baixo da tabela; agora cada item deprecia pelo mesmo fator e o desconto fica onde foi dado. */
+  var somaVend=itens.reduce(function(a,i){if(i.planoCobre)return a;return a+((+i.valor||0)*(i.qtd||1));},0);
   var base=0,pontos=0,abaixo=false,tb=$("v_itens"),linhasFaixa=[];
   /* a tabela é redesenhada a cada conta: se o cursor está num valor de item, ele volta para lá */
   var focoVU=(document.activeElement&&document.activeElement.getAttribute&&document.activeElement.getAttribute("data-vu"));
@@ -7718,7 +7722,7 @@ function calcular(){
   itens.forEach(function(i,idx){
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
     var cobPl=!!i.planoCobre;
-    var q=cobPl?0:(somaCheia>0?(((+p.cheia||0)*(i.qtd||1))/somaCheia):(1/itens.length));
+    var q=cobPl?0:(somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(1/itens.length));
     var depI=cobPl?0:centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=cobPl?{f:0,n:"plano",cls:"p-ok"}:faixa(unit,p);
     if(!cobPl){base+=depI*fx.f;pontos+=(i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;}
     /* em que tabela este produto caiu — mostrado na Comissão ao vivo e refeito a cada mudança
@@ -19393,16 +19397,14 @@ function calcOrc(){
   var total=orcItens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
   var n=+$("or_parc").value||1,coef=coefDe($("or_forma").value,n)||1;
   var parcela=total/n,dep=coef?parcela/coef:0,desc=total-dep;
-  /* rateio do depreciado pelo peso do item na tabela cheia — mesma conta do pedido */
-  var somaCheia=orcItens.reduce(function(a,i){
-    var p=produtos.filter(function(x){return x.id===i.pid;})[0];
-    return a+(((p&&+p.cheia)||0)*(i.qtd||1));},0);
+  /* rateio do depreciado pelo VALOR VENDIDO de cada item — mesma conta do pedido (20/09) */
+  var somaVend=orcItens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
   var tb=$("or_itens");tb.innerHTML="";
   if(!orcItens.length)tb.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Nenhum item</div>Escolha um produto acima e clique em Adicionar.</div></td></tr>';
   var base=0,pontos=0,abaixo=false;
   orcItens.forEach(function(i,idx){
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
-    var q=somaCheia>0?(((+p.cheia||0)*(i.qtd||1))/somaCheia):(orcItens.length?1/orcItens.length:0);
+    var q=somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(orcItens.length?1/orcItens.length:0);
     var depI=centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
     base+=depI*fx.f;pontos+=(+i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;
     tb.innerHTML+='<tr><td><div class="t-main"><button class="lixo" type="button" data-orm="'+idx+'" title="Remover este item">&#128465;</button>'+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+
@@ -19879,12 +19881,13 @@ function recalcPedido(itens,formas,fatorAbaixo){
     var n=f.parc||1,coef=coefDe(f.tipo,n)||1;
     dep+=(coef?centavos((v/n)/coef):0);   /* centavos, para cima (regra dele, 20/09) */
   });
-  var somaCheia=itens.reduce(function(a,i){if(i.planoCobre)return a;var p=produtos.filter(function(x){return x.id===i.pid;})[0];return a+(((p&&+p.cheia)||0)*(i.qtd||1));},0);
+  /* mesma repartição da tela: pelo VALOR VENDIDO de cada item (regra dele, 20/09) */
+  var somaVend=itens.reduce(function(a,i){if(i.planoCobre)return a;return a+((+i.valor||0)*(i.qtd||1));},0);
   var base=0,pontos=0,abaixo=false,depAbaixo=0,linhas=[];
   itens.forEach(function(i){
     if(i.planoCobre)return;   /* coberto pelo plano: sem custo, fora da faixa e da comissão */
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
-    var q=somaCheia>0?(((+p.cheia||0)*(i.qtd||1))/somaCheia):(itens.length?1/itens.length:0);
+    var q=somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(itens.length?1/itens.length:0);
     var depI=centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
     var f=(fx.f===0&&fatorAbaixo!=null)?+fatorAbaixo:fx.f;
     base+=depI*f;pontos+=(+i.pontos||0)*(i.qtd||1)*f;
