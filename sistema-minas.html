@@ -8641,6 +8641,24 @@ function origemRetiradaNome(r){
   var lo=r.lojaOrigem||r.loja;
   return lo===r.loja?"Estoque geral (almoxarifado da "+nomeLojaId(lo)+")":"Estoque da loja "+nomeLojaId(lo);
 }
+/* Retirada de estoque ainda não regularizada trava a aprovação financeira (regra dele, 20/09:
+   "o financeiro não conseguirá aprovar o pedido se o vendedor não regularizar a solicitação de
+   acréscimo para seu estoque, pois o mesmo vendeu sem estoque"). A trava já existia dentro de
+   `aprovarVenda`, mas só aparecia ao clicar — agora o botão do financeiro nasce desligado. */
+function retiradaPendentePedido(p){
+  if(!p)return null;
+  var l=requisicoes.filter(function(r){
+    return r.tipo==="retirada"&&r.pedidoId===p.id&&(r.status==="pendente"||r.status==="recusada");});
+  if(!l.length)return null;
+  var rec=l.filter(function(r){return r.status==="recusada";});
+  return {lista:l,recusada:rec.length>0,
+    texto:rec.length
+      ? "O estoque <b>recusou</b> a retirada de produto deste pedido"+
+        (rec[0].motivoRecusa?" ("+esc(rec[0].motivoRecusa)+")":"")+
+        ". O vendedor precisa acertar o estoque ou a venda precisa ser ajustada."
+      : "A venda saiu <b>sem estoque do vendedor</b> e a solicitação de retirada ainda está "+
+        "<b>aguardando o responsável pelo estoque</b>."};
+}
 function htmlRetiradasPedido(p){
   var l=requisicoes.filter(function(r){return r.tipo==="retirada"&&r.pedidoId===p.id;});
   if(!l.length)return "";
@@ -8649,7 +8667,10 @@ function htmlRetiradasPedido(p){
     return r.itens.map(function(i){return i.qtd+"× "+esc(i.nome);}).join(", ")+" · "+esc(origemRetiradaNome(r))+" — "+
       ({pendente:"aguardando o responsável pelo estoque",aprovada:"aceita por "+esc(r.aprovadaPor||"")+" em "+esc(dataCurta(r.aprovadaEm||"")),
         recusada:"recusada por "+esc(r.recusadaPor||"")+(r.motivoRecusa?": "+esc(r.motivoRecusa):"")}[r.status]||esc(r.status));
-  }).join("<br>")+"</div>";
+  }).join("<br>")+
+  /* a mesma frase aparece no pedido, na venda completa e no financeiro (regra dele, 20/09) */
+  (cls==="ok"?"":"<br><b>Enquanto esta retirada não for aceita, o financeiro não consegue aprovar a venda.</b>")+
+  "</div>";
 }
 async function lancarMovLoja(loja,pid,qtd,origem,destino,doc,obs){
   var m={id:uid(),loja:loja,produtoId:pid,qtd:+qtd||0,origem:origem||"",destino:destino||"",doc:doc||"",obs:obs||"",
@@ -21831,13 +21852,20 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
          (p.anexos&&p.anexos.length)?'<div class="t-sub" style="margin-top:6px">Anexos: '+esc(p.anexos.join(", "))+"</div>":"")+"</div>"+
     "</div>"+
     (podeAprovar
-      ? '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:12px">'+
-          '<div class="fld" style="margin:0;flex:1 1 200px"><label>Caixa de destino</label><select data-fincx="'+p.id+'">'+
-            cxs.map(function(c){return '<option value="'+c.id+'"'+(c.id===cxPadrao?" selected":"")+">"+esc(c.nome)+"</option>";}).join("")+
-          "</select></div>"+
-          '<button class="btn" type="button" data-finok="'+p.id+'">Aprovar recebimento</button>'+
-          '<button class="btn mut" type="button" data-findev="'+p.id+'">Devolver</button>'+
-        "</div>"
+      ? (function(){
+          /* venda sem estoque do vendedor: sem o aceite do responsável pelo estoque, não aprova */
+          var trava=retiradaPendentePedido(p);
+          return (trava?'<div class="note crit" style="margin-top:10px"><b>Aprovação travada.</b> '+trava.texto+
+              " O financeiro só libera esta venda depois que a retirada for <b>aceita</b> pelo responsável pelo estoque."+
+              ' <button class="btn ghost sm" type="button" data-finreq="'+p.id+'" style="margin-top:8px">Ver as requisições de estoque</button></div>':"")+
+            '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:12px">'+
+            '<div class="fld" style="margin:0;flex:1 1 200px"><label>Caixa de destino</label><select data-fincx="'+p.id+'"'+(trava?" disabled":"")+">"+
+              cxs.map(function(c){return '<option value="'+c.id+'"'+(c.id===cxPadrao?" selected":"")+">"+esc(c.nome)+"</option>";}).join("")+
+            "</select></div>"+
+            '<button class="btn'+(trava?" mut":"")+'" type="button" data-finok="'+p.id+'"'+(trava?" disabled":"")+
+              ' title="'+(trava?"Retirada de estoque não regularizada":"Aprovar o recebimento")+'">Aprovar recebimento</button>'+
+            '<button class="btn mut" type="button" data-findev="'+p.id+'">Devolver</button>'+
+          "</div>";})()
       : '<div class="help" style="margin-top:8px">Só o Financeiro aprova o recebimento.</div>')+
   "</div>";
 }
@@ -21891,6 +21919,14 @@ function renderFin(){
         "</div>";
     }).join("");
   }
+  /* atalho para o financeiro ver por que a venda está travada */
+  Array.prototype.forEach.call(tela.querySelectorAll("[data-finreq]"),function(bt){
+    bt.onclick=function(){
+      ir("estEmpresa");
+      var t=$("eeAbas")&&$("eeAbas").querySelector('[data-t="req"]');
+      if(t)t.click();else{eeAba="req";try{renderEstEmpresa();}catch(e){}}
+      toast("A retirada precisa ser aceita pelo responsável pelo estoque antes de o financeiro aprovar.");};
+  });
   Array.prototype.forEach.call(tela.querySelectorAll("[data-finok]"),function(bt){
     bt.onclick=async function(){
       var p=porId(bt.getAttribute("data-finok"));if(!p)return;
