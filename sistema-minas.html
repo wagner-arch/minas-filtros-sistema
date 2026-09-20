@@ -7603,6 +7603,45 @@ function ajustarInstalador(){
       : "Instalador em branco: o vendedor ("+(vend||"—")+") é o instalador e fica com os 20%.";
   }
 }
+/* ---------- em que tabela cada produto caiu (Comissão ao vivo) ----------
+   Regra dele (20/09): "se tiver algum item que foi em tabela diferente, aparecer item por item;
+   mas se for todas na mesma tabela, aparecer somente a informação do nome do produto de maior
+   valor e o valor total do pedido, que é o importante para ser informado." */
+function linhaFaixaComissao(l){
+  var alvo=(l.fx.f===1)?(+l.p.cheia||0):(l.fx.f===0.7?(+l.p.campanha||0):(l.fx.f===0.5?(+l.p.minimo||0):0));
+  var falta=(l.fx.f===0)
+    ? (function(){
+        /* quanto falta para voltar a ganhar comissão: o piso mais baixo que ainda paga —
+           a campanha quando está ligada, senão a de 70%, senão a cheia */
+        var piso=(l.p.campativa==="sim"&&+l.p.minimo>0)?+l.p.minimo
+                :((+l.p.campanha>0)?+l.p.campanha:(+l.p.cheia||0));
+        var d=Math.max(0,piso-l.unit);
+        return d>0?'<div class="t-sub">faltam '+BRL(d)+" de depreciado por unidade para pagar comissão</div>":"";})()
+    : (alvo>0?'<div class="t-sub">tabela '+BRL(alvo)+"</div>":"");
+  return "<tr><td>"+esc(l.nome)+(l.qtd>1?" ("+l.qtd+"×)":"")+"</td>"+
+    '<td class="num">'+BRL(l.unit)+"</td>"+
+    '<td><span class="pill '+l.fx.cls+'">'+esc(l.fx.n)+"</span>"+
+    (l.fx.f>0?' <span class="t-sub">paga '+(l.fx.f*100).toFixed(0)+"%</span>":"")+falta+"</td></tr>";
+}
+function htmlFaixasComissao(linhas,total,dep){
+  if(!linhas||!linhas.length)return "";
+  var cab='<div class="tw" style="margin-top:12px"><table><thead><tr><th>Produto</th>'+
+    '<th class="num">Depreciado</th><th>Tabela</th></tr></thead><tbody>';
+  var iguais=linhas.every(function(l){return l.fx.n===linhas[0].fx.n;});
+  /* tudo na mesma tabela e mais de um item: uma linha só, com o produto de maior valor */
+  if(iguais&&linhas.length>1){
+    var maior=linhas.slice().sort(function(a,b){
+      return (b.valor*b.qtd)-(a.valor*a.qtd);})[0];
+    var fx=linhas[0],outros=linhas.length-1;
+    return cab+"<tr><td>"+esc(maior.nome)+
+      '<div class="t-sub">e mais '+outros+" item"+(outros>1?"s":"")+", todos na mesma tabela · pedido "+BRL(total)+"</div></td>"+
+      '<td class="num">'+BRL(dep)+"</td>"+
+      '<td><span class="pill '+fx.fx.cls+'">'+esc(fx.fx.n)+"</span>"+
+      (fx.fx.f>0?' <span class="t-sub">paga '+(fx.fx.f*100).toFixed(0)+"%</span>":"")+
+      "</td></tr></tbody></table></div>";
+  }
+  return cab+linhas.map(linhaFaixaComissao).join("")+"</tbody></table></div>";
+}
 function calcular(){
   /* refaz sozinho o preço dos itens que entraram pelo valor sugerido, sempre que a forma, as
      parcelas ou a entrada sem juros mudarem (regra dele, 20/09: "toda vez que adicionar algum
@@ -7741,25 +7780,7 @@ function calcular(){
   $("c_base").textContent=BRL(base);
   /* "em qual tabela esse produto vai cair" (regra dele, 20/09): a Comissão ao vivo diz item por
      item, com o depreciado unitário que foi comparado com a tabela. Refeito a cada mudança. */
-  $("c_faixas").innerHTML=linhasFaixa.length
-    ? '<div class="tw" style="margin-top:12px"><table><thead><tr><th>Produto</th><th class="num">Depreciado</th><th>Tabela</th></tr></thead><tbody>'+
-      linhasFaixa.map(function(l){
-        var alvo=(l.fx.f===1)?(+l.p.cheia||0):(l.fx.f===0.7?(+l.p.campanha||0):(l.fx.f===0.5?(+l.p.minimo||0):0));
-        var falta=(l.fx.f===0)
-          ? (function(){
-              /* quanto falta para voltar a ganhar comissão: o piso mais baixo que ainda paga —
-                 a campanha quando está ligada, senão a de 70%, senão a cheia */
-              var piso=(l.p.campativa==="sim"&&+l.p.minimo>0)?+l.p.minimo
-                      :((+l.p.campanha>0)?+l.p.campanha:(+l.p.cheia||0));
-              var d=Math.max(0,piso-l.unit);
-              return d>0?'<div class="t-sub">faltam '+BRL(d)+" de depreciado por unidade para pagar comissão</div>":"";})()
-          : (alvo>0?'<div class="t-sub">tabela '+BRL(alvo)+"</div>":"");
-        return "<tr><td>"+esc(l.nome)+(l.qtd>1?" ("+l.qtd+"×)":"")+"</td>"+
-          '<td class="num">'+BRL(l.unit)+"</td>"+
-          '<td><span class="pill '+l.fx.cls+'">'+esc(l.fx.n)+"</span>"+
-          (l.fx.f>0?' <span class="t-sub">paga '+(l.fx.f*100).toFixed(0)+"%</span>":"")+falta+"</td></tr>";
-      }).join("")+"</tbody></table></div>"
-    : "";
+  $("c_faixas").innerHTML=htmlFaixasComissao(linhasFaixa,total,dep);
   $("r_p").textContent=BRL(base*.2);$("r_v").textContent=BRL(base*.6);$("r_i").textContent=BRL(base*.2);
   $("pt_p").textContent=(pontos*.2).toFixed(1).replace(".",",")+" pts";
   $("pt_v").textContent=(pontos*.6).toFixed(1).replace(".",",")+" pts";
