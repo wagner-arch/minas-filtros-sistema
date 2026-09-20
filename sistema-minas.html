@@ -335,6 +335,7 @@
   .lixo-reg{background:none;border:1px solid var(--linha);border-radius:8px;cursor:pointer;
     font-size:15px;line-height:1;padding:7px 9px;color:var(--ink-3);margin-left:6px}
   .lixo-reg:hover{color:#fff;background:var(--crit);border-color:var(--crit)}
+  .lixo-reg.mini{padding:2px 6px;font-size:13px;margin-left:8px;vertical-align:middle}
   .lnk-cli{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--accent);
     cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:2px}
   .lnk-cli:hover{opacity:.8}
@@ -4124,9 +4125,12 @@ img{max-width:100%}
           </table></div>
           <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
             <button class="btn ghost sm" type="button" id="pg_add">Adicionar parcela</button>
-            <button class="btn mut sm" type="button" id="pg_gerar">Gerar 1× a 12× com coeficiente 1</button>
+            <!-- parcelamento até 24× (pedido do Wagner, 20/09) -->
+            <button class="btn ghost sm" type="button" id="pg_ate24">Completar até 24×</button>
+            <button class="btn mut sm" type="button" id="pg_gerar">Gerar 1× a 12× sem depreciação</button>
           </div>
-          <p class="help">Coeficiente <b>1</b> significa que não deprecia — dinheiro, PIX, permuta. Coeficiente acima de 1 no <b>1×</b> é a taxa da máquina: R$ 1.000 ÷ 1,0527 = R$ 950 de base.</p>
+          <div id="pg_notaParc"></div>
+          <p class="help">O pedido oferece <b>exatamente as parcelas cadastradas aqui</b>, no máximo 24×. <b>Completar até 24×</b> descobre a taxa ao mês da tabela já cadastrada e continua a mesma conta de 13× a 24× — confira depois com a operadora. Coeficiente acima de 1 no <b>1×</b> é a taxa da máquina: R$ 1.000 ÷ 1,0527 = R$ 950 de base. Forma que <b>não deprecia</b> (dinheiro, PIX, permuta) tem 1 no 1×, 0,5 no 2×, 0,3333 no 3× — sempre 1 ÷ parcelas.</p>
         </div>
         <div class="actions">
           <button class="btn" type="button" id="pgtoSalvar">Salvar forma</button>
@@ -5326,7 +5330,11 @@ async function codigoClienteNovo(){
   return proxCodigo();
 }
 /* Coeficientes reais — planilha da empresa. Editáveis em Configurações. */
-function seqUm(n){var a={};for(var i=1;i<=n;i++)a[i]=1;return a;}
+/* Forma que NÃO deprecia (permuta, locação, carnê próprio): o depreciado é `(valor/n)/coef`, então
+   para o valor cheio chegar inteiro na base o coeficiente tem de ser 1/n, não 1 (defeito achado em
+   20/09: com coef 1 em 12×, uma venda de R$ 2.400 virava base de R$ 200). Coeficiente 1 só está
+   certo no 1×. `corrigirCoefSemJuros` conserta as formas já gravadas. */
+function seqUm(n){var a={};for(var i=1;i<=n;i++)a[i]=1/i;return a;}
 function seq(arr,ini){var a={},s=ini||1;arr.forEach(function(v,i){a[s+i]=v;});return a;}
 var C_MODERNINHA=[1.0309,0.5328,0.3607,0.2746,0.223,0.189,0.1663,0.1475,0.133,0.1219,0.1128,0.1052];
 var C_STONE=[1.0309,0.5226,0.3535,0.269,0.2184,0.1846,0.1605,0.1425,0.1284,0.1172,0.1081,0.1005];
@@ -5373,6 +5381,50 @@ var SEED_FORMAS=[
 function formaPor(nome){return formasPgto.filter(function(f){return f.nome===nome;})[0]||formasPgto[0]||{nome:"",coef:{1:1}};}
 function coefDe(nome,n){var f=formaPor(nome);return f.coef[n]||null;}
 function parcelasDe(nome){var k=Object.keys(formaPor(nome).coef).map(Number).sort(function(a,b){return a-b;});return k.length?k:[1];}
+/* ---------- parcelamento até 24× (pedido do Wagner, 20/09) ----------
+   Quantas vezes o pedido oferece é o que está cadastrado na forma: a lista de parcelas sai das
+   chaves de `coef`. As máquinas foram cadastradas até 12×, por isso o pedido parava em 12.
+   O coeficiente de 13× a 24× NÃO é inventado: a tabela das operadoras é a tabela Price
+   descontada mês a mês — coef(n) = r / (1 − (1+r)^−n). Conferido na Sipag: com r = 3% ao mês,
+   11 dos 12 coeficientes cadastrados batem na quarta casa (só o 11× está 0,1071 contra 0,1081,
+   provável erro de digitação da tabela original). Então `taxaMensalCoef` descobre o r da própria
+   tabela já cadastrada e `coefPorTaxa` continua a mesma conta até 24. O 1× fica de fora do ajuste
+   porque carrega a taxa fixa da máquina (Sipag: 1,0527), que não segue a curva. */
+var MAX_PARC=24;
+function coefPorTaxa(r,n){return r<=0?1:(r/(1-Math.pow(1+r,-n)));}
+function taxaMensalCoef(coef){
+  var ns=Object.keys(coef||{}).map(Number).filter(function(n){return n>=2&&+coef[n]>0;});
+  if(!ns.length)return 0;                                   /* só 1× cadastrado: não dá para inferir */
+  if(ns.every(function(n){return Math.abs(+coef[n]-1/n)<1e-6;}))return 0;   /* não deprecia */
+  var melhor=0,erro=Infinity;
+  for(var r=0.0005;r<=0.15;r+=0.0005){
+    var e=0;
+    ns.forEach(function(n){var d=coefPorTaxa(r,n)-(+coef[n]);e+=d*d;});
+    if(e<erro){erro=e;melhor=r;}
+  }
+  return Math.round(melhor*1e6)/1e6;
+}
+/* completa o que falta de 13× a `ate` seguindo a mesma tabela; devolve o que foi gerado */
+function completarCoefAte(coef,ate){
+  var r=taxaMensalCoef(coef),novos=[];
+  for(var n=2;n<=Math.min(MAX_PARC,ate||MAX_PARC);n++){
+    if(+coef[n]>0)continue;
+    coef[n]=(r>0?Math.round(coefPorTaxa(r,n)*1e6)/1e6:Math.round((1/n)*1e6)/1e6);
+    novos.push(n);
+  }
+  return {taxa:r,novos:novos};
+}
+/* conserta as formas gravadas antes de 20/09 com coeficiente 1 em 2× ou mais — tabela nenhuma
+   tem coeficiente exatamente 1 fora do 1×, então o padrão identifica sem risco de falso positivo */
+function corrigirCoefSemJuros(){
+  var mudou=false;
+  formasPgto.forEach(function(f){
+    Object.keys(f.coef||{}).map(Number).forEach(function(n){
+      if(n>=2&&+f.coef[n]===1){f.coef[n]=Math.round((1/n)*1e6)/1e6;mudou=true;}
+    });
+  });
+  return mudou;
+}
 var LOJAS=[{id:"mf",nome:"Minas Filtros"},{id:"wf",nome:"WF Filtros"},{id:"dv",nome:"Divinópolis Filtros"}];
 var ORIGENS=["Loja Pará de Minas","Telemarketing","Indicação","Instagram","WhatsApp","Site","Feira","Passagem"];
 var USUARIOS=[
@@ -5559,6 +5611,8 @@ async function carregar(){
     if(!formasPgto.some(function(f){return f.nome===FORMA_RENDIMENTOS;})){
       formasPgto.push({nome:FORMA_RENDIMENTOS,coef:seq(C_SIPAG),recebimento:"antecipada",
         caixaNome:"Ascicred",caixaId:"",diasCredito:0,conferir:true});antigo=true;}
+    /* coeficiente 1 em 2× ou mais era conta errada: dividia a base pelo nº de parcelas (20/09) */
+    if(corrigirCoefSemJuros())antigo=true;
     if(antigo)await gravarFormas();
   }catch(e){console.warn("formas",e);}
   try{
@@ -6095,10 +6149,38 @@ async function apagarRegistro(tipo,id){
 function registrarAcessoApagou(tipo,r){
   try{console.warn("apagado por "+usuarioAtual+": "+tipo+" "+(r.numero||r.id));}catch(e){}
 }
+/* lixeira de UMA linha de "O que nasceu desta atividade" (pedido dele, 20/09) — apaga só o
+   registro do histórico; o pedido, a OS ou o orçamento que a linha cita continuam no sistema */
+function htmlLixeiraAcao(ativId,ix){
+  if(!ehAdministrador())return "";
+  return ' <button class="lixo-reg mini" type="button" data-rmacao="'+ativId+"|"+ix+
+    '" title="Apagar esta linha do histórico" aria-label="Apagar esta linha do histórico">&#128465;</button>';
+}
+async function apagarAcaoAtiv(ativId,ix){
+  if(!ehAdministrador()){toast("Só o Administrador pode apagar.");return;}
+  var a=atendimentos.filter(function(x){return x.id===ativId;})[0];
+  if(!a||!a.acoes||!a.acoes[ix]){toast("Esta linha já não existe.");return;}
+  var l=a.acoes[ix];
+  if(!confirm("Apagar esta linha do histórico?\n\n"+dataCurta(l.quando)+" · "+(l.por||"")+"\n"+
+    (l.texto||"")+"\n\nO pedido, a OS ou o orçamento citados continuam no sistema."))return;
+  a.acoes.splice(ix,1);
+  if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
+  toast("Linha apagada.");
+  abrirDetalhes(a);
+}
 /* um clique só, em captura, atende todas as lixeiras de linha do sistema */
 function ligarLixeiras(){
   document.addEventListener("click",function(ev){
-    var el=ev.target&&ev.target.closest?ev.target.closest("[data-apagar]"):null;
+    var alvo=ev.target&&ev.target.closest?ev.target:null;
+    if(!alvo)return;
+    var la=alvo.closest("[data-rmacao]");
+    if(la){
+      ev.preventDefault();ev.stopPropagation();
+      var pa=String(la.getAttribute("data-rmacao")||"").split("|");
+      if(pa.length===2)apagarAcaoAtiv(pa[0],+pa[1]);
+      return;
+    }
+    var el=alvo.closest("[data-apagar]");
     if(!el)return;
     ev.preventDefault();ev.stopPropagation();
     var p=String(el.getAttribute("data-apagar")||"").split(":");
@@ -7355,7 +7437,7 @@ function renderFormas(){
     if(ps.indexOf(f.parc)<0){f.parc=ps[ps.length-1];}
     var pOpts=ps.map(function(n){return '<option value="'+n+'"'+(n===f.parc?" selected":"")+">"+n+"× · coef "+coefDe(f.tipo,n).toFixed(4).replace(".",",")+"</option>";}).join("");
     d.innerHTML='<div class="fld"><label>Forma '+(i+1)+'</label><select data-f="tipo" data-i="'+i+'">'+opts+'</select></div>'+
-      '<div class="fld"><label>Valor</label><input type="number" step="10" data-f="valor" data-i="'+i+'" value="'+(f.valor||0)+'"></div>'+
+      '<div class="fld"><label>Valor</label><input type="text" inputmode="decimal" data-f="valor" data-i="'+i+'" value="'+(f.valor||0)+'"></div>'+
       '<div class="fld"><label>Parcelas</label><select data-f="parc" data-i="'+i+'">'+pOpts+'</select></div>'+
       '<div class="fld" style="justify-content:flex-end">'+(formas.length>1?'<button class="btn mut sm" type="button" data-rmf="'+i+'">Remover</button>':'<span class="help" style="margin:0">à vista não deprecia</span>')+'</div>';
     w.appendChild(d);
@@ -16105,6 +16187,9 @@ function htmlVendaResumo(p){
 }
 function abrirDetalhes(a){
   detReg=a;
+  /* regra dele (20/09): "essas repetições da mesma ação não aparecer" — limpa o que já estava
+     gravado antes da correção, não só o que nasce daqui para a frente */
+  try{limparAcoesRepetidas(a);}catch(e){console.warn(e);}
   var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
   var ativ=(a.natureza==="atividade"),d=quando(a),agora=new Date();
   var atrasou=(ativ&&a.status!=="finalizado"&&d&&d<agora);
@@ -16140,16 +16225,19 @@ function abrirDetalhes(a){
   var pedInst=pedidoDaInstalacaoAtiv(a);
   var blocoVenda=pedInst?htmlVendaResumo(pedInst):"";
   /* o que nasceu desta atividade */
-  var acoes=(a.acoes||[]).slice().reverse();
+  /* guarda a posição real de cada ação: a lista é mostrada de trás para frente, mas quem apaga
+     precisa do índice no registro (lixeira do Administrador, pedido dele em 20/09) */
+  var acoes=(a.acoes||[]).map(function(x,ix){return {x:x,ix:ix};}).reverse();
   var geradas=acoes.length
     ? '<div class="sect"><p class="sect-t">O que nasceu desta atividade</p><div class="linha-tempo">'+
-      acoes.map(function(x){
-        var st="";
+      acoes.map(function(o){
+        var x=o.x,st="";
         if(x.tipo==="os"&&x.id){
           var oo=ordens.filter(function(z){return z.id===x.id;})[0];
           if(oo)st=' · <span class="pill '+osStatusO(oo.status).cls+'">'+osStatusO(oo.status).n+"</span>";
         }
-        return '<div class="lt"><div class="cab"><b>'+esc(x.quando)+"</b> · "+esc(x.por||"")+st+"</div>"+
+        return '<div class="lt"><div class="cab"><b>'+esc(dataCurta(x.quando))+"</b> · "+esc(x.por||"")+st+
+          htmlLixeiraAcao(a.id,o.ix)+"</div>"+
           '<div class="txt">'+esc(x.texto)+"</div></div>";}).join("")+"</div></div>"
     : "";
   $("dt_hist").innerHTML=(c.id?htmlPlanoCliente(c.id):"")+blocoVenda+geradas+
@@ -16380,9 +16468,31 @@ async function confirmarFinalizar(){
   fmReg=null;
 }
 /* toda ação nascida de uma atividade fica registrada nela */
+/* tira as linhas repetidas de "O que nasceu desta atividade" já gravadas (regra dele, 20/09:
+   "essas repetições da mesma ação não aparecer"). Repetida = mesma ação, mesmo texto, mesmo dia
+   e mesmo registro de destino; fica a primeira, que é a que conta a história. Grava só se mudou. */
+function limparAcoesRepetidas(a){
+  if(!a||!a.acoes||a.acoes.length<2)return false;
+  var vistos={},limpa=[];
+  a.acoes.forEach(function(x){
+    var k=(x.tipo||"")+"|"+(x.texto||"")+"|"+(x.quando||"")+"|"+(x.id||"");
+    if(vistos[k])return;
+    vistos[k]=true;limpa.push(x);
+  });
+  if(limpa.length===a.acoes.length)return false;
+  a.acoes=limpa;
+  if(db){try{col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
+  return true;
+}
 async function registrarAcaoAtiv(a,tipo,id,numero,texto){
   if(!a)return;
   a.acoes=a.acoes||[];
+  /* abrir a venda pela atividade escrevia uma linha a cada vez — o Wagner mandou print com seis
+     "Pedido iniciado a partir desta atividade" iguais (20/09). A mesma ação, com o mesmo texto,
+     no mesmo dia, é a mesma coisa: registra uma vez só. */
+  var ja=a.acoes.filter(function(x){
+    return x.tipo===tipo&&x.texto===texto&&x.quando===hojeISO()&&(x.id||"")===(id||"");})[0];
+  if(ja)return;
   a.acoes.push({tipo:tipo,id:id,numero:numero,texto:texto,quando:hojeISO(),por:usuarioAtual});
   if(!a.situacao||a.situacao==="pendente")a.situacao="andamento";
   if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
@@ -23945,9 +24055,29 @@ function ligar(){
   $("pgtoSalvar").onclick=salvarPgto;
   $("pg_add").onclick=function(){
     var ult=pgLinhas.length?pgLinhas[pgLinhas.length-1].n:0;
-    pgLinhas.push({n:ult+1,c:1});renderPgLinhas();};
+    if(ult>=MAX_PARC){toast("O máximo é "+MAX_PARC+" parcelas.");return;}
+    pgLinhas.push({n:ult+1,c:Math.round((1/(ult+1))*1e6)/1e6});renderPgLinhas();};
+  /* completa 13× a 24× pela mesma tabela que já está cadastrada (pedido dele, 20/09) */
+  $("pg_ate24").onclick=function(){
+    var coef={};pgLinhas.forEach(function(l){if(l.n>0&&l.c>0)coef[l.n]=l.c;});
+    if(!Object.keys(coef).length){toast("Cadastre ao menos o 1× antes de completar.");return;}
+    var r=completarCoefAte(coef,MAX_PARC);
+    if(!r.novos.length){toast("Esta forma já vai até "+MAX_PARC+"×.");return;}
+    pgLinhas=Object.keys(coef).map(Number).sort(function(a,b){return a-b;})
+      .map(function(n){return {n:n,c:coef[n]};});
+    renderPgLinhas();
+    $("pg_notaParc").innerHTML='<div class="note ok"><b>'+r.novos.length+" parcela(s) gerada(s): "+
+      r.novos[0]+"× a "+r.novos[r.novos.length-1]+"×.</b> "+
+      (r.taxa>0
+        ? "A tabela cadastrada equivale a <b>"+(r.taxa*100).toFixed(2).replace(".",",")+
+          "% ao mês</b> — as novas seguem a mesma conta, <code>coef = taxa ÷ (1 − (1+taxa)<sup>−n</sup>)</code>. "+
+          "Confira com a operadora antes de vender nessas parcelas."
+        : "Esta forma não deprecia, então cada parcela nova entrou com <b>1 ÷ nº de parcelas</b> — o valor cheio continua indo inteiro para a base.")+
+      " Nada foi gravado ainda: use <b>Salvar forma</b>.</div>";
+  };
   $("pg_gerar").onclick=function(){
-    pgLinhas=[];for(var i=1;i<=12;i++)pgLinhas.push({n:i,c:1});renderPgLinhas();};
+    pgLinhas=[];for(var i=1;i<=12;i++)pgLinhas.push({n:i,c:Math.round((1/i)*1e6)/1e6});
+    $("pg_notaParc").innerHTML="";renderPgLinhas();};
   $("pgtoExcluir").onclick=async function(){
     if(!editandoPg)return;
     var idx=formasPgto.indexOf(editandoPg);
@@ -23997,6 +24127,7 @@ function abrirPgto(f){
   $("pg_caixa").onchange=notaRecebimentoPg;
   $("pg_dias").oninput=notaRecebimentoPg;
   notaRecebimentoPg();
+  $("pg_notaParc").innerHTML="";
   pgLinhas=[];
   if(f){Object.keys(f.coef).map(Number).sort(function(a,b){return a-b;}).forEach(function(k){pgLinhas.push({n:k,c:f.coef[k]});});}
   else{pgLinhas=[{n:1,c:1}];}
@@ -24037,6 +24168,8 @@ async function salvarPgto(){
   if(!nome){toast("Dê um nome à forma de pagamento.");return;}
   var dup=formasPgto.filter(function(f){return f.nome===nome&&(!editandoPg||f!==editandoPg);})[0];
   if(dup){toast("Já existe uma forma com esse nome.");return;}
+  if(pgLinhas.some(function(l){return l.n>MAX_PARC;})){
+    toast("O máximo é "+MAX_PARC+" parcelas — tire as linhas acima de "+MAX_PARC+"×.");return;}
   var coef={};pgLinhas.forEach(function(l){if(l.n>0&&l.c>0)coef[l.n]=l.c;});
   if(!Object.keys(coef).length){toast("Cadastre ao menos uma parcela com coeficiente.");return;}
   var extra={caixaId:$("pg_caixa").value||"",
