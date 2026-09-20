@@ -5457,7 +5457,7 @@ var USUARIOS=[
   {nome:"Jaqueline Nunes",perfil:"Prospector",ativo:true}
 ];
 var NOMES_USUARIOS_EXEMPLO=["Erico","Carol","Veronica Aparecida Marques","Franciele Neves","Guilherme Guimarães","Jaqueline Nunes"];
-var EQUIPE=USUARIOS.map(function(u){return u.nome;});
+var EQUIPE=USUARIOS.map(function(u){return u.nome;}).sort(ordAZ);
 function usuarioPor(n){return USUARIOS.filter(function(u){return u.nome===n;})[0]||null;}
 function colabAtivo(n){var u=usuarioPor(n);return !!(u&&u.ativo);}
 
@@ -6371,7 +6371,8 @@ function renderProdutos(){
   var fg=sg?sg.value:"",fs=ss?ss.value:"";
   var lista=produtos.filter(function(p){return !q||(p.nome||"").toLowerCase().indexOf(q)>=0||(p.cod||"").toLowerCase().indexOf(q)>=0;})
     .filter(function(p){return !fg||(p.grupo||"")===fg;})
-    .filter(function(p){return !fs||(p.subgrupo||"")===fs;});
+    .filter(function(p){return !fs||(p.subgrupo||"")===fs;})
+    .sort(function(a,b){return ordAZ(a.nome,b.nome);});   /* ordem alfabética (regra dele, 20/09) */
   $("prodCount").textContent=lista.length+(lista.length===1?" produto":" produtos");
   var b=$("prodBody");b.innerHTML="";
   lista.forEach(function(p){
@@ -7048,7 +7049,7 @@ function opcoesProduto(){
   /* plano não é escolhido como produto: entra sozinho pela garantia do item;
      produto importado sem preço também fica de fora até o cadastro ser completado (v143) */
   var ativos=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos"&&p.cod!=="USADO-TROCA"&&p.cod!=="OS-CLIENTE"&&!produtoIncompleto(p);});
-  ativos.forEach(function(p){var o=document.createElement("option");o.value=p.id;o.textContent=p.cod+" · "+p.nome+"   "+BRL(p.cheia);s.appendChild(o);});
+  porNomeAZ(ativos).forEach(function(p){var o=document.createElement("option");o.value=p.id;o.textContent=p.nome+"   "+BRL(p.cheia);o.setAttribute("data-cod",p.cod||"");   /* nome na frente: a lista fica visivelmente alfabética (20/09) */s.appendChild(o);});
   if(!ativos.length){var o=document.createElement("option");o.textContent="— nenhum produto ativo —";s.appendChild(o);}
   if(atual&&ativos.some(function(p){return p.id===atual;}))s.value=atual;
   sincronizarValor();
@@ -7623,7 +7624,7 @@ function renderFormas(){
     var d=document.createElement("div");
     d.className="grid g4";d.style.marginBottom="14px";
     /* a forma "Crédito do plano" só existe para quem tem plano vigente com direito */
-    var opts=formasPgto.filter(function(t){
+    var opts=porNomeAZ(formasPgto).filter(function(t){
         return t.nome!==FORMA_CREDITO||temCredito||f.tipo===FORMA_CREDITO;})
       .map(function(t){return '<option'+(t.nome===f.tipo?" selected":"")+">"+t.nome+"</option>";}).join("");
     var ps=parcelasDe(f.tipo);
@@ -9462,7 +9463,7 @@ function abrirEstoque(modo,colab){
   $("es_titulo").textContent=t;
   $("es_sub").textContent=nomeLoja();
   opcoes("es_prod",produtos.filter(function(p){return (p.status||"ativo")==="ativo";}),
-    function(p){return p.id;},function(p){return p.cod+" · "+p.nome;},null);
+    function(p){return p.id;},function(p){return p.nome;},null);
   opcoes("es_centro",centrosOrdenados().filter(function(c){return c.tipo==="saida";}),
     function(c){return c.id;},function(c){return caminhoCentro(c);},"— sem centro —");
   $("es_data").value=hojeISO();$("es_obs").value="";$("es_alerta").innerHTML="";
@@ -10012,12 +10013,19 @@ function hojeISO(){return iso(new Date());}
 function somaDias(d,n){var x=new Date(d+"T00:00:00");x.setDate(x.getDate()+n);return iso(x);}
 
 /* ---------- opções que alimentam vários selects ---------- */
-function opcoes(sel,itens,valorDe,textoDe,vazio){
+function opcoes(sel,itens,valorDe,textoDe,vazio,semOrdem){
   var s=$(sel);if(!s)return;
   var atual=s.value;s.innerHTML="";
   if(vazio){var o=document.createElement("option");o.value="";o.textContent=vazio;s.appendChild(o);}
-  itens.forEach(function(x){
-    var o=document.createElement("option");o.value=valorDe(x);o.textContent=textoDe(x);s.appendChild(o);});
+  /* toda lista de escolha sai em ordem alfabética pelo que aparece na tela (regra dele, 20/09).
+     A opção vazia fica sempre em cima; `semOrdem` deixa o chamador manter a ordem própria. */
+  var l=(itens||[]).slice();
+  if(!semOrdem)l.sort(function(a,b){return ordAZ(textoDe(a),textoDe(b));});
+  l.forEach(function(x){
+    var o=document.createElement("option");o.value=valorDe(x);o.textContent=textoDe(x);
+    /* o código fica fora do texto, mas continua sendo pesquisável (regra dele, 20/09) */
+    if(x&&x.cod)o.setAttribute("data-cod",x.cod);
+    s.appendChild(o);});
   if(atual)s.value=atual;
 }
 function opcoesFinanceiro(){
@@ -10035,7 +10043,7 @@ function opcoesFinanceiro(){
       function(c){return caminhoCentro(c);},"— escolha o centro de custo —");});
   if($("nf_forn"))opcoes("nf_forn",fornecedores.filter(function(f){return f.status!=="inativo";}),
     function(f){return f.id;},function(f){return f.nome;},null);
-  if($("nf_prod"))opcoes("nf_prod",produtos,function(p){return p.id;},function(p){return p.cod+" · "+p.nome;},null);
+  if($("nf_prod"))opcoes("nf_prod",produtos,function(p){return p.id;},function(p){return p.nome;},null);
 }
 
 /* ---------- USUÁRIOS ---------- */
@@ -10044,7 +10052,7 @@ var editandoFc=null;
 function renderFuncoes(){
   $("fcCount").textContent=funcoes.length+(funcoes.length===1?" função":" funções");
   var b=$("fcBody");b.innerHTML="";
-  funcoes.forEach(function(f,i){
+  funcoes.map(function(v,i){return {v:v,i:i};}).sort(function(a,b){return ordAZ(a.v&&a.v.nome||a.v,b.v&&b.v.nome||b.v);}).forEach(function(x){var f=x.v,i=x.i;
     var n=USUARIOS.filter(function(u){return u.perfil===f.nome;}).length;
     var tr=document.createElement("tr");tr.className="clickable";
     tr.innerHTML="<td><b>"+esc(f.nome)+"</b></td><td>"+esc(f.desc||"—")+"</td>"+
@@ -10091,7 +10099,7 @@ var pmSel={telas:[],acoes:[]},pmFunc=null;
 function renderPermissoes(){
   var s=$("pmFuncao"),at=s.value;
   s.innerHTML="";
-  funcoes.forEach(function(f){var o=document.createElement("option");o.textContent=f.nome;s.appendChild(o);});
+  porNomeAZ(funcoes).forEach(function(f){var o=document.createElement("option");o.textContent=f.nome;s.appendChild(o);});
   if(at&&funcaoPor(at))s.value=at;
   pmFunc=funcaoPor(s.value)||funcoes[0];
   if(!pmFunc){$("pmResumo").textContent="nenhuma função cadastrada";return;}
@@ -10138,7 +10146,7 @@ function renderPmChips(){
         else if(!todos&&k<0)pmSel.telas.push(t[0]);});
       renderPmChips();};});
   var wa=$("pm_acoes");wa.innerHTML="";
-  ACOES.forEach(function(a){
+  ACOES.slice().sort(function(x,y){return ordAZ(x[1],y[1]);}).forEach(function(a){
     var b=document.createElement("button");b.type="button";b.textContent=a[1];
     b.setAttribute("aria-pressed",String(pmSel.acoes.indexOf(a[0])>=0));
     b.onclick=function(){
@@ -10166,7 +10174,7 @@ function renderMatriz(){
   h.innerHTML="<th>Permissão</th>"+funcoes.map(function(f){
     return '<th class="num" style="white-space:nowrap">'+esc(f.nome)+"</th>";}).join("");
   b.innerHTML="";
-  ACOES.forEach(function(a){
+  ACOES.slice().sort(function(x,y){return ordAZ(x[1],y[1]);}).forEach(function(a){
     b.innerHTML+="<tr><td><b>"+esc(a[1])+"</b></td>"+
       funcoes.map(function(f,fi){
         var tem=(f.acoes||[]).indexOf(a[0])>=0;
@@ -10198,7 +10206,12 @@ function renderUsuarios(){
   if(atual0)sp0.value=atual0;
   $("usCount").textContent=USUARIOS.length+(USUARIOS.length===1?" usuário":" usuários");
   var b=$("usBody");b.innerHTML="";
-  USUARIOS.forEach(function(u,i){
+  /* lista em ordem alfabética (regra dele, 20/09); o índice continua o do cadastro gravado,
+     porque é por ele que a ficha do colaborador abre */
+  USUARIOS.map(function(u,i){return {u:u,i:i};})
+    .sort(function(a,b2){return ordAZ(a.u.nome,b2.u.nome);})
+    .forEach(function(x){
+    var u=x.u,i=x.i;
     var j=jornadaDe(u.nome);
     var premios=(+u.assiduidade||0)+(+u.desempenho||0);
     var tr=document.createElement("tr");tr.className="clickable";
@@ -10341,7 +10354,7 @@ function notaRemuneracao(){
     "A comissão sai em Remunerações Colaboradores.</div>";
 }
 function sincronizarEquipe(){
-  EQUIPE=USUARIOS.filter(function(u){return u.ativo;}).map(function(u){return u.nome;});
+  EQUIPE=USUARIOS.filter(function(u){return u.ativo;}).map(function(u){return u.nome;}).sort(ordAZ);   /* em ordem alfabética em toda parte (regra dele, 20/09) */
   if(EQUIPE.indexOf(usuarioAtual)<0&&EQUIPE.length)usuarioAtual=EQUIPE[0];
   try{
     var su=$("usuario");su.innerHTML="";
@@ -10690,7 +10703,7 @@ function renderCentros(){
 function renderOrigens(){
   $("ogCount").textContent=ORIGENS.length+(ORIGENS.length===1?" origem":" origens");
   var b=$("ogBody");b.innerHTML="";
-  ORIGENS.forEach(function(o,i){
+  ORIGENS.map(function(v,i){return {v:v,i:i};}).sort(function(a,b){return ordAZ(a.v&&a.v.nome||a.v,b.v&&b.v.nome||b.v);}).forEach(function(x){var o=x.v,i=x.i;
     var cads=clientes.filter(function(c){return c.origem===o;});
     var venderam=cads.filter(function(c){return vendasDe(c.id).length>0;});
     var pct=cads.length?Math.round(venderam.length/cads.length*100):0;
@@ -12265,16 +12278,16 @@ function opcoesRelatorios(){
   var cl=centrosOrdenados().map(function(c){return {v:c.id,t:caminhoCentro(c)};});
   encher("rf_centro",cl,"Todos");encher("rt_centro",cl,"Todos");
   encher("rf_quem",EQUIPE.slice(),"Todos");
-  ["rv_vend","rv_prosp","rv_inst"].forEach(function(id){encher(id,EQUIPE.slice(),"Todos");});
+  ["rv_vend","rv_prosp","rv_inst"].forEach(function(id){encher(id,EQUIPE.slice().sort(ordAZ),"Todos");});
   var cid={};clientes.forEach(function(c){if(c.cidade)cid[c.cidade]=1;});
   encher("rv_cidade",Object.keys(cid).sort(function(a,b){return a.localeCompare(b,"pt-BR");}),"Todas");
-  var fp=formasPgto.map(function(f){return f.nome;});
+  var fp=porNomeAZ(formasPgto).map(function(f){return f.nome;});
   encher("rv_forma",fp,"Todas");encher("rt_forma",fp,"Todas");
   encher("rv_grupo",listaGruposProd(),"Todos");
   encher("rv_prod",produtos.filter(function(p){return p.grupo!=="Planos";}).slice()
     .sort(function(a,b){return String(a.nome).localeCompare(String(b.nome),"pt-BR");})
-    .map(function(p){return {v:p.id,t:p.cod+" · "+p.nome};}),"Todos");
-  encher("rv_origem",ORIGENS.slice(),"Todas");
+    .map(function(p){return {v:p.id,t:p.nome+" · "+p.cod};}),"Todos");
+  encher("rv_origem",ORIGENS.slice().sort(ordAZ),"Todas");
   var ogs=ORIGENS.slice();if(clientes.some(function(c){return !String(c.origem||"").trim();}))ogs.push("Sem origem");
   encher("rg_origem",ogs,"Todas");
   encher("rg_cidade",Object.keys(cid).sort(function(a,b){return a.localeCompare(b,"pt-BR");}),"Todas");
@@ -18309,9 +18322,9 @@ function renderManut(){
       var sm=statusManut(e),k=sm.k;
       if(fs==="revisita")return k==="aguardando"&&!!sm.revisita;
       return fs==="realizada"?(k==="comvenda"||k==="semvenda"):k===fs;})
-    .sort(function(a,b){
-      var sa=sitEq(a).dias,sb=sitEq(b).dias;
-      if(sa==null)return 1;if(sb==null)return -1;return sa-sb;});
+    /* ordem alfabética pelo cliente (regra dele, 20/09); a urgência continua nos filtros de
+       situação (vencida, até 7 dias, até 30) e nos KPIs do topo */
+    .sort(function(a,b){return ordAZ(a.cliente,b.cliente)||ordAZ(a.produto,b.produto);});
   var ativos=base.filter(function(e){return e.ativo!==false;});
   var venc=ativos.filter(function(e){return sitEq(e).k==="vencida";});
   if($("mpStatus")&&!$("mpStatus").__ligado){$("mpStatus").__ligado=true;$("mpStatus").onchange=renderManut;}
@@ -18406,7 +18419,7 @@ function abrirEquip(e){
   $("mpLista").hidden=true;$("mpForm").hidden=false;
   $("mpTitulo").textContent=e?(e.produto+" · "+(e.serie||e.cliente||"sem série")):"Cadastrar equipamento";
   opcoes("mp_prod",produtos.filter(function(p){return +p.manut>0;}),
-    function(p){return p.id;},function(p){return p.cod+" · "+p.nome+" · "+p.manut+" dias";},"— escolher —");
+    function(p){return p.id;},function(p){return p.nome+" · "+p.manut+" dias";},"— escolher —");
   var st=$("mp_tecnico");st.innerHTML="";
   EQUIPE.forEach(function(n){var o=document.createElement("option");o.textContent=n;st.appendChild(o);});
   var v=e||{};
@@ -18511,13 +18524,13 @@ function abrirManut(e){
   var st=$("mn_tecnico");st.innerHTML="";
   EQUIPE.forEach(function(n){var o=document.createElement("option");o.textContent=n;st.appendChild(o);});
   opcoes("mn_peca",produtos.filter(function(p){return (p.status||"ativo")==="ativo";}),
-    function(p){return p.id;},function(p){return p.cod+" · "+p.nome+((+p.manut>0)?" · manutenção "+p.manut+" dias":"");},null);
+    function(p){return p.id;},function(p){return p.nome+((+p.manut>0)?" · manutenção "+p.manut+" dias":"");},null);
   $("mn_serie").value=e?(e.serie||e.cliente||""):"";$("mn_data").value=hojeISO();
   $("mn_hora").value=(e?horaUltimaVendaDe(e):"")||agoraHM();
   var sf=$("mn_forma");
   if(!sf.options.length){
     var o0=document.createElement("option");o0.value="";o0.textContent="—";sf.appendChild(o0);
-    formasPgto.forEach(function(f){var o=document.createElement("option");o.textContent=(f&&f.nome)?f.nome:f;sf.appendChild(o);});
+    porNomeAZ(formasPgto).forEach(function(f){var o=document.createElement("option");o.textContent=(f&&f.nome)?f.nome:f;sf.appendChild(o);});
   }
   sf.value="";
   $("mn_tecnico").value=(e&&e.tecnico)||usuarioAtual;
@@ -18766,9 +18779,9 @@ function abrirOS(o,ctx){
   $("osLista").hidden=true;$("osForm").hidden=false;$("osImpressao").hidden=true;
   var sp=$("os_prod");sp.innerHTML="";
   var vazio=document.createElement("option");vazio.value="";vazio.textContent="— escolher —";sp.appendChild(vazio);
-  produtos.forEach(function(p){var x=document.createElement("option");x.value=p.id;x.textContent=p.cod+" · "+p.nome;sp.appendChild(x);});
+  porNomeAZ(produtos).forEach(function(p){var x=document.createElement("option");x.value=p.id;x.textContent=p.nome;x.setAttribute("data-cod",p.cod||"");sp.appendChild(x);});
   var spc=$("os_peca");spc.innerHTML="";
-  produtos.forEach(function(p){var x=document.createElement("option");x.value=p.id;x.textContent=p.cod+" · "+p.nome;spc.appendChild(x);});
+  porNomeAZ(produtos).forEach(function(p){var x=document.createElement("option");x.value=p.id;x.textContent=p.nome;x.setAttribute("data-cod",p.cod||"");spc.appendChild(x);});
   var st=$("os_tipoSel");st.innerHTML="";
   OS_TIPOS.forEach(function(t){var x=document.createElement("option");x.value=t.k;x.textContent=t.n;st.appendChild(x);});
   var ss=$("os_status");ss.innerHTML="";
@@ -18777,7 +18790,7 @@ function abrirOS(o,ctx){
   EQUIPE.forEach(function(n){var x=document.createElement("option");x.textContent=n;stc.appendChild(x);});
   var sf=$("os_pagto");sf.innerHTML="";
   var v0=document.createElement("option");v0.value="";v0.textContent="—";sf.appendChild(v0);
-  formasPgto.forEach(function(f){var x=document.createElement("option");x.textContent=f.nome;sf.appendChild(x);});
+  porNomeAZ(formasPgto).forEach(function(f){var x=document.createElement("option");x.textContent=f.nome;sf.appendChild(x);});
 
   var v=o||{};
   $("osTitulo").textContent=o?("OS "+o.numero+" · "+(o.cliente||"")):"Nova ordem de serviço";
@@ -19488,10 +19501,10 @@ function abrirOrc(o){
   var sv=$("or_vend");sv.innerHTML="";
   EQUIPE.forEach(function(n){var op=document.createElement("option");op.textContent=n;sv.appendChild(op);});
   var sp=$("or_prod");sp.innerHTML="";
-  produtos.filter(function(x){return (x.status||"ativo")==="ativo";}).forEach(function(x){
-    var op=document.createElement("option");op.value=x.id;op.textContent=x.cod+" · "+x.nome;sp.appendChild(op);});
+  porNomeAZ(produtos.filter(function(x){return (x.status||"ativo")==="ativo";})).forEach(function(x){
+    var op=document.createElement("option");op.value=x.id;op.textContent=x.nome;op.setAttribute("data-cod",x.cod||"");sp.appendChild(op);});
   var sf=$("or_forma");sf.innerHTML="";
-  formasPgto.forEach(function(f){var op=document.createElement("option");op.textContent=f.nome;sf.appendChild(op);});
+  porNomeAZ(formasPgto).forEach(function(f){var op=document.createElement("option");op.textContent=f.nome;sf.appendChild(op);});
   var v=o||{};
   $("or_nome").value=v.cliente||"";$("or_tel").value=v.tel||"";$("or_email").value=v.email||"";
   $("or_cidade").value=v.cidade||"";$("or_doc").value=v.doc||"";$("or_obs").value=v.obs||"";
@@ -20044,8 +20057,8 @@ function abrirPedido(p){
   $("pedLista").hidden=true;$("pedDet").hidden=false;
   $("pd_titulo").textContent="Pedido "+p.numero+" · "+p.cliente;
   var sp=$("pd_prod");sp.innerHTML="";
-  produtos.filter(function(x){return (x.status||"ativo")==="ativo";}).forEach(function(x){
-    var o=document.createElement("option");o.value=x.id;o.textContent=x.cod+" · "+x.nome;sp.appendChild(o);});
+  porNomeAZ(produtos.filter(function(x){return (x.status||"ativo")==="ativo";})).forEach(function(x){
+    var o=document.createElement("option");o.value=x.id;o.textContent=x.nome;o.setAttribute("data-cod",x.cod||"");sp.appendChild(o);});
   renderPedDet();
 }
 function renderPedDet(){
@@ -20582,8 +20595,8 @@ function abrirInstalacao(p,modo){
   instAberta=p;instModo=modo||"instalacao";
   if(!Array.isArray(p.materiaisInstalacao))p.materiaisInstalacao=[];
   var sp=$("ins_prod");sp.innerHTML="";
-  produtos.filter(function(x){return (x.status||"ativo")==="ativo";}).forEach(function(x){
-    var o=document.createElement("option");o.value=x.id;o.textContent=x.cod+" · "+x.nome;sp.appendChild(o);});
+  porNomeAZ(produtos.filter(function(x){return (x.status||"ativo")==="ativo";})).forEach(function(x){
+    var o=document.createElement("option");o.value=x.id;o.textContent=x.nome;o.setAttribute("data-cod",x.cod||"");sp.appendChild(o);});
   $("ins_qtd").value="";
   $("ins_obs").value=p.obsInstalacao||"";
   $("ins_alerta").innerHTML="";
@@ -20767,6 +20780,16 @@ function dataBR(s){
   var m=/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}:\d{2}))?/.exec(t);
   return m?(m[3]+"/"+m[2]+"/"+m[1]+(m[4]?" "+m[4]:"")):t;
 }
+/* ---------- ordem alfabética (regra dele, 20/09) ----------
+   "Tudo no sistema tem que estar em ordem alfabética para pesquisa: qualquer produto, cadastro
+   de clientes, forma de pagamento, tudo." Vale para as listas de CADASTRO e de ESCOLHA; o que é
+   registro do dia a dia (atendimentos, pedidos, movimentações) continua na ordem do tempo, e os
+   caixas continuam pelo código da conta, que foi regra dele em 16/09.
+   Ignora maiúsculas e acentos e entende número dentro do texto (Refil 2 antes de Refil 10). */
+function ordAZ(a,b){
+  return String(a==null?"":a).localeCompare(String(b==null?"":b),"pt-BR",{sensitivity:"base",numeric:true});
+}
+function porNomeAZ(l){return (l||[]).slice().sort(function(a,b){return ordAZ(a&&a.nome,b&&b.nome);});}
 /* valor em reais por extenso: 622,12 → "Seiscentos e vinte e dois reais e doze centavos" */
 function valorPorExtenso(v){
   var U=["zero","um","dois","três","quatro","cinco","seis","sete","oito","nove","dez","onze","doze","treze","quatorze",
@@ -21043,7 +21066,7 @@ function abrirPlano(pl){
     b.onclick=function(){abaPlano(b.getAttribute("data-pla"));};});
   abaPlano("dados");
   opcoes("pl_prod",produtos.filter(function(x){return (x.status||"ativo")==="ativo"&&x.grupo!=="Planos";}),
-    function(x){return x.id;},function(x){return x.cod+" · "+x.nome+" · "+BRL(x.cheia);},"— escolha o produto ou serviço —");
+    function(x){return x.id;},function(x){return x.nome+" · "+BRL(x.cheia);},"— escolha o produto ou serviço —");
   $("pl_prod").value="";$("pl_qtd").value="";
   $("pl_addProd").onclick=addProdutoPlano;
   /* plano novo parte do contrato do Premium I para só ajustar o que muda */
@@ -22106,7 +22129,7 @@ function renderTipos(){
   $("tipoCount").textContent=tipos.length+(tipos.length===1?" tipo":" tipos");
   var b=$("tipoBody");b.innerHTML="";
   if(!tipos.length){b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum tipo cadastrado</div>Escreva acima e clique em Adicionar.</div></td></tr>';return;}
-  tipos.forEach(function(t,i){
+  tipos.map(function(v,i){return {v:v,i:i};}).sort(function(a,b){return ordAZ(a.v&&a.v.nome||a.v,b.v&&b.v.nome||b.v);}).forEach(function(x){var t=x.v,i=x.i;
     var uso=atendimentos.filter(function(a){return (a.tipos||[]).indexOf(t)>=0;}).length;
     var atual=canalDe(t);
     b.innerHTML+='<tr><td><div class="t-main">'+esc(t)+"</div></td>"+
@@ -22135,7 +22158,7 @@ function renderMotivos(){
   $("motCount").textContent=motivos.length+(motivos.length===1?" motivo":" motivos");
   var b=$("motBody");b.innerHTML="";
   if(!motivos.length){b.innerHTML='<tr><td colspan="3"><div class="empty"><div class="big">Nenhum motivo cadastrado</div>Escreva acima e clique em Adicionar.</div></td></tr>';return;}
-  motivos.forEach(function(m,i){
+  motivos.map(function(v,i){return {v:v,i:i};}).sort(function(a,b){return ordAZ(a.v&&a.v.nome||a.v,b.v&&b.v.nome||b.v);}).forEach(function(x){var m=x.v,i=x.i;
     var uso=atendimentos.filter(function(a){return (a.motivos||[]).indexOf(m)>=0;}).length;
     b.innerHTML+='<tr><td><div class="t-main">'+esc(m)+'</div></td><td class="num">'+uso+
       " atendimento"+(uso===1?"":"s")+'</td><td class="num"><button class="btn mut sm" type="button" data-rmm="'+i+'">Remover</button></td></tr>';
@@ -24477,7 +24500,7 @@ function ligar(){
 var editandoPg=null,pgLinhas=[];
 function renderPgto(){
   var q=($("pgtoBusca").value||"").toLowerCase();
-  var lista=formasPgto.filter(function(f){return !q||f.nome.toLowerCase().indexOf(q)>=0;});
+  var lista=porNomeAZ(formasPgto.filter(function(f){return !q||f.nome.toLowerCase().indexOf(q)>=0;}));
   $("pgtoCount").textContent=lista.length+(lista.length===1?" forma":" formas");
   var b=$("pgtoBody");b.innerHTML="";
   if(!lista.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma forma cadastrada</div>Use o botão <b>Nova forma</b> acima para criar a primeira.</div></td></tr>';return;}
@@ -25591,9 +25614,11 @@ function erro(msg){
         Array.prototype.forEach.call(sel.options,function(o){
           if(!o.value||o.disabled)return;
           var cb=barras[o.value]||"";
-          var t=ibgeTexto(o.textContent)+(cb?" "+cb:"");
+          /* o código saiu do texto da opção (regra dele, 20/09: "o código do produto não pode
+             estar no mesmo campo do nome"), mas continua pesquisável pelo atributo data-cod */
+          var cod=ibgeTexto(o.getAttribute("data-cod")||String(o.textContent).split("·")[0]);
+          var t=ibgeTexto(o.textContent)+(cod?" "+cod:"")+(cb?" "+cb:"");
           for(var i=0;i<termos.length;i++)if(t.indexOf(termos[i])<0)return;
-          var cod=ibgeTexto(String(o.textContent).split("·")[0]);
           var nota=(digitos&&cb===digitos)?-1:(cod.indexOf(termos[0])===0?0:(t.indexOf(termos[0])===0?1:2));
           if(nota===-1)exatos.push(o);
           lista.push({o:o,nota:nota});
