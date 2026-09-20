@@ -1303,7 +1303,7 @@ img{max-width:100%}
               <div class="auto" id="c_indicSug" hidden></div>
             </div>
             <div class="fld"><label for="c_sexo">Sexo <span class="req" id="c_reqSexo">*</span></label>
-              <select id="c_sexo"><option value="">—</option><option>Feminino</option><option>Masculino</option><option>Outro</option><option>Prefere não informar</option></select></div>
+              <select id="c_sexo"><option value="">— escolha —</option><option>Feminino</option><option>Masculino</option></select></div>
           </div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="c_apelido" id="c_lblApelido">Nome fantasia ou apelido</label><input id="c_apelido"></div>
@@ -2411,8 +2411,8 @@ img{max-width:100%}
             </div>
           </div>
           <div class="grid g4" style="margin-top:16px">
-            <div class="fld"><label for="at_sexo">Sexo</label>
-              <select id="at_sexo"><option value="">—</option><option>Feminino</option><option>Masculino</option><option>Outro</option><option>Prefere não informar</option></select></div>
+            <div class="fld"><label for="at_sexo">Sexo <span class="req" id="at_reqSexo">*</span></label>
+              <select id="at_sexo"><option value="">— escolha —</option><option>Feminino</option><option>Masculino</option></select></div>
             <div class="fld"><label for="at_doc">CPF / CNPJ</label><input id="at_doc"></div>
             <div class="fld"><label for="at_cidade">Cidade <span class="req">*</span></label><input id="at_cidade" placeholder="Cidade ou CEP"></div>
             <div class="fld"><label for="at_uf">Estado</label><input id="at_uf" maxlength="2" placeholder="MG"></div>
@@ -2443,7 +2443,7 @@ img{max-width:100%}
           <p class="help" style="margin:6px 0 0">Endereço do lead: só a <b>cidade</b> é obrigatória. O resto é opcional — mas digitando o CEP ele se preenche sozinho.</p>
           <div class="chips" style="margin-top:12px">
             <button class="btn sm ghost" type="button" id="at_leadCompleto">Abrir cadastro completo do lead</button>
-            <span class="help">Todos os campos do cliente. Para o lead, são obrigatórios nome e sobrenome, telefone, cidade, origem e tipo de atendimento.</span>
+            <span class="help">Todos os campos do cliente. Para o lead, são obrigatórios nome e sobrenome, sexo, telefone, cidade, origem e tipo de atendimento.</span>
           </div>
           <div id="at_achou"></div>
         </div>
@@ -3392,7 +3392,7 @@ img{max-width:100%}
             <div class="fld" style="grid-column:span 2"><label for="u_nome">Nome completo <span class="req">*</span></label><input id="u_nome"></div>
             <div class="fld"><label for="u_apelido">Como é chamado</label><input id="u_apelido"></div>
             <div class="fld"><label for="u_sexo">Sexo</label>
-              <select id="u_sexo"><option value="">—</option><option>Feminino</option><option>Masculino</option><option>Outro</option><option>Prefere não informar</option></select></div>
+              <select id="u_sexo"><option value="">— escolha —</option><option>Feminino</option><option>Masculino</option></select></div>
           </div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="u_cpf">CPF</label><input id="u_cpf"></div>
@@ -5822,7 +5822,10 @@ function renderClientes(){
 }
 /* obrigatórios do LEAD (primeiro atendimento) — regra do Wagner: nome e sobrenome,
    telefone e cidade. CPF, identidade, nascimento, sexo e endereço ficam para a venda. */
-var CO_LEAD=[["nome","Nome e sobrenome"],["tel","Telefone"],["cidade","Cidade"],["origem","Origem do contato"]];
+/* Sexo entrou nos obrigatórios do lead em 20/09 (regra dele: "no cadastro, quando tiver a
+   informação do Sexo, ter somente Feminino e Masculino e colocar campo obrigatório").
+   Pessoa Jurídica continua fora, pelo filtro de `faltamObrig`. */
+var CO_LEAD=[["nome","Nome e sobrenome"],["sexo","Sexo"],["tel","Telefone"],["cidade","Cidade"],["origem","Origem do contato"]];
 /* ORIGEM: escolhida uma única vez, no primeiro cadastro, e gravada para sempre.
    A lista começa vazia de propósito — ninguém passa com a primeira opção sem ver. */
 function opcoesOrigem(sel,valor){
@@ -5950,8 +5953,13 @@ function modoCli(){
 function aplicarModoCli(){
   var m=modoCli(),lead=(m==="lead");
   /* lead: só nome e sobrenome, telefone e cidade levam asterisco */
-  ["c_reqDoc","c_reqNasc","c_reqTipo","c_reqSexo"].forEach(function(id){
+  /* o Sexo virou obrigatório também no lead (20/09) — o asterisco dele não some mais */
+  ["c_reqDoc","c_reqNasc","c_reqTipo"].forEach(function(id){
     var e=$(id);if(e)e.style.visibility=lead?"hidden":"";});
+  try{
+    var eSx=$("c_reqSexo"),ehPJ=($("c_tipo")&&$("c_tipo").value==="Pessoa Jurídica");
+    if(eSx)eSx.style.visibility=(ehPJ?"hidden":"");
+  }catch(e){}
   Array.prototype.forEach.call(document.querySelectorAll(".end-req"),function(e){
     e.style.visibility=lead?"hidden":"";});
   $("cliSalvar").textContent=lead?"Salvar lead":"Salvar cliente";
@@ -5980,6 +5988,15 @@ function abrirCliente(c){
   opcoesTipoAt("c_tipoAt");$("c_tipoAt").value="";
   $("c_tipoAtWrap").hidden=!!(c||voltaAtend);
   CAMPOS_CLI.forEach(function(k){var el=$("c_"+k);if(el)el.value=v[k]||"";});
+  /* cadastro antigo gravado com "Outro" ou "Prefere não informar": a opção não existe mais
+     (20/09), então o valor entra na lista só para este cadastro — assim ninguém apaga o que
+     está gravado sem perceber, e quem salvar escolhe Feminino ou Masculino */
+  try{
+    var sx=$("c_sexo");
+    if(v.sexo&&sx&&!Array.prototype.some.call(sx.options,function(o){return o.value===v.sexo||o.textContent===v.sexo;})){
+      var ox=document.createElement("option");ox.textContent=v.sexo;sx.appendChild(ox);sx.value=v.sexo;
+    }
+  }catch(e){}
   $("c_geo").__escolhido=v.geo||"";$("c_geo").__geoExato=(v.geoOrigem==="exato")?(v.geo||""):"";
   $("c_geo").__geoEnd=[v.rua,v.num,v.bairro,v.cidade].map(function(x){return String(x||"").trim();}).join("|").toLowerCase();
   $("c_temconj").value=v.temconj||"nao";
@@ -13586,7 +13603,7 @@ async function gerarDemo(){
   c1.nasc=nascEm(0,41);c3.nasc=nascEm(3,33);l1.nasc=nascEm(6,28);
   /* pessoa jurídica, com IE e responsáveis */
   var cj={id:uid(),demo:true,loja:L,codigo:proxCodigo(),tipo:"Pessoa Jurídica",
-    nome:"Clube de Aviação de Itaúna LTDA",apelido:"Aeroclube",sexo:"Prefere não informar",
+    nome:"Clube de Aviação de Itaúna LTDA",apelido:"Aeroclube",sexo:"",
     doc:"05.416.544/0001-52",ie:"ISENTA",nasc:"2003-06-15",
     tel:"(37) 3241-8800",email:"contato@aviacaoitauna.com.br",
     cep:"35680-000",rua:"Rodovia MG-050",num:"km 95",comp:"Zona Rural",bairro:"Zona Rural",
@@ -21748,11 +21765,14 @@ async function salvarAtend(){
     if(!temSobrenome(nome))faltaLead.push("sobrenome");
     if(!$("at_cidade").value.trim())faltaLead.push("cidade");
     if(!$("at_origem").value)faltaLead.push("origem");
+    /* sexo obrigatório no cadastro (regra dele, 20/09); empresa não tem */
+    var pjAt=String($("at_doc").value||"").replace(/\D/g,"").length===14;
+    if(!pjAt&&!$("at_sexo").value)faltaLead.push("sexo");
     /* veio por indicação: sem dizer quem indicou, o indicador não ganha a estrela */
     if(ehOrigemIndicacao($("at_origem").value)&&!$("at_indicado").value)faltaLead.push("quem indicou");
     if(faltaLead.length){
       $("at_alerta").innerHTML='<div class="note crit"><b>Falta preencher: '+faltaLead.join(" · ")+
-        ".</b> Este contato não tem cadastro e vai nascer como lead — nome e sobrenome, telefone, cidade, origem e tipo de atendimento "+
+        ".</b> Este contato não tem cadastro e vai nascer como lead — nome e sobrenome, sexo, telefone, cidade, origem e tipo de atendimento "+
         "são o mínimo para alguém conseguir voltar a falar com ele. "+
         'Se quiser registrar tudo agora, use <b>Abrir cadastro completo do lead</b>.</div>';
       return;}
