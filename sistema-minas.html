@@ -7067,22 +7067,74 @@ function formaBaseVenda(){
   var f=(formas||[]).filter(function(x){return (+x.valor||0)>0;})[0]||(formas||[])[0];
   return f||{tipo:"",parc:1};
 }
+/* ---------- preço com MAIS DE UMA forma de pagamento (regra dele, 20/09) ----------
+   "Quando tiver mais de uma forma de pagamento, ou se tiver alguma forma cujo coeficiente seja 1,
+   o valor total do pedido deve abater o valor dessa forma e o que sobrar deve seguir conforme a
+   forma que tiver coeficiente diferente de 1, seguindo pela de menor juros e depois pela de maior."
+   Relato dele: R$ 1.000 em dinheiro + Sipag 12× num produto de tabela cheia R$ 2.200 não calculava
+   — o preço saía pela primeira forma com valor (o dinheiro), dava R$ 2.200, e a venda caía abaixo
+   da tabela com comissão zero.
+   `acrescimo(f)` = quanto cada real vira no preço (n × coef): dinheiro e PIX = 1; Sipag 12× = 1,206.
+   Entrada sem juros E entra pelo valor de face; o que falta da tabela é multiplicado pelo
+   acréscimo da forma com juros de menor acréscimo:  preço = E + (cheia − E) × acréscimo.
+   Conferido: 1.000 + (2.200 − 1.000) × 1,206 = R$ 2.447,20, que deprecia de volta em R$ 2.200,00. */
+function acrescimoForma(f){
+  if(!f||!f.tipo)return 1;
+  var n=Math.max(1,+f.parc||1),c=coefDe(f.tipo,n);
+  return c?(n*c):1;
+}
+function semJuros(f){return Math.abs(acrescimoForma(f)-1)<1e-9;}
+/* formas com juros, da de MENOR acréscimo para a de maior (ordem que ele pediu) */
+function formasComJuros(){
+  return (formas||[]).filter(function(f){return f.tipo&&!semJuros(f);})
+    .sort(function(a,b){return acrescimoForma(a)-acrescimoForma(b);});
+}
+/* o que já está combinado nas formas sem juros (dinheiro, PIX, crédito do plano, troca) */
+function entradaSemJuros(){
+  return centavos((formas||[]).filter(function(f){return f.tipo&&semJuros(f);})
+    .reduce(function(a,f){return a+(+f.valor||0);},0));
+}
+/* o item entrou pelo preço que o sistema sugeriu? Se sim, ele acompanha sozinho qualquer mudança
+   de forma, parcelas ou entrada (regra dele, 20/09: "toda vez que adicionar algum produto, ou
+   alterar o valor do produto, o sistema tem que refazer o cálculo automaticamente"). Quem digita
+   o valor à mão perde a marca e o valor digitado é respeitado. */
+function precoAutoItem(p){
+  if(!p||!(+p.cheia>0))return false;
+  return Math.abs((numMF($("v_valor").value)||0)-precoPelaForma(p.cheia))<0.01;
+}
 function precoPelaForma(cheia){
-  var f=formaBaseVenda(),n=Math.max(1,+f.parc||1),c=coefDe(f.tipo,n);
-  if(!(+cheia>0))return 0;
-  if(!c)return Math.round(+cheia*100)/100;
+  var alvo=+cheia||0;
+  if(!(alvo>0))return 0;
+  var comJuros=formasComJuros();
+  /* tudo sem juros (ou nenhuma forma escolhida): o preço é a própria tabela */
+  if(!comJuros.length)return Math.round(alvo*100)/100;
+  var ent=Math.min(entradaSemJuros(),alvo);
   /* arredonda para CIMA no centavo: por baixo, a venda nasceria um milésimo abaixo da tabela */
-  return Math.ceil(+cheia*n*c*100)/100;
+  return Math.ceil((ent+(alvo-ent)*acrescimoForma(comJuros[0]))*100)/100;
+}
+/* explica a conta em palavras, incluindo a entrada sem juros quando houver */
+function textoPrecoForma(cheia){
+  var alvo=+cheia||0,comJuros=formasComJuros();
+  if(!(alvo>0))return "";
+  if(!comJuros.length)return "Tabela cheia <b>"+BRL(alvo)+"</b> — nenhuma forma com juros escolhida.";
+  var f=comJuros[0],n=Math.max(1,+f.parc||1);
+  var ent=Math.min(entradaSemJuros(),alvo),v=precoPelaForma(alvo);
+  if(ent>0){
+    var nomesSJ=(formas||[]).filter(function(x){return x.tipo&&semJuros(x)&&(+x.valor||0)>0;})
+      .map(function(x){return x.tipo;}).join(" + ");
+    return "Tabela cheia <b>"+BRL(alvo)+"</b> · <b>"+BRL(ent)+"</b> sem juros ("+esc(nomesSJ)+
+      ") e os <b>"+BRL(alvo-ent)+"</b> que sobram em <b>"+esc(f.tipo)+" "+n+"×</b> = <b>"+BRL(v-ent)+
+      "</b>. Total do item <b>"+BRL(v)+"</b>"+(n>1?" ("+BRL((v-ent)/n)+" por parcela)":"")+".";
+  }
+  return "Tabela cheia <b>"+BRL(alvo)+"</b> em <b>"+esc(f.tipo)+" "+n+"×</b> = <b>"+BRL(v)+"</b>"+
+    (n>1?" ("+BRL(v/n)+" por parcela)":"")+".";
 }
 function notaPrecoForma(p){
   var el=$("v_precoNota");if(!el)return;
-  var f=formaBaseVenda(),n=Math.max(1,+f.parc||1),c=coefDe(f.tipo,n);
-  if(!p||!(+p.cheia>0)||!f.tipo){el.innerHTML="";return;}
-  var v=precoPelaForma(p.cheia);
-  el.innerHTML=(c&&Math.abs(v-(+p.cheia))>=0.01)
-    ? '<div class="note ok" style="margin-top:8px">Tabela cheia <b>'+BRL(p.cheia)+"</b> em <b>"+esc(f.tipo)+" "+n+"×</b> = <b>"+BRL(v)+
-      "</b>"+(n>1?" ("+BRL(v/n)+" por parcela)":"")+". Pode mudar o valor — a comissão acompanha.</div>"
-    : '<div class="note" style="margin-top:8px">Tabela cheia <b>'+BRL(p.cheia)+"</b>. Pode mudar o valor — a comissão acompanha.</div>";
+  if(!p||!(+p.cheia>0)||!formaBaseVenda().tipo){el.innerHTML="";return;}
+  var v=precoPelaForma(p.cheia),mudou=Math.abs(v-(+p.cheia))>=0.01;
+  el.innerHTML='<div class="note'+(mudou?" ok":"")+'" style="margin-top:8px">'+textoPrecoForma(p.cheia)+
+    " Pode mudar o valor — a comissão acompanha.</div>";
 }
 /* forma ou parcelamento mudou: refaz o preço do item que está sendo montado */
 function atualizarPrecoItemNovo(){
@@ -7182,10 +7234,9 @@ function notaGarantia(){
       var pCheia=precoPelaForma(pl.cheia),pBaixa=precoPelaForma(pl.campanha);
       if(!$("v_planoValor").value||w.__plano!==pl.id||w.__precoPl!==pCheia){
         $("v_planoValor").value=brMF(pCheia);w.__plano=pl.id;w.__precoPl=pCheia;}
-      var fPl=formaBaseVenda(),nPl=Math.max(1,+fPl.parc||1);
-      $("v_planoAjuda").textContent="Tabela cheia "+BRL(pl.cheia)+" em "+fPl.tipo+" "+nPl+"× = "+BRL(pCheia)+
-        " · tabela baixa "+BRL(pl.campanha)+" = "+BRL(pBaixa)+
-        ". Abaixo da tabela baixa, o pedido precisa de autorização.";
+      $("v_planoAjuda").innerHTML=textoPrecoForma(pl.cheia)+
+        " Tabela baixa "+BRL(pl.campanha)+" = <b>"+BRL(pBaixa)+
+        "</b>. Abaixo da tabela baixa, o pedido precisa de autorização.";
     }
   }
   $("v_garNota").innerHTML = g==="Bronze"
@@ -7263,11 +7314,13 @@ function addItem(){
     msgPlano=qc+"× "+p.nome+" pelo plano "+cobV.cobre.e.plano+", sem custo.";
     if(qtd>qc){
       itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd-qc,valor:numMF($("v_valor").value)||0,
+        precoAuto:precoAutoItem(p),
         serie:serie,equipId:equipId,local:local,pontos:+p.pontos||0,garantia:gar,vinculo:uid()});
       msgPlano+=" O plano não cobrirá as outras "+(qtd-qc)+": os direitos do plano para essa peça se esgotaram — cobradas pelo valor normal.";
     }
   }else{
     itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd,valor:numMF($("v_valor").value)||0,
+      precoAuto:precoAutoItem(p),
       serie:serie,equipId:equipId,local:local,pontos:+p.pontos||0,garantia:gar,vinculo:vinculo});
     if(cobV&&cobV.esgotado)msgPlano="O plano "+cobV.esgotado.e.plano+" não cobrirá "+p.nome+
       ": os direitos do plano para essa peça já foram esgotados. Cobrado pelo valor normal.";
@@ -7509,13 +7562,41 @@ function ajustarInstalador(){
   }
 }
 function calcular(){
+  /* refaz sozinho o preço dos itens que entraram pelo valor sugerido, sempre que a forma, as
+     parcelas ou a entrada sem juros mudarem (regra dele, 20/09: "toda vez que adicionar algum
+     produto, ou alterar o valor do produto, o sistema tem que refazer o cálculo automaticamente").
+     Item com valor digitado à mão não é tocado. Roda ANTES do total, para tudo sair na mesma conta. */
+  itens.forEach(function(i){
+    if(!i.precoAuto||i.planoCobre||ehPlano(i))return;
+    var pr=produtos.filter(function(x){return x.id===i.pid;})[0];
+    if(!pr||!(+pr.cheia>0))return;
+    var novo=precoPelaForma(pr.cheia);
+    if(Math.abs((+i.valor||0)-novo)>=0.01)i.valor=novo;
+  });
   var total=itens.reduce(function(a,i){return a+(i.valor*(i.qtd||1));},0);
   /* forma de pagamento já com o total do pedido (regra do Wagner, 12/09): com uma forma só, o valor
      acompanha o total até alguém digitar outro valor */
   if(formas.length===1&&formas[0].__auto!==false&&Math.round((+formas[0].valor||0)*100)!==Math.round(total*100)){
     formas[0].valor=Math.round(total*100)/100;
     var inpF=$("v_formas")?$("v_formas").querySelector('[data-f="valor"]'):null;
-    if(inpF)inpF.value=formas[0].valor;
+    if(inpF)inpF.value=brMF(formas[0].valor);
+  }
+  /* com mais de uma forma (regra dele, 20/09): a entrada sem juros é o que ele digitou, e o que
+     sobra do pedido cai sozinho na forma COM JUROS de menor acréscimo — que é justamente a que o
+     preço do item usou. Só preenche a que ninguém digitou (`__auto`), então quem quiser repartir
+     à mão continua repartindo. */
+  if(formas.length>1&&total>0){
+    var cj=formasComJuros().filter(function(f){return f.__auto!==false;});
+    if(cj.length===1){
+      var outras=formas.reduce(function(a,f){return a+((f===cj[0])?0:(+f.valor||0));},0);
+      var resto=Math.round(Math.max(0,total-outras)*100)/100;
+      if(Math.round((+cj[0].valor||0)*100)!==Math.round(resto*100)){
+        cj[0].valor=resto;
+        var ixJ=formas.indexOf(cj[0]);
+        var campos=$("v_formas")?$("v_formas").querySelectorAll('[data-f="valor"]'):[];
+        if(campos[ixJ]&&campos[ixJ]!==document.activeElement)campos[ixJ].value=brMF(resto);
+      }
+    }
   }
 
   var somaFormas=0,dep=0,descV=0,partes=[];
@@ -7579,6 +7660,8 @@ function calcular(){
       var v=numMF(inp.value);
       if(v<0)v=0;
       it.valor=v;
+      /* valor digitado à mão: o item para de acompanhar o preço da forma de pagamento */
+      it.precoAuto=false;
       /* com uma forma só, o valor dela volta a acompanhar o total */
       if(formas.length===1)formas[0].__auto=true;
       calcular();
@@ -23791,7 +23874,9 @@ function ligar(){
     /* a forma nova já vem com o que falta para fechar o total do pedido */
     var tot=itens.reduce(function(a,i){return a+(i.valor*(i.qtd||1));},0);
     var soma=formas.reduce(function(a,f){return a+(+f.valor||0);},0);
-    formas.forEach(function(f){f.__auto=false;});
+    /* as formas que já existiam continuam como estavam: `__auto=false` é a marca de "a pessoa
+       digitou este valor", e quem não digitou segue recebendo o que sobra do pedido (regra dele,
+       20/09). Antes esta linha marcava TODAS como digitadas e a forma com juros travava. */
     formas.push({tipo:"Dinheiro",valor:Math.max(0,Math.round((tot-soma)*100)/100),parc:1,__auto:false});
     renderFormas();calcular();};
   /* Desconto de troca: entra como forma de pagamento com valor zerado, para o vendedor digitar
