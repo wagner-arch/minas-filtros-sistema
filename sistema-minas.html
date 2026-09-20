@@ -346,6 +346,9 @@
   .fx-v{font-size:13px;color:var(--ink-2);margin-top:4px;display:flex;flex-wrap:wrap;align-items:center;gap:4px}
   .fx-pct{font-size:12px;color:var(--ink-3)}
   .fx-s{font-size:12px;color:var(--ink-3);margin-top:3px}
+  /* valor da parcela, embaixo de cada forma de pagamento (20/09) */
+  .pg-parc{grid-column:1/-1;margin-top:-4px;font-size:13.5px;color:var(--ink-2)}
+  .pg-parc b{color:var(--accent)}
   .lnk-cli{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--accent);
     cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:2px}
   .lnk-cli:hover{opacity:.8}
@@ -7591,6 +7594,25 @@ function notaCreditoPlano(){
 }
 /* formas de pagamento */
 var formas=[{tipo:"Cartão de Crédito Sipag",valor:0,parc:12}];
+/* "na forma de pagamento deve aparecer o valor que será a parcela, caso a forma de pagamento
+   tenha" (pedido dele, 20/09). O resto da divisão vai na PRIMEIRA parcela, que é como o pedido
+   impresso sempre fez (docPedido) e como `gerarReceberDoPedido` gera os títulos. */
+function textoParcelaForma(f){
+  var v=+f.valor||0,n=Math.max(1,+f.parc||1);
+  if(!(v>0)||n<2)return "";
+  var p=Math.floor((v/n)*100)/100,p1=Math.round((v-p*(n-1))*100)/100;
+  var igual=(Math.round(p1*100)===Math.round(p*100));
+  return "<b>"+n+"× de "+BRL(p)+"</b>"+(igual?"":" · a 1ª de "+BRL(p1));
+}
+/* o valor da forma muda sem redesenhar o bloco (a distribuição automática e o que ele digita),
+   então a linha da parcela é reescrita a cada conta */
+function atualizarParcelasFormas(){
+  var w=$("v_formas");if(!w)return;
+  Array.prototype.forEach.call(w.querySelectorAll("[data-pgp]"),function(el){
+    var f=formas[+el.getAttribute("data-pgp")];
+    el.innerHTML=f?textoParcelaForma(f):"";
+  });
+}
 function renderFormas(){
   var w=$("v_formas");w.innerHTML="";
   /* a lista das formas chega em carregar(); montar antes deixava a Forma 1 sem opções */
@@ -7610,7 +7632,9 @@ function renderFormas(){
     d.innerHTML='<div class="fld"><label>Forma '+(i+1)+'</label><select data-f="tipo" data-i="'+i+'">'+opts+'</select></div>'+
       '<div class="fld"><label>Valor</label><input type="text" inputmode="decimal" data-f="valor" data-i="'+i+'" value="'+brMF(f.valor||0)+'"></div>'+
       '<div class="fld"><label>Parcelas</label><select data-f="parc" data-i="'+i+'">'+pOpts+'</select></div>'+
-      '<div class="fld" style="justify-content:flex-end">'+(formas.length>1?'<button class="btn mut sm" type="button" data-rmf="'+i+'">Remover</button>':'<span class="help" style="margin:0">à vista não deprecia</span>')+'</div>';
+      '<div class="fld" style="justify-content:flex-end">'+(formas.length>1?'<button class="btn mut sm" type="button" data-rmf="'+i+'">Remover</button>':'<span class="help" style="margin:0">à vista não deprecia</span>')+'</div>'+
+      /* quanto fica cada parcela desta forma (pedido dele, 20/09) */
+      '<div class="pg-parc" data-pgp="'+i+'"></div>';
     w.appendChild(d);
   });
   Array.prototype.forEach.call(w.querySelectorAll("[data-f]"),function(el){
@@ -7645,6 +7669,7 @@ function renderFormas(){
   Array.prototype.forEach.call(w.querySelectorAll("[data-rmf]"),function(b){
     b.onclick=function(){formas.splice(+b.getAttribute("data-rmf"),1);renderFormas();calcular();};
   });
+  atualizarParcelasFormas();
 }
 /* regra do Wagner (12/09): sem instalador informado ou sem instalação futura, o vendedor é o
    instalador e fica com os 20% — na tela o campo mostra isso */
@@ -7777,6 +7802,7 @@ function calcular(){
 
   $("c_dep").textContent=BRL(dep);
   $("c_formula").textContent=partes.length?partes.join("  +  "):"—";
+  try{atualizarParcelasFormas();}catch(e){}
 
   /* item coberto pelo plano sai sem custo: fora da divisão do valor, da faixa e da comissão */
   /* o depreciado do pedido é repartido entre os itens **pelo valor vendido de cada um**
