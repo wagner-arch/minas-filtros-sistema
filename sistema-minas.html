@@ -1450,7 +1450,8 @@ img{max-width:100%}
           <p class="sect-t">Preços e comissão</p>
           <div class="grid g4">
             <div class="fld"><label for="p_cheia">Tabela 100% <span class="req">*</span></label><input id="p_cheia" type="text" inputmode="decimal" step="0.01"></div>
-            <div class="fld"><label for="p_campanha">Tabela 70%</label><input id="p_campanha" type="text" inputmode="decimal" step="0.01"></div>
+            <!-- zerada = só vale a tabela cheia (regra dele, 20/09) -->
+            <div class="fld"><label for="p_campanha">Tabela 70%</label><input id="p_campanha" type="text" inputmode="decimal" step="0.01" placeholder="deixe zerada para valer só a cheia"></div>
             <div class="fld"><label for="p_minimo">Campanha</label><input id="p_minimo" type="text" inputmode="decimal" step="0.01"></div>
             <div class="fld"><label for="p_campativa">Campanha ativa <span class="pill p-crit" style="font-size:10px;padding:1px 7px;margin-left:4px">Admin</span></label>
               <select id="p_campativa"><option value="nao">Desativada</option><option value="sim">Ativa</option></select></div>
@@ -5796,7 +5797,11 @@ function faixa(v,p){
   if(v>=c-eps)return{n:"100%",f:1,cls:"p-ok"};
   if(ca>0&&v>=ca-eps)return{n:"70%",f:.7,cls:"p-acc"};
   if(campOn&&m>0&&v>=m-eps)return{n:"Campanha",f:.5,cls:"p-warn"};
-  return{n:campOn?"Abaixo da campanha":"Abaixo dos 70%",f:0,cls:"p-crit"};
+  /* produto sem tabela de 70% (regra dele, 20/09: "a que tiver zerada o cálculo será somente em
+     cima da tabela cheia, os 100%"): o rótulo não pode citar uma tabela que não existe — era isso
+     que aparecia no print dele, "abaixo da tabela de 70%", num produto que só tem a cheia. */
+  return{n:(campOn&&m>0)?"Abaixo da campanha":(ca>0?"Abaixo dos 70%":"Abaixo da tabela cheia"),
+    f:0,cls:"p-crit"};
 }
 
 /* clientes */
@@ -6445,9 +6450,15 @@ function notaEstoque(){
 }
 function notaCampanha(){
   var on=$("p_campativa").value==="sim", val=numMF($("p_minimo").value)||0;
+  /* tabela de 70% zerada = só vale a cheia (regra dele, 20/09) — a nota não pode prometer
+     uma faixa de 70% que este produto não tem */
+  var set=numMF($("p_campanha").value)||0;
+  var piso=set>0?("a tabela de 70% ("+BRL(set)+")"):("a tabela cheia ("+BRL(numMF($("p_cheia").value)||0)+")");
   $("p_campNota").innerHTML = on
     ? '<div class="note warn"><b>Campanha ligada.</b> O vendedor pode fechar em '+(val?BRL(val):"—")+' e a comissão paga 50%. Abaixo disso, zera e exige aprovação do Admin.</div>'
-    : '<div class="note"><b>Campanha desligada.</b> O vendedor só tem 100% e 70%. Qualquer valor abaixo da tabela de 70% zera a comissão e exige aprovação do Admin.</div>';
+    : '<div class="note"><b>Campanha desligada.</b> '+
+      (set>0?"O vendedor tem 100% e 70%.":"<b>Sem tabela de 70%:</b> este produto só tem os 100%.")+
+      " Qualquer valor abaixo d"+piso+" zera a comissão e exige aprovação do Admin.</div>";
 }
 
 /* pedido */
@@ -23731,7 +23742,8 @@ function ligar(){
   $("prodGrupo").onchange=function(){$("prodSub").value="";renderProdutos();};
   $("prodSub").onchange=renderProdutos;
   $("p_grupo").oninput=atualizarListasGrupoProd;
-  $("p_campativa").onchange=notaCampanha;$("p_minimo").oninput=notaCampanha;
+  $("p_campativa").onchange=notaCampanha;
+  ["p_minimo","p_campanha","p_cheia"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaCampanha);});
   ["p_custo","p_frete","p_ipi","p_st","p_federais","p_icms","p_cheia","p_campanha","p_minimo"].forEach(function(id){$(id).oninput=notaCusto;});
   $("p_estoque").oninput=notaEstoque;$("p_estmin").oninput=notaEstoque;
   $("p_status").onchange=notaStatus;
