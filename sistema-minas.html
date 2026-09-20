@@ -7137,31 +7137,68 @@ function focarSemJurosPendente(){
    o valor à mão perde a marca e o valor digitado é respeitado. */
 function precoAutoItem(p){
   if(!p||!(+p.cheia>0))return false;
-  return Math.abs((numMF($("v_valor").value)||0)-precoPelaForma(p.cheia))<0.01;
+  return Math.abs((numMF($("v_valor").value)||0)-precoPelaForma(p.cheia,qtdDoForm(),tabelaTotalVenda(true)))<0.01;
 }
-function precoPelaForma(cheia){
-  var alvo=+cheia||0;
+/* ---------- a entrada sem juros é REPARTIDA entre os itens (defeito que ele pegou, 20/09) ------
+   Print dele: purificador de tabela R$ 2.200 + Plano Premium I de R$ 600, com R$ 500 de entrada.
+   O purificador saiu "Abaixo da tabela cheia" por R$ 9,67 SEM o vendedor mexer em nada — e a
+   regra dele é clara: "a tabela só será abaixo se o vendedor alterar por conta própria o valor".
+   Causa: `precoPelaForma` somava os R$ 500 INTEIROS no preço de CADA item. Como a entrada só
+   existe uma vez, o preço total nascia menor que o necessário e o depreciado do pedido parava em
+   R$ 2.752,61 em vez dos R$ 2.800,00 das duas tabelas.
+   Agora a entrada é repartida proporcionalmente à tabela cheia de cada item:
+       E_i = E × T_i ÷ T        preço_i = E_i + (T_i − E_i) × acréscimo
+   Com isso preço_i fica proporcional a T_i, e como o depreciado é rateado pelo valor vendido
+   (v171), cada item deprecia exatamente na sua tabela — a conta fecha por construção. */
+function qtdDoForm(){return Math.max(1,parseInt($("v_qtd")?$("v_qtd").value:"1",10)||1);}
+function somaTabelaCarrinho(){
+  return (itens||[]).reduce(function(a,i){
+    if(i.planoCobre)return a;
+    var p=produtos.filter(function(x){return x.id===i.pid;})[0];
+    return a+(((p&&+p.cheia)||0)*(i.qtd||1));},0);
+}
+/* soma das tabelas do que está sendo montado no formulário e ainda não entrou no carrinho:
+   o produto escolhido e, se houver, o plano de garantia que vai junto com ele */
+function tabelaDoFormulario(){
+  var t=0,q=Math.max(1,parseInt($("v_qtd")?$("v_qtd").value:"1",10)||1);
+  var p=produtos.filter(function(x){return x.id===($("v_prod")?$("v_prod").value:"");})[0];
+  if(p&&+p.cheia>0)t+=(+p.cheia)*q;
+  var pl=$("v_gar")?planoDaGarantia($("v_gar").value):null;
+  if(pl&&+pl.cheia>0)t+=(+pl.cheia)*q;
+  return t;
+}
+/* T = tabela cheia de TUDO que compõe o pedido; `comFormulario` inclui o que está sendo montado */
+function tabelaTotalVenda(comFormulario){
+  return somaTabelaCarrinho()+(comFormulario?tabelaDoFormulario():0);
+}
+function precoPelaForma(cheia,qtd,T){
+  var q=Math.max(1,+qtd||1),alvo=(+cheia||0)*q;
   if(!(alvo>0))return 0;
   var comJuros=formasComJuros();
   /* tudo sem juros (ou nenhuma forma escolhida): o preço é a própria tabela */
-  if(!comJuros.length)return Math.round(alvo*100)/100;
-  var ent=Math.min(entradaSemJuros(),alvo);
+  if(!comJuros.length)return Math.round((+cheia||0)*100)/100;
+  var tot=(+T>0)?+T:alvo;
+  if(tot<alvo)tot=alvo;
+  var ent=Math.min(entradaSemJuros(),tot)*(alvo/tot);   /* a fatia da entrada deste item */
   /* arredonda para CIMA no centavo: por baixo, a venda nasceria um milésimo abaixo da tabela */
-  return Math.ceil((ent+(alvo-ent)*acrescimoForma(comJuros[0]))*100)/100;
+  return Math.ceil(((ent+(alvo-ent)*acrescimoForma(comJuros[0]))/q)*100)/100;
 }
-/* explica a conta em palavras, incluindo a entrada sem juros quando houver */
-function textoPrecoForma(cheia){
-  var alvo=+cheia||0,comJuros=formasComJuros();
+/* explica a conta em palavras, incluindo a fatia da entrada sem juros quando houver */
+function textoPrecoForma(cheia,qtd,T){
+  var q=Math.max(1,+qtd||1),alvo=(+cheia||0)*q,comJuros=formasComJuros();
   if(!(alvo>0))return "";
-  if(!comJuros.length)return "Tabela cheia <b>"+BRL(alvo)+"</b> — nenhuma forma com juros escolhida.";
+  if(!comJuros.length)return "Tabela cheia <b>"+BRL(+cheia||0)+"</b> — nenhuma forma com juros escolhida.";
   var f=comJuros[0],n=Math.max(1,+f.parc||1);
-  var ent=Math.min(entradaSemJuros(),alvo),v=precoPelaForma(alvo);
-  if(ent>0){
+  var tot=(+T>0)?Math.max(+T,alvo):alvo;
+  var ent=Math.min(entradaSemJuros(),tot)*(alvo/tot);
+  var v=precoPelaForma(cheia,q,tot)*q;
+  if(ent>0.004){
     var nomesSJ=(formas||[]).filter(function(x){return x.tipo&&semJuros(x)&&(+x.valor||0)>0;})
       .map(function(x){return x.tipo;}).join(" + ");
-    return "Tabela cheia <b>"+BRL(alvo)+"</b> · <b>"+BRL(ent)+"</b> sem juros ("+esc(nomesSJ)+
-      ") e os <b>"+BRL(alvo-ent)+"</b> que sobram em <b>"+esc(f.tipo)+" "+n+"×</b> = <b>"+BRL(v-ent)+
-      "</b>. Total do item <b>"+BRL(v)+"</b>"+(n>1?" ("+BRL((v-ent)/n)+" por parcela)":"")+".";
+    return "Tabela cheia <b>"+BRL(alvo)+"</b> · <b>"+BRL(ent)+"</b> da entrada sem juros ("+esc(nomesSJ)+
+      (tot>alvo?", a parte deste item":"")+") e os <b>"+BRL(alvo-ent)+"</b> que sobram em <b>"+
+      esc(f.tipo)+" "+n+"×</b> = <b>"+BRL(v-ent)+"</b>. Total do item <b>"+BRL(v)+"</b>"+
+      (n>1?" ("+BRL((v-ent)/n)+" por parcela)":"")+".";
   }
   return "Tabela cheia <b>"+BRL(alvo)+"</b> em <b>"+esc(f.tipo)+" "+n+"×</b> = <b>"+BRL(v)+"</b>"+
     (n>1?" ("+BRL(v/n)+" por parcela)":"")+".";
@@ -7176,25 +7213,30 @@ function notaPrecoForma(p){
     return;
   }
   if(!p||!(+p.cheia>0)||!formaBaseVenda().tipo){el.innerHTML="";return;}
-  var v=precoPelaForma(p.cheia),mudou=Math.abs(v-(+p.cheia))>=0.01;
-  el.innerHTML='<div class="note'+(mudou?" ok":"")+'" style="margin-top:8px">'+textoPrecoForma(p.cheia)+
+  var qN=qtdDoForm(),TN=tabelaTotalVenda(true);
+  var v=precoPelaForma(p.cheia,qN,TN),mudou=Math.abs(v-(+p.cheia))>=0.01;
+  el.innerHTML='<div class="note'+(mudou?" ok":"")+'" style="margin-top:8px">'+textoPrecoForma(p.cheia,qN,TN)+
     " Pode mudar o valor — a comissão acompanha.</div>";
 }
-/* forma ou parcelamento mudou: refaz o preço do item que está sendo montado */
-function atualizarPrecoItemNovo(){
+/* forma ou parcelamento mudou: refaz o preço do item que está sendo montado.
+   `soProduto` evita o vaivém com `notaGarantia`, que também chama esta função: produto e plano
+   dividem a MESMA entrada sem juros, então os dois preços têm de ser refeitos com o mesmo T
+   (defeito de 20/09: o produto era precificado antes de o plano ser escolhido e ficava com a
+   entrada inteira; ao entrar o plano, o produto não era refeito e caía abaixo da tabela). */
+function atualizarPrecoItemNovo(soProduto){
   var vv=$("v_valor");if(!vv)return;
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if(!p)return;
   if(vv.__manual)  {notaPrecoForma(p);return;}   /* valor digitado à mão fica como está */
-  vv.value=travaSemJuros()?"":brMF(precoPelaForma(p.cheia));
+  vv.value=travaSemJuros()?"":brMF(precoPelaForma(p.cheia,qtdDoForm(),tabelaTotalVenda(true)));
   notaPrecoForma(p);
-  try{notaGarantia();}catch(e){}   /* o plano segue o mesmo preço da forma (20/09) */
+  if(!soProduto){try{notaGarantia();}catch(e){}}   /* o plano segue o mesmo preço da forma (20/09) */
   try{calcular();}catch(e){}
 }
 function sincronizarValor(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if($("v_valor"))$("v_valor").__manual=false;
-  if(p){$("v_valor").value=travaSemJuros()?"":brMF(precoPelaForma(p.cheia));notaPrecoForma(p);
+  if(p){$("v_valor").value=travaSemJuros()?"":brMF(precoPelaForma(p.cheia,qtdDoForm(),tabelaTotalVenda(true)));notaPrecoForma(p);
     /* número de série só para os grupos marcados em Configurações › Planos de Garantia › Número de série */
     var sg=temSerieGrupo(p);
     $("v_serie").disabled=!sg;
@@ -7275,10 +7317,11 @@ function notaGarantia(){
       var lbPl=w.querySelector("label");if(lbPl)lbPl.textContent="Valor do Plano "+pl.garantia;
       /* o plano também sai pelo preço da forma de pagamento escolhida (relato dele, 20/09:
          "o valor do plano premium não passou pela nova regra de cálculo") */
-      var pCheia=precoPelaForma(pl.cheia),pBaixa=precoPelaForma(pl.campanha);
+      var qG=qtdDoForm(),TG=tabelaTotalVenda(true);
+      var pCheia=precoPelaForma(pl.cheia,qG,TG),pBaixa=precoPelaForma(pl.campanha,qG,TG);
       if(!$("v_planoValor").value||w.__plano!==pl.id||w.__precoPl!==pCheia){
         $("v_planoValor").value=brMF(pCheia);w.__plano=pl.id;w.__precoPl=pCheia;}
-      $("v_planoAjuda").innerHTML=textoPrecoForma(pl.cheia)+
+      $("v_planoAjuda").innerHTML=textoPrecoForma(pl.cheia,qG,TG)+
         " Tabela baixa "+BRL(pl.campanha)+" = <b>"+BRL(pBaixa)+
         "</b>. Abaixo da tabela baixa, o pedido precisa de autorização.";
     }
@@ -7289,6 +7332,9 @@ function notaGarantia(){
     : pl
       ? '<div class="note warn"><b>'+g+'</b> entra no pedido como <b>'+esc(pl.nome)+'</b> (linha de garantia, soma no total), gera o Contrato de Assistência Técnica e <b>exige o número de série</b> do equipamento.</div>'
       : '<div class="note crit"><b>'+g+'</b> não é um plano ativo. Cadastre ou ative em Configurações › Planos de Garantia, ou escolha Bronze.</div>';
+  /* entrou ou saiu plano: a entrada sem juros passa a ser dividida por outro total, então o
+     preço do PRODUTO também tem de ser refeito (20/09) */
+  try{atualizarPrecoItemNovo(true);}catch(e){}
 }
 /* Aparelho com manutenção periódica precisa ser identificável: número de
    série OU localização. Um dos dois basta — com série não pede localização,
@@ -7384,6 +7430,9 @@ function addItem(){
   /* o plano entra como linha da venda, amarrada ao produto que ele cobre */
   if(plano){
     itens.push({pid:plano.id,nome:plano.nome,cod:plano.cod,qtd:qtd,valor:vPlano,serie:"",
+      /* o plano acompanha a forma de pagamento igual aos outros itens, a menos que o vendedor
+         tenha digitado outro valor no campo do plano (20/09) */
+      precoAuto:Math.abs(vPlano-precoPelaForma(plano.cheia,qtd,tabelaTotalVenda(true)))<0.01,
       pontos:+plano.pontos||0,garantia:"",plano:true,planoDe:vinculo});
     $("v_planoValor").value="";
   }
@@ -7665,11 +7714,14 @@ function calcular(){
      parcelas ou a entrada sem juros mudarem (regra dele, 20/09: "toda vez que adicionar algum
      produto, ou alterar o valor do produto, o sistema tem que refazer o cálculo automaticamente").
      Item com valor digitado à mão não é tocado. Roda ANTES do total, para tudo sair na mesma conta. */
+  /* o plano de garantia também acompanha — ele é um item com tabela cheia como os outros
+     (no print dele, 20/09, o plano tinha caído sozinho para a faixa de 70%) */
+  var Tcar=somaTabelaCarrinho();
   itens.forEach(function(i){
-    if(!i.precoAuto||i.planoCobre||ehPlano(i))return;
+    if(!i.precoAuto||i.planoCobre)return;
     var pr=produtos.filter(function(x){return x.id===i.pid;})[0];
     if(!pr||!(+pr.cheia>0))return;
-    var novo=precoPelaForma(pr.cheia);
+    var novo=precoPelaForma(pr.cheia,i.qtd,Tcar);
     if(Math.abs((+i.valor||0)-novo)>=0.01)i.valor=novo;
   });
   var total=itens.reduce(function(a,i){return a+(i.valor*(i.qtd||1));},0);
