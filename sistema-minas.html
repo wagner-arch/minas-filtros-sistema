@@ -6394,13 +6394,13 @@ function custoDe(p){
   return Math.round((((+p.custo||0)+(+p.frete||0)+(+p.ipi||0)+(+p.st||0)+(+p.federais||0)-(+p.icms||0)))*100)/100;
 }
 function notaCusto(){
-  var v={custo:parseFloat($("p_custo").value)||0,frete:parseFloat($("p_frete").value)||0,
-    ipi:parseFloat($("p_ipi").value)||0,st:parseFloat($("p_st").value)||0,
-    federais:parseFloat($("p_federais").value)||0,icms:parseFloat($("p_icms").value)||0};
+  var v={custo:numMF($("p_custo").value)||0,frete:numMF($("p_frete").value)||0,
+    ipi:numMF($("p_ipi").value)||0,st:numMF($("p_st").value)||0,
+    federais:numMF($("p_federais").value)||0,icms:numMF($("p_icms").value)||0};
   var imp=v.ipi+v.st+v.federais-v.icms;
   var tot=custoDe(v);
-  var cheia=parseFloat($("p_cheia").value)||0,setenta=parseFloat($("p_campanha").value)||0,
-      camp=parseFloat($("p_minimo").value)||0;
+  var cheia=numMF($("p_cheia").value)||0,setenta=numMF($("p_campanha").value)||0,
+      camp=numMF($("p_minimo").value)||0;
   $("p_impostos").value=BRL(imp);
   $("p_custoTotal").value=BRL(tot);
   function marg(preco){return (preco>0&&tot>0)?((preco-tot)/preco*100).toFixed(1).replace(".",",")+"% · "+BRL(preco-tot):"—";}
@@ -6437,14 +6437,14 @@ function notaStatus(){
     : "";
 }
 function notaEstoque(){
-  var q=parseFloat($("p_estoque").value),m=parseFloat($("p_estmin").value)||0;
+  var q=numMF($("p_estoque").value),m=numMF($("p_estmin").value)||0;
   if(isNaN(q)){$("p_estNota").innerHTML="";return;}
   if(q<0)$("p_estNota").innerHTML='<div class="note crit"><b>Saldo negativo.</b> Entra sozinho na fila de reposição e acende alerta no painel do almoxarifado.</div>';
   else if(m>0&&q<m)$("p_estNota").innerHTML='<div class="note warn"><b>Abaixo do mínimo.</b> '+q+" em estoque, mínimo "+m+". Entra na sugestão de compra.</div>";
   else $("p_estNota").innerHTML='<div class="note ok"><b>Estoque adequado</b> em '+nomeLoja()+".</div>";
 }
 function notaCampanha(){
-  var on=$("p_campativa").value==="sim", val=parseFloat($("p_minimo").value)||0;
+  var on=$("p_campativa").value==="sim", val=numMF($("p_minimo").value)||0;
   $("p_campNota").innerHTML = on
     ? '<div class="note warn"><b>Campanha ligada.</b> O vendedor pode fechar em '+(val?BRL(val):"—")+' e a comissão paga 50%. Abaixo disso, zera e exige aprovação do Admin.</div>'
     : '<div class="note"><b>Campanha desligada.</b> O vendedor só tem 100% e 70%. Qualquer valor abaixo da tabela de 70% zera a comissão e exige aprovação do Admin.</div>';
@@ -7079,14 +7079,15 @@ function atualizarPrecoItemNovo(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if(!p)return;
   if(vv.__manual)  {notaPrecoForma(p);return;}   /* valor digitado à mão fica como está */
-  vv.value=precoPelaForma(p.cheia);
+  vv.value=brMF(precoPelaForma(p.cheia));
   notaPrecoForma(p);
+  try{notaGarantia();}catch(e){}   /* o plano segue o mesmo preço da forma (20/09) */
   try{calcular();}catch(e){}
 }
 function sincronizarValor(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if($("v_valor"))$("v_valor").__manual=false;
-  if(p){$("v_valor").value=precoPelaForma(p.cheia);notaPrecoForma(p);
+  if(p){$("v_valor").value=brMF(precoPelaForma(p.cheia));notaPrecoForma(p);
     /* número de série só para os grupos marcados em Configurações › Planos de Garantia › Número de série */
     var sg=temSerieGrupo(p);
     $("v_serie").disabled=!sg;
@@ -7165,8 +7166,14 @@ function notaGarantia(){
     w.hidden=!pl;
     if(pl){
       var lbPl=w.querySelector("label");if(lbPl)lbPl.textContent="Valor do Plano "+pl.garantia;
-      if(!$("v_planoValor").value||w.__plano!==pl.id){$("v_planoValor").value=(+pl.cheia||0).toFixed(2);w.__plano=pl.id;}
-      $("v_planoAjuda").textContent="Tabela cheia "+BRL(pl.cheia)+" · tabela baixa "+BRL(pl.campanha)+
+      /* o plano também sai pelo preço da forma de pagamento escolhida (relato dele, 20/09:
+         "o valor do plano premium não passou pela nova regra de cálculo") */
+      var pCheia=precoPelaForma(pl.cheia),pBaixa=precoPelaForma(pl.campanha);
+      if(!$("v_planoValor").value||w.__plano!==pl.id||w.__precoPl!==pCheia){
+        $("v_planoValor").value=brMF(pCheia);w.__plano=pl.id;w.__precoPl=pCheia;}
+      var fPl=formaBaseVenda(),nPl=Math.max(1,+fPl.parc||1);
+      $("v_planoAjuda").textContent="Tabela cheia "+BRL(pl.cheia)+" em "+fPl.tipo+" "+nPl+"× = "+BRL(pCheia)+
+        " · tabela baixa "+BRL(pl.campanha)+" = "+BRL(pBaixa)+
         ". Abaixo da tabela baixa, o pedido precisa de autorização.";
     }
   }
@@ -7210,7 +7217,7 @@ function addItem(){
   var plano=(gar!=="Bronze")?planoDaGarantia(gar):null;
   if(gar!=="Bronze"&&!plano){toast("O Plano "+gar+" não está ativo — cadastre ou ative em Configurações › Planos de Garantia, ou escolha Bronze.");return;}
   if(plano&&!planoAtende(plano,p)){toast("O Plano "+gar+" não atende produtos do grupo "+(p.grupo||"sem grupo")+". Escolha Bronze ou marque o grupo em Configurações › Planos de Garantia.");return;}
-  var vPlano=plano?Math.round((parseFloat($("v_planoValor").value)||0)*100)/100:0;
+  var vPlano=plano?Math.round((numMF($("v_planoValor").value)||0)*100)/100:0;
   if(plano&&vPlano<=0){toast("Informe o valor do "+plano.nome+".");try{$("v_planoValor").focus();}catch(e){}return;}
   /* aparelho acompanhado: série OU localização, um dos dois */
   if((+p.manut)&&!equipId&&!serie&&!local){
@@ -7244,12 +7251,12 @@ function addItem(){
       planoCobre:{equipId:cobV.cobre.e.id,garantia:cobV.cobre.e.plano,direitoId:cobV.cobre.d.id,direito:cobV.cobre.d.item}});
     msgPlano=qc+"× "+p.nome+" pelo plano "+cobV.cobre.e.plano+", sem custo.";
     if(qtd>qc){
-      itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd-qc,valor:parseFloat($("v_valor").value)||0,
+      itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd-qc,valor:numMF($("v_valor").value)||0,
         serie:serie,equipId:equipId,local:local,pontos:+p.pontos||0,garantia:gar,vinculo:uid()});
       msgPlano+=" O plano não cobrirá as outras "+(qtd-qc)+": os direitos do plano para essa peça se esgotaram — cobradas pelo valor normal.";
     }
   }else{
-    itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd,valor:parseFloat($("v_valor").value)||0,
+    itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd,valor:numMF($("v_valor").value)||0,
       serie:serie,equipId:equipId,local:local,pontos:+p.pontos||0,garantia:gar,vinculo:vinculo});
     if(cobV&&cobV.esgotado)msgPlano="O plano "+cobV.esgotado.e.plano+" não cobrirá "+p.nome+
       ": os direitos do plano para essa peça já foram esgotados. Cobrado pelo valor normal.";
@@ -7437,7 +7444,7 @@ function renderFormas(){
     if(ps.indexOf(f.parc)<0){f.parc=ps[ps.length-1];}
     var pOpts=ps.map(function(n){return '<option value="'+n+'"'+(n===f.parc?" selected":"")+">"+n+"× · coef "+coefDe(f.tipo,n).toFixed(4).replace(".",",")+"</option>";}).join("");
     d.innerHTML='<div class="fld"><label>Forma '+(i+1)+'</label><select data-f="tipo" data-i="'+i+'">'+opts+'</select></div>'+
-      '<div class="fld"><label>Valor</label><input type="text" inputmode="decimal" data-f="valor" data-i="'+i+'" value="'+(f.valor||0)+'"></div>'+
+      '<div class="fld"><label>Valor</label><input type="text" inputmode="decimal" data-f="valor" data-i="'+i+'" value="'+brMF(f.valor||0)+'"></div>'+
       '<div class="fld"><label>Parcelas</label><select data-f="parc" data-i="'+i+'">'+pOpts+'</select></div>'+
       '<div class="fld" style="justify-content:flex-end">'+(formas.length>1?'<button class="btn mut sm" type="button" data-rmf="'+i+'">Remover</button>':'<span class="help" style="margin:0">à vista não deprecia</span>')+'</div>';
     w.appendChild(d);
@@ -7445,7 +7452,7 @@ function renderFormas(){
   Array.prototype.forEach.call(w.querySelectorAll("[data-f]"),function(el){
     el.oninput=el.onchange=function(){
       var i=+el.getAttribute("data-i"),k=el.getAttribute("data-f");
-      formas[i][k]=(k==="valor"?(parseFloat(el.value)||0):(k==="parc"?parseInt(el.value,10):el.value));
+      formas[i][k]=(k==="valor"?numMF(el.value):(k==="parc"?parseInt(el.value,10):el.value));
       if(k==="valor")formas[i].__auto=false;
       /* trocou a forma ou o parcelamento: o preço do item novo se refaz pela tabela cheia,
          a menos que alguém já tenha digitado um valor à mão (v161) */
@@ -7547,7 +7554,7 @@ function calcular(){
       /* valor livre para alterar depois de incluído; mexeu, a comissão ao vivo acompanha (v161) */
       '<td class="num">'+(cobPl
         ? BRL(0)
-        : '<input class="v-unit" type="text" inputmode="decimal" data-vu="'+idx+'" value="'+(+i.valor||0)+
+        : '<input class="v-unit" type="text" inputmode="decimal" data-vu="'+idx+'" value="'+brMF(+i.valor||0)+
           '" aria-label="Valor unitário de '+esc(i.nome)+'">'+
           ((i.qtd||1)>1?'<div class="t-sub">total '+BRL(i.valor*(i.qtd||1))+"</div>":""))+"</td>"+
       '<td><span class="pill '+fx.cls+'">'+fx.n+'</span></td><td class="num">'+(fx.f*100).toFixed(0)+"%</td>"+
@@ -7558,7 +7565,7 @@ function calcular(){
   Array.prototype.forEach.call(tb.querySelectorAll("[data-vu]"),function(inp){
     inp.onchange=function(){
       var it=itens[+inp.getAttribute("data-vu")];if(!it)return;
-      var v=parseFloat(String(inp.value).replace(/\./g,".").replace(",","."))||0;
+      var v=numMF(inp.value);
       if(v<0)v=0;
       it.valor=v;
       /* com uma forma só, o valor dela volta a acompanhar o total */
@@ -10017,7 +10024,7 @@ function notaRemuneracao(){
   var B=BENEFICIOS;
   [["u_vr",B.va],["u_assiduidade",B.assid.valor],["u_desempenho",B.desemp.valor]].forEach(function(x){
     var el=$(x[0]);if(el){el.value=x[1];el.disabled=true;el.title="Definido em Configurações › Benefícios";}});
-  var s=parseFloat($("u_salario").value)||0,t=s+(+B.va||0)+(+B.assid.valor||0)+(+B.desemp.valor||0);
+  var s=numMF($("u_salario").value)||0,t=s+(+B.va||0)+(+B.assid.valor||0)+(+B.desemp.valor||0);
   $("u_remNota").innerHTML='<div class="note"><b>Teto do mês: '+BRL(t)+"</b> — fixo "+BRL(s)+" + vale alimentação "+BRL(B.va)+
     " + assiduidade "+BRL(B.assid.valor)+" + desempenho "+BRL(B.desemp.valor)+", fora a comissão de venda.<br>"+
     "Vale e prêmios valem para todos e são definidos em <b>Configurações › Benefícios</b>: a <b>assiduidade</b> perde "+BRL(B.assid.porFalta)+
@@ -10209,7 +10216,7 @@ async function salvarCaixaCad(){
   }else{
     ["banco","bancoCod","tipoConta","agencia","agDv","conta","contaDv","titular","titularDoc","pixTipo","pix","gerente","gerenteTel","ag"].forEach(function(k){c[k]="";});
   }
-  c.saldo=parseFloat($("cx_saldo").value)||0;c.dataSaldo=$("cx_data").value||hojeISO();c.obs=$("cx_obs").value.trim();
+  c.saldo=numMF($("cx_saldo").value)||0;c.dataSaldo=$("cx_data").value||hojeISO();c.obs=$("cx_obs").value.trim();
   if(c.padrao==="sim")caixas.forEach(function(x){if(x!==c&&x.loja===c.loja)x.padrao="nao";});
   if(!editandoCx)caixas.push(c);
   await grava("caixas",c);editandoCx=null;
@@ -10660,7 +10667,7 @@ function abrirTitulo(especie){
   $("tituloModal").hidden=false;
 }
 function previewTitulo(){
-  var v=parseFloat($("tt_valor").value)||0,n=Math.max(1,parseInt($("tt_parc").value,10)||1);
+  var v=numMF($("tt_valor").value)||0,n=Math.max(1,parseInt($("tt_parc").value,10)||1);
   var d=$("tt_venc").value||hojeISO(),iv=Math.max(1,parseInt($("tt_inter").value,10)||30);
   if(!v){$("tt_prev").innerHTML="";return;}
   var p=Math.round(v/n*100)/100,linhas=[];
@@ -10669,7 +10676,7 @@ function previewTitulo(){
     (n>6?"<br>… e mais "+(n-6)+" parcela(s)":"")+"</div>";
 }
 async function salvarTitulo(){
-  var desc=$("tt_desc").value.trim(),v=parseFloat($("tt_valor").value)||0;
+  var desc=$("tt_desc").value.trim(),v=numMF($("tt_valor").value)||0;
   if(!desc||!v||!$("tt_venc").value){
     $("tt_alerta").innerHTML='<div class="note crit"><b>Descrição, valor e vencimento são obrigatórios.</b></div>';return;}
   /* nenhum lançamento sem centro de custo (regra do Wagner, 15/09) */
@@ -10719,7 +10726,7 @@ function abrirBaixa(id){
 }
 function difBaixa(){
   if(!bxTit)return;
-  var v=parseFloat($("bx_valor").value)||0,d=v-(+bxTit.valor||0);
+  var v=numMF($("bx_valor").value)||0,d=v-(+bxTit.valor||0);
   $("bx_taxa").value=(d===0?"—":(d>0?"+":"")+BRL(d));
   $("bx_alerta").innerHTML=(Math.abs(d)>=0.01)
     ? '<div class="note warn"><b>'+(d<0?"Recebido a menos: ":"Recebido a mais: ")+BRL(Math.abs(d))+
@@ -10727,7 +10734,7 @@ function difBaixa(){
 }
 async function confirmarBaixa(){
   if(!bxTit)return;
-  var data=$("bx_data").value,cx=$("bx_caixa").value,v=parseFloat($("bx_valor").value)||0;
+  var data=$("bx_data").value,cx=$("bx_caixa").value,v=numMF($("bx_valor").value)||0;
   if(!data||!cx||!v){$("bx_alerta").innerHTML='<div class="note crit"><b>Data, caixa e valor são obrigatórios.</b></div>';return;}
   bxTit.status="pago";bxTit.pagoEm=data;bxTit.valorPago=v;bxTit.caixaId=cx;bxTit.baixadoPor=usuarioAtual;
   await grava("titulos",bxTit);
@@ -10762,7 +10769,7 @@ function abrirMov(modo){
   $("movModal").hidden=false;
 }
 async function salvarMov(){
-  var cx=$("mv_caixa").value,data=$("mv_data").value,v=parseFloat($("mv_valor").value)||0,desc=$("mv_desc").value.trim();
+  var cx=$("mv_caixa").value,data=$("mv_data").value,v=numMF($("mv_valor").value)||0,desc=$("mv_desc").value.trim();
   if(!cx||!data||!v||!desc){$("mv_alerta").innerHTML='<div class="note crit"><b>Caixa, data, valor e descrição são obrigatórios.</b></div>';return;}
   if(mvModo==="transf"){
     var dest=$("mv_dest").value;
@@ -11444,17 +11451,17 @@ async function salvarVeiculo(){
   v.tipo=$("vc_tipo").value;v.combustivel=$("vc_comb").value;v.situacao=$("vc_sit").value;v.status=$("vc_status").value;
   v.renavam=$("vc_renavam").value.trim();v.chassi=String($("vc_chassi").value||"").toUpperCase().trim();
   v.km=Math.max(km,+v.km||0);
-  v.consumo=parseFloat($("vc_consumo").value)||0;
-  v.compraData=$("vc_compraData").value;v.compraValor=parseFloat($("vc_compraValor").value)||0;
+  v.consumo=numMF($("vc_consumo").value)||0;
+  v.compraData=$("vc_compraData").value;v.compraValor=numMF($("vc_compraValor").value)||0;
   v.crlv=$("vc_crlv").value;v.ipva=$("vc_ipva").value;
   v.seguradora=$("vc_seguradora").value.trim();v.apolice=$("vc_apolice").value.trim();
-  v.seguroVenc=$("vc_seguroVenc").value;v.franquia=parseFloat($("vc_franquia").value)||0;
+  v.seguroVenc=$("vc_seguroVenc").value;v.franquia=numMF($("vc_franquia").value)||0;
   v.obs=$("vc_obs").value.trim();
   v.guarda=$("vc_guarda").value;
   v.guardaNome=$("vc_guardaNome").value.trim();
   v.guardaEnd=$("vc_guardaEnd").value.trim();
   v.guardaGeo=$("vc_guardaGeo").value.trim();
-  v.guardaValor=parseFloat($("vc_guardaValor").value)||0;
+  v.guardaValor=numMF($("vc_guardaValor").value)||0;
   if(!editandoVc)veiculos.push(v);
   await grava("veiculos",v);
   editandoVc=v;vcAberto=v;
@@ -11695,7 +11702,7 @@ function mostrarResponsavelMulta(){
 }
 async function salvarMulta(){
   var v=vcAberto;if(!v)return;
-  var val=parseFloat($("mt_valor").value)||0,inf=$("mt_infracao").value.trim();
+  var val=numMF($("mt_valor").value)||0,inf=$("mt_infracao").value.trim();
   if(!$("mt_data").value||!$("mt_hora").value||!inf||!(val>0)){
     $("mt_alerta").innerHTML='<div class="note crit"><b>Data, hora, infração e valor são obrigatórios.</b></div>';return;}
   var q=$("mt_data").value+" "+$("mt_hora").value;
@@ -11736,7 +11743,7 @@ function abrirAbast(){
 }
 function previaAbast(){
   var v=vcAberto;if(!v)return;
-  var km=parseInt($("ab_km").value,10)||0,lt=parseFloat($("ab_litros").value)||0;
+  var km=parseInt($("ab_km").value,10)||0,lt=numMF($("ab_litros").value)||0;
   var ant=abastDoVeic(v.id).filter(function(a){return a.tanqueCheio;}).pop();
   var msg=[];
   if(ant&&km>(+ant.km||0)&&lt>0&&$("ab_cheio").checked){
@@ -11751,7 +11758,7 @@ function previaAbast(){
 async function salvarAbast(){
   var v=vcAberto;if(!v)return;
   var data=$("ab_data").value,km=parseInt($("ab_km").value,10);
-  var lt=parseFloat($("ab_litros").value)||0,val=parseFloat($("ab_valor").value)||0;
+  var lt=numMF($("ab_litros").value)||0,val=numMF($("ab_valor").value)||0;
   if(!data||!(km>0)||!(lt>0)||!(val>0)){
     $("ab_alerta").innerHTML='<div class="note crit"><b>Data, km, litros e total são obrigatórios.</b></div>';return;}
   var ultimo=abastDoVeic(v.id).pop();
@@ -11760,7 +11767,7 @@ async function salvarAbast(){
       (+ultimo.km).toLocaleString("pt-BR")+" km).</b> Confira o odômetro.</div>";return;}
   var pg=$("ab_pgto").value;
   var a={id:uid(),loja:lojaAtual,veiculoId:v.id,data:data,km:km,litros:lt,
-    precoLitro:parseFloat($("ab_preco").value)||Math.round(val/lt*1000)/1000,
+    precoLitro:numMF($("ab_preco").value)||Math.round(val/lt*1000)/1000,
     valor:Math.round(val*100)/100,posto:$("ab_posto").value.trim(),
     condutor:$("ab_cond").value||usuarioAtual,combustivel:$("ab_comb").value,
     tanqueCheio:$("ab_cheio").checked,pagamento:pg,criadoEm:hojeISO(),criadoPor:usuarioAtual};
@@ -11807,7 +11814,7 @@ function sugerirProximaManut(){
 async function salvarManutVeic(){
   var v=vcAberto;if(!v)return;
   var data=$("mc_data").value,km=parseInt($("mc_km").value,10);
-  var desc=$("mc_desc").value.trim(),val=parseFloat($("mc_valor").value)||0;
+  var desc=$("mc_desc").value.trim(),val=numMF($("mc_valor").value)||0;
   if(!data||!(km>0)||!desc||!(val>0)){
     $("mc_alerta").innerHTML='<div class="note crit"><b>Data, km, o que foi feito e valor são obrigatórios.</b></div>';return;}
   var s=servVeic($("mc_tipo").value),pg=$("mc_pgto").value;
@@ -12741,8 +12748,8 @@ function sincCustoNf(){
 /* rateia frete e despesas pelo peso do item no valor da nota:
    item mais caro puxa mais frete, na proporção exata do que representa */
 function rateioNota(){
-  var frete=parseFloat($("nf_frete").value)||0;
-  var desp=parseFloat($("nf_desp").value)||0;
+  var frete=numMF($("nf_frete").value)||0;
+  var desp=numMF($("nf_desp").value)||0;
   var prod=nfItens.reduce(function(a,i){return a+i.qtd*i.custo;},0);
   var acumF=0,acumD=0;
   var linhas=nfItens.map(function(i,idx){
@@ -12954,7 +12961,7 @@ async function salvarNota(){
       qtdConf:l.i.qtd,obsConf:""};});
   var nota={id:uid(),loja:lojaAtual,fornecedorId:forn,numero:num,serie:$("nf_serie").value.trim(),
     emissao:$("nf_emissao").value,entrada:"",
-    frete:parseFloat($("nf_frete").value)||0,despesas:parseFloat($("nf_desp").value)||0,
+    frete:numMF($("nf_frete").value)||0,despesas:numMF($("nf_desp").value)||0,
     itens:itens,total:r.total,centroId:$("nf_centro").value,
     parcelas:Math.max(1,parseInt($("nf_parc").value,10)||1),
     primeiroVenc:$("nf_venc").value||somaDias(hojeISO(),30),
@@ -14605,8 +14612,8 @@ function ligarPenalidades(quem){
 }
 /* Configurações › Benefícios: valores e regras escritas */
 function regrasBeneficiosTela(){
-  var va=parseFloat($("bf_va").value)||0,av=parseFloat($("bf_assidValor").value)||0,
-      pf=parseFloat($("bf_porFalta").value)||0,pm=parseFloat($("bf_porMinuto").value)||0,dv=parseFloat($("bf_desemp").value)||0;
+  var va=numMF($("bf_va").value)||0,av=numMF($("bf_assidValor").value)||0,
+      pf=numMF($("bf_porFalta").value)||0,pm=numMF($("bf_porMinuto").value)||0,dv=numMF($("bf_desemp").value)||0;
   var ex=Math.max(0,av-pf-10*pm);
   $("bf_regraAssid").innerHTML='<div class="note"><b>Como funciona.</b> Todo colaborador começa o mês com <b>'+BRL(av)+"</b>. "+
     "Cada <b>falta desconta "+BRL(pf)+"</b> e cada <b>minuto de atraso desconta "+BRL(pm)+"</b>. "+
@@ -14630,7 +14637,7 @@ function renderBeneficios(){
   regrasBeneficiosTela();
 }
 async function salvarBeneficios(){
-  function n(id){return Math.max(0,Math.round((parseFloat($(id).value)||0)*100)/100);}
+  function n(id){return Math.max(0,Math.round((numMF($(id).value)||0)*100)/100);}
   BENEFICIOS={va:n("bf_va"),assid:{valor:n("bf_assidValor"),porFalta:n("bf_porFalta"),porMinuto:n("bf_porMinuto")},desemp:{valor:n("bf_desemp")}};
   bfSujo=false;
   await gravarBeneficios();
@@ -14667,7 +14674,7 @@ async function criarTituloAdiant(a){
   a.tituloId=t.id;
 }
 async function solicitarAdiantamento(){
-  var quem=$("fat_quem").value,c=compAtual(),v=Math.round((parseFloat($("ad_valor").value)||0)*100)/100;
+  var quem=$("fat_quem").value,c=compAtual(),v=Math.round((numMF($("ad_valor").value)||0)*100)/100;
   var al=$("ad_alerta");
   function erro(m){al.innerHTML='<div class="note crit"><b>'+m+"</b></div>";}
   if(quem!==usuarioAtual&&!ehAdministrador()){erro("Só o próprio colaborador (ou o administrador) solicita adiantamento.");return;}
@@ -15975,12 +15982,12 @@ function renderCfgMetas(){
 function montarLinhasMetas(){
   var w=$("cm_linhas");if(!w||w.__pronto)return;w.__pronto=true;
   w.innerHTML=META_LINHAS.map(function(l){
-    var st=l.moeda?'step="0.01" inputmode="decimal"':'step="1" inputmode="numeric"',rs=l.moeda?" (R$)":"";
+    var st=l.moeda?'type="text" inputmode="decimal"':'type="number" min="0" step="1"',rs=l.moeda?" (R$)":"";
     return '<div class="cm-l" id="cm_l_'+l.k+'">'+
       '<label class="cm-n"><input type="checkbox" id="cm_'+l.k+'_on"><span><b>'+esc(l.n)+"</b>"+
         (l.k==="faturamento"?"<br><small>valor depreciado pela forma de pagamento, dividido pela posição</small>":"")+"</span></label>"+
-      '<div class="fld"><label for="cm_'+l.k+'_sem">Meta da semana'+rs+'</label><input id="cm_'+l.k+'_sem" type="number" min="0" '+st+"></div>"+
-      '<div class="fld"><label for="cm_'+l.k+'">Meta do mês'+rs+'</label><input id="cm_'+l.k+'" type="number" min="0" '+st+"></div>"+
+      '<div class="fld"><label for="cm_'+l.k+'_sem">Meta da semana'+rs+'</label><input id="cm_'+l.k+'_sem" '+st+"></div>"+
+      '<div class="fld"><label for="cm_'+l.k+'">Meta do mês'+rs+'</label><input id="cm_'+l.k+'" '+st+"></div>"+
       '<div class="cm-d" id="cm_'+l.k+'_dia"></div></div>';
   }).join("");
   META_LINHAS.forEach(function(l){
@@ -17517,7 +17524,7 @@ function renderMetas(){
   Array.prototype.forEach.call(b.querySelectorAll("[data-mt]"),function(el){
     el.onchange=function(){
       var l=mtLinhas[+el.getAttribute("data-i")],k=el.getAttribute("data-mt");
-      l[k]=(k==="ate"&&el.value==="")?null:parseFloat(el.value)||0;
+      l[k]=(k==="ate"&&el.value==="")?null:numMF(el.value);
       notaMetas();};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mtrm]"),function(bt){
     bt.onclick=function(){mtLinhas.splice(+bt.getAttribute("data-mtrm"),1);renderMetas();};});
@@ -18577,8 +18584,8 @@ function calcOS(){
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-osrm]"),function(bt){
     bt.onclick=function(){osPecas.splice(+bt.getAttribute("data-osrm"),1);calcOS();};});
-  var o={pecas:osPecas,mao:parseFloat($("os_mao").value)||0,
-    taxa:parseFloat($("os_taxa").value)||0,desconto:parseFloat($("os_desc").value)||0};
+  var o={pecas:osPecas,mao:numMF($("os_mao").value)||0,
+    taxa:numMF($("os_taxa").value)||0,desconto:numMF($("os_desc").value)||0};
   $("os_total").value=BRL(totalOS(o));
   var st=osStatusO($("os_status").value);
   $("os_sitPill").textContent=st.n;$("os_sitPill").className="pill "+st.cls;
@@ -18629,8 +18636,8 @@ async function salvarOS(){
   o.defeito=$("os_defeito").value.trim();o.acessorios=$("os_acess").value.trim();
   o.avarias=$("os_avarias").value.trim();o.laudo=$("os_laudo").value.trim();
   o.reparo=$("os_reparo").value.trim();o.pecasNec=$("os_pecasNec").value.trim();o.infoTec=$("os_infoTec").value.trim();
-  o.pecas=osPecas.slice();o.mao=parseFloat($("os_mao").value)||0;
-  o.taxa=parseFloat($("os_taxa").value)||0;o.desconto=parseFloat($("os_desc").value)||0;
+  o.pecas=osPecas.slice();o.mao=numMF($("os_mao").value)||0;
+  o.taxa=numMF($("os_taxa").value)||0;o.desconto=numMF($("os_desc").value)||0;
   o.status=$("os_status").value;o.entrega=$("os_entrega").value;
   o.retiradoPor=$("os_retirado").value.trim();o.pagto=$("os_pagto").value;
   o.total=totalOS(o);
@@ -19016,7 +19023,7 @@ async function gerarOrcamentoOS(){
   var o=editandoOS;if(!o)return;
   if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") ou a gestão gera o orçamento.");return;}
   if(!o.diagnosticoEm){toast("Faça o diagnóstico técnico antes do orçamento.");return;}
-  var mao=parseFloat($("os_mao").value)||0,outros=parseFloat($("os_taxa").value)||0;
+  var mao=numMF($("os_mao").value)||0,outros=numMF($("os_taxa").value)||0;
   if(!osPecas.length&&mao<=0&&outros<=0){
     $("os_alerta").innerHTML='<div class="note crit"><b>Lance a mão de obra, as peças ou outros custos antes de gerar o orçamento.</b></div>';return;}
   if(["aberta","analise"].indexOf($("os_status").value)>=0)$("os_status").value="aprovacao";
@@ -19750,14 +19757,14 @@ function renderPedDet(){
       (i.serie?" · série "+esc(i.serie):"")+(i.garantia?" · "+esc(i.garantia):"")+(i.daInstalacao?" · incluído na instalação":"")+
       (i.planoCobre?" · coberto pelo plano "+esc(i.planoCobre.garantia):"")+"</div></td>"+
       '<td class="num">'+(ed?'<input type="number" min="1" style="max-width:80px" data-pi="qtd" data-i="'+idx+'" value="'+(i.qtd||1)+'">':(i.qtd||1))+"</td>"+
-      '<td class="num">'+(ed?'<input type="text" step="0.01" style="max-width:120px" data-pi="valor" data-i="'+idx+'" value="'+(+i.valor||0)+'">':BRL(i.valor))+"</td>"+
+      '<td class="num">'+(ed?'<input type="text" inputmode="decimal" style="max-width:120px" data-pi="valor" data-i="'+idx+'" value="'+brMF(+i.valor||0)+'">':BRL(i.valor))+"</td>"+
       '<td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
       '<td class="num">'+(ed?'<button class="btn mut sm" type="button" data-pirm="'+idx+'">Remover</button>':"")+"</td></tr>";
   });
   var tf=$("pd_formas");tf.innerHTML="";
   pedRasc.formas.forEach(function(f,idx){
     tf.innerHTML+="<tr><td>"+esc(f.tipo)+'</td><td class="num">'+f.parc+"×</td>"+
-      '<td class="num">'+(ed?'<input type="text" step="0.01" style="max-width:140px" data-pf="'+idx+'" value="'+(+f.valor||0)+'">':BRL(f.valor))+"</td></tr>";
+      '<td class="num">'+(ed?'<input type="text" inputmode="decimal" style="max-width:140px" data-pf="'+idx+'" value="'+brMF(+f.valor||0)+'">':BRL(f.valor))+"</td></tr>";
   });
   $("pd_addBox").hidden=!ed;
 
@@ -19861,18 +19868,18 @@ function ligarPedDet(){
     el.onchange=function(){
       var i=pedRasc.itens[+el.getAttribute("data-i")];
       if(el.getAttribute("data-pi")==="qtd")i.qtd=Math.max(1,parseInt(el.value,10)||1);
-      else i.valor=parseFloat(el.value)||0;
+      else i.valor=numMF(el.value);
       renderPedDet();};});
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-pirm]"),function(b){
     b.onclick=function(){pedRasc.itens.splice(+b.getAttribute("data-pirm"),1);renderPedDet();};});
   Array.prototype.forEach.call($("pd_formas").querySelectorAll("[data-pf]"),function(el){
-    el.onchange=function(){pedRasc.formas[+el.getAttribute("data-pf")].valor=parseFloat(el.value)||0;renderPedDet();};});
+    el.onchange=function(){pedRasc.formas[+el.getAttribute("data-pf")].valor=numMF(el.value);renderPedDet();};});
   var add=$("pd_add");
   if(add)add.onclick=function(){
     var pr=produtos.filter(function(x){return x.id===$("pd_prod").value;})[0];if(!pr){toast("Escolha o produto.");return;}
     var qp=qtdInformada("pd_qtd");if(!qp)return;
     pedRasc.itens.push({pid:pr.id,nome:pr.nome,cod:pr.cod,qtd:qp,
-      valor:parseFloat($("pd_valor").value)||0,serie:"",pontos:+pr.pontos||0,garantia:"Bronze"});
+      valor:numMF($("pd_valor").value)||0,serie:"",pontos:+pr.pontos||0,garantia:"Bronze"});
     renderPedDet();limparInclusao("pd_prod","pd_qtd",["pd_valor"]);};
   function on(id,fn){var e=$(id);if(e)e.onclick=fn;}
   on("pd_pdf",function(){abrirDocVenda(p);});
@@ -20371,7 +20378,7 @@ function renderInstalacao(){
   if(bp)bp.onclick=async function(){
     if(!podeInstalar(p))return;
     var tipo=$("ins_forma").value,parc=parseInt($("ins_parc").value,10)||1;
-    var v=Math.round((parseFloat($("ins_valor").value)||0)*100)/100;
+    var v=Math.round((numMF($("ins_valor").value)||0)*100)/100;
     if(!tipo||v<=0){toast("Escolha a forma e informe o valor do pagamento.");return;}
     p.formas=p.formas||[];
     p.formas.push({tipo:tipo,parc:parc,valor:v,daInstalacao:true});
@@ -20726,8 +20733,8 @@ function planoDoFormulario(){
   var g=$("pl_garantia").value.trim();
   return {garantia:g,nome:$("pl_nome").value.trim()||("PLANO "+g.toUpperCase()),
     contrato:$("pl_contratoTitulo").value.trim(),
-    cheia:Math.round((parseFloat($("pl_cheia").value)||0)*100)/100,
-    campanha:Math.round((parseFloat($("pl_baixa").value)||0)*100)/100,
+    cheia:Math.round((numMF($("pl_cheia").value)||0)*100)/100,
+    campanha:Math.round((numMF($("pl_baixa").value)||0)*100)/100,
     vigencia:Math.max(1,parseInt($("pl_vigencia").value,10)||12),
     status:$("pl_status").value,contratoTexto:$("pl_contrato").value,
     grupos:[].slice.call($("pl_grupos").querySelectorAll("input:checked")).map(function(c){return c.value;}),
@@ -21235,7 +21242,7 @@ async function salvarNegocio(){
     n=negocioNovo(c,"novo","");
   }
   if(etapa==="perdido"&&!$("ng_motivo").value){$("ng_alerta").innerHTML='<div class="note crit"><b>Escolha o motivo da perda.</b> É o que mostra onde o funil está vazando.</div>';return;}
-  n.valor=parseFloat($("ng_valor").value)||0;n.responsavel=$("ng_resp").value;n.produto=$("ng_prod").value.trim();n.obs=$("ng_obs").value.trim();
+  n.valor=numMF($("ng_valor").value)||0;n.responsavel=$("ng_resp").value;n.produto=$("ng_prod").value.trim();n.obs=$("ng_obs").value.trim();
   if(etapa==="perdido"){n.motivoPerda=$("ng_motivo").value;n.motivoPerdaObs=$("ng_motivoObs").value.trim();}
   moverNegocio(n,etapa,false,{obs:etapa==="perdido"?n.motivoPerda+(n.motivoPerdaObs?": "+n.motivoPerdaObs:""):""});
   await gravarNegocio(n);
@@ -22782,6 +22789,7 @@ function render(){
   try{notaCreditoPlano();}catch(e){}
   opcoesClienteVenda();
   calcular();
+  try{formatarValoresVisiveis();}catch(e){}
 }
 /* UM campo só para escolher o cliente (v154): digita, aparece a lista, toca no nome.
    A caixa de seleção continua existindo escondida, porque é dela que o resto do sistema
@@ -22799,52 +22807,86 @@ function escolherClienteVenda(c){
   opcoesClienteVenda();
 }
 function ev(el,t){if(el)el.dispatchEvent(new Event(t,{bubbles:true}));}
-/* ================= VÍRGULA NOS CAMPOS DE VALOR (v157, 18/09) =================
-   Reclamação do Wagner: "não consigo colocar , ou . — corrija em toda opção que tem valor".
-   Todo campo de dinheiro era <input type="number">, e o Chrome recusa a vírgula: o vendedor
-   digitava 1988,52 e ficava 198852. Agora esses campos são de texto com teclado numérico
-   (inputmode="decimal") e este filtro deixa o valor SEMPRE no formato que o resto do
-   sistema lê (ponto decimal): a vírgula vira ponto e, havendo mais de um separador, vale o
-   último — assim "1.988,52" entra como 1988.52. */
-function limparValorDecimal(t){
-  var s=String(t==null?"":t).replace(/[^0-9,.\-]/g,"").replace(/,/g,".");
+/* ================= DINHEIRO NO PADRÃO BRASILEIRO (v166, 20/09) =================
+   Reclamação dele, com print do Valor unitário mostrando "2430.42": "no lugar do ponto é
+   vírgula que separa a casa decimal, e o ponto deve ser usado na casa de milhar".
+   A v157 (18/09) deixou DIGITAR vírgula, mas guardava e escrevia com ponto, porque os 60
+   `parseFloat($(...).value)` do arquivo liam assim. Agora o campo mostra e aceita o formato
+   brasileiro — 2.430,42 — e quem lê passa por `numMF`, que entende as duas escritas.
+     numMF("2.430,42") = 2430.42      numMF("2430.42") = 2430.42
+     numMF("1.988")    = 1988         (separador único com 3 casas é milhar)
+     brMF(2430.42)     = "2.430,42"                                              */
+function numMF(t){
+  var s=String(t==null?"":t).replace(/[^0-9,.\-]/g,"");
+  if(!s)return 0;
   var neg=s.charAt(0)==="-";s=s.replace(/-/g,"");
-  var p=s.split(".");
-  if(p.length>2){
-    var dec=p.pop();
-    /* separador seguido de 3 dígitos é milhar ("1.988"), não decimal */
-    s=(dec.length===3)?(p.join("")+dec):(p.join("")+"."+dec);
+  var ult=Math.max(s.lastIndexOf(","),s.lastIndexOf("."));
+  var n;
+  if(ult<0)n=parseFloat(s)||0;
+  else{
+    var casas=s.length-ult-1,inteiro=s.slice(0,ult).replace(/[.,]/g,""),dec=s.slice(ult+1);
+    /* separador único seguido de 3 dígitos é milhar ("1.988" = mil novecentos e oitenta e oito) */
+    n=(casas===3&&s.slice(0,ult).search(/[.,]/)<0)
+      ? (parseFloat(inteiro+dec)||0)
+      : (parseFloat(inteiro+"."+dec)||0);
   }
-  return (neg?"-":"")+s;
+  return neg?-n:n;
 }
-/* campos onde 3 casas depois do separador são de verdade (litro, preço do litro, km/l):
-   nesses, "5.499" é cinco reais e quatrocentos e noventa e nove milésimos */
+function brMF(n,casas){
+  var v=+n;if(!isFinite(v))v=0;
+  var c=(casas==null?2:casas);
+  var s=Math.abs(v).toFixed(c),p=s.split(".");
+  return (v<0?"-":"")+p[0].replace(/\B(?=(\d{3})+(?!\d))/g,".")+(p[1]?","+p[1]:"");
+}
+/* campos onde 3 casas depois do separador são de verdade (litro, preço do litro, km/l) */
 var IDS_TRES_CASAS=/^(ab_preco|ab_litros|vc_consumo)$/;
+function casasDoCampo(el){return IDS_TRES_CASAS.test((el&&el.id)||"")?3:2;}
+function ehCampoValorMF(el){
+  return !!el&&el.tagName==="INPUT"&&(el.type||"")==="text"&&
+    (el.getAttribute("inputmode")||"")==="decimal";
+}
+/* põe no formato brasileiro o que o sistema escreveu por dentro (preço pela forma de
+   pagamento, valores da ficha, prévia da nota…). Não mexe no campo em que a pessoa está. */
+function formatarValoresVisiveis(raiz){
+  var alvo=raiz||document;
+  Array.prototype.forEach.call(alvo.querySelectorAll('input[inputmode="decimal"]'),function(el){
+    if(!ehCampoValorMF(el)||el===document.activeElement)return;
+    var v=String(el.value||"").trim();
+    if(!v)return;
+    var certo=brMF(numMF(v),casasDoCampo(el));
+    if(v!==certo)el.value=certo;
+  });
+}
 function ligarCamposValor(){
-  function ehValor(el){
-    return !!el&&el.tagName==="INPUT"&&(el.type||"")==="text"&&
-      (el.getAttribute("inputmode")||"")==="decimal";
-  }
+  /* digitando: só tira o que não é número, vírgula, ponto ou sinal — a pessoa escreve como quiser */
   document.addEventListener("input",function(e){
-    var el=e.target;if(!ehValor(el))return;
-    var novo=limparValorDecimal(el.value);
+    var el=e.target;if(!ehCampoValorMF(el))return;
+    var novo=String(el.value||"").replace(/[^0-9,.\-]/g,"");
     if(novo!==el.value){
       var fim=(el.selectionStart===el.value.length);
       el.value=novo;
       if(fim){try{el.setSelectionRange(novo.length,novo.length);}catch(x){}}
     }
   },true);
-  /* ao sair do campo: "1.988" digitado é mil novecentos e oitenta e oito, não um e noventa
-     e oito — em dinheiro o separador com 3 casas é milhar */
+  /* ao sair do campo, o valor aparece como no Brasil: 2.430,42 */
   document.addEventListener("blur",function(e){
-    var el=e.target;if(!ehValor(el))return;
-    if(IDS_TRES_CASAS.test(el.id||""))return;
-    var v=String(el.value||"");
-    if(/^-?\d+\.\d{3}$/.test(v)){
-      el.value=v.replace(".","");
-      ev(el,"input");ev(el,"change");
-    }
+    var el=e.target;if(!ehCampoValorMF(el))return;
+    var v=String(el.value||"").trim();
+    if(!v)return;
+    var certo=brMF(numMF(v),casasDoCampo(el));
+    if(certo!==el.value){el.value=certo;ev(el,"change");}
   },true);
+  /* as fichas enchem os campos por dentro (`$("nf_custo").value=…`), e aí ninguém passou pelo
+     blur. Janela e ficha aparecem tirando o `hidden`: quando isso acontece, o que está escrito
+     dentro é acertado. É o mesmo gancho que o módulo de celular usa para travar a página de trás. */
+  try{
+    new MutationObserver(function(ms){
+      ms.forEach(function(m){
+        var el=m.target;
+        if(el&&el.nodeType===1&&!el.hidden)formatarValoresVisiveis(el);
+      });
+    }).observe(document.body,{attributes:true,attributeFilter:["hidden"],subtree:true});
+  }catch(e){console.warn("formato de valor nas fichas",e);}
 }
 function opcoesClienteVenda(){
   var inp=$("v_cliBusca"),nota=$("v_cliNota");if(!inp||!nota)return;
@@ -22899,6 +22941,8 @@ function ir(s){
     if($("vcBusca"))$("vcBusca").value="";
     try{renderVeiculos();}catch(e){console.warn(e);}}
   telaAtual=s;
+  /* o que a tela escreveu nos campos de valor aparece no padrão brasileiro (v166) */
+  try{formatarValoresVisiveis($("s-"+s)||document);}catch(e){}
 }
 function resetarProdutos(){
   editandoProd=null;
@@ -23138,7 +23182,7 @@ function ligar(){
     var nomeAntigo=u.nome;
     u.nome=n;u.perfil=$("u_perfil").value;u.ativo=($("u_ativo").value==="sim");
     CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)u[k]=e.value.trim?e.value.trim():e.value;});
-    ["salario","vr","assiduidade","desempenho"].forEach(function(k){u[k]=parseFloat($("u_"+k).value)||0;});
+    ["salario","vr","assiduidade","desempenho"].forEach(function(k){u[k]=numMF($("u_"+k).value)||0;});
     ["entrada","almocoIni","almocoFim","saida"].forEach(function(k){u[k]=$("u_"+k).value;});
     u.tolerancia=parseInt($("u_tolerancia").value,10);if(isNaN(u.tolerancia))u.tolerancia=2;
     u.bateponto=$("u_bateponto").value;
@@ -23361,10 +23405,10 @@ function ligar(){
   $("ab_cheio").onchange=previaAbast;
   /* litros × preço = total, e o que faltar o sistema completa */
   $("ab_preco").oninput=function(){
-    var l=parseFloat($("ab_litros").value)||0,p=parseFloat(this.value)||0;
+    var l=numMF($("ab_litros").value)||0,p=parseFloat(this.value)||0;
     if(l&&p)$("ab_valor").value=(Math.round(l*p*100)/100).toFixed(2);};
   $("ab_valor").oninput=function(){
-    var l=parseFloat($("ab_litros").value)||0,v=parseFloat(this.value)||0;
+    var l=numMF($("ab_litros").value)||0,v=parseFloat(this.value)||0;
     if(l&&v)$("ab_preco").value=(Math.round(v/l*1000)/1000).toFixed(3);};
   $("mc_ok").onclick=salvarManutVeic;
   $("mc_fechar").onclick=function(){$("mvcModal").hidden=true;};
@@ -23433,7 +23477,7 @@ function ligar(){
     var p=produtos.filter(function(x){return x.id===$("nf_prod").value;})[0];if(!p){toast("Escolha o produto.");return;}
     var qn=qtdInformada("nf_qtd");if(!qn)return;
     nfItens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qn,
-      custo:parseFloat($("nf_custo").value)||0});
+      custo:numMF($("nf_custo").value)||0});
     calcNota();limparInclusao("nf_prod","nf_qtd",["nf_custo"]);};
   $("nfSalvar").onclick=salvarNota;
 
@@ -23583,7 +23627,7 @@ function ligar(){
     var p=produtos.filter(function(x){return x.id===$("os_peca").value;})[0];if(!p){toast("Escolha a peça.");return;}
     var qo=qtdInformada("os_pqtd");if(!qo)return;
     /* cliente com plano vigente: o que o plano ainda cobre sai sem custo; o esgotado é cobrado (regra do Wagner, 14/09) */
-    var vOs=parseFloat($("os_pvalor").value)||0,cobO=coberturaCliente(clienteIdOS(),p,equipIdOS(),osPecas),msgO="";
+    var vOs=numMF($("os_pvalor").value)||0,cobO=coberturaCliente(clienteIdOS(),p,equipIdOS(),osPecas),msgO="";
     if(cobO&&cobO.cobre){
       var qcO=Math.min(qo,cobO.cobre.resta);
       osPecas.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qcO,valor:0,
@@ -23704,7 +23748,7 @@ function ligar(){
       return;}
     p.cod=cod;p.nome=nome;p.pop=$("p_pop").value.trim();p.marca=$("p_marca").value.trim();p.grupo=grupo;p.subgrupo=subgrupo;
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
-    ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){p[k]=parseFloat($("p_"+k).value)||0;});
+    ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
     /* produto importado deixa de ser "a completar" quando ganha grupo de verdade e preço (v143) */
     p.completar=(grupo===GRUPO_COMPLETAR||!(+p.cheia>0));
@@ -23942,7 +23986,7 @@ function ligar(){
     var p=produtos.filter(function(x){return x.id===$("or_prod").value;})[0];if(!p){toast("Escolha o produto.");return;}
     var qr=qtdInformada("or_qtd");if(!qr)return;
     orcItens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qr,
-      valor:parseFloat($("or_valor").value)||0,pontos:+p.pontos||0});
+      valor:numMF($("or_valor").value)||0,pontos:+p.pontos||0});
     calcOrc();limparInclusao("or_prod","or_qtd",["or_valor"]);};
   $("orcEnviar").onclick=async function(){var o=await salvarOrc();if(o)abrirEnvio(o);};
   $("orcEfetivar").onclick=async function(){var o=await salvarOrc();if(o)virarVenda(o);};
