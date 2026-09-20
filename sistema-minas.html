@@ -5715,6 +5715,12 @@ async function carregar(){
   }catch(e){console.warn("db",e);}
 }
 
+/* Dinheiro se conta em CENTAVOS, e o que sobra do centavo sobe (regra do Wagner, 20/09:
+   "contar somente centavos e não milésimo, sempre arredondar para cima"). */
+function centavos(v){
+  var n=+v||0;
+  return Math.ceil(Math.round(n*100000)/1000)/100;   /* tira o ruído do ponto flutuante antes de subir */
+}
 function faixa(v,p){
   var c=+p.cheia||0,ca=+p.campanha||0,m=+p.minimo||0;
   var campOn=(p.campativa==="sim");
@@ -7337,8 +7343,9 @@ function calcular(){
   formas.forEach(function(f){
     var v=+f.valor||0;somaFormas+=v;
     var n=f.parc||1,coef=coefDe(f.tipo,n)||1,parcela=v/n;
-    dep+=(coef?parcela/coef:0);
-    descV+=(coef>0?(v-(parcela/coef)):0);
+    /* em centavos, arredondando para cima (regra dele, 20/09) */
+    dep+=(coef?centavos(parcela/coef):0);
+    descV+=(coef>0?(v-centavos(parcela/coef)):0);
     if(v>0)partes.push(coef===1?BRL(v):(BRL(parcela)+" ÷ "+coef.toFixed(4).replace(".",",")));
   });
 
@@ -7364,7 +7371,7 @@ function calcular(){
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
     var cobPl=!!i.planoCobre;
     var q=cobPl?0:(somaCheia>0?(((+p.cheia||0)*(i.qtd||1))/somaCheia):(1/itens.length));
-    var depI=dep*q,unit=depI/(i.qtd||1),fx=cobPl?{f:0,n:"plano",cls:"p-ok"}:faixa(unit,p);
+    var depI=cobPl?0:centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=cobPl?{f:0,n:"plano",cls:"p-ok"}:faixa(unit,p);
     if(!cobPl){base+=depI*fx.f;pontos+=(i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;}
     var garPill=ehPlano(i)?'<span class="pill p-acc">plano de garantia</span>':
       (i.garantia==="Bronze"||!i.garantia)?'<span class="pill p-mut">Bronze</span>':'<span class="pill p-acc">'+esc(i.garantia)+"</span>";
@@ -19002,7 +19009,7 @@ function calcOrc(){
   orcItens.forEach(function(i,idx){
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
     var q=somaCheia>0?(((+p.cheia||0)*(i.qtd||1))/somaCheia):(orcItens.length?1/orcItens.length:0);
-    var depI=dep*q,unit=depI/(i.qtd||1),fx=faixa(unit,p);
+    var depI=centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
     base+=depI*fx.f;pontos+=(+i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;
     tb.innerHTML+='<tr><td><div class="t-main"><button class="lixo" type="button" data-orm="'+idx+'" title="Remover este item">&#128465;</button>'+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+
         "</code> · cheia "+BRL(+p.cheia||0)+"</div></td>"+
@@ -19476,7 +19483,7 @@ function recalcPedido(itens,formas,fatorAbaixo){
   formas.forEach(function(f){
     var v=+f.valor||0;soma+=v;
     var n=f.parc||1,coef=coefDe(f.tipo,n)||1;
-    dep+=(coef?(v/n)/coef:0);
+    dep+=(coef?centavos((v/n)/coef):0);   /* centavos, para cima (regra dele, 20/09) */
   });
   var somaCheia=itens.reduce(function(a,i){if(i.planoCobre)return a;var p=produtos.filter(function(x){return x.id===i.pid;})[0];return a+(((p&&+p.cheia)||0)*(i.qtd||1));},0);
   var base=0,pontos=0,abaixo=false,depAbaixo=0,linhas=[];
@@ -19484,7 +19491,7 @@ function recalcPedido(itens,formas,fatorAbaixo){
     if(i.planoCobre)return;   /* coberto pelo plano: sem custo, fora da faixa e da comissão */
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
     var q=somaCheia>0?(((+p.cheia||0)*(i.qtd||1))/somaCheia):(itens.length?1/itens.length:0);
-    var depI=dep*q,unit=depI/(i.qtd||1),fx=faixa(unit,p);
+    var depI=centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
     var f=(fx.f===0&&fatorAbaixo!=null)?+fatorAbaixo:fx.f;
     base+=depI*f;pontos+=(+i.pontos||0)*(i.qtd||1)*f;
     if(fx.f===0){abaixo=true;depAbaixo+=depI;}
