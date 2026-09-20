@@ -1656,6 +1656,8 @@ img{max-width:100%}
               <div class="r" id="c_trocaR" hidden><span>− Desconto de troca</span><span id="c_troca">—</span></div>
               <div class="r sep big"><span>Base de comissão</span><span id="c_base">—</span></div>
             </div>
+            <!-- em que tabela cada produto caiu, refeito a cada mudança de valor (regra dele, 20/09) -->
+            <div id="c_faixas"></div>
             <div class="split">
               <div><div class="lbl">Prospector 20%</div><div class="val" id="r_p">—</div><div class="pts" id="pt_p">—</div></div>
               <div><div class="lbl">Vendedor 60%</div><div class="val" id="r_v">—</div><div class="pts" id="pt_v">—</div></div>
@@ -7094,6 +7096,27 @@ function entradaSemJuros(){
   return centavos((formas||[]).filter(function(f){return f.tipo&&semJuros(f);})
     .reduce(function(a,f){return a+(+f.valor||0);},0));
 }
+/* ---------- forma sem juros sem valor informado trava a venda (regra dele, 20/09) ----------
+   "Toda vez que tiver uma forma de pagamento com o coeficiente 1, o sistema deve travar e uma
+   caixa de informação: favor informar o valor da forma de pagamento X, para o sistema poder
+   continuar com a operação do cálculo."
+   É o que falta para a conta fechar: o preço do item é `E + (cheia − E) × acréscimo`, e sem saber
+   E — quanto o cliente dá em dinheiro, PIX ou na troca — não existe preço. Com UMA forma só não há
+   o que informar: ela recebe o total do pedido sozinha. */
+function formasSemJurosPendentes(){
+  if(!formas||formas.length<2)return [];
+  return formas.filter(function(f){return f.tipo&&semJuros(f)&&!((+f.valor||0)>0);});
+}
+function travaSemJuros(){return formasSemJurosPendentes().length>0;}
+function nomesSemJurosPendentes(){
+  return formasSemJurosPendentes().map(function(f){return f.tipo;}).join(", ");
+}
+/* leva o cursor para o primeiro valor que falta */
+function focarSemJurosPendente(){
+  var p=formasSemJurosPendentes()[0];if(!p)return;
+  var ix=formas.indexOf(p),c=$("v_formas")?$("v_formas").querySelectorAll('[data-f="valor"]'):[];
+  if(c[ix]){try{c[ix].focus();c[ix].select();}catch(e){}}
+}
 /* o item entrou pelo preço que o sistema sugeriu? Se sim, ele acompanha sozinho qualquer mudança
    de forma, parcelas ou entrada (regra dele, 20/09: "toda vez que adicionar algum produto, ou
    alterar o valor do produto, o sistema tem que refazer o cálculo automaticamente"). Quem digita
@@ -7131,6 +7154,13 @@ function textoPrecoForma(cheia){
 }
 function notaPrecoForma(p){
   var el=$("v_precoNota");if(!el)return;
+  if(travaSemJuros()){
+    el.innerHTML='<div class="note crit" style="margin-top:8px"><b>Informe o valor de '+
+      esc(nomesSemJurosPendentes())+'.</b> Sem saber quanto entra nessa forma, o sistema não tem '+
+      "como calcular o preço dos itens: o que ela cobrir sai sem juros e só o que sobrar da tabela "+
+      "segue pela forma com juros.</div>";
+    return;
+  }
   if(!p||!(+p.cheia>0)||!formaBaseVenda().tipo){el.innerHTML="";return;}
   var v=precoPelaForma(p.cheia),mudou=Math.abs(v-(+p.cheia))>=0.01;
   el.innerHTML='<div class="note'+(mudou?" ok":"")+'" style="margin-top:8px">'+textoPrecoForma(p.cheia)+
@@ -7142,7 +7172,7 @@ function atualizarPrecoItemNovo(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if(!p)return;
   if(vv.__manual)  {notaPrecoForma(p);return;}   /* valor digitado à mão fica como está */
-  vv.value=brMF(precoPelaForma(p.cheia));
+  vv.value=travaSemJuros()?"":brMF(precoPelaForma(p.cheia));
   notaPrecoForma(p);
   try{notaGarantia();}catch(e){}   /* o plano segue o mesmo preço da forma (20/09) */
   try{calcular();}catch(e){}
@@ -7150,7 +7180,7 @@ function atualizarPrecoItemNovo(){
 function sincronizarValor(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if($("v_valor"))$("v_valor").__manual=false;
-  if(p){$("v_valor").value=brMF(precoPelaForma(p.cheia));notaPrecoForma(p);
+  if(p){$("v_valor").value=travaSemJuros()?"":brMF(precoPelaForma(p.cheia));notaPrecoForma(p);
     /* número de série só para os grupos marcados em Configurações › Planos de Garantia › Número de série */
     var sg=temSerieGrupo(p);
     $("v_serie").disabled=!sg;
@@ -7268,6 +7298,13 @@ function ajustarLocalItem(){
   }
 }
 function addItem(){
+  /* forma sem juros sem valor informado trava a inclusão (regra dele, 20/09) */
+  if(travaSemJuros()){
+    toast("Informe primeiro o valor de "+nomesSemJurosPendentes()+
+      " — é esse valor que o sistema abate antes de calcular o preço do item.");
+    focarSemJurosPendente();
+    return;
+  }
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if(!p){toast("Escolha o produto.");try{$("v_prod_busca").focus();}catch(e){}return;}
   var gar=$("v_gar").value, serie=temSerieGrupo(p)?$("v_serie").value.trim():"", qtd=parseInt($("v_qtd").value,10)||0;
@@ -7522,6 +7559,11 @@ function renderFormas(){
          a menos que alguém já tenha digitado um valor à mão (v161) */
       if(k==="tipo"||k==="parc"){try{atualizarPrecoItemNovo();}catch(e){}}
       if(k==="tipo"){
+        /* trocou para uma forma sem juros: o valor volta a zero para ele informar quanto entra
+           nela — é esse valor que o preço dos itens abate (regra dele, 20/09) */
+        if(formas.length>1&&el.value!==FORMA_CREDITO&&semJuros(formas[i])){
+          formas[i].valor=0;formas[i].__auto=false;
+        }
         if(el.value===FORMA_CREDITO){
           formas[i].parc=1;
           var cl2=clienteDaVenda(),lim=cl2?creditoPlanoTotal(cl2.id):0;
@@ -7614,7 +7656,14 @@ function calcular(){
   $("o_desc").textContent="− "+BRL(descV);
   $("o_liq").textContent=BRL(dep);
   var dif=Math.round((total-somaFormas)*100)/100;
-  $("o_alertaPag").innerHTML = (total>0&&dif!==0)
+  /* caixa de informação pedindo o valor da forma sem juros (regra dele, 20/09) */
+  if(travaSemJuros()){
+    $("o_alertaPag").innerHTML='<div class="note crit"><b>Informe o valor de '+
+      esc(nomesSemJurosPendentes())+' para continuar.</b> O sistema precisa saber quanto o cliente '+
+      "paga nessa forma: esse valor entra sem juros e só o que sobrar da tabela segue pela forma "+
+      "com juros. Enquanto estiver em branco, não dá para incluir itens.</div>";
+  }
+  else $("o_alertaPag").innerHTML = (total>0&&dif!==0)
     ? '<div class="note '+(dif>0?"warn":"crit")+'"><b>'+(dif>0?"Falta distribuir "+BRL(dif):"Sobra "+BRL(-dif))+".</b> A soma das formas precisa bater com o total do pedido.</div>" : "";
 
   $("c_dep").textContent=BRL(dep);
@@ -7622,7 +7671,7 @@ function calcular(){
 
   /* item coberto pelo plano sai sem custo: fora da divisão do valor, da faixa e da comissão */
   var somaCheia=itens.reduce(function(a,i){if(i.planoCobre)return a;var p=produtos.filter(function(x){return x.id===i.pid;})[0];return a+(((p&&+p.cheia)||0)*(i.qtd||1));},0);
-  var base=0,pontos=0,abaixo=false,tb=$("v_itens");
+  var base=0,pontos=0,abaixo=false,tb=$("v_itens"),linhasFaixa=[];
   /* a tabela é redesenhada a cada conta: se o cursor está num valor de item, ele volta para lá */
   var focoVU=(document.activeElement&&document.activeElement.getAttribute&&document.activeElement.getAttribute("data-vu"));
   tb.innerHTML="";
@@ -7633,6 +7682,9 @@ function calcular(){
     var q=cobPl?0:(somaCheia>0?(((+p.cheia||0)*(i.qtd||1))/somaCheia):(1/itens.length));
     var depI=cobPl?0:centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=cobPl?{f:0,n:"plano",cls:"p-ok"}:faixa(unit,p);
     if(!cobPl){base+=depI*fx.f;pontos+=(i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;}
+    /* em que tabela este produto caiu — mostrado na Comissão ao vivo e refeito a cada mudança
+       de valor, forma ou parcelas (regra dele, 20/09) */
+    if(!cobPl)linhasFaixa.push({nome:i.nome,fx:fx,unit:unit,valor:+i.valor||0,qtd:(i.qtd||1),p:p});
     var garPill=ehPlano(i)?'<span class="pill p-acc">plano de garantia</span>':
       (i.garantia==="Bronze"||!i.garantia)?'<span class="pill p-mut">Bronze</span>':'<span class="pill p-acc">'+esc(i.garantia)+"</span>";
     var tr=document.createElement("tr");
@@ -7687,6 +7739,27 @@ function calcular(){
   $("c_trocaR").hidden=!(trocaCom>0);
   $("c_troca").textContent="− "+BRL(trocaCom);
   $("c_base").textContent=BRL(base);
+  /* "em qual tabela esse produto vai cair" (regra dele, 20/09): a Comissão ao vivo diz item por
+     item, com o depreciado unitário que foi comparado com a tabela. Refeito a cada mudança. */
+  $("c_faixas").innerHTML=linhasFaixa.length
+    ? '<div class="tw" style="margin-top:12px"><table><thead><tr><th>Produto</th><th class="num">Depreciado</th><th>Tabela</th></tr></thead><tbody>'+
+      linhasFaixa.map(function(l){
+        var alvo=(l.fx.f===1)?(+l.p.cheia||0):(l.fx.f===0.7?(+l.p.campanha||0):(l.fx.f===0.5?(+l.p.minimo||0):0));
+        var falta=(l.fx.f===0)
+          ? (function(){
+              /* quanto falta para voltar a ganhar comissão: o piso mais baixo que ainda paga —
+                 a campanha quando está ligada, senão a de 70%, senão a cheia */
+              var piso=(l.p.campativa==="sim"&&+l.p.minimo>0)?+l.p.minimo
+                      :((+l.p.campanha>0)?+l.p.campanha:(+l.p.cheia||0));
+              var d=Math.max(0,piso-l.unit);
+              return d>0?'<div class="t-sub">faltam '+BRL(d)+" de depreciado por unidade para pagar comissão</div>":"";})()
+          : (alvo>0?'<div class="t-sub">tabela '+BRL(alvo)+"</div>":"");
+        return "<tr><td>"+esc(l.nome)+(l.qtd>1?" ("+l.qtd+"×)":"")+"</td>"+
+          '<td class="num">'+BRL(l.unit)+"</td>"+
+          '<td><span class="pill '+l.fx.cls+'">'+esc(l.fx.n)+"</span>"+
+          (l.fx.f>0?' <span class="t-sub">paga '+(l.fx.f*100).toFixed(0)+"%</span>":"")+falta+"</td></tr>";
+      }).join("")+"</tbody></table></div>"
+    : "";
   $("r_p").textContent=BRL(base*.2);$("r_v").textContent=BRL(base*.6);$("r_i").textContent=BRL(base*.2);
   $("pt_p").textContent=(pontos*.2).toFixed(1).replace(".",",")+" pts";
   $("pt_v").textContent=(pontos*.6).toFixed(1).replace(".",",")+" pts";
@@ -23877,7 +23950,9 @@ function ligar(){
     /* as formas que já existiam continuam como estavam: `__auto=false` é a marca de "a pessoa
        digitou este valor", e quem não digitou segue recebendo o que sobra do pedido (regra dele,
        20/09). Antes esta linha marcava TODAS como digitadas e a forma com juros travava. */
-    formas.push({tipo:"Dinheiro",valor:Math.max(0,Math.round((tot-soma)*100)/100),parc:1,__auto:false});
+    /* a forma nova nasce SEM valor: sendo sem juros, é ele quem diz quanto entra nela, e é esse
+       valor que o preço dos itens abate (regra dele, 20/09) */
+    formas.push({tipo:"Dinheiro",valor:0,parc:1,__auto:false});
     renderFormas();calcular();};
   /* Desconto de troca: entra como forma de pagamento com valor zerado, para o vendedor digitar
      quanto vale o usado. Esse valor NÃO entra na base de comissão (regra dele, 20/09). */
