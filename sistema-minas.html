@@ -3728,6 +3728,7 @@ img{max-width:100%}
               <input id="u_acEmail" type="email" inputmode="email" autocomplete="off" placeholder="nome@minasfiltrosonline.com.br"></div>
             <div class="fld"><label for="u_acLoja">Loja do colaborador</label><select id="u_acLoja"></select></div>
             <div class="fld" style="align-self:end"><button class="btn" type="button" id="u_acCriar">Cadastrar senha de acesso</button></div>
+            <div class="fld" style="align-self:end"><button class="btn ghost" type="button" id="u_acFuncao" hidden>Atualizar a função no banco</button></div>
           </div>
           <div class="grid g4" style="margin-top:12px">
             <div class="fld"><label for="u_acSenha">Senha <span class="req">*</span></label>
@@ -6081,7 +6082,7 @@ function unicos(lista,campo){
 }
 var cliPag=1;
 function renderClientes(){
-  var base=clientes.filter(function(c){return c.loja===lojaAtual;});
+  var base=clientes.filter(function(c){return c.loja===lojaAtual&&meuCliente(c);});
   /* os filtros de endereço se encadeiam: bairro só mostra os da cidade escolhida, e assim por diante */
   encherFiltro("cliCidade",unicos(base,"cidade"),"Todas as cidades");
   var cid=$("cliCidade").value;
@@ -8772,10 +8773,11 @@ function renderPedidos(){
     var o0=document.createElement("option");o0.value="";o0.textContent="Todos os vendedores";sv.appendChild(o0);
     EQUIPE.forEach(function(n){var o=document.createElement("option");o.value=n;o.textContent=n;sv.appendChild(o);});
   }
+  travarSelectPessoa(sv,"Meus pedidos");
   var j=janelaPed(),q=($("pedBusca").value||"").toLowerCase();
   var vend=sv.value,sit=$("pedSit").value;
   if(pedPeriodo!=="livre"){$("pedDe").value=j.de||"";$("pedAte").value=j.ate||"";}
-  var lista=pedidos.filter(function(p){return p.loja===lojaAtual;})
+  var lista=pedidos.filter(function(p){return p.loja===lojaAtual&&meuPedido(p);})
     .filter(function(p){
       if(j.de&&p.data<j.de)return false;
       if(j.ate&&p.data>j.ate)return false;
@@ -18084,11 +18086,12 @@ function renderAtividades(){
     var o0=document.createElement("option");o0.value="";o0.textContent="Equipe toda";sq.appendChild(o0);
     EQUIPE.forEach(function(n){var o=document.createElement("option");o.value=n;o.textContent=n;sq.appendChild(o);});
   }
+  travarSelectPessoa(sq,"Minhas atividades");
   var q=($("avBusca").value||"").toLowerCase(),f=$("avQuando").value,quem=sq.value;
   var hoje=iso(new Date()),agora=new Date();
   var sem=new Date();sem.setDate(sem.getDate()+7);var semISO=iso(sem);
 
-  var base=atendimentos.filter(function(a){return a.loja===lojaAtual;});
+  var base=atendimentos.filter(function(a){return a.loja===lojaAtual&&meuAtend(a);});
   var abertas=base.filter(function(a){return a.natureza==="atividade"&&a.status!=="finalizado";});
   /* realizada é tanto a que virou atendimento quanto a que foi concluída direto */
   var feitas=base.filter(function(a){
@@ -18192,7 +18195,7 @@ function retratoLead(c){
 }
 function renderLeads(){
   var q=($("ldBusca").value||"").toLowerCase(),f=$("ldFiltro").value;
-  var base=clientes.filter(function(c){return c.loja===lojaAtual&&ehLead(c);});
+  var base=clientes.filter(function(c){return c.loja===lojaAtual&&ehLead(c)&&meuCliente(c);});
   var lista=base.map(function(c){return {c:c,r:retratoLead(c)};})
     .filter(function(x){
       if(f==="quente")return x.r.abertos.length>0;
@@ -19053,7 +19056,11 @@ async function manutencaoPelaVenda(ped){
   return {baixadas:baixadas,agendadas:agendadas,trocas:trocas,plano:migPlano};
 }
 function renderManut(){
-  var base=equipamentos.filter(function(e){return e.loja===lojaAtual;});
+  var base=equipamentos.filter(function(e){
+    if(e.loja!==lojaAtual)return false;
+    if(!soMeus())return true;
+    return meuCliente(clientes.filter(function(x){return x.id===e.clienteId;})[0]);
+  });
   /* endereço vem do cadastro do cliente, para os filtros encadearem */
   base.forEach(function(e){
     var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
@@ -19545,7 +19552,7 @@ function renderOS(){
   var q=($("osBusca").value||"").toLowerCase(),s=$("osSit").value,tp=$("osTipo").value;
   if(!$("osTipo").options.length||$("osTipo").options.length===1)
     OS_TIPOS.forEach(function(t){var o=document.createElement("option");o.value=t.k;o.textContent=t.n;$("osTipo").appendChild(o);});
-  var base=ordens.filter(function(o){return o.loja===lojaAtual;});
+  var base=ordens.filter(function(o){return o.loja===lojaAtual&&minhaOS(o);});
   var lista=base.filter(function(o){
       if(s==="abertas")return ["concluida","entregue","cancelada","reprovada"].indexOf(o.status)<0;
       return !s||o.status===s;})
@@ -20306,7 +20313,7 @@ function orcSituacao(o){
 }
 function renderOrcam(){
   var q=($("orcBusca").value||"").toLowerCase(),f=$("orcFiltro").value;
-  var todos=orcamentos.filter(function(o){return o.loja===lojaAtual;});
+  var todos=orcamentos.filter(function(o){return o.loja===lojaAtual&&meuOrc(o);});
   var lista=todos.filter(function(o){
       if(!f)return true;
       var s=orcSituacao(o).n;
@@ -22307,6 +22314,32 @@ function ajustarAcessoUsuario(){
     : (u.nome?'<div class="note warn"><b>'+esc(u.nome)+' ainda não tem acesso.</b> Cadastre o e-mail e a senha abaixo — é com eles que ele entra.</div>'
       :'<div class="note">Salve o colaborador primeiro; depois cadastre o acesso.</div>');
   $("u_acCriar").textContent=tem?"Atualizar senha de acesso":"Cadastrar senha de acesso";
+  /* quem manda no menu e nas permissões é a função gravada no banco (v200): trocar aqui não basta */
+  var atrasada=tem&&u.funcaoBanco&&u.funcaoBanco!==(u.perfil||"Vendedor");
+  $("u_acFuncao").hidden=!atrasada;
+  if(atrasada)$("u_acEstado").innerHTML+='<div class="note crit"><b>No banco ele ainda está como '+esc(u.funcaoBanco)+
+    ", e é essa a função que vale no login dele.</b> O cadastro aqui está como "+esc(u.perfil||"Vendedor")+
+    ". Clique em <b>Atualizar a função no banco</b> para valer a partir do próximo login dele.</div>";
+}
+async function atualizarFuncaoBanco(){
+  var al=$("u_acAlerta"),bt=$("u_acFuncao"),u=editandoUs;
+  if(!u||!u.nome)return;
+  var em=$("u_acEmail").value.trim()||u.emailAcesso||"";
+  var rot=bt.textContent;bt.disabled=true;bt.textContent="Atualizando…";al.innerHTML="";
+  try{
+    await chamarFuncaoBanco("criar-acesso",{email:em,nome:u.nome,funcao:u.perfil||"Vendedor",
+      loja:$("u_acLoja").value||u.loja||lojaAtual,somenteFuncao:true});
+    u.funcaoBanco=u.perfil||"Vendedor";
+    await gravarUsuarios();
+    try{await mesclarPerfisBanco();sincronizarEquipe();}catch(e){}
+    al.innerHTML='<div class="note ok"><b>Função atualizada para '+esc(u.perfil||"Vendedor")+".</b> Ela vale no próximo login dele.</div>";
+    renderUsuarios();ajustarAcessoUsuario();
+  }catch(e){
+    var m=(e&&e.message)||String(e);
+    al.innerHTML='<div class="note crit"><b>Não deu certo:</b> '+esc(m)+
+      (/senha/i.test(m)?" <br>A função <b>criar-acesso</b> publicada ainda é a antiga. Publique de novo o arquivo <b>supabase/functions/criar-acesso/index.ts</b>, ou cadastre uma senha nova aqui em cima — isso também grava a função.":"")+"</div>";
+  }
+  bt.disabled=false;bt.textContent=rot;
 }
 async function chamarFuncaoBanco(nome,corpo){
   if(!db||!db.sb)throw new Error("Sem conexão com o banco.");
@@ -22377,6 +22410,7 @@ async function trocarMinhaSenha(){
 }
 function ligarAcesso(){
   $("u_acCriar").onclick=cadastrarAcessoUsuario;
+  $("u_acFuncao").onclick=atualizarFuncaoBanco;
   $("u_acSugerir").onclick=function(){var s=senhaSugerida();$("u_acSenha").value=s;$("u_acSenha2").value=s;
     $("u_acAlerta").innerHTML='<div class="note"><b>Senha sugerida:</b> <code>'+esc(s)+"</code> — anote e passe ao colaborador antes de cadastrar.</div>";};
   $("usMinhaSenha").onclick=abrirTrocarSenha;
@@ -22504,6 +22538,7 @@ function filtrarNegocios(){
   var corte=dias?somaDias(hojeISO(),-dias):"9999";
   return negocios.filter(function(n){
     if(n.loja!==lojaAtual)return false;
+    if(soMeus()&&n.responsavel!==usuarioAtual)return false;
     if(resp==="__meus"&&n.responsavel!==usuarioAtual)return false;
     if(resp&&resp!=="__meus"&&n.responsavel!==resp)return false;
     if(orig&&(n.origem||"Sem origem")!==orig)return false;
@@ -22513,9 +22548,16 @@ function filtrarNegocios(){
 }
 function opcoesFunil(){
   var sr=$("fuResp"),at=sr.value;
-  sr.innerHTML='<option value="__meus">Meus negócios</option><option value="">Equipe toda</option>'+
-    EQUIPE.map(function(n){return "<option>"+esc(n)+"</option>";}).join("");
-  sr.value=at||(ehGestor()?"":"__meus");
+  if(soMeus()){
+    sr.innerHTML='<option value="__meus">Meus negócios</option>';
+    sr.value="__meus";sr.disabled=true;
+  }else{
+    var reabriu=sr.disabled;
+    sr.disabled=false;
+    sr.innerHTML='<option value="__meus">Meus negócios</option><option value="">Equipe toda</option>'+
+      EQUIPE.map(function(n){return "<option>"+esc(n)+"</option>";}).join("");
+    sr.value=reabriu?"":(at||"");
+  }
   var so=$("fuOrigem"),ao=so.value;
   so.innerHTML='<option value="">Todas as origens</option>'+origensNomes().sort(ordAZ).concat(["Sem origem"]).map(function(o){return "<option>"+esc(o)+"</option>";}).join("");
   so.value=ao;
@@ -22524,10 +22566,12 @@ function renderFunil(){
   if(!$("fuQuadro"))return;
   if(!$("fuResp").options.length)opcoesFunil();
   var lista=filtrarNegocios();
-  var abertos=negocios.filter(function(n){return n.loja===lojaAtual&&!etapaFechada(n.etapa);});
+  /* os números do quadro seguem o que a pessoa enxerga (v200) */
+  var meus=negocios.filter(function(n){return n.loja===lojaAtual&&(!soMeus()||n.responsavel===usuarioAtual);});
+  var abertos=meus.filter(function(n){return !etapaFechada(n.etapa);});
   var mes=hojeISO().slice(0,7);
-  var ganhos=negocios.filter(function(n){return n.loja===lojaAtual&&n.etapa==="venda"&&String(n.ganhoEm).slice(0,7)===mes;});
-  var perdidos=negocios.filter(function(n){return n.loja===lojaAtual&&n.etapa==="perdido"&&String(n.perdidoEm).slice(0,7)===mes;});
+  var ganhos=meus.filter(function(n){return n.etapa==="venda"&&String(n.ganhoEm).slice(0,7)===mes;});
+  var perdidos=meus.filter(function(n){return n.etapa==="perdido"&&String(n.perdidoEm).slice(0,7)===mes;});
   var parados=abertos.filter(function(n){return diasParado(n)>=7;});
   var soma=function(l){return l.reduce(function(a,n){return a+(+n.valor||0);},0);};
   $("fuKpis").innerHTML=
@@ -23517,7 +23561,9 @@ function achaCliente(q){
 }
 function linhaSugestao(c){
   var lead=ehLead(c),n=vendasDe(c.id).length;
-  return "<b>"+esc(c.nome)+(lead?' <span class="pill p-acc">lead</span>':' <span class="pill p-ok">cliente</span>')+
+  /* a busca acha a loja inteira para ninguém cadastrar o mesmo cliente duas vezes (v200) */
+  var deOutro=(soMeus()&&!meuCliente(c))?' <span class="pill p-warn">cadastro de outro atendente</span>':"";
+  return "<b>"+esc(c.nome)+deOutro+(lead?' <span class="pill p-acc">lead</span>':' <span class="pill p-ok">cliente</span>')+
     "</b><span>"+esc(c.codigo||"")+" · "+esc(c.doc||"sem documento")+" · "+esc(c.cidade||"—")+
     (c.tel?" · "+esc(c.tel):"")+(n?" · "+n+" venda"+(n===1?"":"s"):"")+"</span>";
 }
@@ -23912,7 +23958,7 @@ function veTela(s,quem){
   return (f.telas||[]).indexOf(s)>=0;
 }
 function ehGestor(){return pode("verTudo");}
-/* toda a equipe VÊ as atividades uns dos outros; só altera quem tem papel nela */
+/* quem não é da gestão só VÊ o que é dele (v200, soMeus); aqui é quem pode ALTERAR */
 function podeEditarAtiv(a){
   if(!a)return true;
   if(ehGestor())return true;
@@ -23940,10 +23986,57 @@ function aplicarPerfil(){
   });
   if(precisaSair)ir(veTela("dash")?"dash":"agenda");
 }
-function visiveis(lista){
-  /* todo mundo enxerga a agenda da equipe toda — o que muda é quem pode alterar */
-  return lista;
+/* ================= O QUE CADA UM ENXERGA (regra do Wagner, 21/09) =================
+   "só vai aparecer para o usuário aquilo que ele fez, cadastrou, ou que os outros usuários
+   tenham colocado ele." Quem tem a permissão verTudo (Administrador, Financeiro, gestão)
+   continua vendo a loja inteira. A ÚNICA exceção é a busca de cliente do atendimento, do
+   orçamento, do pedido e da OS: ela continua achando qualquer cadastro da loja, marcado
+   "cadastro de outro atendente" — senão o vendedor cadastraria o mesmo cliente duas vezes. */
+function soMeus(){return !ehGestor();}
+function deMim(o,campos){
+  if(!o)return false;
+  for(var i=0;i<campos.length;i++){var v=o[campos[i]];if(v&&v===usuarioAtual)return true;}
+  return false;
 }
+var CAMPOS_ATEND=["colaborador","prospector","vendedor","instalador","tecnico","criadoPor","atendente"];
+var CAMPOS_PED=["vendedor","prospector","instalador","respInstalacao","criadoPor"];
+var CAMPOS_ORC=["vendedor","colaborador","criadoPor"];
+var CAMPOS_OS=["atendente","tecnico","criadoPor","diagnosticoPor","orcRecebidoPor"];
+function meuAtend(a){return !soMeus()||deMim(a,CAMPOS_ATEND);}
+function meuPedido(p){return !soMeus()||deMim(p,CAMPOS_PED);}
+function meuOrc(o){return !soMeus()||deMim(o,CAMPOS_ORC);}
+function minhaOS(o){return !soMeus()||deMim(o,CAMPOS_OS);}
+/* cliente é meu quando eu cadastrei ou quando tenho atendimento, pedido, orçamento ou OS dele */
+var _meusCli=null;
+function esquecerMeusClientes(){_meusCli=null;}
+function meusClientesIds(){
+  if(_meusCli)return _meusCli;
+  var s={};
+  atendimentos.forEach(function(a){if(a.clienteId&&deMim(a,CAMPOS_ATEND))s[a.clienteId]=1;});
+  pedidos.forEach(function(p){if(p.clienteId&&deMim(p,CAMPOS_PED))s[p.clienteId]=1;});
+  orcamentos.forEach(function(o){if(o.clienteId&&deMim(o,CAMPOS_ORC))s[o.clienteId]=1;});
+  ordens.forEach(function(o){if(o.clienteId&&deMim(o,CAMPOS_OS))s[o.clienteId]=1;});
+  negocios.forEach(function(n){if(n.clienteId&&n.responsavel===usuarioAtual)s[n.clienteId]=1;});
+  _meusCli=s;return s;
+}
+function meuCliente(c){
+  if(!soMeus())return true;
+  if(!c)return false;
+  if(c.criadoPor===usuarioAtual)return true;
+  return !!meusClientesIds()[c.id];
+}
+/* filtro de pessoa que vira "Meus registros" e trava para quem não é da gestão */
+function travarSelectPessoa(sel,rot){
+  if(!sel)return false;
+  if(!soMeus()){sel.disabled=false;return false;}
+  sel.innerHTML='<option value="">'+esc(rot||"Meus registros")+"</option>";
+  sel.value="";sel.disabled=true;return true;
+}
+function visiveis(lista){
+  if(!soMeus())return lista;
+  return lista.filter(meuAtend);
+}
+
 function quando(a){
   if(!a.data)return null;
   var h=(a.inicio||"23:59").split(":");
@@ -24036,6 +24129,7 @@ async function remarcar(){
   toast("Atividade remarcada para "+d+" às "+h+".");render();
 }
 function eventos(){
+  travarSelectPessoa($("agendaPessoa"),"Minha agenda");
   var pessoa=$("agendaPessoa").value,out=[],agora=new Date();
   visiveis(atendimentos.filter(function(a){return a.loja===lojaAtual;})).forEach(function(a){
     var d=quando(a);
@@ -24275,7 +24369,8 @@ function renderAniversariantes(){
     $("anBusca").oninput=renderAniversariantes;
   }
   var sq=$("anQuem");
-  if(sq.options.length!==EQUIPE.length+1){
+  if(soMeus())travarSelectPessoa(sq,"Meus clientes");
+  else if(sq.options.length!==EQUIPE.length+1){
     var atq=sq.value;
     sq.innerHTML='<option value="">Todos os vendedores</option>'+EQUIPE.map(function(n){return "<option>"+esc(n)+"</option>";}).join("");
     sq.value=atq||"";
@@ -24286,7 +24381,7 @@ function renderAniversariantes(){
     var op=ss.querySelector('option[value="'+o[0]+'"]');if(op)op.textContent=o[1];});
   var sit=ss.value,per=$("anPer").value,tipo=$("anTipo").value,quem=$("anQuem").value;
   var q=semAcento($("anBusca").value||"").trim(),qd=($("anBusca").value||"").replace(/\D/g,"");
-  var base=clientes.filter(function(c){return c.loja===lojaAtual&&c.nasc;})
+  var base=clientes.filter(function(c){return c.loja===lojaAtual&&c.nasc&&meuCliente(c);})
     .map(function(c){return situacaoAniv(c,h);}).filter(Boolean);
   function noPeriodo(dt,p){
     var dd=diasEntre(h,dt),m=+dt.slice(5,7)-1,y=+dt.slice(0,4);
@@ -24370,6 +24465,7 @@ function renderAniversariantes(){
       ir(ehLead(c)?"leads":"clientes");try{abrirCliente(c);}catch(e){console.warn(e);}};});
 }
 function render(){
+  esquecerMeusClientes();
   renderClientes();renderProdutos();renderPedidos();renderAgenda();
   try{if(!$("s-aniver").hidden)renderAniversariantes();}catch(e){console.warn(e);}
   try{if($("s-funil")&&!$("s-funil").hidden)renderFunil();}catch(e){console.warn(e);}
@@ -26158,7 +26254,7 @@ async function mesclarPerfisBanco(){
   ps.forEach(function(p){
     var u=USUARIOS.filter(function(x){return x.nome===p.nome;})[0];
     if(!u){u={nome:p.nome};USUARIOS.push(u);}
-    u.perfil=p.funcao;u.ativo=p.ativo!==false;if(p.loja)u.loja=p.loja;u.temLogin=true;
+    u.perfil=p.funcao;u.funcaoBanco=p.funcao;u.ativo=p.ativo!==false;if(p.loja)u.loja=p.loja;u.temLogin=true;
   });
   /* teste real zerado (pedido do Wagner, 17/09): os 6 colaboradores de exemplo do código saem da lista; fica quem
      tem login no banco e quem o Administrador cadastrar em Configurações › Usuários (cadastradoEm) */
