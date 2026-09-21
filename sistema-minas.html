@@ -898,6 +898,9 @@
   .folha-os .os-emp-g>div:empty{display:none}
   .folha-os .os-emp-g b{font-size:11px;color:#0B3C5D}
   .folha-os .nb{white-space:nowrap}
+  /* imprimir só a ficha ou só o comprovante (pedido do Wagner, 21/09) */
+  .folha-os.so-ficha .canhoto,.folha-os.so-ficha .tesoura{display:none}
+  .folha-os.so-canhoto .peca,.folha-os.so-canhoto .tesoura{display:none}
 
   .obs-box{background:var(--accent-2);border-left:4px solid var(--accent);border-radius:0 10px 10px 0;
     padding:16px 18px;font-size:15px;line-height:1.6;color:var(--ink);white-space:pre-wrap}
@@ -2137,7 +2140,7 @@ img{max-width:100%}
           <span class="sp"></span>
           <button class="btn ghost" type="button" id="osFicha">Ficha e canhoto</button>
           <button class="btn ghost" type="button" id="osPdfOS">PDF da OS</button>
-          <button class="btn zap" type="button" id="osZap">Enviar OS para cliente via WhatsApp</button>
+          <button class="btn zap" type="button" id="osZap">Enviar o comprovante ao cliente via WhatsApp</button>
           <button class="btn mut" type="button" id="osCancelar">Voltar</button>
         </div>
 
@@ -2323,9 +2326,15 @@ img{max-width:100%}
       <div class="card" id="osImpressao" hidden>
         <div class="toolbar" style="padding:0 0 18px">
           <h2 style="margin:0" id="os_impTitulo">Ficha e canhoto</h2><span class="sp"></span>
-          <button class="btn zap" type="button" id="osImpZap">Enviar OS para cliente via WhatsApp</button>
+          <button class="btn zap" type="button" id="osImpZap">Enviar o comprovante ao cliente via WhatsApp</button>
           <button class="btn" type="button" id="osImprimir">Imprimir</button>
           <button class="btn mut" type="button" id="osVoltarImp">Voltar</button>
+        </div>
+        <!-- escolher o que imprimir: tudo, só a ficha ou só o comprovante (pedido do Wagner, 21/09) -->
+        <div class="cal-views" id="os_impQue" style="margin:0 0 14px;flex-wrap:wrap">
+          <button type="button" data-imp="tudo" aria-current="true">Ficha e comprovante</button>
+          <button type="button" data-imp="ficha">Só a ficha</button>
+          <button type="button" data-imp="canhoto">Só o comprovante</button>
         </div>
         <div id="os_folha" class="folha-os"></div>
       </div>
@@ -20027,7 +20036,20 @@ function orcamentoOS(){
         (EMPRESA.cnpj?" · CNPJ "+esc(EMPRESA.cnpj):"")+"<br>"+esc(EMPRESA.endereco||"")+(EMPRESA.fone?" · "+esc(EMPRESA.fone):"")+"</div>"+
     "</div>";
   if($("os_impTitulo"))$("os_impTitulo").textContent="Orçamento do serviço";
-  $("osForm").hidden=true;$("osImpressao").hidden=false;
+  $("osForm").hidden=true;$("osImpressao").hidden=false;aplicarImpressaoOS();
+}
+/* o que sai na impressão da OS: "tudo", "ficha" ou "canhoto" (pedido do Wagner, 21/09) */
+var osImpQue="tudo";
+function aplicarImpressaoOS(){
+  var f=$("os_folha"),q=$("os_impQue");if(!f)return;
+  var soCanhoto=!f.querySelector(".canhoto");   /* orçamento do serviço não tem canhoto */
+  if(q)q.hidden=soCanhoto;
+  if(soCanhoto)osImpQue="tudo";
+  f.classList.remove("so-ficha","so-canhoto");
+  if(osImpQue==="ficha")f.classList.add("so-ficha");
+  if(osImpQue==="canhoto")f.classList.add("so-canhoto");
+  if(q)Array.prototype.forEach.call(q.querySelectorAll("[data-imp]"),function(bt){
+    bt.setAttribute("aria-current",bt.getAttribute("data-imp")===osImpQue?"true":"false");});
 }
 function fichaOS(){
   var o=editandoOS;if(!o)return;
@@ -20078,7 +20100,7 @@ function fichaOS(){
         (EMPRESA.cnpj?" · CNPJ "+esc(EMPRESA.cnpj):"")+"<br>"+esc(EMPRESA.endereco||"")+
         (EMPRESA.fone?" · "+esc(EMPRESA.fone):"")+"</div>"+
     "</div>";
-  $("osForm").hidden=true;$("osImpressao").hidden=false;
+  $("osForm").hidden=true;$("osImpressao").hidden=false;aplicarImpressaoOS();
 }
 
 /* ---------- ORÇAMENTOS ---------- */
@@ -22628,19 +22650,37 @@ function enviarOrcWhatsApp(o,botao){
     msg:textoProposta(o),
     registrar:async function(){await registrarEnvio(o,"WhatsApp (PDF)");}},botao);
 }
-/* OS: a ficha do equipamento com o comprovante de entrega (fichaOS) vira o PDF */
+/* OS: o cliente recebe SÓ o comprovante de entrega (regra do Wagner, 21/09) — a ficha
+   do equipamento é interna, fica pregada no produto */
+function folhaComprovanteOS(){
+  var f=$("os_folha"),canhoto=f&&f.querySelector(".canhoto");
+  if(!canhoto)return f;
+  var tmp=document.createElement("div");
+  tmp.style.cssText="position:absolute;left:-10000px;top:0;width:820px;background:#fff";
+  var folha=document.createElement("div");
+  folha.className="folha-os";
+  folha.style.cssText="width:820px;background:#fff;box-shadow:none;margin:0";
+  folha.appendChild(canhoto.cloneNode(true));
+  tmp.appendChild(folha);document.body.appendChild(tmp);
+  folha.__tmp=tmp;
+  return folha;
+}
 function enviarOSWhatsApp(o,botao){
   if(!o)return;
   var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
   return enviarPdfWhatsApp({chave:"os:"+o.id,
-    gerar:function(){return pdfDoElemento($("os_folha"),nomeArquivoPdf("OS",o.numero,o.cliente),
-      {mode:["css"],before:".canhoto",avoid:[".peca"]});},
-    tel:o.tel||c.tel,cliente:o.cliente,titulo:"OS "+o.numero,oQue:"da OS "+o.numero,
-    msg:"Olá, "+primeiroNome(o.cliente)+"! Segue a sua ordem de serviço Nº "+o.numero+" da "+(EMPRESA.razao||"Minas Filtros")+
-      ". Guarde o comprovante: a retirada do equipamento é feita com ele. Qualquer dúvida, estamos à disposição.",
+    gerar:async function(){
+      var el=folhaComprovanteOS();
+      try{return await pdfDoElemento(el,nomeArquivoPdf("Comprovante-OS",o.numero,o.cliente),{mode:["css"]});}
+      finally{if(el&&el.__tmp&&el.__tmp.parentNode)el.__tmp.parentNode.removeChild(el.__tmp);}
+    },
+    tel:o.tel||c.tel,cliente:o.cliente,titulo:"Comprovante da OS "+o.numero,oQue:"do comprovante da OS "+o.numero,
+    msg:"Olá, "+primeiroNome(o.cliente)+"! Segue o comprovante de entrega da ordem de serviço Nº "+o.numero+" da "+
+      (EMPRESA.razao||"Minas Filtros")+". Guarde este comprovante: a retirada do equipamento é feita com ele. "+
+      "Qualquer dúvida, estamos à disposição.",
     registrar:async function(como){
       o.historico=o.historico||[];
-      o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"OS enviada ao cliente pelo WhatsApp ("+como+")"});
+      o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Comprovante de entrega enviado ao cliente pelo WhatsApp ("+como+")"});
       await grava("ordens",o);}},botao);
 }
 /* venda salva: janela com o envio pelo WhatsApp e o PDF */
@@ -24964,6 +25004,12 @@ function ligar(){
   $("osCancelar").onclick=function(){$("osForm").hidden=true;$("osLista").hidden=false;editandoOS=null;osOrigemAtiv=null;};
   $("osVoltarImp").onclick=function(){$("osImpressao").hidden=true;$("osForm").hidden=false;};
   $("osImprimir").onclick=function(){window.print();};
+  /* escolher o que sai na impressão: tudo, só a ficha ou só o comprovante (regra dele, 21/09) */
+  Array.prototype.forEach.call($("os_impQue").querySelectorAll("[data-imp]"),function(bt){
+    bt.onclick=function(){
+      osImpQue=bt.getAttribute("data-imp");
+      aplicarImpressaoOS();
+    };});
   /* OS nova ainda sem técnico agendado: primeiro abre a OS com a atividade do técnico */
   function osNovaSemAtiv(){
     if(editandoOS)return false;
