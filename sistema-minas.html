@@ -6034,7 +6034,24 @@ function centavos(v){
   var n=+v||0;
   return Math.ceil(Math.round(n*100000)/1000)/100;   /* tira o ruído do ponto flutuante antes de subir */
 }
+/* reparte o depreciado do pedido entre os itens SEM criar centavo (v201, defeito que ele pegou
+   na lista de Pedidos: "Depreciado R$ 2.800,01 · Base R$ 2.800,02"). Cada item leva a parte
+   inteira em centavos e a sobra fica com o item de maior peso — o mesmo critério das parcelas.
+   Antes cada parte era arredondada PARA CIMA (v163) e a soma passava do depreciado.
+   O arredondamento para cima continua no valor unitário, que é o que decide a tabela. */
+function repartirDep(dep,pesos){
+  var depC=Math.round((+dep||0)*100),partes=[],dado=0,maior=-1,i,q;
+  for(i=0;i<pesos.length;i++){
+    q=+pesos[i]||0;
+    var c=q>0?Math.floor(depC*q):0;
+    partes.push(c);dado+=c;
+    if(q>0&&(maior<0||q>(+pesos[maior]||0)))maior=i;
+  }
+  if(maior>=0)partes[maior]+=depC-dado;
+  return partes.map(function(c){return c/100;});
+}
 function faixa(v,p){
+
   var c=+p.cheia||0,ca=+p.campanha||0,m=+p.minimo||0;
   var campOn=(p.campativa==="sim");
   /* Tolerância de um centavo (v162, defeito que o Wagner pegou em 20/09): o preço calculado pela
@@ -8111,6 +8128,11 @@ function calcular(){
      proporcional à TABELA CHEIA, e aí o desconto dado num item derrubava a venda inteira para
      baixo da tabela; agora cada item deprecia pelo mesmo fator e o desconto fica onde foi dado. */
   var somaVend=itens.reduce(function(a,i){if(i.planoCobre)return a;return a+((+i.valor||0)*(i.qtd||1));},0);
+  var pesosDep=itens.map(function(i){
+    if(i.planoCobre)return 0;
+    return somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(itens.length?1/itens.length:0);
+  });
+  var partesDep=repartirDep(dep,pesosDep);
   var base=0,pontos=0,abaixo=false,tb=$("v_itens"),linhasFaixa=[];
   /* a tabela é redesenhada a cada conta: se o cursor está num valor de item, ele volta para lá */
   var focoVU=(document.activeElement&&document.activeElement.getAttribute&&document.activeElement.getAttribute("data-vu"));
@@ -8119,8 +8141,7 @@ function calcular(){
   itens.forEach(function(i,idx){
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
     var cobPl=!!i.planoCobre;
-    var q=cobPl?0:(somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(1/itens.length));
-    var depI=cobPl?0:centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=cobPl?{f:0,n:"plano",cls:"p-ok"}:faixa(unit,p);
+    var depI=cobPl?0:(partesDep[idx]||0),unit=centavos(depI/(i.qtd||1)),fx=cobPl?{f:0,n:"plano",cls:"p-ok"}:faixa(unit,p);
     if(!cobPl){base+=depI*fx.f;pontos+=(i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;}
     /* em que tabela este produto caiu — mostrado na Comissão ao vivo e refeito a cada mudança
        de valor, forma ou parcelas (regra dele, 20/09) */
@@ -20395,11 +20416,13 @@ function calcOrc(){
   var somaVend=orcItens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
   var tb=$("or_itens");tb.innerHTML="";
   if(!orcItens.length)tb.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Nenhum item</div>Escolha um produto acima e clique em Adicionar.</div></td></tr>';
+  var partesO=repartirDep(dep,orcItens.map(function(i){
+    return somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(orcItens.length?1/orcItens.length:0);
+  }));
   var base=0,pontos=0,abaixo=false;
   orcItens.forEach(function(i,idx){
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
-    var q=somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(orcItens.length?1/orcItens.length:0);
-    var depI=centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
+    var depI=(partesO[idx]||0),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
     base+=depI*fx.f;pontos+=(+i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;
     tb.innerHTML+='<tr><td><div class="t-main"><button class="lixo" type="button" data-orm="'+idx+'" title="Remover este item">&#128465;</button>'+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+
         "</code> · cheia "+BRL(+p.cheia||0)+"</div></td>"+
@@ -20877,12 +20900,16 @@ function recalcPedido(itens,formas,fatorAbaixo){
   });
   /* mesma repartição da tela: pelo VALOR VENDIDO de cada item (regra dele, 20/09) */
   var somaVend=itens.reduce(function(a,i){if(i.planoCobre)return a;return a+((+i.valor||0)*(i.qtd||1));},0);
+  var pesosP=itens.map(function(i){
+    if(i.planoCobre)return 0;
+    return somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(itens.length?1/itens.length:0);
+  });
+  var partesP=repartirDep(dep,pesosP);
   var base=0,pontos=0,abaixo=false,depAbaixo=0,linhas=[];
-  itens.forEach(function(i){
+  itens.forEach(function(i,ix){
     if(i.planoCobre)return;   /* coberto pelo plano: sem custo, fora da faixa e da comissão */
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
-    var q=somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(itens.length?1/itens.length:0);
-    var depI=centavos(dep*q),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
+    var depI=(partesP[ix]||0),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
     var f=(fx.f===0&&fatorAbaixo!=null)?+fatorAbaixo:fx.f;
     base+=depI*f;pontos+=(+i.pontos||0)*(i.qtd||1)*f;
     if(fx.f===0){abaixo=true;depAbaixo+=depI;}
