@@ -3744,10 +3744,12 @@ img{max-width:100%}
         <div class="toolbar">
           <input id="ogNome" placeholder="Ex.: Instagram, Indicação, Passagem em frente" style="max-width:300px">
           <button class="btn" type="button" id="ogAdd">Adicionar</button>
+          <!-- filtro por situação (pedido dele, 20/09) -->
+          <select id="ogFiltro" style="max-width:170px"><option value="">Todas</option><option value="ativas">Só ativas</option><option value="inativas">Só inativas</option></select>
           <span class="sp"></span><span class="count" id="ogCount"></span>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Origem</th><th class="num">Cadastros</th><th class="num">Viraram venda</th><th class="num">Conversão</th><th></th></tr></thead>
+          <thead><tr><th>Origem</th><th class="num">Cadastros</th><th class="num">Viraram venda</th><th class="num">Conversão</th><th>Situação</th><th></th></tr></thead>
           <tbody id="ogBody"></tbody>
         </table></div>
       </div>
@@ -5991,8 +5993,9 @@ var CO_LEAD=[["nome","Nome e sobrenome"],["sexo","Sexo"],["tel","Telefone"],["ci
 function opcoesOrigem(sel,valor){
   var s=$(sel);if(!s)return;
   s.innerHTML='<option value="">— escolha a origem —</option>'+
-    ORIGENS.map(function(x){return "<option>"+esc(x)+"</option>";}).join("")+
-    ((valor&&ORIGENS.indexOf(valor)<0)?"<option>"+esc(valor)+"</option>":"");
+    origensNomes(true).sort(ordAZ).map(function(x){return "<option>"+esc(x)+"</option>";}).join("")+
+    /* origem inativa some das novas, mas a que já está no cadastro continua aparecendo */
+    ((valor&&origensNomes(true).indexOf(valor)<0)?"<option>"+esc(valor)+"</option>":"");
   s.value=valor||"";
 }
 function opcoesTipoAt(sel){
@@ -10971,19 +10974,88 @@ function ligarGruposProd(){
       renderGruposProd();atualizarListasGrupoProd();
     };});
 }
+/* ---------- situação da origem (pedido dele, 20/09: "ter campo de ativo e inativo e filtro
+   para tal") ----------
+   A lista era de textos; virou [{nome,status}] sem quebrar nada: `nomeOrigem` e `origemAtiva`
+   entendem as duas formas, e `normalizarOrigens` converte o que estava gravado. Origem inativa
+   não aparece para escolher em cadastro novo, mas continua nos relatórios e no cadastro de quem
+   já veio por ela — origem é escolhida uma vez e fica (regra de 12/09). */
+function nomeOrigem(o){return (typeof o==="string")?o:String((o&&o.nome)||"");}
+function origemAtiva(o){return (typeof o==="string")?true:(!o||o.status!=="inativo");}
+function origensNomes(soAtivas){
+  return ORIGENS.filter(function(o){return !soAtivas||origemAtiva(o);}).map(nomeOrigem);
+}
+function origemPorNome(n){
+  return ORIGENS.filter(function(o){return ordAZ(nomeOrigem(o),n)===0;})[0]||null;
+}
+async function normalizarOrigens(){
+  var mudou=false;
+  ORIGENS=ORIGENS.map(function(o){
+    if(typeof o==="string"){mudou=true;return {nome:o,status:"ativo"};}
+    if(!o.status){mudou=true;o.status="ativo";}
+    return o;});
+  if(mudou)await gravarOrigens();
+}
 function renderOrigens(){
-  $("ogCount").textContent=ORIGENS.length+(ORIGENS.length===1?" origem":" origens");
+  var f=$("ogFiltro")?$("ogFiltro").value:"";
+  var ativas=ORIGENS.filter(origemAtiva).length;
+  $("ogCount").textContent=ORIGENS.length+(ORIGENS.length===1?" origem":" origens")+
+    " · "+ativas+" ativa"+(ativas===1?"":"s");
   var b=$("ogBody");b.innerHTML="";
-  ORIGENS.map(function(v,i){return {v:v,i:i};}).sort(function(a,b){return ordAZ(a.v&&a.v.nome||a.v,b.v&&b.v.nome||b.v);}).forEach(function(x){var o=x.v,i=x.i;
-    var cads=clientes.filter(function(c){return c.origem===o;});
+  ORIGENS.map(function(v,i){return {v:v,i:i};})
+    .filter(function(x){return !f||(f==="ativas"?origemAtiva(x.v):!origemAtiva(x.v));})
+    .sort(function(a,b2){return ordAZ(nomeOrigem(a.v),nomeOrigem(b2.v));})
+    .forEach(function(x){
+    var o=x.v,i=x.i,nm=nomeOrigem(o),at=origemAtiva(o);
+    var cads=clientes.filter(function(c){return c.origem===nm;});
     var venderam=cads.filter(function(c){return vendasDe(c.id).length>0;});
     var pct=cads.length?Math.round(venderam.length/cads.length*100):0;
-    b.innerHTML+="<tr><td><b>"+esc(o)+"</b></td>"+
+    b.innerHTML+='<tr'+(at?"":' style="opacity:.6"')+"><td><b>"+esc(nm)+"</b></td>"+
       '<td class="num">'+cads.length+'</td><td class="num">'+venderam.length+"</td>"+
       '<td class="num"><span class="pill '+(pct>=30?"p-ok":pct>=15?"p-acc":pct>0?"p-warn":"p-mut")+'">'+pct+"%</span></td>"+
-      '<td class="num">'+(cads.length?'<span class="pill p-mut">em uso</span>':
-        '<button class="btn mut sm" type="button" data-ogrm="'+i+'">Remover</button>')+"</td></tr>";
+      "<td>"+(at?'<span class="pill p-ok">Ativa</span>':'<span class="pill p-mut">Inativa</span>')+"</td>"+
+      '<td class="num"><button class="btn ghost sm" type="button" data-ogren="'+i+'">Renomear</button>'+
+      ' <button class="btn ghost sm" type="button" data-ogst="'+i+'">'+(at?"Inativar":"Ativar")+"</button>"+
+      (cads.length?' <span class="pill p-mut">em uso</span>':
+        ' <button class="btn mut sm" type="button" data-ogrm="'+i+'">Remover</button>')+"</td></tr>";
   });
+  if(!b.innerHTML)b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma origem nesta visão</div>Troque o filtro acima.</div></td></tr>';
+  /* renomear a origem (pedido dele, 20/09). A origem fica gravada como texto em cada cadastro,
+     então mudar o nome aqui muda em todos os clientes que vieram por ela — senão o histórico e
+     o Relatório de Origens ficariam apontando para um nome que não existe mais. */
+  Array.prototype.forEach.call(b.querySelectorAll("[data-ogren]"),function(bt){
+    bt.onclick=async function(){
+      var ix=+bt.getAttribute("data-ogren"),o=ORIGENS[ix];if(!o)return;
+      var velho=nomeOrigem(o);
+      var novo=prompt("Renomear a origem. Os cadastros que vieram por ela passam a usar o nome novo.",velho);
+      if(novo==null)return;novo=novo.trim();
+      if(!novo||novo===velho)return;
+      var outra=origemPorNome(novo);
+      if(outra&&outra!==o){toast("Já existe uma origem chamada "+novo+".");return;}
+      var alvo=clientes.filter(function(c){return c.origem===velho;});
+      if(alvo.length&&!confirm(alvo.length+" cadastro(s) vieram por "+velho+" e vão passar para "+novo+".\n\nConfirma?"))return;
+      if(typeof o==="string")ORIGENS[ix]=o={nome:velho,status:"ativo"};
+      o.nome=novo;
+      alvo.forEach(function(c){c.origem=novo;});
+      if(db&&alvo.length){
+        try{
+          if(db.gravarVarios)await db.gravarVarios("clientes",alvo,{bloco:100});
+          else for(var k=0;k<alvo.length;k++)await grava("clientes",alvo[k]);
+        }catch(e){console.warn("renomear origem",e);}
+      }
+      await gravarOrigens();
+      toast("Origem renomeada para "+novo+(alvo.length?" em "+alvo.length+" cadastro(s).":"."));
+      renderOrigens();montarSelects();try{renderClientes();}catch(e){}
+    };});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-ogst]"),function(bt){
+    bt.onclick=async function(){
+      var o=ORIGENS[+bt.getAttribute("data-ogst")];if(!o)return;
+      if(typeof o==="string")o=ORIGENS[+bt.getAttribute("data-ogst")]={nome:o,status:"ativo"};
+      o.status=origemAtiva(o)?"inativo":"ativo";
+      await gravarOrigens();
+      toast(nomeOrigem(o)+(o.status==="inativo"?" inativada: não aparece mais para escolher em cadastro novo.":" ativada."));
+      renderOrigens();montarSelects();
+    };});
   Array.prototype.forEach.call(b.querySelectorAll("[data-ogrm]"),function(bt){
     bt.onclick=async function(){ORIGENS.splice(+bt.getAttribute("data-ogrm"),1);
       await gravarOrigens();renderOrigens();montarSelects();};});
@@ -12558,8 +12630,8 @@ function opcoesRelatorios(){
   encher("rv_prod",produtos.filter(function(p){return p.grupo!=="Planos";}).slice()
     .sort(function(a,b){return String(a.nome).localeCompare(String(b.nome),"pt-BR");})
     .map(function(p){return {v:p.id,t:p.nome+" · "+p.cod};}),"Todos");
-  encher("rv_origem",ORIGENS.slice().sort(ordAZ),"Todas");
-  var ogs=ORIGENS.slice();if(clientes.some(function(c){return !String(c.origem||"").trim();}))ogs.push("Sem origem");
+  encher("rv_origem",origensNomes().sort(ordAZ),"Todas");
+  var ogs=origensNomes();if(clientes.some(function(c){return !String(c.origem||"").trim();}))ogs.push("Sem origem");
   encher("rg_origem",ogs,"Todas");
   encher("rg_cidade",Object.keys(cid).sort(function(a,b){return a.localeCompare(b,"pt-BR");}),"Todas");
   encher("rg_quem",EQUIPE.slice(),"Todos");encher("rg_vend",EQUIPE.slice(),"Todos");
@@ -12836,7 +12908,7 @@ function relOrigens(P){
   var grupos={};
   linhas.forEach(function(x){(grupos[x.origem]=grupos[x.origem]||[]).push(x);});
   /* toda origem cadastrada aparece no sintético, mesmo zerada — dá para ver a mídia que não trouxe ninguém */
-  if(modo==="sintetico"&&!cidade&&!quem&&!vend&&!tipo&&!sit)ORIGENS.forEach(function(o){if((!origem||o===origem)&&!grupos[o])grupos[o]=[];});
+  if(modo==="sintetico"&&!cidade&&!quem&&!vend&&!tipo&&!sit)origensNomes().forEach(function(o){if((!origem||o===origem)&&!grupos[o])grupos[o]=[];});
   var tot=soma(linhas);
   var ordem=Object.keys(grupos).sort(function(a,b){
     var sa=soma(grupos[a]),sb=soma(grupos[b]);return (sb.total-sa.total)||(sb.cad-sa.cad)||a.localeCompare(b,"pt-BR");});
@@ -21742,7 +21814,7 @@ function opcoesFunil(){
     EQUIPE.map(function(n){return "<option>"+esc(n)+"</option>";}).join("");
   sr.value=at||(ehGestor()?"":"__meus");
   var so=$("fuOrigem"),ao=so.value;
-  so.innerHTML='<option value="">Todas as origens</option>'+ORIGENS.concat(["Sem origem"]).map(function(o){return "<option>"+esc(o)+"</option>";}).join("");
+  so.innerHTML='<option value="">Todas as origens</option>'+origensNomes().sort(ordAZ).concat(["Sem origem"]).map(function(o){return "<option>"+esc(o)+"</option>";}).join("");
   so.value=ao;
 }
 function renderFunil(){
@@ -23954,10 +24026,11 @@ function ligar(){
   $("ogAdd").onclick=async function(){
     var n=$("ogNome").value.trim();
     if(!n){toast("Escreva a origem.");return;}
-    if(ORIGENS.indexOf(n)>=0){toast("Essa origem já existe.");return;}
-    ORIGENS.push(n);await gravarOrigens();$("ogNome").value="";
+    if(origemPorNome(n)){toast("Essa origem já existe.");return;}
+    ORIGENS.push({nome:n,status:"ativo"});await gravarOrigens();$("ogNome").value="";
     renderOrigens();montarSelects();toast("Origem adicionada.");};
   $("ogNome").onkeydown=function(e){if(e.key==="Enter")$("ogAdd").click();};
+  if($("ogFiltro"))$("ogFiltro").onchange=renderOrigens;
 
   $("fnBusca").oninput=renderFornec;
   $("fnNovo").onclick=function(){abrirFornec(null);};
@@ -25179,6 +25252,7 @@ async function continuarBoot(){
   try{await normalizarGruposProdutos();}catch(e){console.warn("grupos e subgrupos",e);}
   /* o cadastro de Grupos de Produtos recolhe o que já está escrito nos produtos (v180) */
   try{if(semearGruposCadastro())await gravarGruposProd();}catch(e){console.warn("cadastro de grupos",e);}
+  try{await normalizarOrigens();}catch(e){console.warn("situação das origens",e);}
   try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
   try{await normalizarLancamentos();}catch(e){console.warn("centro de custo dos lançamentos",e);}
   try{await lancarVagasDoMes();}catch(e){console.warn("vaga de estacionamento",e);}
