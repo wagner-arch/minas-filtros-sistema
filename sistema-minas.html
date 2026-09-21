@@ -2893,6 +2893,8 @@ img{max-width:100%}
         </div>
       </div>
       <div class="kpis" id="finKpis"></div>
+      <!-- Servico de Orcamento recebido na abertura da OS interna (regra do Wagner, 20/09) -->
+      <div id="finOrc" hidden></div>
       <div id="finFila"></div>
       <div class="card" style="margin-top:20px">
         <h2 style="margin:0 0 4px">Ainda não chegaram ao financeiro</h2>
@@ -10291,9 +10293,22 @@ var SEED_CENTROS=[
 ];
 var SEED_CAIXAS=[
   {nome:"Caixa da Loja",tipo:"dinheiro",padrao:"sim"},
+  {nome:"Caixa Financeiro",tipo:"dinheiro"},
   {nome:"Conta Corrente",tipo:"banco"},
   {nome:"Recebíveis de Cartão",tipo:"cartao"}
 ];
+/* Caixa Financeiro (regra do Wagner, 20/09): é nele que cai o dinheiro aprovado pelo financeiro,
+   como o Serviço de Orçamento recebido na abertura da OS interna */
+var CAIXA_FIN="Caixa Financeiro";
+async function garantirCaixaFinanceiro(){
+  var c=daLoja(caixas).filter(function(x){return chaveNomeCaixa(x.nome)===chaveNomeCaixa(CAIXA_FIN);})[0];
+  if(c)return c;
+  c={id:uid(),loja:lojaAtual,nome:CAIXA_FIN,tipo:"dinheiro",saldo:0,status:"ativo",
+    dataSaldo:hojeISO(),codigo:proximoCodigoCaixa(),criadoEm:hojeISO(),criadoPor:usuarioAtual,
+    obs:"Recebimentos aprovados pelo financeiro."};
+  caixas.push(c);await grava("caixas",c);
+  return c;
+}
 async function grava(colecao,obj){if(db){try{await col(colecao).doc(obj.id).set(obj);}catch(e){console.warn(colecao,e);}}}
 async function apaga(colecao,id){if(db){try{await col(colecao).doc(id).delete();}catch(e){console.warn(e);}}}
 async function gravarUsuarios(){if(!db)return;try{await db.doc("config/usuarios").set({lista:USUARIOS});}catch(e){console.warn(e);}}
@@ -17431,26 +17446,71 @@ async function cobrarOrcamentoOS(o){
   o.formasOS=o.formasOS||[];
   if(!o.formasOS.some(function(f){return f.tipo===FORMA_ORC;}))
     o.formasOS.push({tipo:FORMA_ORC,parc:1,valor:val,__auto:false});
-  var cx=daLoja(caixas).filter(function(c){return c.padrao==="sim";})[0]||daLoja(caixas)[0];
-  var m={id:uid(),loja:lojaAtual,caixaId:cx?cx.id:"",data:hojeISO(),hora:agoraHM(),tipo:"entrada",valor:val,
+  /* nasce só lançado: o dinheiro entra no Caixa Financeiro depois do "Recebido" do atendente
+     e da aprovação do financeiro (regra do Wagner, 20/09) */
+  o.orcamentoAdiantado={valor:val,status:"lancado",quando:hojeISO(),hora:agoraHM(),por:usuarioAtual,
+    atendente:o.atendente||usuarioAtual};
+  o.total=totalOS(o);
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,
+    texto:"Serviço de Orçamento lançado na abertura · "+BRL(val)+" a receber do cliente"});
+  return o.orcamentoAdiantado;
+}
+/* o atendente confirma que recebeu do cliente: vai para a fila da Aprovação Financeira */
+async function marcarOrcamentoRecebido(o){
+  var a=o&&o.orcamentoAdiantado;if(!a||a.status!=="lancado")return null;
+  a.status="recebido";a.recebidoEm=hojeISO();a.recebidoHora=agoraHM();a.recebidoPor=usuarioAtual;
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,
+    texto:"Serviço de Orçamento recebido do cliente · "+BRL(a.valor)+" · aguardando aprovação do financeiro"});
+  await grava("ordens",o);
+  return a;
+}
+/* o financeiro aprova: o dinheiro cai no Caixa Financeiro e o valor entra na comissão de quem
+   abriu a OS e recebeu (regra do Wagner, 20/09) */
+async function aprovarOrcamentoOS(o){
+  var a=o&&o.orcamentoAdiantado;if(!a||a.status!=="recebido")return null;
+  var cx=await garantirCaixaFinanceiro();
+  var m={id:uid(),loja:lojaAtual,caixaId:cx.id,data:hojeISO(),hora:agoraHM(),tipo:"entrada",valor:a.valor,
     descricao:"Serviço de Orçamento · OS "+o.numero+(o.cliente?" · "+o.cliente:""),
     centroId:await centroFixo("Serviço e instalação","Receitas","entrada"),
     origem:"os",osId:o.id,orcamentoOS:true,por:usuarioAtual};
   movs.push(m);await grava("movs",m);
-  o.orcamentoAdiantado={valor:val,quando:hojeISO(),hora:agoraHM(),por:usuarioAtual,
-    movId:m.id,caixaId:m.caixaId,caixa:cx?cx.nome:""};
-  o.total=totalOS(o);
+  /* entra na comissão de quem recebeu, no mês da aprovação */
+  var quem=a.recebidoPor||a.atendente||o.atendente||"";
+  var aj=null;
+  if(quem){
+    aj={id:uid(),loja:lojaAtual,comp:compAtual(),colaborador:quem,papel:"Atendente",
+      valor:a.valor,pontos:0,pedido:"OS "+o.numero,osId:o.id,
+      motivo:"Serviço de Orçamento da OS "+o.numero+" recebido do cliente",
+      quando:hojeISO(),por:usuarioAtual};
+    ajustes.push(aj);await grava("ajustes",aj);
+  }
+  a.status="aprovado";a.aprovadoEm=hojeISO();a.aprovadoHora=agoraHM();a.aprovadoPor=usuarioAtual;
+  a.movId=m.id;a.caixaId=cx.id;a.caixa=cx.nome;a.ajusteId=aj?aj.id:"";a.comissaoDe=quem;
   o.historico=o.historico||[];
   o.historico.push({quando:hojeISO(),por:usuarioAtual,
-    texto:"Serviço de Orçamento cobrado na abertura · "+BRL(val)+" recebido por "+usuarioAtual+
-      (cx?" no caixa "+cx.nome:"")});
-  return o.orcamentoAdiantado;
+    texto:"Serviço de Orçamento aprovado pelo financeiro · "+BRL(a.valor)+" no "+cx.nome+
+      (quem?" · comissão de "+quem:"")});
+  await grava("ordens",o);
+  return a;
+}
+/* OS internas com o orçamento esperando o recebimento ou a aprovação */
+function orcamentosOSPendentes(st){
+  return ordens.filter(function(o){
+    return o.loja===lojaAtual&&o.orcamentoAdiantado&&o.orcamentoAdiantado.status===st;});
 }
 /* linha do adiantamento, usada na ficha, no comprovante de entrega e no pedido da OS */
 function textoAdiantOrcamento(o){
   var a=o&&o.orcamentoAdiantado;if(!a)return "";
-  return "Já adiantado "+BRL(a.valor)+" do orçamento, recebido em "+dataBR(a.quando)+
-    (a.hora?" às "+a.hora:"")+(a.por?" por "+a.por:"")+".";
+  if(a.status==="lancado")
+    return "Serviço de Orçamento de "+BRL(a.valor)+" lançado na abertura, a receber do cliente.";
+  var t="Já adiantado "+BRL(a.valor)+" do orçamento, recebido em "+dataBR(a.recebidoEm||a.quando)+
+    (a.recebidoHora||a.hora?" às "+(a.recebidoHora||a.hora):"")+(a.recebidoPor||a.por?" por "+(a.recebidoPor||a.por):"")+".";
+  if(a.status==="recebido")t+=" Aguardando a aprovação do financeiro.";
+  if(a.status==="aprovado")t+=" Aprovado no financeiro em "+dataBR(a.aprovadoEm)+
+    (a.caixa?" · "+a.caixa:"")+".";
+  return t;
 }
 /* contato feito e o cliente ficou de pensar ou de passar na loja: OS parada aguardando o retorno dele */
 function notaRetornoOS(o){
@@ -17749,9 +17809,20 @@ function renderPedOS(){
           '</td><td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td></tr>";}).join("")+
         '<tr><td colspan="2"><b>Total</b></td><td class="num"><b>'+BRL(total)+"</b></td></tr></tbody></table></div>"
     : '<p class="help">Nenhuma peça ou serviço incluído ainda. O técnico inclui na mesma tela do Novo Pedido.</p>';
-  if(o.orcamentoAdiantado)
-    tabela='<div class="note ok"><b>Serviço de Orçamento já recebido:</b> '+esc(textoAdiantOrcamento(o))+
-      " O valor já está lançado na OS como <b>"+esc(FORMA_ORC)+"</b> e não gera cobrança de novo.</div>"+tabela;
+  if(o.orcamentoAdiantado){
+    var ao=o.orcamentoAdiantado;
+    var cls=ao.status==="lancado"?"warn":"ok";
+    tabela='<div class="note '+cls+'" id="os_orcNota"><b>Serviço de Orçamento · '+BRL(ao.valor)+"</b> — "+
+      esc(textoAdiantOrcamento(o))+
+      " O valor já está na OS como <b>"+esc(FORMA_ORC)+"</b> e não é cobrado de novo no pedido."+
+      (ao.status==="lancado"
+        ? '<div style="margin-top:8px"><button class="btn sm" type="button" id="osOrcRecebido">Recebido do cliente</button></div>'
+        : "")+
+      (ao.status==="recebido"
+        ? '<div style="margin-top:8px"><button class="btn ghost sm" type="button" id="osOrcFin">Ver na Aprovação Financeira</button></div>'
+        : "")+
+      "</div>"+tabela;
+  }
   var estado=ped
     ? '<div class="note ok"><b>Pedido '+ped.numero+" lançado</b> · "+esc(ped.status||"")+(formasTexto(fs)?" · "+esc(formasTexto(fs)):"")+"</div>"
     : (lista.length?'<div class="note"><b>Salvo na OS sem finalizar</b>'+(o.pecasServicosPor?" por "+esc(o.pecasServicosPor)+" em "+esc(dataCurta(o.pecasServicosEm||"")):"")+
@@ -17792,6 +17863,15 @@ function renderPedOS(){
   }
   if(instPend&&!fechada)bt+='<button class="btn ghost" type="button" id="osAbrirInst">Abrir a instalação</button>';
   w.innerHTML=tabela+estado+contato+notaRetornoOS(o)+notaServicoOS(o)+final+(bt?'<div class="actions" style="justify-content:flex-start">'+bt+"</div>":"");
+  if($("osOrcRecebido"))$("osOrcRecebido").onclick=async function(){
+    this.disabled=true;
+    var a=await marcarOrcamentoRecebido(o);
+    if(!a){this.disabled=false;return;}
+    renderPedOS();render();
+    toast(BRL(a.valor)+" do Serviço de Orçamento marcado como recebido. Está na fila da Aprovação Financeira.");
+    ir("fin");
+  };
+  if($("osOrcFin"))$("osOrcFin").onclick=function(){ir("fin");};
   if($("osPecasPed"))$("osPecasPed").onclick=function(){abrirPedidoDaOS(o,"tecnico");};
   if($("osAtivRealizada"))$("osAtivRealizada").onclick=atividadeRealizadaOS;
   if($("osAutorizar"))$("osAutorizar").onclick=function(){abrirAtivServicoOS(o);};
@@ -19526,8 +19606,8 @@ async function salvarOS(){
   try{adi=await cobrarOrcamentoOS(o);}catch(e){console.warn(e);}
   if(adi){
     await grava("ordens",o);
-    toast("Serviço de Orçamento de "+BRL(adi.valor)+" lançado na OS "+o.numero+" e recebido no caixa"+
-      (adi.caixa?" "+adi.caixa:"")+". Receba do cliente agora.");
+    toast("Serviço de Orçamento de "+BRL(adi.valor)+" lançado na OS "+o.numero+
+      ". Receba do cliente e toque em \"Recebido\" para mandar ao financeiro.");
   }
   if(novo&&osOrigemAtiv)await registrarAcaoAtiv(osOrigemAtiv,"os",o.id,o.numero,"OS "+o.numero+" aberta");
   editandoOS=o;osOrigemAtiv=null;
@@ -22701,6 +22781,57 @@ function renderFin(){
   var podeAprovar=pode("aprovarFinanceiro");
   var cxs=daLoja(caixas).filter(function(c){return (c.status||"ativo")==="ativo";});
   var cxPadrao=(cxs.filter(function(c){return c.padrao==="sim";})[0]||cxs[0]||{}).id||"";
+  /* Serviço de Orçamento recebido na abertura da OS interna, esperando a aprovação (regra dele, 20/09) */
+  var orcs=orcamentosOSPendentes("recebido").filter(function(o){
+    return !q||(String(o.numero)+" "+(o.cliente||"")).toLowerCase().indexOf(q)>=0;})
+    .sort(function(a,b){return String(a.orcamentoAdiantado.recebidoEm||"").localeCompare(String(b.orcamentoAdiantado.recebidoEm||""))||a.numero-b.numero;});
+  var cardOrc=$("finOrc");
+  if(cardOrc){
+    cardOrc.hidden=!orcs.length;
+    cardOrc.innerHTML=orcs.length
+      ? '<div class="card"><div style="display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin-bottom:6px">'+
+          '<h2 style="margin:0">Serviço de Orçamento recebido</h2>'+
+          '<span class="pill p-warn" style="margin-left:auto">'+orcs.length+(orcs.length===1?" recebimento":" recebimentos")+" · "+
+            BRL(orcs.reduce(function(s,o){return s+(+o.orcamentoAdiantado.valor||0);},0))+"</span></div>"+
+          '<p class="help">Aprovado, o dinheiro entra no <b>'+esc(CAIXA_FIN)+
+            "</b> e o valor entra na comissão de quem abriu a OS e recebeu do cliente.</p>"+
+          orcs.map(function(o){
+            var a=o.orcamentoAdiantado;
+            return '<div style="border-top:1px solid var(--line);padding:12px 0">'+
+              '<div style="display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline">'+
+                "<b>OS "+esc(o.numero)+'</b><span class="t-sub">'+esc(o.cliente||"—")+"</span>"+
+                '<span style="margin-left:auto"><b>'+BRL(a.valor)+"</b></span></div>"+
+              '<div class="t-sub" style="margin:4px 0 8px">Recebido por <b>'+esc(a.recebidoPor||"—")+"</b> em "+
+                esc(dataBR(a.recebidoEm||""))+(a.recebidoHora?" às "+esc(a.recebidoHora):"")+
+                " · aberta por "+esc(a.atendente||o.atendente||"—")+"</div>"+
+              (podeAprovar
+                ? '<button class="btn sm" type="button" data-finorc="'+o.id+'">Aprovar recebimento</button>'+
+                  '<button class="btn ghost sm" type="button" data-finorcos="'+o.id+'">Abrir a OS</button>'
+                : '<span class="t-sub">Aguardando o financeiro aprovar.</span>')+
+            "</div>";}).join("")+
+        "</div>"
+      : "";
+    Array.prototype.forEach.call(cardOrc.querySelectorAll("[data-finorc]"),function(bt){
+      bt.onclick=async function(){
+        var o=ordens.filter(function(x){return x.id===bt.getAttribute("data-finorc");})[0];if(!o)return;
+        var a=o.orcamentoAdiantado||{};
+        if(!confirm("Aprovar o recebimento de "+BRL(a.valor)+" da OS "+o.numero+"?\n\n"+
+          "• entra no "+CAIXA_FIN+"\n• entra na comissão de "+(a.recebidoPor||a.atendente||"—")+
+          " em "+rotuloComp(compAtual())))return;
+        bt.disabled=true;
+        var r=await aprovarOrcamentoOS(o);
+        if(r)toast(BRL(r.valor)+" da OS "+o.numero+" aprovado: entrou no "+r.caixa+
+          (r.comissaoDe?" e na comissão de "+r.comissaoDe:"")+".");
+        /* o dinheiro entrou agora: as telas do financeiro precisam ser refeitas */
+        try{renderCaixasMov();renderCadCaixas();renderFluxo();}catch(erf){console.warn(erf);}
+        render();
+      };});
+    Array.prototype.forEach.call(cardOrc.querySelectorAll("[data-finorcos]"),function(bt){
+      bt.onclick=function(){
+        var o=ordens.filter(function(x){return x.id===bt.getAttribute("data-finorcos");})[0];
+        if(o){ir("os");abrirOS(o);}
+      };});
+  }
   if(!visivel.length){
     tela.innerHTML='<div class="card"><div class="empty"><div class="big">Nada para aprovar</div>'+
       (fila.length?"Nenhuma venda neste filtro.":"Quando uma venda for finalizada sem instalação, ou tiver a instalação concluída, ela aparece aqui.")+
