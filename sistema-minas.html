@@ -346,6 +346,17 @@
   .fx-v{font-size:13px;color:var(--ink-2);margin-top:4px;display:flex;flex-wrap:wrap;align-items:center;gap:4px}
   .fx-pct{font-size:12px;color:var(--ink-3)}
   .fx-s{font-size:12px;color:var(--ink-3);margin-top:3px}
+  /* Configurações › Grupos de Produtos (20/09) */
+  .gp-g{border:1px solid var(--linha);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+  .gp-cab{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  .gp-subs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+  .gp-s{display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--linha);
+    border-radius:999px;padding:5px 8px 5px 12px;font-size:13px}
+  .gp-s .gp-n{background:var(--linha);border-radius:999px;padding:1px 7px;font-size:11.5px;color:var(--ink-2)}
+  .gp-s button{background:none;border:0;cursor:pointer;color:var(--ink-3);font-size:13px;padding:2px 3px}
+  .gp-s button:hover{color:var(--crit)}
+  .gp-add{display:flex;gap:8px;flex-wrap:wrap}
+  .gp-add input{flex:1 1 220px}
   /* valor da parcela, embaixo de cada forma de pagamento (20/09) */
   .pg-parc{grid-column:1/-1;margin-top:-4px;font-size:13.5px;color:var(--ink-2)}
   .pg-parc b{color:var(--accent)}
@@ -1133,6 +1144,7 @@ img{max-width:100%}
     <button data-s="cadcaixas">Cadastro de Caixas</button>
     <button data-s="pgto">Formas de Pagamento</button>
     <button data-s="centros">Centros de Custo</button>
+    <button data-s="grupos">Grupos de Produtos</button>
     <button data-s="origens">Origens</button>
     <button data-s="tipos">Tipos de Atendimento</button>
     <button data-s="motivos">Motivos de Finalização</button>
@@ -3715,6 +3727,23 @@ img{max-width:100%}
       </div>
     </section>
 
+    <!-- Cadastro de Grupos e Subgrupos de produtos (pedido do Wagner, 20/09): é daqui que saem
+         os campos Grupo e Subgrupo da ficha do produto -->
+    <section class="screen" id="s-grupos" hidden>
+      <div class="page-head"><h1>Grupos e Subgrupos de Produtos</h1><p>O que é cadastrado aqui é o que aparece nos campos <b>Grupo</b> e <b>Subgrupo</b> da ficha do produto. Renomear aqui renomeia em todos os produtos; excluir só é possível quando nenhum produto usa.</p></div>
+      <div class="card flush">
+        <div class="toolbar">
+          <input id="gpNome" placeholder="Nome do grupo. Ex.: Purificadores" style="max-width:280px">
+          <button class="btn" type="button" id="gpAdd">Adicionar grupo</button>
+          <span class="sp"></span>
+          <input id="gpBusca" type="search" placeholder="Buscar grupo ou subgrupo" style="max-width:240px">
+          <span class="count" id="gpCount"></span>
+        </div>
+        <div id="gpAlerta"></div>
+        <div id="gpLista" style="padding:0 28px 22px"></div>
+      </div>
+    </section>
+
     <!-- ===== GESTÃO ADMINISTRATIVA ===== -->
     <section class="screen" id="s-fornec" hidden>
       <div class="page-head"><h1>Cadastro de Fornecedores</h1><p>Quem vende para a empresa. Amarra a entrada de nota, a conta a pagar e o custo do produto.</p></div>
@@ -5740,6 +5769,8 @@ async function carregar(){
     else{await gravarUsuarios();}
     await mesclarPerfisBanco();
     sincronizarEquipe();
+    var gpx=await db.doc("config/grupos_produtos").get();
+    if(gpx.exists&&gpx.data()&&gpx.data().lista)GRUPOS_PROD=gpx.data().lista;
     var og=await db.doc("config/origens").get();
     if(og.exists&&og.data()&&og.data().lista&&og.data().lista.length){ORIGENS=og.data().lista;}
     else{await gravarOrigens();}
@@ -9347,13 +9378,57 @@ async function normalizarGruposProdutos(){
   }
   return mudou;
 }
+/* ================= CADASTRO DE GRUPOS E SUBGRUPOS DE PRODUTOS (v180, 20/09) =================
+   Pedido dele: "dentro de configurações preciso ter Cadastro de Grupo e Sub-Grupos de Produtos,
+   onde os campos são vinculados com os campos de grupo e sub-grupos dos produtos."
+   Guardado em `config/grupos_produtos` como [{nome, subgrupos:[nomes]}]. A ficha do produto lê
+   daqui (datalists), e o que já estava escrito nos 604 produtos importados é recolhido para cá
+   por `semearGruposCadastro()` — ninguém perde classificação por causa do cadastro novo. */
+var GRUPOS_PROD=[];
+function grupoCad(nome){
+  var n=String(nome||"").trim();
+  return GRUPOS_PROD.filter(function(g){return ordAZ(g.nome,n)===0;})[0]||null;
+}
+function nomesGruposCad(){return GRUPOS_PROD.map(function(g){return g.nome;}).sort(ordAZ);}
+function subgruposCad(nome){
+  var g=grupoCad(nome);
+  return g?(g.subgrupos||[]).slice().sort(ordAZ):[];
+}
+/* quantos produtos usam o grupo (e, se informado, o subgrupo) */
+function usoGrupoProd(grupo,sub){
+  return produtos.filter(function(p){
+    if(ordAZ(p.grupo,grupo)!==0)return false;
+    return sub==null?true:(ordAZ(p.subgrupo,sub)===0);}).length;
+}
+/* recolhe para o cadastro tudo que já está escrito nos produtos */
+function semearGruposCadastro(){
+  var mudou=false;
+  produtos.forEach(function(p){
+    var gn=String(p.grupo||"").trim();if(!gn)return;
+    var g=grupoCad(gn);
+    if(!g){g={nome:gn,subgrupos:[]};GRUPOS_PROD.push(g);mudou=true;}
+    var sn=String(p.subgrupo||"").trim();if(!sn)return;
+    if(!(g.subgrupos||[]).some(function(s){return ordAZ(s,sn)===0;})){
+      g.subgrupos=(g.subgrupos||[]).concat([sn]);mudou=true;}
+  });
+  return mudou;
+}
+async function gravarGruposProd(){
+  if(!db)return;
+  try{await db.doc("config/grupos_produtos").set({lista:GRUPOS_PROD});}catch(e){console.warn(e);}
+}
 function atualizarListasGrupoProd(){
   var dg=$("dlGrupos"),ds=$("dlSubgrupos");if(!dg||!ds)return;
-  dg.innerHTML=listaGruposProd().map(function(g){return '<option value="'+esc(g)+'">';}).join("");
+  /* o cadastro manda; o que só existe nos produtos entra junto para nada sumir da ficha */
+  var gs=nomesGruposCad();
+  listaGruposProd().forEach(function(g){if(gs.indexOf(g)<0)gs.push(g);});
+  dg.innerHTML=gs.sort(ordAZ).map(function(g){return '<option value="'+esc(g)+'">';}).join("");
   var g=$("p_grupo")?$("p_grupo").value.trim():"";
-  var subs=subgruposDeProdutos(g);
-  if(!subs.length)subs=subgruposDeProdutos("");
-  ds.innerHTML=subs.map(function(s){return '<option value="'+esc(s)+'">';}).join("");
+  var subs=subgruposCad(g);
+  subgruposDeProdutos(g).forEach(function(s){if(subs.indexOf(s)<0)subs.push(s);});
+  if(!subs.length){subs=subgruposDeProdutos("");GRUPOS_PROD.forEach(function(x){
+    (x.subgrupos||[]).forEach(function(s){if(subs.indexOf(s)<0)subs.push(s);});});}
+  ds.innerHTML=subs.sort(ordAZ).map(function(s){return '<option value="'+esc(s)+'">';}).join("");
 }
 function gruposDeProdutos(){
   var cont={};
@@ -10700,6 +10775,115 @@ function renderCentros(){
 }
 
 /* ---------- ORIGENS ---------- */
+/* ---------- tela Configurações › Grupos de Produtos (v180) ---------- */
+function renderGruposProd(){
+  var w=$("gpLista");if(!w)return;
+  var q=semAcento(($("gpBusca")?$("gpBusca").value:"")||"").toLowerCase();
+  var lista=GRUPOS_PROD.slice().sort(function(a,b){return ordAZ(a.nome,b.nome);})
+    .filter(function(g){
+      if(!q)return true;
+      if(semAcento(g.nome).toLowerCase().indexOf(q)>=0)return true;
+      return (g.subgrupos||[]).some(function(s){return semAcento(s).toLowerCase().indexOf(q)>=0;});
+    });
+  var nSub=GRUPOS_PROD.reduce(function(a,g){return a+((g.subgrupos||[]).length);},0);
+  $("gpCount").textContent=GRUPOS_PROD.length+(GRUPOS_PROD.length===1?" grupo":" grupos")+" · "+
+    nSub+(nSub===1?" subgrupo":" subgrupos");
+  if(!lista.length){
+    w.innerHTML='<div class="empty"><div class="big">'+(q?"Nada com esse nome":"Nenhum grupo cadastrado")+"</div>"+
+      (q?"Limpe a busca para ver todos.":"Escreva o nome do grupo acima e clique em Adicionar grupo.")+"</div>";
+    return;
+  }
+  w.innerHTML=lista.map(function(g){
+    var usoG=usoGrupoProd(g.nome);
+    var subs=(g.subgrupos||[]).slice().sort(ordAZ);
+    return '<div class="gp-g">'+
+      '<div class="gp-cab"><b>'+esc(g.nome)+"</b>"+
+        '<span class="pill '+(usoG?"p-acc":"p-mut")+'">'+usoG+(usoG===1?" produto":" produtos")+"</span>"+
+        '<span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">'+
+          '<button class="btn ghost sm" type="button" data-gpren="'+esc(g.nome)+'">Renomear</button>'+
+          '<button class="btn mut sm" type="button" data-gpdel="'+esc(g.nome)+'">Excluir</button>'+
+        "</span></div>"+
+      '<div class="gp-subs">'+
+        (subs.length?subs.map(function(s){
+          var u=usoGrupoProd(g.nome,s);
+          return '<span class="gp-s">'+esc(s)+'<span class="gp-n">'+u+"</span>"+
+            '<button type="button" title="Renomear subgrupo" data-gpsren="'+esc(g.nome)+"|"+esc(s)+'">✎</button>'+
+            '<button type="button" title="Excluir subgrupo" data-gpsdel="'+esc(g.nome)+"|"+esc(s)+'">&#128465;</button></span>';
+        }).join(""):'<span class="help" style="margin:0">Sem subgrupo ainda.</span>')+
+      "</div>"+
+      '<div class="gp-add"><input placeholder="Novo subgrupo de '+esc(g.nome)+'" data-gpsn="'+esc(g.nome)+'">'+
+        '<button class="btn ghost sm" type="button" data-gpsadd="'+esc(g.nome)+'">Adicionar subgrupo</button></div>'+
+    "</div>";
+  }).join("");
+  ligarGruposProd();
+}
+function ligarGruposProd(){
+  var w=$("gpLista");
+  function av(t,cls){$("gpAlerta").innerHTML=t?'<div class="note '+(cls||"")+'">'+t+"</div>":"";}
+  Array.prototype.forEach.call(w.querySelectorAll("[data-gpsadd]"),function(b){
+    b.onclick=async function(){
+      var gn=b.getAttribute("data-gpsadd"),inp=w.querySelector('[data-gpsn="'+gn.replace(/"/g,'\\"')+'"]');
+      var s=inp?inp.value.trim():"";
+      if(!s){av("<b>Escreva o nome do subgrupo.</b>","warn");if(inp)inp.focus();return;}
+      var g=grupoCad(gn);if(!g)return;
+      if((g.subgrupos||[]).some(function(x){return ordAZ(x,s)===0;})){av("<b>"+esc(s)+"</b> já existe em "+esc(gn)+".","warn");return;}
+      g.subgrupos=(g.subgrupos||[]).concat([s]);
+      await gravarGruposProd();av("Subgrupo <b>"+esc(s)+"</b> criado em "+esc(gn)+".","ok");
+      renderGruposProd();atualizarListasGrupoProd();
+    };});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-gpren]"),function(b){
+    b.onclick=async function(){
+      var gn=b.getAttribute("data-gpren"),g=grupoCad(gn);if(!g)return;
+      var novo=prompt("Renomear o grupo. Os produtos deste grupo passam a usar o nome novo.",gn);
+      if(novo==null)return;novo=novo.trim();
+      if(!novo||ordAZ(novo,gn)===0)return;
+      if(grupoCad(novo)){av("Já existe um grupo chamado <b>"+esc(novo)+"</b>.","warn");return;}
+      var n=usoGrupoProd(gn);
+      if(n&&!confirm(n+" produto(s) estão em "+gn+" e vão passar para "+novo+".\n\nConfirma?"))return;
+      g.nome=novo;
+      for(var i=0;i<produtos.length;i++){
+        if(ordAZ(produtos[i].grupo,gn)===0){produtos[i].grupo=novo;if(db)await grava("produtos",produtos[i]);}
+      }
+      await gravarGruposProd();av("Grupo renomeado para <b>"+esc(novo)+"</b>"+(n?" em "+n+" produto(s)":"")+".","ok");
+      renderGruposProd();atualizarListasGrupoProd();try{renderProdutos();}catch(e){}
+    };});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-gpsren]"),function(b){
+    b.onclick=async function(){
+      var p=b.getAttribute("data-gpsren").split("|"),gn=p[0],sn=p[1],g=grupoCad(gn);if(!g)return;
+      var novo=prompt("Renomear o subgrupo de "+gn+".",sn);
+      if(novo==null)return;novo=novo.trim();
+      if(!novo||ordAZ(novo,sn)===0)return;
+      if((g.subgrupos||[]).some(function(x){return ordAZ(x,novo)===0;})){av("<b>"+esc(novo)+"</b> já existe em "+esc(gn)+".","warn");return;}
+      var n=usoGrupoProd(gn,sn);
+      if(n&&!confirm(n+" produto(s) estão em "+sn+" e vão passar para "+novo+".\n\nConfirma?"))return;
+      g.subgrupos=(g.subgrupos||[]).map(function(x){return ordAZ(x,sn)===0?novo:x;});
+      for(var i=0;i<produtos.length;i++){
+        if(ordAZ(produtos[i].grupo,gn)===0&&ordAZ(produtos[i].subgrupo,sn)===0){
+          produtos[i].subgrupo=novo;if(db)await grava("produtos",produtos[i]);}
+      }
+      await gravarGruposProd();av("Subgrupo renomeado para <b>"+esc(novo)+"</b>"+(n?" em "+n+" produto(s)":"")+".","ok");
+      renderGruposProd();atualizarListasGrupoProd();try{renderProdutos();}catch(e){}
+    };});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-gpdel]"),function(b){
+    b.onclick=async function(){
+      var gn=b.getAttribute("data-gpdel"),n=usoGrupoProd(gn);
+      if(n){av("<b>"+esc(gn)+"</b> não pode ser excluído: "+n+" produto(s) estão nele. Troque o grupo desses produtos primeiro, ou renomeie este.","crit");return;}
+      if(!confirm("Excluir o grupo "+gn+"?"))return;
+      GRUPOS_PROD=GRUPOS_PROD.filter(function(g){return ordAZ(g.nome,gn)!==0;});
+      await gravarGruposProd();av("Grupo <b>"+esc(gn)+"</b> excluído.","ok");
+      renderGruposProd();atualizarListasGrupoProd();
+    };});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-gpsdel]"),function(b){
+    b.onclick=async function(){
+      var p=b.getAttribute("data-gpsdel").split("|"),gn=p[0],sn=p[1],n=usoGrupoProd(gn,sn);
+      if(n){av("<b>"+esc(sn)+"</b> não pode ser excluído: "+n+" produto(s) estão nele.","crit");return;}
+      if(!confirm("Excluir o subgrupo "+sn+" de "+gn+"?"))return;
+      var g=grupoCad(gn);if(!g)return;
+      g.subgrupos=(g.subgrupos||[]).filter(function(x){return ordAZ(x,sn)!==0;});
+      await gravarGruposProd();av("Subgrupo <b>"+esc(sn)+"</b> excluído.","ok");
+      renderGruposProd();atualizarListasGrupoProd();
+    };});
+}
 function renderOrigens(){
   $("ogCount").textContent=ORIGENS.length+(ORIGENS.length===1?" origem":" origens");
   var b=$("ogBody");b.innerHTML="";
@@ -14147,6 +14331,8 @@ async function gerarDemo(){
     await grava("produtos",demoProds[pi]);
   }
   try{await normalizarGruposProdutos();}catch(eG){console.warn(eG);}
+  /* os grupos dos produtos de demonstração entram no cadastro de Grupos (v180) */
+  try{if(semearGruposCadastro())await gravarGruposProd();}catch(eG2){console.warn(eG2);}
   opcoesProduto();
   log.push("6 produtos de teste: com série, com campanha ativa, abaixo do mínimo, zerado, inativo, brinde de R$ 0,00 e material de consumo");
 
@@ -22603,7 +22789,7 @@ var GRUPOS_TELA=[
     ["notas","Entrada de Notas"],["receber","Contas a Receber"],["pagar","Contas a Pagar"],["concil","Conciliação"],
     ["fatur","Remunerações"],["fluxo","Fluxo de Caixa"],["relat","Relatórios"],["veiculos","Veículos"],["fin","Aprovação Financeira"]]},
   {g:"Configurações",telas:[["funcoes","Funções"],["permissoes","Permissões"],["usuarios","Usuários"],["cadcaixas","Cadastro de Caixas"],
-    ["pgto","Formas de Pagamento"],["centros","Centros de Custo"],["origens","Origens"],["tipos","Tipos de Atendimento"],
+    ["pgto","Formas de Pagamento"],["centros","Centros de Custo"],["grupos","Grupos de Produtos"],["origens","Origens"],["tipos","Tipos de Atendimento"],
     ["motivos","Motivos de Finalização"],["planos","Planos de Garantia"],["beneficios","Benefícios"],["cfgmetas","Configurações de Meta"],["metas","Metas e Comissões"],["empresa","Dados da Empresa"]]}
 ];
 var ACOES=[
@@ -23145,7 +23331,7 @@ function render(){
   try{avisarDescontos();}catch(e){console.warn(e);}
   try{avisarPosseVeiculo();}catch(e){console.warn(e);}
   try{renderFin();}catch(e){console.warn("aprovação financeira",e);}
-  try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();try{renderPadroes();}catch(e){}renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
+  try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();try{renderPadroes();}catch(e){}try{renderGruposProd();}catch(e){}renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
   try{notaCreditoPlano();}catch(e){}
   opcoesClienteVenda();
   calcular();
@@ -23664,6 +23850,20 @@ function ligar(){
     renderPadroes();toast("Padrão "+nome+" adicionado.");};
   $("ccNome").onkeydown=function(e){if(e.key==="Enter")$("ccAdd").click();};
 
+  /* Configurações › Grupos de Produtos (v180) */
+  if($("gpAdd")){
+    $("gpAdd").onclick=async function(){
+      var n=$("gpNome").value.trim();
+      if(!n){$("gpAlerta").innerHTML='<div class="note warn"><b>Escreva o nome do grupo.</b></div>';$("gpNome").focus();return;}
+      if(grupoCad(n)){$("gpAlerta").innerHTML='<div class="note warn"><b>'+esc(n)+"</b> já existe.</div>";return;}
+      GRUPOS_PROD.push({nome:n,subgrupos:[]});
+      await gravarGruposProd();$("gpNome").value="";
+      $("gpAlerta").innerHTML='<div class="note ok">Grupo <b>'+esc(n)+"</b> criado. Agora acrescente os subgrupos dele.</div>";
+      renderGruposProd();atualizarListasGrupoProd();
+    };
+    $("gpNome").onkeydown=function(e){if(e.key==="Enter")$("gpAdd").click();};
+    $("gpBusca").oninput=renderGruposProd;
+  }
   $("ogAdd").onclick=async function(){
     var n=$("ogNome").value.trim();
     if(!n){toast("Escreva a origem.");return;}
@@ -24108,6 +24308,15 @@ function ligar(){
       try{(grupo?$("p_subgrupo"):$("p_grupo")).focus();}catch(e){}
       return;}
     p.cod=cod;p.nome=nome;p.pop=$("p_pop").value.trim();p.marca=$("p_marca").value.trim();p.grupo=grupo;p.subgrupo=subgrupo;
+    /* grupo ou subgrupo escrito na ficha entra no cadastro de Grupos, para os dois lados ficarem
+       sempre iguais (regra dele, 20/09) */
+    try{
+      var gCad=grupoCad(grupo);
+      if(!gCad){gCad={nome:grupo,subgrupos:[]};GRUPOS_PROD.push(gCad);}
+      if(!(gCad.subgrupos||[]).some(function(s){return ordAZ(s,subgrupo)===0;}))
+        gCad.subgrupos=(gCad.subgrupos||[]).concat([subgrupo]);
+      await gravarGruposProd();
+    }catch(eGC){console.warn("cadastro de grupos",eGC);}
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
     ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
@@ -24880,6 +25089,8 @@ async function continuarBoot(){
   try{await carregar();}catch(e){erro("carregar: "+e.message);}
   /* estoque antigo guardado no produto vira movimento "Estoque inicial", uma vez só */
   try{await normalizarGruposProdutos();}catch(e){console.warn("grupos e subgrupos",e);}
+  /* o cadastro de Grupos de Produtos recolhe o que já está escrito nos produtos (v180) */
+  try{if(semearGruposCadastro())await gravarGruposProd();}catch(e){console.warn("cadastro de grupos",e);}
   try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
   try{await normalizarLancamentos();}catch(e){console.warn("centro de custo dos lançamentos",e);}
   try{await lancarVagasDoMes();}catch(e){console.warn("vaga de estacionamento",e);}
