@@ -17514,9 +17514,16 @@ function notaRecebimentoOrcamento(){
   var a=orcRecOS&&orcRecOS.orcamentoAdiantado;if(!a)return;
   var forma=$("orc_forma").value,n=+$("orc_parc").value||1;
   var dep=depreciadoOrcamento(a.valor,forma,n);
+  var prazo=!(aVista(forma)&&n<=1),dias=diasCreditoForma(forma);
   $("orc_nota").innerHTML='<div class="note"><b>'+BRL(a.valor)+"</b> em "+esc(forma)+(n>1?" · "+n+"×":"")+
     ". Na comissão entra o <b>valor depreciado pela forma</b>: <b>"+BRL(dep)+"</b>"+
-    (dep<a.valor?" (a diferença é a taxa da operadora).":" (forma sem depreciação).")+"</div>";
+    (dep<a.valor?" (a diferença é a taxa da operadora).":" (forma sem depreciação).")+
+    "<br>Aprovado pelo financeiro, "+(prazo
+      ? "o valor vai para o <b>Contas a Receber</b>: "+
+        (ehAntecipada(forma)?"um título de "+BRL(a.valor)+" (crédito antecipado)"
+          :(n>1?n+" parcelas":"um título"))+
+        ", 1º vencimento em "+esc(dataBR(somaDias(hojeISO(),dias)))+"."
+      : "o dinheiro entra na hora no <b>"+esc(CAIXA_FIN)+"</b>.")+"</div>";
 }
 /* o atendente confirma que recebeu do cliente: vai para a fila da Aprovação Financeira */
 async function marcarOrcamentoRecebido(o,forma,parc){
@@ -17536,12 +17543,41 @@ async function marcarOrcamentoRecebido(o,forma,parc){
 async function aprovarOrcamentoOS(o){
   var a=o&&o.orcamentoAdiantado;if(!a||a.status!=="recebido")return null;
   var cx=await garantirCaixaFinanceiro();
-  var m={id:uid(),loja:lojaAtual,caixaId:cx.id,data:hojeISO(),hora:agoraHM(),tipo:"entrada",valor:a.valor,
-    descricao:"Serviço de Orçamento · OS "+o.numero+(o.cliente?" · "+o.cliente:"")+
-      (a.forma?" · "+a.forma+((a.parc||1)>1?" "+a.parc+"×":""):""),
-    centroId:await centroFixo("Serviço e instalação","Receitas","entrada"),
-    origem:"os",osId:o.id,orcamentoOS:true,forma:a.forma||"",parc:a.parc||1,por:usuarioAtual};
-  movs.push(m);await grava("movs",m);
+  var forma=a.forma||"Dinheiro",n=Math.max(1,+a.parc||1);
+  var cc=await centroFixo("Serviço e instalação","Receitas","entrada");
+  var m=null,tits=[];
+  if(aVista(forma)&&n<=1){
+    /* dinheiro, PIX, débito: o valor entra na hora no Caixa Financeiro */
+    m={id:uid(),loja:lojaAtual,caixaId:cx.id,data:hojeISO(),hora:agoraHM(),tipo:"entrada",valor:a.valor,
+      descricao:"Serviço de Orçamento · OS "+o.numero+(o.cliente?" · "+o.cliente:"")+" · "+forma,
+      centroId:cc,origem:"os",osId:o.id,orcamentoOS:true,forma:forma,parc:1,por:usuarioAtual};
+    movs.push(m);await grava("movs",m);
+  } else {
+    /* a prazo (cartão, boleto, cheque, carnê): vira título em Contas a Receber, como a venda.
+       O dinheiro só entra no caixa quando o título for baixado (regra do Wagner, 21/09). */
+    var cxF=caixaDaForma(forma),dias=diasCreditoForma(forma),hj=hojeISO();
+    var cxId=(cxF&&cxF.id)||cx.id;
+    if(ehAntecipada(forma)){
+      tits.push({id:uid(),loja:lojaAtual,especie:"receber",origem:"os",osId:o.id,
+        docRef:"OS "+o.numero,clienteId:o.clienteId,pessoa:o.cliente,
+        descricao:"Serviço de Orçamento · "+forma+" · crédito antecipado"+(n>1?" ("+n+"× no cartão)":""),
+        formaTipo:forma,centroId:cc,caixaId:cxId,emissao:hj,vencimento:somaDias(hj,dias),
+        valor:a.valor,parcela:1,totalParcelas:n,antecipada:true,
+        status:"aberto",valorPago:0,criadoEm:hj,criadoPor:usuarioAtual});
+    } else {
+      var cada=Math.round(a.valor/n*100)/100;
+      for(var i=1;i<=n;i++){
+        tits.push({id:uid(),loja:lojaAtual,especie:"receber",origem:"os",osId:o.id,
+          docRef:"OS "+o.numero,clienteId:o.clienteId,pessoa:o.cliente,
+          descricao:"Serviço de Orçamento · "+forma+(n>1?" "+i+"/"+n:""),
+          formaTipo:forma,centroId:cc,caixaId:cxId,
+          emissao:hj,vencimento:somaDias(hj,30*(i-1)+dias),
+          valor:(i===n?Math.round((a.valor-cada*(n-1))*100)/100:cada),
+          parcela:i,totalParcelas:n,status:"aberto",valorPago:0,criadoEm:hj,criadoPor:usuarioAtual});
+      }
+    }
+    for(var k=0;k<tits.length;k++){titulos.push(tits[k]);await grava("titulos",tits[k]);}
+  }
   /* entra na comissão de quem recebeu, no mês da aprovação, pelo valor DEPRECIADO da forma */
   var quem=a.recebidoPor||a.atendente||o.atendente||"";
   var dep=(a.depreciado!=null?+a.depreciado:depreciadoOrcamento(a.valor,a.forma||"Dinheiro",a.parc||1));
@@ -17555,10 +17591,17 @@ async function aprovarOrcamentoOS(o){
     ajustes.push(aj);await grava("ajustes",aj);
   }
   a.status="aprovado";a.aprovadoEm=hojeISO();a.aprovadoHora=agoraHM();a.aprovadoPor=usuarioAtual;
-  a.movId=m.id;a.caixaId=cx.id;a.caixa=cx.nome;a.ajusteId=aj?aj.id:"";a.comissaoDe=quem;
+  a.movId=m?m.id:"";a.caixaId=m?cx.id:((tits[0]||{}).caixaId||"");
+  a.caixa=m?cx.nome:((caixaPor((tits[0]||{}).caixaId)||{}).nome||cx.nome);
+  a.titulos=tits.map(function(t){return t.id;});
+  a.aPrazo=!m;a.venc1=(tits[0]||{}).vencimento||"";
+  a.ajusteId=aj?aj.id:"";a.comissaoDe=quem;
   o.historico=o.historico||[];
   o.historico.push({quando:hojeISO(),por:usuarioAtual,
-    texto:"Serviço de Orçamento aprovado pelo financeiro · "+BRL(a.valor)+" no "+cx.nome+
+    texto:"Serviço de Orçamento aprovado pelo financeiro · "+BRL(a.valor)+
+      (m?" no "+cx.nome
+        :" em "+tits.length+" título"+(tits.length===1?"":"s")+" no Contas a Receber"+
+          (a.venc1?" · 1º vencimento "+dataBR(a.venc1):""))+
       (quem?" · comissão de "+quem:"")});
   await grava("ordens",o);
   return a;
@@ -17579,7 +17622,8 @@ function textoAdiantOrcamento(o){
     ((a.depreciado!=null&&a.depreciado<a.valor)?" (depreciado "+BRL(a.depreciado)+" na comissão)":"")+".";
   if(a.status==="recebido")t+=" Aguardando a aprovação do financeiro.";
   if(a.status==="aprovado")t+=" Aprovado no financeiro em "+dataBR(a.aprovadoEm)+
-    (a.caixa?" · "+a.caixa:"")+".";
+    (a.aPrazo?" · lançado no Contas a Receber"+(a.venc1?", 1º vencimento em "+dataBR(a.venc1):"")
+             :(a.caixa?" · "+a.caixa:""))+".";
   return t;
 }
 /* contato feito e o cliente ficou de pensar ou de passar na loja: OS parada aguardando o retorno dele */
@@ -22888,8 +22932,9 @@ function renderFin(){
           '<h2 style="margin:0">Serviço de Orçamento recebido</h2>'+
           '<span class="pill p-warn" style="margin-left:auto">'+orcs.length+(orcs.length===1?" recebimento":" recebimentos")+" · "+
             BRL(orcs.reduce(function(s,o){return s+(+o.orcamentoAdiantado.valor||0);},0))+"</span></div>"+
-          '<p class="help">Aprovado, o dinheiro entra no <b>'+esc(CAIXA_FIN)+
-            "</b> e o valor entra na comissão de quem abriu a OS e recebeu do cliente.</p>"+
+          '<p class="help">Aprovado: à vista o dinheiro entra no <b>'+esc(CAIXA_FIN)+"</b>; a prazo vira título no "+
+            "<b>Contas a Receber</b>, com o vencimento da forma. Em qualquer caso o valor <b>depreciado</b> entra na "+
+            "comissão de quem abriu a OS e recebeu do cliente.</p>"+
           orcs.map(function(o){
             var a=o.orcamentoAdiantado;
             return '<div style="border-top:1px solid var(--line);padding:12px 0">'+
@@ -22913,16 +22958,24 @@ function renderFin(){
         var o=ordens.filter(function(x){return x.id===bt.getAttribute("data-finorc");})[0];if(!o)return;
         var a=o.orcamentoAdiantado||{};
         var depC=(a.depreciado!=null?a.depreciado:a.valor);
-        if(!confirm("Aprovar o recebimento de "+BRL(a.valor)+" da OS "+o.numero+"?\n\n"+
-          "• entra no "+CAIXA_FIN+(a.forma?" ("+a.forma+((a.parc||1)>1?" "+a.parc+"×":"")+")":"")+"\n"+
+        var formaC=a.forma||"Dinheiro",nC=Math.max(1,+a.parc||1);
+        var prazoC=!(aVista(formaC)&&nC<=1);
+        if(!confirm("Aprovar o recebimento de "+BRL(a.valor)+" da OS "+o.numero+
+          " ("+formaC+(nC>1?" "+nC+"×":"")+")?\n\n"+
+          (prazoC
+            ? "• vai para o Contas a Receber"+((nC>1&&!ehAntecipada(formaC))?" em "+nC+" parcelas":"")+
+              ", 1º vencimento em "+dataBR(somaDias(hojeISO(),diasCreditoForma(formaC)))
+            : "• entra no "+CAIXA_FIN)+"\n"+
           "• entra na comissão de "+(a.recebidoPor||a.atendente||"—")+" em "+rotuloComp(compAtual())+
           " pelo depreciado de "+BRL(depC)))return;
         bt.disabled=true;
         var r=await aprovarOrcamentoOS(o);
-        if(r)toast(BRL(r.valor)+" da OS "+o.numero+" aprovado: entrou no "+r.caixa+
+        if(r)toast(BRL(r.valor)+" da OS "+o.numero+" aprovado: "+
+          (r.aPrazo?"lançado no Contas a Receber"+(r.venc1?", 1º vencimento em "+dataBR(r.venc1):"")
+                   :"entrou no "+r.caixa)+
           (r.comissaoDe?" · comissão de "+r.comissaoDe+" sobre "+BRL(r.depreciado!=null?r.depreciado:r.valor):"")+".");
-        /* o dinheiro entrou agora: as telas do financeiro precisam ser refeitas */
-        try{renderCaixasMov();renderCadCaixas();renderFluxo();}catch(erf){console.warn(erf);}
+        /* o dinheiro (ou o título) entrou agora: as telas do financeiro precisam ser refeitas */
+        try{renderCaixasMov();renderCadCaixas();renderFluxo();renderReceber();}catch(erf){console.warn(erf);}
         render();
       };});
     Array.prototype.forEach.call(cardOrc.querySelectorAll("[data-finorcos]"),function(bt){
