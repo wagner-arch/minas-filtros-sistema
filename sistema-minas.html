@@ -357,6 +357,16 @@
   .gp-s button:hover{color:var(--crit)}
   .gp-add{display:flex;gap:8px;flex-wrap:wrap}
   .gp-add input{flex:1 1 220px}
+  /* ficha do produto: código e situação do tamanho necessário, nome grande (20/09) */
+  .p-ident{grid-template-columns:150px minmax(0,1fr) 140px}
+  @media(max-width:760px){.p-ident{grid-template-columns:1fr}}
+  .p-img{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
+  .p-img-pre{width:120px;height:120px;border:1px solid var(--linha);border-radius:10px;background:var(--bg);
+    display:flex;align-items:center;justify-content:center;overflow:hidden;flex:0 0 auto}
+  .p-img-pre img{width:100%;height:100%;object-fit:contain}
+  .p-img-bts{flex:1 1 180px}
+  .prod-mini{width:34px;height:34px;border-radius:7px;object-fit:contain;background:var(--bg);
+    border:1px solid var(--linha);margin-right:9px;vertical-align:middle}
   /* valor da parcela, embaixo de cada forma de pagamento (20/09) */
   .pg-parc{grid-column:1/-1;margin-top:-4px;font-size:13.5px;color:var(--ink-2)}
   .pg-parc b{color:var(--accent)}
@@ -1455,13 +1465,29 @@ img{max-width:100%}
         <h2 id="prodFormTitulo">Novo produto</h2>
         <div class="sect">
           <p class="sect-t">Identificação</p>
-          <div class="grid g3">
+          <!-- larguras pedidas por ele em 20/09: código e situação só do tamanho necessário,
+               nome grande. A explicação de ativo/inativo virou caixa de informação abaixo. -->
+          <div class="grid p-ident">
             <div class="fld"><label for="p_cod">Código MF <span class="req">*</span></label><input id="p_cod"></div>
             <div class="fld"><label for="p_nome">Nome <span class="req">*</span></label><input id="p_nome"></div>
             <div class="fld"><label for="p_status">Situação</label>
-              <select id="p_status"><option value="ativo">Ativo — disponível para venda</option><option value="inativo">Inativo — não aparece para o vendedor</option></select></div>
+              <select id="p_status"><option value="ativo">Ativo</option><option value="inativo">Inativo</option></select></div>
           </div>
           <div id="p_statusNota"></div>
+          <!-- foto do produto (pedido dele, 20/09) -->
+          <div class="grid g2" style="margin-top:16px">
+            <div class="fld"><label>Imagem do produto</label>
+              <div class="p-img">
+                <div class="p-img-pre" id="p_imgPre"><span class="help" style="margin:0">Sem imagem</span></div>
+                <div class="p-img-bts">
+                  <button class="btn ghost sm" type="button" id="p_imgBt">Escolher imagem</button>
+                  <button class="btn mut sm" type="button" id="p_imgTirar" hidden>Remover</button>
+                  <input id="p_imgIn" type="file" accept="image/*" class="os-foto-in">
+                  <div class="help" style="margin:6px 0 0">JPG ou PNG. A imagem é reduzida para caber no cadastro.</div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="p_pop">Nome popular</label><input id="p_pop"></div>
             <div class="fld"><label for="p_marca">Marca</label><input id="p_marca"></div>
@@ -6413,7 +6439,10 @@ function renderProdutos(){
     var estCls=est<0?"p-crit":((mn>0&&est<mn)?"p-warn":"p-mut");
     var inativo=(p.status||"ativo")==="inativo";
     if(inativo)tr.style.opacity=".55";
-    tr.innerHTML='<td><div class="t-main">'+esc(p.nome)+(inativo?' <span class="pill p-mut">inativo</span>':"")+
+    tr.innerHTML='<td><div class="t-main">'+
+        /* miniatura da imagem do produto (20/09) */
+        (p.imagem?'<img class="prod-mini" src="'+p.imagem+'" alt="">':"")+
+        esc(p.nome)+(inativo?' <span class="pill p-mut">inativo</span>':"")+
         /* importado sem preço: some da venda até o cadastro ser completado (v143) */
         (!inativo&&produtoIncompleto(p)?' <span class="pill p-crit">completar cadastro</span>':"")+
         '</div><div class="t-sub"><code>'+esc(p.cod)+"</code> · "+esc(p.marca||"—")+"</div></td>"+
@@ -6438,6 +6467,7 @@ function abrirProduto(p){
   $("p_un").value=v.un||"UN";$("p_serie").value=v.serie||"nao";
   $("p_campativa").value=v.campativa||"nao";
   $("p_status").value=v.status||"ativo";notaStatus();
+  prodImagem=v.imagem||null;renderImagemProduto();   /* imagem do produto (20/09) */
   $("p_estLoja").textContent="· "+nomeLoja();
   var mins=v.estmin||{},locs=v.local||{};
   $("p_estoque").value=(v.id?estEmpresaDe(v):"");
@@ -6487,10 +6517,67 @@ function notaCusto(){
     (!negativa&&pctF>25?"<br><br><b>Frete alto:</b> mais de um quarto do custo do produto é transporte. Vale revisar fornecedor ou consolidar pedidos.":"")+
     "</div>";
 }
-function notaStatus(){
-  $("p_statusNota").innerHTML = $("p_status").value==="inativo"
-    ? '<div class="note warn"><b>Produto inativo.</b> Some da lista de venda do vendedor, mas continua no histórico dos pedidos antigos e no cadastro. Para voltar a vender, é só reativar aqui.</div>'
-    : "";
+/* A situação ficou só "Ativo" e "Inativo" (regra dele, 20/09: o campo precisa ser curto). O que
+   cada uma significa aparece numa caixa de informação quando ele escolhe, e some sozinha. */
+/* ---------- imagem do produto (pedido dele, 20/09) ----------
+   Guardada em `p.imagem` como dataURL, reduzida a 600 px e JPEG 80% para não pesar o cadastro
+   (o mesmo caminho dos anexos da venda, v89). Aparece na ficha e como miniatura na lista. */
+var prodImagem=null;
+function lerImagemProduto(f){
+  return new Promise(function(ok,nao){
+    if(!f)return nao(new Error("sem arquivo"));
+    if(!/^image\//.test(f.type||""))return nao(new Error("Escolha uma imagem (JPG ou PNG)."));
+    var r=new FileReader();
+    r.onerror=function(){nao(new Error("não consegui ler o arquivo"));};
+    r.onload=function(){
+      var im=new Image();
+      im.onerror=function(){nao(new Error("arquivo de imagem inválido"));};
+      im.onload=function(){
+        var L=600,e=Math.min(1,L/Math.max(im.width,im.height));
+        var c=document.createElement("canvas");
+        c.width=Math.round(im.width*e);c.height=Math.round(im.height*e);
+        c.getContext("2d").drawImage(im,0,0,c.width,c.height);
+        try{ok(c.toDataURL("image/jpeg",.8));}catch(x){ok(String(r.result));}
+      };
+      im.src=String(r.result);
+    };
+    r.readAsDataURL(f);
+  });
+}
+function renderImagemProduto(){
+  var pre=$("p_imgPre"),bt=$("p_imgTirar");if(!pre)return;
+  if(prodImagem){
+    pre.innerHTML='<img src="'+prodImagem+'" alt="Imagem do produto">';
+    if(bt)bt.hidden=false;
+  }else{
+    pre.innerHTML='<span class="help" style="margin:0">Sem imagem</span>';
+    if(bt)bt.hidden=true;
+  }
+}
+function ligarImagemProduto(){
+  var bt=$("p_imgBt"),inp=$("p_imgIn"),rm=$("p_imgTirar");
+  if(!bt||!inp)return;
+  bt.onclick=function(){inp.value="";inp.click();};
+  inp.onchange=async function(){
+    var f=inp.files&&inp.files[0];if(!f)return;
+    try{prodImagem=await lerImagemProduto(f);renderImagemProduto();
+      toast("Imagem escolhida. Salve o produto para gravar.");}
+    catch(e){toast(e.message||"não consegui ler a imagem");}
+  };
+  if(rm)rm.onclick=function(){prodImagem=null;renderImagemProduto();toast("Imagem removida. Salve o produto.");};
+}
+var sumirNotaStatus=null;
+function notaStatus(escolheu){
+  var el=$("p_statusNota");if(!el)return;
+  if(sumirNotaStatus){clearTimeout(sumirNotaStatus);sumirNotaStatus=null;}
+  var inativo=$("p_status").value==="inativo";
+  if(!escolheu){el.innerHTML=inativo
+    ? '<div class="note warn"><b>Produto inativo.</b> Não aparece para o vendedor.</div>' : "";
+    return;}
+  el.innerHTML=inativo
+    ? '<div class="note warn"><b>Inativo.</b> Some da lista de venda do vendedor, mas continua no histórico dos pedidos antigos e no cadastro. Para voltar a vender, é só escolher Ativo aqui.</div>'
+    : '<div class="note ok"><b>Ativo.</b> Disponível para venda: aparece na lista de produtos do vendedor, no orçamento e na OS.</div>';
+  sumirNotaStatus=setTimeout(function(){notaStatus();},6000);
 }
 function notaEstoque(){
   var q=numMF($("p_estoque").value),m=numMF($("p_estmin").value)||0;
@@ -24295,7 +24382,7 @@ function ligar(){
   ["p_minimo","p_campanha","p_cheia"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaCampanha);});
   ["p_custo","p_frete","p_ipi","p_st","p_federais","p_icms","p_cheia","p_campanha","p_minimo"].forEach(function(id){$(id).oninput=notaCusto;});
   $("p_estoque").oninput=notaEstoque;$("p_estmin").oninput=notaEstoque;
-  $("p_status").onchange=notaStatus;
+  $("p_status").onchange=function(){notaStatus(true);};ligarImagemProduto();   /* a explicação aparece ao escolher e some sozinha (20/09) */
   $("prodSalvar").onclick=async function(){
     var cod=$("p_cod").value.trim(),nome=$("p_nome").value.trim();
     if(!cod||!nome){toast("Código e nome são obrigatórios.");return;}
@@ -24320,6 +24407,7 @@ function ligar(){
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
     ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
+    if(prodImagem)p.imagem=prodImagem;else delete p.imagem;   /* imagem do produto (20/09) */
     /* produto importado deixa de ser "a completar" quando ganha grupo de verdade e preço (v143) */
     p.completar=(grupo===GRUPO_COMPLETAR||!(+p.cheia>0));
     p.estmin=p.estmin||{};p.local=p.local||{};p.estoqueMigrado=true;
