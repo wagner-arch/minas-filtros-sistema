@@ -3573,6 +3573,8 @@ img{max-width:100%}
       <div class="card" id="usForm" hidden>
         <div class="toolbar" style="padding:0 0 18px">
           <h2 id="usTitulo" style="margin:0">Colaborador</h2><span class="sp"></span>
+          <button class="btn ghost" type="button" id="usDesativar" hidden>Desativar</button>
+          <button class="btn ghost" type="button" id="usApagar" hidden>Apagar colaborador</button>
           <button class="btn mut" type="button" id="usCancelar">Voltar</button>
         </div>
         <div class="sect">
@@ -10636,7 +10638,88 @@ function idadeDe(nasc){
   if(m<0||(m===0&&h.getDate()<n.getDate()))a--;
   return a;
 }
+/* ---------- desativar e apagar colaborador (pedido dele, 21/09: "clico na função de apagar o
+   usuário e não funciona" — o único Remover da tela era o da FOTO; apagar colaborador não existia).
+   Quem já trabalhou no sistema NÃO se apaga: some da comissão, do ponto e do histórico da venda.
+   Esse é desativado, o que tira do menu, das listas de responsável e do login. ---------- */
+function usoDoColaborador(n){
+  if(!n)return [];
+  var out=[];
+  function conta(um,varios,qt){if(qt>0)out.push(qt+" "+(qt===1?um:varios));}
+  conta("atendimento","atendimentos",atendimentos.filter(function(a){return deOutro(a,CAMPOS_ATEND,n);}).length);
+  conta("pedido","pedidos",pedidos.filter(function(p){return deOutro(p,CAMPOS_PED,n);}).length);
+  conta("orçamento","orçamentos",orcamentos.filter(function(o){return deOutro(o,CAMPOS_ORC,n);}).length);
+  conta("OS","OS",ordens.filter(function(o){return deOutro(o,CAMPOS_OS,n);}).length);
+  conta("batida de ponto","batidas de ponto",pontos.filter(function(p){return p.colaborador===n;}).length);
+  conta("requisição de estoque","requisições de estoque",requisicoes.filter(function(r){return r.colaborador===n||r.criadoPor===n;}).length);
+  conta("negócio no funil","negócios no funil",negocios.filter(function(x){return x.responsavel===n;}).length);
+  conta("ajuste de comissão","ajustes de comissão",ajustes.filter(function(a){return a.colaborador===n;}).length);
+  return out;
+}
+function deOutro(o,campos,n){
+  if(!o)return false;
+  for(var i=0;i<campos.length;i++){if(o[campos[i]]&&o[campos[i]]===n)return true;}
+  return false;
+}
+function ajustarBotoesUsuario(){
+  var bd=$("usDesativar"),ba=$("usApagar");
+  if(!bd||!ba)return;
+  var u=editandoUs;
+  var pode=!!(u&&u.nome&&ehAdministrador()&&u.nome!==usuarioAtual);
+  bd.hidden=!pode;ba.hidden=!pode;
+  if(!pode)return;
+  bd.textContent=(u.ativo===false?"Reativar colaborador":"Desativar colaborador");
+}
+async function desativarColaborador(){
+  var u=editandoUs;if(!u||!u.nome)return;
+  var al=$("u_alerta"),ligar=(u.ativo===false);
+  if(!confirm((ligar?"Reativar ":"Desativar ")+u.nome+"?\n\n"+
+    (ligar?"Ele volta para as listas de responsável e volta a entrar no sistema."
+         :"Ele sai do menu de responsáveis e das listas, e não consegue mais entrar no sistema. O histórico dele continua inteiro.")))return;
+  u.ativo=ligar;$("u_ativo").value=ligar?"sim":"nao";
+  await gravarUsuarios();sincronizarEquipe();
+  var aviso="";
+  if(modoBanco()&&u.temLogin){
+    try{
+      await chamarFuncaoBanco("criar-acesso",{email:u.emailAcesso||u.email||"",nome:u.nome,
+        funcao:u.perfil||"Vendedor",loja:u.loja||lojaAtual,somenteFuncao:true,ativo:ligar});
+    }catch(e){
+      var m=(e&&e.message)||String(e);
+      aviso='<div class="note crit"><b>O cadastro foi '+(ligar?"reativado":"desativado")+", mas o login no banco não mudou:</b> "+esc(m)+
+        (/senha/i.test(m)?" <br>A função <b>criar-acesso</b> publicada ainda é a antiga: publique de novo o arquivo <b>supabase/functions/criar-acesso/index.ts</b>.":"")+
+        " <br>Enquanto isso, ele ainda consegue entrar com o e-mail e a senha dele.</div>";
+    }
+  }
+  al.innerHTML=aviso||'<div class="note ok"><b>'+esc(u.nome)+(ligar?" reativado.":" desativado.")+"</b> "+
+    (ligar?"Ele volta às listas e ao login.":"Ele saiu das listas de responsável e não entra mais no sistema.")+"</div>";
+  ajustarBotoesUsuario();renderUsuarios();render();
+  toast(u.nome+(ligar?" reativado.":" desativado."));
+}
+async function apagarColaborador(){
+  var u=editandoUs;if(!u||!u.nome)return;
+  var al=$("u_alerta"),uso=usoDoColaborador(u.nome);
+  if(uso.length){
+    al.innerHTML='<div class="note crit"><b>'+esc(u.nome)+" não pode ser apagado: já tem "+esc(uso.join(", "))+
+      " no sistema.</b> Apagar o cadastro deixaria essas vendas, comissões e batidas de ponto sem dono. "+
+      "Use <b>Desativar colaborador</b> — ele sai das listas e do login, e o histórico continua inteiro.</div>";
+    return;
+  }
+  if(modoBanco()&&u.temLogin&&u.ativo!==false){
+    al.innerHTML='<div class="note crit"><b>'+esc(u.nome)+" tem login no banco.</b> Clique antes em "+
+      "<b>Desativar colaborador</b> — apagar só o cadastro daqui não tira o acesso dele, e ele continuaria entrando.</div>";
+    return;
+  }
+  if(!confirm("Apagar o cadastro de "+u.nome+"?\n\nEle não tem nenhum registro no sistema. Isto não tem volta."))return;
+  var ix=USUARIOS.indexOf(u);
+  if(ix>=0)USUARIOS.splice(ix,1);
+  if(metas[u.nome]){delete metas[u.nome];try{await gravarMetas();}catch(e){}}
+  await gravarUsuarios();sincronizarEquipe();
+  editandoUs=null;$("usForm").hidden=true;$("usLista").hidden=false;
+  renderUsuarios();render();
+  toast("Cadastro de "+u.nome+" apagado.");
+}
 function abrirUsuario(i){
+
   editandoUs=(i==null?null:USUARIOS[i]);
   var u=editandoUs||{};
   $("usLista").hidden=true;$("usForm").hidden=false;
@@ -10646,6 +10729,7 @@ function abrirUsuario(i){
   funcoes.forEach(function(f){var o=document.createElement("option");o.textContent=f.nome;sp.appendChild(o);});
   sp.value=u.perfil||"Vendedor";
   $("u_ativo").value=(u.ativo===false?"nao":"sim");
+  ajustarBotoesUsuario();
   CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)e.value=u[k]||"";});
   try{ajustarConjuge();}catch(e){}
   ["salario","vr","assiduidade","desempenho"].forEach(function(k){$("u_"+k).value=(u[k]!=null?u[k]:"");});
@@ -24899,6 +24983,8 @@ function ligar(){
     r.readAsDataURL(f);
     this.value="";};
   $("u_apagarFoto").onclick=function(){usFacial="";usFacialSig=null;mostrarFacial();};
+  $("usDesativar").onclick=desativarColaborador;
+  $("usApagar").onclick=apagarColaborador;
   $("u_addFilho").onclick=function(){usFilhos.push({nome:"",nasc:""});renderFilhos();};
   $("usSalvar").onclick=async function(){
     var n=$("u_nome").value.trim();
