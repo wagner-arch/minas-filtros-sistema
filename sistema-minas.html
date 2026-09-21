@@ -4945,6 +4945,24 @@ img{max-width:100%}
 </div>
 
 <!-- purificador usado entregue como troca na venda (pedido do Wagner, 16/09) -->
+<!-- como o cliente pagou o Serviço de Orçamento (pedido do Wagner, 21/09) -->
+<div class="modal" id="orcRecModal" hidden>
+  <div class="box">
+    <h3>Recebido do cliente</h3>
+    <div class="sub" id="orc_sub"></div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="fld"><label for="orc_forma">Forma de pagamento <span class="req">*</span></label>
+        <select id="orc_forma"></select></div>
+      <div class="fld"><label for="orc_parc">Parcelas</label><select id="orc_parc"></select></div>
+    </div>
+    <div id="orc_nota"></div>
+    <div class="actions">
+      <button class="btn mut" type="button" id="orc_cancelar">Cancelar</button>
+      <button class="btn" type="button" id="orc_ok">Confirmar o recebimento</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="trocaModal" hidden>
   <div class="box">
     <h3>Purificador usado na troca</h3>
@@ -17465,13 +17483,51 @@ async function cobrarOrcamentoOS(o){
     texto:"Serviço de Orçamento lançado na abertura · "+BRL(val)+" a receber do cliente"});
   return o.orcamentoAdiantado;
 }
+/* formas que o cliente pode usar para pagar o orçamento na hora (as internas ficam de fora) */
+function formasDoOrcamento(){
+  return porNomeAZ(formasPgto).filter(function(f){
+    return [FORMA_CREDITO,FORMA_TROCA,FORMA_ORC].indexOf(f.nome)<0;});
+}
+/* o valor que entra na comissão é o DEPRECIADO pela forma escolhida (regra do Wagner, 21/09) */
+function depreciadoOrcamento(valor,forma,parc){
+  var n=Math.max(1,+parc||1),v=+valor||0;
+  return centavos(v*fatorLiquido(forma,n));
+}
+var orcRecOS=null;
+function abrirRecebimentoOrcamento(o){
+  var a=o&&o.orcamentoAdiantado;if(!a||a.status!=="lancado")return;
+  orcRecOS=o;
+  $("orc_sub").textContent="OS "+o.numero+" · "+(o.cliente||"")+" · "+BRL(a.valor)+
+    " do Serviço de Orçamento. Registre como o cliente pagou.";
+  var sel=$("orc_forma");
+  sel.innerHTML=formasDoOrcamento().map(function(f){
+    return '<option'+(f.nome==="Dinheiro"?" selected":"")+">"+esc(f.nome)+"</option>";}).join("");
+  ajustarParcelasOrcamento();
+  $("orcRecModal").hidden=false;
+}
+function ajustarParcelasOrcamento(){
+  var forma=$("orc_forma").value,ps=parcelasDe(forma),sel=$("orc_parc");
+  sel.innerHTML=ps.map(function(n){return "<option value='"+n+"'>"+n+"×</option>";}).join("");
+  notaRecebimentoOrcamento();
+}
+function notaRecebimentoOrcamento(){
+  var a=orcRecOS&&orcRecOS.orcamentoAdiantado;if(!a)return;
+  var forma=$("orc_forma").value,n=+$("orc_parc").value||1;
+  var dep=depreciadoOrcamento(a.valor,forma,n);
+  $("orc_nota").innerHTML='<div class="note"><b>'+BRL(a.valor)+"</b> em "+esc(forma)+(n>1?" · "+n+"×":"")+
+    ". Na comissão entra o <b>valor depreciado pela forma</b>: <b>"+BRL(dep)+"</b>"+
+    (dep<a.valor?" (a diferença é a taxa da operadora).":" (forma sem depreciação).")+"</div>";
+}
 /* o atendente confirma que recebeu do cliente: vai para a fila da Aprovação Financeira */
-async function marcarOrcamentoRecebido(o){
+async function marcarOrcamentoRecebido(o,forma,parc){
   var a=o&&o.orcamentoAdiantado;if(!a||a.status!=="lancado")return null;
+  var n=Math.max(1,+parc||1);
   a.status="recebido";a.recebidoEm=hojeISO();a.recebidoHora=agoraHM();a.recebidoPor=usuarioAtual;
+  a.forma=forma||"Dinheiro";a.parc=n;a.depreciado=depreciadoOrcamento(a.valor,a.forma,n);
   o.historico=o.historico||[];
   o.historico.push({quando:hojeISO(),por:usuarioAtual,
-    texto:"Serviço de Orçamento recebido do cliente · "+BRL(a.valor)+" · aguardando aprovação do financeiro"});
+    texto:"Serviço de Orçamento recebido do cliente · "+BRL(a.valor)+" em "+a.forma+(n>1?" "+n+"×":"")+
+      " · depreciado "+BRL(a.depreciado)+" · aguardando aprovação do financeiro"});
   await grava("ordens",o);
   return a;
 }
@@ -17481,17 +17537,20 @@ async function aprovarOrcamentoOS(o){
   var a=o&&o.orcamentoAdiantado;if(!a||a.status!=="recebido")return null;
   var cx=await garantirCaixaFinanceiro();
   var m={id:uid(),loja:lojaAtual,caixaId:cx.id,data:hojeISO(),hora:agoraHM(),tipo:"entrada",valor:a.valor,
-    descricao:"Serviço de Orçamento · OS "+o.numero+(o.cliente?" · "+o.cliente:""),
+    descricao:"Serviço de Orçamento · OS "+o.numero+(o.cliente?" · "+o.cliente:"")+
+      (a.forma?" · "+a.forma+((a.parc||1)>1?" "+a.parc+"×":""):""),
     centroId:await centroFixo("Serviço e instalação","Receitas","entrada"),
-    origem:"os",osId:o.id,orcamentoOS:true,por:usuarioAtual};
+    origem:"os",osId:o.id,orcamentoOS:true,forma:a.forma||"",parc:a.parc||1,por:usuarioAtual};
   movs.push(m);await grava("movs",m);
-  /* entra na comissão de quem recebeu, no mês da aprovação */
+  /* entra na comissão de quem recebeu, no mês da aprovação, pelo valor DEPRECIADO da forma */
   var quem=a.recebidoPor||a.atendente||o.atendente||"";
+  var dep=(a.depreciado!=null?+a.depreciado:depreciadoOrcamento(a.valor,a.forma||"Dinheiro",a.parc||1));
   var aj=null;
-  if(quem){
+  if(quem&&dep>0){
     aj={id:uid(),loja:lojaAtual,comp:compAtual(),colaborador:quem,papel:"Atendente",
-      valor:a.valor,pontos:0,pedido:"OS "+o.numero,osId:o.id,
-      motivo:"Serviço de Orçamento da OS "+o.numero+" recebido do cliente",
+      valor:dep,pontos:0,pedido:"OS "+o.numero,osId:o.id,
+      motivo:"Serviço de Orçamento da OS "+o.numero+" recebido em "+(a.forma||"Dinheiro")+
+        ((a.parc||1)>1?" "+a.parc+"×":"")+(dep<a.valor?" · depreciado de "+BRL(a.valor):""),
       quando:hojeISO(),por:usuarioAtual};
     ajustes.push(aj);await grava("ajustes",aj);
   }
@@ -17516,6 +17575,8 @@ function textoAdiantOrcamento(o){
     return "Serviço de Orçamento de "+BRL(a.valor)+" lançado na abertura, a receber do cliente.";
   var t="Já adiantado "+BRL(a.valor)+" do orçamento, recebido em "+dataBR(a.recebidoEm||a.quando)+
     (a.recebidoHora||a.hora?" às "+(a.recebidoHora||a.hora):"")+(a.recebidoPor||a.por?" por "+(a.recebidoPor||a.por):"")+".";
+  if(a.forma)t+=" Pago em "+a.forma+((a.parc||1)>1?" "+a.parc+"×":"")+
+    ((a.depreciado!=null&&a.depreciado<a.valor)?" (depreciado "+BRL(a.depreciado)+" na comissão)":"")+".";
   if(a.status==="recebido")t+=" Aguardando a aprovação do financeiro.";
   if(a.status==="aprovado")t+=" Aprovado no financeiro em "+dataBR(a.aprovadoEm)+
     (a.caixa?" · "+a.caixa:"")+".";
@@ -17872,14 +17933,8 @@ function renderPedOS(){
   }
   if(instPend&&!fechada)bt+='<button class="btn ghost" type="button" id="osAbrirInst">Abrir a instalação</button>';
   w.innerHTML=tabela+estado+contato+notaRetornoOS(o)+notaServicoOS(o)+final+(bt?'<div class="actions" style="justify-content:flex-start">'+bt+"</div>":"");
-  if($("osOrcRecebido"))$("osOrcRecebido").onclick=async function(){
-    this.disabled=true;
-    var a=await marcarOrcamentoRecebido(o);
-    if(!a){this.disabled=false;return;}
-    renderPedOS();render();
-    toast(BRL(a.valor)+" do Serviço de Orçamento marcado como recebido. Está na fila da Aprovação Financeira.");
-    ir("fin");
-  };
+  /* pergunta a forma de pagamento antes de mandar ao financeiro (regra dele, 21/09) */
+  if($("osOrcRecebido"))$("osOrcRecebido").onclick=function(){abrirRecebimentoOrcamento(o);};
   if($("osOrcFin"))$("osOrcFin").onclick=function(){ir("fin");};
   if($("osPecasPed"))$("osPecasPed").onclick=function(){abrirPedidoDaOS(o,"tecnico");};
   if($("osAtivRealizada"))$("osAtivRealizada").onclick=atividadeRealizadaOS;
@@ -22843,7 +22898,9 @@ function renderFin(){
                 '<span style="margin-left:auto"><b>'+BRL(a.valor)+"</b></span></div>"+
               '<div class="t-sub" style="margin:4px 0 8px">Recebido por <b>'+esc(a.recebidoPor||"—")+"</b> em "+
                 esc(dataBR(a.recebidoEm||""))+(a.recebidoHora?" às "+esc(a.recebidoHora):"")+
-                " · aberta por "+esc(a.atendente||o.atendente||"—")+"</div>"+
+                " · aberta por "+esc(a.atendente||o.atendente||"—")+
+                (a.forma?" · <b>"+esc(a.forma)+"</b>"+((a.parc||1)>1?" "+a.parc+"×":""):"")+
+                " · comissão sobre <b>"+BRL(a.depreciado!=null?a.depreciado:a.valor)+"</b> (depreciado)</div>"+
               (podeAprovar
                 ? '<button class="btn sm" type="button" data-finorc="'+o.id+'">Aprovar recebimento</button>'+
                   '<button class="btn ghost sm" type="button" data-finorcos="'+o.id+'">Abrir a OS</button>'
@@ -22855,13 +22912,15 @@ function renderFin(){
       bt.onclick=async function(){
         var o=ordens.filter(function(x){return x.id===bt.getAttribute("data-finorc");})[0];if(!o)return;
         var a=o.orcamentoAdiantado||{};
+        var depC=(a.depreciado!=null?a.depreciado:a.valor);
         if(!confirm("Aprovar o recebimento de "+BRL(a.valor)+" da OS "+o.numero+"?\n\n"+
-          "• entra no "+CAIXA_FIN+"\n• entra na comissão de "+(a.recebidoPor||a.atendente||"—")+
-          " em "+rotuloComp(compAtual())))return;
+          "• entra no "+CAIXA_FIN+(a.forma?" ("+a.forma+((a.parc||1)>1?" "+a.parc+"×":"")+")":"")+"\n"+
+          "• entra na comissão de "+(a.recebidoPor||a.atendente||"—")+" em "+rotuloComp(compAtual())+
+          " pelo depreciado de "+BRL(depC)))return;
         bt.disabled=true;
         var r=await aprovarOrcamentoOS(o);
         if(r)toast(BRL(r.valor)+" da OS "+o.numero+" aprovado: entrou no "+r.caixa+
-          (r.comissaoDe?" e na comissão de "+r.comissaoDe:"")+".");
+          (r.comissaoDe?" · comissão de "+r.comissaoDe+" sobre "+BRL(r.depreciado!=null?r.depreciado:r.valor):"")+".");
         /* o dinheiro entrou agora: as telas do financeiro precisam ser refeitas */
         try{renderCaixasMov();renderCadCaixas();renderFluxo();}catch(erf){console.warn(erf);}
         render();
@@ -25002,6 +25061,23 @@ function ligar(){
   $("osBusca").oninput=renderOS;$("osSit").onchange=renderOS;$("osTipo").onchange=renderOS;
   $("osNova").onclick=function(){abrirOS(null);};
   $("osCancelar").onclick=function(){$("osForm").hidden=true;$("osLista").hidden=false;editandoOS=null;osOrigemAtiv=null;};
+  /* janela do recebimento do Serviço de Orçamento */
+  $("orc_forma").onchange=ajustarParcelasOrcamento;
+  $("orc_parc").onchange=notaRecebimentoOrcamento;
+  $("orc_cancelar").onclick=function(){$("orcRecModal").hidden=true;orcRecOS=null;};
+  $("orc_ok").onclick=async function(){
+    var o=orcRecOS;if(!o)return;
+    this.disabled=true;
+    var a=await marcarOrcamentoRecebido(o,$("orc_forma").value,+$("orc_parc").value||1);
+    this.disabled=false;
+    $("orcRecModal").hidden=true;orcRecOS=null;
+    if(!a)return;
+    try{renderPedOS();}catch(e){}
+    render();
+    toast(BRL(a.valor)+" recebido em "+a.forma+((a.parc||1)>1?" "+a.parc+"×":"")+
+      " · na comissão entra "+BRL(a.depreciado)+". Está na fila da Aprovação Financeira.");
+    ir("fin");
+  };
   $("osVoltarImp").onclick=function(){$("osImpressao").hidden=true;$("osForm").hidden=false;};
   $("osImprimir").onclick=function(){window.print();};
   /* escolher o que sai na impressão: tudo, só a ficha ou só o comprovante (regra dele, 21/09) */
