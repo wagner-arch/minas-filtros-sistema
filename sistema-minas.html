@@ -2803,11 +2803,12 @@ img{max-width:100%}
         <div class="toolbar">
           <input id="motNovo" placeholder="Ex.: Vendido, Sem interesse, Preço alto, Vai pensar…" style="max-width:340px">
           <button class="btn" type="button" id="motAdd">Adicionar</button>
+          <select id="motFiltro" style="max-width:170px"><option value="">Todos</option><option value="ativas">Só ativos</option><option value="inativas">Só inativos</option></select>
           <span class="sp"></span>
           <span class="count" id="motCount"></span>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Motivo</th><th class="num">Usado em</th><th></th></tr></thead>
+          <thead><tr><th>Motivo</th><th class="num">Usado em</th><th>Situação</th><th></th></tr></thead>
           <tbody id="motBody"></tbody>
         </table></div>
       </div>
@@ -4041,11 +4042,12 @@ img{max-width:100%}
         <div class="toolbar">
           <input id="tipoNovo" placeholder="Ex.: Visita presencial, WhatsApp, Ligação…" style="max-width:340px">
           <button class="btn" type="button" id="tipoAdd">Adicionar</button>
+          <select id="tipoFiltro" style="max-width:170px"><option value="">Todos</option><option value="ativas">Só ativos</option><option value="inativas">Só inativos</option></select>
           <span class="sp"></span>
           <span class="count" id="tipoCount"></span>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Tipo</th><th>Canal — usado no Dashboard</th><th class="num">Usado em</th><th></th></tr></thead>
+          <thead><tr><th>Tipo</th><th>Canal — usado no Dashboard</th><th class="num">Usado em</th><th>Situação</th><th></th></tr></thead>
           <tbody id="tipoBody"></tbody>
         </table></div>
       </div>
@@ -5739,6 +5741,9 @@ async function carregar(){
     var ts=await db.doc("config/tipos_atendimento").get();
     if(ts.exists&&ts.data()&&ts.data().lista&&ts.data().lista.length){tipos=ts.data().lista;}
     else{await gravarTipos();}
+    /* situação de tipos e motivos: lista separada de nomes inativos (20/09) */
+    try{var tof=await db.doc("config/tipos_off").get();if(tof.exists&&tof.data()&&tof.data().lista)TIPOS_OFF=tof.data().lista;}catch(e1){}
+    try{var mof=await db.doc("config/motivos_off").get();if(mof.exists&&mof.data()&&mof.data().lista)MOTIVOS_OFF=mof.data().lista;}catch(e2){}
     var em=await db.doc("config/empresa").get();
     if(em.exists&&em.data())Object.keys(EMPRESA).forEach(function(k){
       if(em.data()[k]!=null)EMPRESA[k]=em.data()[k];});
@@ -16635,7 +16640,7 @@ function renderCfgMetas(){
   function chips(id,chave){
     var w=$(id);w.innerHTML="";
     if(!tipos.length){w.innerHTML='<span class="help">Cadastre tipos em Configurações › Tipos de Atendimento.</span>';return;}
-    tipos.forEach(function(t){
+    tipos.filter(function(t){return tipoAtivo(t)||(metaTipos[chave]||[]).indexOf(t)>=0;}).forEach(function(t){
       var b=document.createElement("button");b.type="button";b.textContent=t;
       var sel=(metaTipos[chave]||[]).indexOf(t)>=0;
       b.setAttribute("aria-pressed",String(sel));
@@ -17053,7 +17058,7 @@ function abrirFinalizar(a){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-r")==="nao"));});
   var w=$("fm_motivos");w.innerHTML="";
   /* regra do Wagner (12/09): instalação e serviço também se concluem pela atividade */
-  var listaM=motivos.slice();
+  var listaM=motivos.filter(function(m){return motivoAtivo(m)||fmMotivos.indexOf(m)>=0;});
   ["Instalação concluída","Serviço realizado"].forEach(function(m){if(listaM.indexOf(m)<0)listaM.push(m);});
   listaM.forEach(function(m){
     var b=document.createElement("button");b.type="button";b.textContent=m;
@@ -20177,7 +20182,7 @@ function abrirNovaAtividade(ctx){
 function renderChipsNa(){
   var w=$("na_tipos");w.innerHTML="";
   if(!tipos.length){w.innerHTML='<span class="help">Cadastre tipos em Configurações › Tipos de Atendimento.</span>';return;}
-  tipos.forEach(function(t){
+  tipos.filter(function(t){return tipoAtivo(t)||naTipos.indexOf(t)>=0;}).forEach(function(t){
     var b=document.createElement("button");b.type="button";b.textContent=t;
     b.setAttribute("aria-pressed",String(naTipos.indexOf(t)>=0));
     b.onclick=function(){
@@ -22470,29 +22475,85 @@ function canalDoRegistro(a){
   for(var i=0;i<ts.length;i++){var c=canalDe(ts[i]);if(c!=="outro")return c;}
   return "outro";
 }
+/* ---------- situação de Tipos e Motivos (pedido dele, 20/09, depois de Origens) ----------
+   As duas listas são de TEXTO e esse texto está gravado dentro de cada atendimento (`a.tipos`,
+   `a.motivos`), em `canalTipo` e em `metaTipos` — mexer na forma delas quebraria ~25 pontos do
+   arquivo. Então a situação mora numa lista separada de nomes inativos, e renomear troca o texto
+   em todo lugar que o guarda. */
+var TIPOS_OFF=[],MOTIVOS_OFF=[];
+function nomeOff(off,n){return off.some(function(x){return ordAZ(x,n)===0;});}
+function tipoAtivo(n){return !nomeOff(TIPOS_OFF,n);}
+function motivoAtivo(n){return !nomeOff(MOTIVOS_OFF,n);}
+async function gravarTiposOff(){if(!db)return;try{await db.doc("config/tipos_off").set({lista:TIPOS_OFF});}catch(e){console.warn(e);}}
+async function gravarMotivosOff(){if(!db)return;try{await db.doc("config/motivos_off").set({lista:MOTIVOS_OFF});}catch(e){console.warn(e);}}
+/* alterna a situação e devolve o texto do aviso */
+async function alternarOff(off,n,gravar){
+  var i=-1;off.forEach(function(x,k){if(ordAZ(x,n)===0)i=k;});
+  if(i>=0)off.splice(i,1);else off.push(n);
+  await gravar();
+  return n+(i>=0?" ativado.":" inativado: não aparece mais para escolher em registro novo.");
+}
 function renderTipos(){
-  $("tipoCount").textContent=tipos.length+(tipos.length===1?" tipo":" tipos");
+  var f=$("tipoFiltro")?$("tipoFiltro").value:"";
+  var ativos=tipos.filter(tipoAtivo).length;
+  $("tipoCount").textContent=tipos.length+(tipos.length===1?" tipo":" tipos")+" · "+ativos+" ativo"+(ativos===1?"":"s");
   var b=$("tipoBody");b.innerHTML="";
-  if(!tipos.length){b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum tipo cadastrado</div>Escreva acima e clique em Adicionar.</div></td></tr>';return;}
-  tipos.map(function(v,i){return {v:v,i:i};}).sort(function(a,b){return ordAZ(a.v&&a.v.nome||a.v,b.v&&b.v.nome||b.v);}).forEach(function(x){var t=x.v,i=x.i;
+  if(!tipos.length){b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum tipo cadastrado</div>Escreva acima e clique em Adicionar.</div></td></tr>';return;}
+  tipos.map(function(v,i){return {v:v,i:i};})
+    .filter(function(x){return !f||(f==="ativas"?tipoAtivo(x.v):!tipoAtivo(x.v));})
+    .sort(function(a,b2){return ordAZ(a.v,b2.v);}).forEach(function(x){
+    var t=x.v,i=x.i,at=tipoAtivo(t);
     var uso=atendimentos.filter(function(a){return (a.tipos||[]).indexOf(t)>=0;}).length;
     var atual=canalDe(t);
-    b.innerHTML+='<tr><td><div class="t-main">'+esc(t)+"</div></td>"+
+    b.innerHTML+='<tr'+(at?"":' style="opacity:.6"')+'><td><div class="t-main">'+esc(t)+"</div></td>"+
       '<td><select data-ct="'+i+'" style="max-width:180px">'+
         CANAIS.map(function(c){return '<option value="'+c[0]+'"'+(c[0]===atual?" selected":"")+">"+c[1]+"</option>";}).join("")+
       "</select></td>"+
       '<td class="num">'+uso+" registro"+(uso===1?"":"s")+"</td>"+
-      '<td class="num"><button class="btn mut sm" type="button" data-rmt="'+i+'">Remover</button></td></tr>';
+      "<td>"+(at?'<span class="pill p-ok">Ativo</span>':'<span class="pill p-mut">Inativo</span>')+"</td>"+
+      '<td class="num"><button class="btn ghost sm" type="button" data-trn="'+i+'">Renomear</button>'+
+      ' <button class="btn ghost sm" type="button" data-tst="'+i+'">'+(at?"Inativar":"Ativar")+"</button>"+
+      (uso?' <span class="pill p-mut">em uso</span>':' <button class="btn mut sm" type="button" data-rmt="'+i+'">Remover</button>')+"</td></tr>";
   });
+  if(!b.innerHTML)b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum tipo nesta visão</div>Troque o filtro acima.</div></td></tr>';
   Array.prototype.forEach.call(b.querySelectorAll("[data-ct]"),function(sel){
     sel.onchange=async function(){
       canalTipo[tipos[+sel.getAttribute("data-ct")]]=sel.value;
       await gravarCanais();try{renderDash();}catch(e){}toast("Canal atualizado.");};});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-tst]"),function(bt){
+    bt.onclick=async function(){
+      toast(await alternarOff(TIPOS_OFF,tipos[+bt.getAttribute("data-tst")],gravarTiposOff));
+      renderTipos();};});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-trn]"),function(bt){
+    bt.onclick=async function(){
+      var i=+bt.getAttribute("data-trn"),velho=tipos[i];
+      var novo=prompt("Renomear o tipo de atendimento. Os registros que usam este tipo passam a usar o nome novo.",velho);
+      if(novo==null)return;novo=novo.trim();
+      if(!novo||novo===velho)return;
+      if(tipos.some(function(t,k){return k!==i&&ordAZ(t,novo)===0;})){toast("Já existe um tipo com esse nome.");return;}
+      var alvo=atendimentos.filter(function(a){return (a.tipos||[]).indexOf(velho)>=0||a.tipo===velho;});
+      if(alvo.length&&!confirm(alvo.length+" registro(s) usam "+velho+" e vão passar para "+novo+".\n\nConfirma?"))return;
+      tipos[i]=novo;
+      if(canalTipo[velho]!=null){canalTipo[novo]=canalTipo[velho];delete canalTipo[velho];}
+      Object.keys(metaTipos||{}).forEach(function(k){
+        metaTipos[k]=(metaTipos[k]||[]).map(function(t){return t===velho?novo:t;});});
+      TIPOS_OFF=TIPOS_OFF.map(function(t){return ordAZ(t,velho)===0?novo:t;});
+      for(var j=0;j<alvo.length;j++){
+        var a=alvo[j];
+        a.tipos=(a.tipos||[]).map(function(t){return t===velho?novo:t;});
+        if(a.tipo===velho)a.tipo=novo;else if(a.tipo)a.tipo=String(a.tipo).split(" · ").map(function(t){return t===velho?novo:t;}).join(" · ");
+        if(db)await grava("atendimentos",a);
+      }
+      await gravarTipos();await gravarCanais();await gravarTiposOff();
+      try{await gravarMetaTipos();}catch(e){}
+      toast("Tipo renomeado para "+novo+(alvo.length?" em "+alvo.length+" registro(s).":"."));
+      renderTipos();try{render();}catch(e){}};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-rmt]"),function(bt){
     bt.onclick=async function(){
       var t=tipos[+bt.getAttribute("data-rmt")];
       tipos.splice(+bt.getAttribute("data-rmt"),1);delete canalTipo[t];
-      await gravarTipos();await gravarCanais();renderTipos();};});
+      TIPOS_OFF=TIPOS_OFF.filter(function(x){return ordAZ(x,t)!==0;});
+      await gravarTipos();await gravarCanais();await gravarTiposOff();renderTipos();};});
 }
 
 /* ---------- motivos de finalização ---------- */
@@ -22500,16 +22561,53 @@ var SEED_MOTIVOS=["Vendido","Instalação concluída","Serviço realizado","Vai 
 var motivos=[];
 async function gravarMotivos(){if(!db)return;try{await db.doc("config/motivos_finalizacao").set({lista:motivos});}catch(e){console.warn(e);}}
 function renderMotivos(){
-  $("motCount").textContent=motivos.length+(motivos.length===1?" motivo":" motivos");
+  var f=$("motFiltro")?$("motFiltro").value:"";
+  var ativos=motivos.filter(motivoAtivo).length;
+  $("motCount").textContent=motivos.length+(motivos.length===1?" motivo":" motivos")+" · "+ativos+" ativo"+(ativos===1?"":"s");
   var b=$("motBody");b.innerHTML="";
-  if(!motivos.length){b.innerHTML='<tr><td colspan="3"><div class="empty"><div class="big">Nenhum motivo cadastrado</div>Escreva acima e clique em Adicionar.</div></td></tr>';return;}
-  motivos.map(function(v,i){return {v:v,i:i};}).sort(function(a,b){return ordAZ(a.v&&a.v.nome||a.v,b.v&&b.v.nome||b.v);}).forEach(function(x){var m=x.v,i=x.i;
+  if(!motivos.length){b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum motivo cadastrado</div>Escreva acima e clique em Adicionar.</div></td></tr>';return;}
+  motivos.map(function(v,i){return {v:v,i:i};})
+    .filter(function(x){return !f||(f==="ativas"?motivoAtivo(x.v):!motivoAtivo(x.v));})
+    .sort(function(a,b2){return ordAZ(a.v,b2.v);}).forEach(function(x){
+    var m=x.v,i=x.i,at=motivoAtivo(m);
     var uso=atendimentos.filter(function(a){return (a.motivos||[]).indexOf(m)>=0;}).length;
-    b.innerHTML+='<tr><td><div class="t-main">'+esc(m)+'</div></td><td class="num">'+uso+
-      " atendimento"+(uso===1?"":"s")+'</td><td class="num"><button class="btn mut sm" type="button" data-rmm="'+i+'">Remover</button></td></tr>';
+    b.innerHTML+='<tr'+(at?"":' style="opacity:.6"')+'><td><div class="t-main">'+esc(m)+'</div></td><td class="num">'+uso+
+      " atendimento"+(uso===1?"":"s")+"</td>"+
+      "<td>"+(at?'<span class="pill p-ok">Ativo</span>':'<span class="pill p-mut">Inativo</span>')+"</td>"+
+      '<td class="num"><button class="btn ghost sm" type="button" data-mrn="'+i+'">Renomear</button>'+
+      ' <button class="btn ghost sm" type="button" data-mst="'+i+'">'+(at?"Inativar":"Ativar")+"</button>"+
+      (uso?' <span class="pill p-mut">em uso</span>':' <button class="btn mut sm" type="button" data-rmm="'+i+'">Remover</button>')+"</td></tr>";
   });
+  if(!b.innerHTML)b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum motivo nesta visão</div>Troque o filtro acima.</div></td></tr>';
+  Array.prototype.forEach.call(b.querySelectorAll("[data-mst]"),function(bt){
+    bt.onclick=async function(){
+      toast(await alternarOff(MOTIVOS_OFF,motivos[+bt.getAttribute("data-mst")],gravarMotivosOff));
+      renderMotivos();};});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-mrn]"),function(bt){
+    bt.onclick=async function(){
+      var i=+bt.getAttribute("data-mrn"),velho=motivos[i];
+      var novo=prompt("Renomear o motivo. Os registros finalizados com ele passam a usar o nome novo.",velho);
+      if(novo==null)return;novo=novo.trim();
+      if(!novo||novo===velho)return;
+      if(motivos.some(function(m,k){return k!==i&&ordAZ(m,novo)===0;})){toast("Já existe um motivo com esse nome.");return;}
+      var alvo=atendimentos.filter(function(a){return (a.motivos||[]).indexOf(velho)>=0;});
+      if(alvo.length&&!confirm(alvo.length+" registro(s) usam "+velho+" e vão passar para "+novo+".\n\nConfirma?"))return;
+      motivos[i]=novo;
+      MOTIVOS_OFF=MOTIVOS_OFF.map(function(m){return ordAZ(m,velho)===0?novo:m;});
+      for(var j=0;j<alvo.length;j++){
+        var a=alvo[j];
+        a.motivos=(a.motivos||[]).map(function(m){return m===velho?novo:m;});
+        if(db)await grava("atendimentos",a);
+      }
+      await gravarMotivos();await gravarMotivosOff();
+      toast("Motivo renomeado para "+novo+(alvo.length?" em "+alvo.length+" registro(s).":"."));
+      renderMotivos();try{render();}catch(e){}};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-rmm]"),function(bt){
-    bt.onclick=async function(){motivos.splice(+bt.getAttribute("data-rmm"),1);await gravarMotivos();renderMotivos();};});
+    bt.onclick=async function(){
+      var m=motivos[+bt.getAttribute("data-rmm")];
+      motivos.splice(+bt.getAttribute("data-rmm"),1);
+      MOTIVOS_OFF=MOTIVOS_OFF.filter(function(x){return ordAZ(x,m)!==0;});
+      await gravarMotivos();await gravarMotivosOff();renderMotivos();};});
 }
 
 /* ---------- atendimentos e atividades ---------- */
@@ -22517,7 +22615,7 @@ var atendimentos=[],editandoAt=null,tiposSel=[],motivosSel=[],completoSel="",ate
 function renderChipsTipos(){
   var w=$("at_tipos");w.innerHTML="";
   if(!tipos.length){w.innerHTML='<span class="help">Nenhum tipo cadastrado. Vá em Configurações › Tipos de Atendimento.</span>';return;}
-  tipos.forEach(function(t){
+  tipos.filter(function(t){return tipoAtivo(t)||tiposSel.indexOf(t)>=0;}).forEach(function(t){
     var b=document.createElement("button");b.type="button";b.textContent=t;
     b.setAttribute("aria-pressed",String(tiposSel.indexOf(t)>=0));
     b.onclick=function(){
@@ -22861,7 +22959,7 @@ function renderChipsMotivos(){
   var w=$("at_motivos");w.innerHTML="";
   if(!motivos.length){w.innerHTML='<span class="help">Nenhum motivo cadastrado. Vá em Configurações › Motivos de Finalização.</span>';return;}
   var anivM=ehAtendAniv(atendPend);
-  motivos.forEach(function(m){
+  motivos.filter(function(m){return motivoAtivo(m)||motivosSel.indexOf(m)>=0;}).forEach(function(m){
     if(!anivM&&(m===MOT_ANIV_OK||m===MOT_ANIV_NAO))return;
     var b=document.createElement("button");b.type="button";b.textContent=m;
     b.setAttribute("aria-pressed",String(motivosSel.indexOf(m)>=0));
@@ -24031,6 +24129,8 @@ function ligar(){
     renderOrigens();montarSelects();toast("Origem adicionada.");};
   $("ogNome").onkeydown=function(e){if(e.key==="Enter")$("ogAdd").click();};
   if($("ogFiltro"))$("ogFiltro").onchange=renderOrigens;
+  if($("tipoFiltro"))$("tipoFiltro").onchange=renderTipos;
+  if($("motFiltro"))$("motFiltro").onchange=renderMotivos;
 
   $("fnBusca").oninput=renderFornec;
   $("fnNovo").onclick=function(){abrirFornec(null);};
