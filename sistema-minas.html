@@ -1684,6 +1684,7 @@ img{max-width:100%}
       <div class="page-head"><h1>Novo Pedido</h1><p>A conta aparece enquanto você monta — não depois de fechar.</p></div>
 
       <div class="note" id="v_osBanner" hidden></div>
+      <div id="v_edBanner" hidden></div>
       <div class="steps" id="v_steps">
         <button type="button" data-step="1"><i>1</i><b>Cliente</b></button>
         <button type="button" data-step="2"><i>2</i><b>Itens</b></button>
@@ -8787,6 +8788,9 @@ async function salvarPedido(){
   /* venda abaixo da tabela (regra do Wagner, 16/09): o vendedor pede a autorização com o motivo antes de finalizar */
   if(r.abaixo&&!descSolResp){abrirSolDesconto(recalcPedido(itens,formas));return;}
   var solDesc=r.abaixo?descSolResp:null;descSolResp=null;
+  /* pedido reaberto pelo botão "Editar o pedido": atualiza o MESMO pedido, com o mesmo número,
+     a mesma data e a mesma assinatura — não nasce outro (regra dele, 22/09) */
+  if(pedEditando)return await aplicarEdicaoPedido(cliSel,r,solDesc);
   var cli=cliSel;
   var arquivos=ANEXOS.filter(function(a){return a.dados;}).map(function(a){return a.dados;});
   var anexados=arquivos.map(function(a){return a.nome;});
@@ -9011,6 +9015,8 @@ function limparPedido(){
   $("v_idata").value="";$("v_ihora").value="";$("v_obs").value="";$("v_imagem").value="sim";
   ANEXOS.forEach(function(a){a.arquivo="";a.dados=null;});
   limparAssinatura();renderFormas();renderAnexos();
+  /* venda nova nunca herda a edição de um pedido salvo */
+  try{pedEditando=null;renderBannerEdicao();}catch(e){}
 }
 
 /* anexos da venda (regra do Wagner, 12/09): só DOIS campos, cada um imagem ou PDF. O arquivo fica
@@ -18242,6 +18248,175 @@ function formasTexto(fs){
   return (fs||[]).filter(function(f){return (+f.valor||0)>0;}).map(function(f){return f.tipo+" "+(f.parc||1)+"× "+BRL(f.valor);}).join(" + ");
 }
 function pedidoDaOS(o){return (o&&o.pedidoId)?(pedidos.filter(function(p){return p.id===o.pedidoId;})[0]||null):null;}
+/* ================= EDITAR O PEDIDO INTEIRO (pedido dele, 22/09: "preciso de opção para editar
+   o pedido") =================
+   A ficha só deixava mexer em quantidade, valor do item e valor da forma. Agora o pedido abre
+   nas MESMAS sete etapas em que foi montado — cliente, itens, garantia, frete, pagamento, equipe
+   e entrega — e, ao finalizar, atualiza o MESMO pedido (mesmo número, mesma data, mesma
+   assinatura). Não cria pedido novo, não refaz requisição de estoque nem cartão do funil. */
+var pedEditando=null;
+function renderBannerEdicao(){
+  var b=$("v_edBanner");if(!b)return;
+  var p=pedEditando;
+  var bs=$("v_salvar");
+  var h1=document.querySelector("#s-venda .page-head h1");
+  if(!p){
+    b.hidden=true;b.innerHTML="";
+    if(bs)bs.textContent="Finalizar pedido";
+    if(h1)h1.textContent="Novo Pedido";
+    return;
+  }
+  if(bs)bs.textContent="Salvar as alterações do pedido "+p.numero;
+  if(h1)h1.textContent="Editando o pedido "+p.numero;
+  b.hidden=false;
+  b.innerHTML='<div class="note warn"><b>Editando o pedido '+esc(String(p.numero))+"</b> · "+esc(p.cliente||"")+
+    " · lançado em "+esc(dataBR(p.data))+"<br>"+
+    "Mude o que precisar e toque em <b>Salvar as alterações</b> no fim: o mesmo pedido é atualizado, com o mesmo número."+
+    (p.assinaturaImg?" A assinatura do cliente é mantida.":"")+
+    '<div class="actions" style="justify-content:flex-start;margin-top:10px">'+
+    '<button class="btn mut sm" type="button" id="v_edCancelar">Cancelar a edição</button></div></div>';
+  var bc=$("v_edCancelar");
+  if(bc)bc.onclick=function(){
+    var alvo=pedEditando;pedEditando=null;
+    try{limparPedido();}catch(e){}
+    ir("pedidos");
+    if(alvo)try{abrirPedido(alvo);}catch(e){}
+    toast("Edição cancelada — nada foi alterado.");
+  };
+}
+function sairModoEdicao(){
+  if(!pedEditando)return;
+  pedEditando=null;
+  try{renderBannerEdicao();}catch(e){}
+}
+function abrirPedidoParaEditar(p){
+  if(!p)return;
+  if(!editavel(p)){toast("Esta venda não pode mais ser alterada.");return;}
+  ir("venda");
+  try{limparPedido();}catch(e){}
+  pedEditando=p;
+  var c=clientes.filter(function(x){return x.id===p.clienteId;})[0];
+  if(c)try{escolherClienteVenda(c);}catch(e){}
+  itens=JSON.parse(JSON.stringify(p.itens||[]));
+  formas=JSON.parse(JSON.stringify(p.formas||[]));
+  normalizarValoresItens(itens);
+  normalizarFormasVenda(formas);
+  try{
+    if($("v_frete"))$("v_frete").value=brMF(+p.frete||0);
+    if($("v_descGeral"))$("v_descGeral").value=brMF(+p.descontoGeral||0);
+    if(p.prospector)$("v_prosp").value=p.prospector;
+    if(p.vendedor)$("v_vend").value=p.vendedor;
+    if(p.instalador)$("v_inst").value=p.instalador;
+    $("v_obs").value=p.obs||"";
+    if(p.usoImagem)$("v_imagem").value=p.usoImagem;
+    if(p.instalacao){
+      var pr=String(p.instalacao).split(" ");
+      $("v_idata").value=pr[0]||"";$("v_ihora").value=pr[1]||"";
+      if(p.respInstalacao)$("v_iresp").value=p.respInstalacao;
+      marcarInstalacao("sim");
+    }else marcarInstalacao(p.instalacaoAgora?"agora":"nao");
+    /* a assinatura já coletada continua valendo e aparece no quadro da etapa 7 */
+    if(p.assinaturaImg)desenharAssinaturaSalva(p.assinaturaImg);
+  }catch(e){console.warn("editar pedido",e);}
+  try{renderFormas();calcular();renderGarantiaEtapa();atualizarEtapas();}catch(e){console.warn(e);}
+  irEtapa(1);
+  renderBannerEdicao();
+  toast("Pedido "+p.numero+" aberto para edição.");
+}
+/* desenha no quadro da etapa 7 a assinatura que o cliente já deu — ela continua valendo quando o
+   pedido é reaberto (regra dele, 22/09: "no reabrir pedido não pode perder a assinatura") */
+function desenharAssinaturaSalva(src){
+  var c=$("v_sig");if(!c||!src)return false;
+  var x=c.getContext("2d");x.clearRect(0,0,c.width,c.height);
+  var im=new Image();
+  im.onload=function(){try{x.drawImage(im,0,0,c.width,c.height);}catch(e){}};
+  im.src=src;
+  assinaturaFeita=true;
+  var st=$("v_sigStatus");
+  if(st)st.textContent="Assinatura do cliente já coletada nesta venda. Para trocar, toque em Limpar e assine de novo.";
+  return true;
+}
+/* aplica a edição no pedido que já existe, sem criar outro. As validações são as mesmas do
+   salvarPedido — este ramo entra depois delas. */
+async function aplicarEdicaoPedido(cli,r,solDesc){
+  var p=pedEditando;if(!p)return null;
+  var antes={base:+p.base||0,pontos:+p.pontos||0,total:+p.total||0};
+  var assNova=assinaturaParaDoc();
+  p.historico=(p.historico||[]);
+  p.historico.push({quando:agoraCarimbo(),por:usuarioAtual,
+    de:{total:p.total,base:p.base},para:{total:r.total,base:r.base},
+    motivo:"pedido editado pelas etapas, antes da aprovação do financeiro",autorizaram:[]});
+  if(cli){p.clienteId=cli.id;p.cliente=cli.nome;}
+  p.itens=itens.slice();p.formas=formas.slice();
+  p.total=r.total;p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
+  p.modelo="base";p.totalBase=r.totalBase;p.acrescimo=r.acrescimo;
+  p.frete=(r.comp?r.comp.frete:0);p.descontoGeral=(r.comp?r.comp.desc:0);
+  p.prospector=$("v_prosp").value;p.vendedor=$("v_vend").value;
+  p.instalador=($("v_idata").value
+    ?($("v_inst").value||$("v_iresp").value||$("v_vend").value)
+    :(temInstalacaoVenda()==="agora"?($("v_inst").value||$("v_vend").value):$("v_vend").value));
+  p.respInstalacao=$("v_idata").value?($("v_iresp").value||$("v_inst").value||$("v_vend").value):"";
+  p.instalacao=$("v_idata").value?($("v_idata").value+" "+($("v_ihora").value||"")):"";
+  p.instalacaoAgora=(temInstalacaoVenda()==="agora"&&!$("v_idata").value);
+  p.obs=$("v_obs").value.trim();p.usoImagem=$("v_imagem").value;
+  p.abaixoTabela=!!r.abaixo;
+  if(solDesc)p.solicitacaoDesconto=solDesc;
+  /* anexo escolhido durante a edição entra junto dos que já estavam */
+  var novosAnx=ANEXOS.filter(function(a){return a.dados;}).map(function(a){return a.dados;});
+  if(novosAnx.length){
+    p.arquivos=(p.arquivos||[]).concat(novosAnx);
+    p.anexos=p.arquivos.map(function(a){return a.nome;});
+  }
+  /* crédito do plano e desconto de troca seguem as formas que ficaram */
+  var credE=formas.filter(function(f){return f.tipo===FORMA_CREDITO;}).reduce(function(a,f){return a+(+f.valor||0);},0);
+  p.creditoPlano=(credE>0&&cli?montarCreditoPlano(cli.id,credE):null);
+  var trocaE=formas.filter(function(f){return f.tipo===FORMA_TROCA;}).reduce(function(a,f){return a+(+f.valor||0);},0);
+  if(trocaE>0&&!p.troca)p.troca={tem:true,viaForma:true,valor:Math.round(trocaE*100)/100,serie:"",
+    quando:agoraCarimbo(),por:usuarioAtual};
+  else if(trocaE>0&&p.troca)p.troca.valor=Math.round(trocaE*100)/100;
+  else if(!trocaE)p.troca=null;
+  /* a assinatura nunca se perde: sem traço novo, vale a que já estava */
+  if(assNova)p.assinaturaImg=assNova;
+  if(p.assinaturaImg)p.assinado=true;
+  if(p.assinaturaImg&&Math.round((antes.total||0)*100)!==Math.round((r.total||0)*100))
+    p.alteradaAposAssinatura={quando:agoraCarimbo(),por:usuarioAtual,de:antes.total,para:r.total,
+      motivo:"pedido editado antes da aprovação"};
+  if(!p.encerrada)p.status=etapaVenda(p);
+  /* item incluído na edição sem estoque de quem entrega: a solicitação de retirada é criada agora
+     (a dos itens que já estavam continua valendo, com o mesmo pedido) */
+  var novasReq=0;
+  for(var iq=0;iq<(p.itens||[]).length;iq++){
+    var itE=p.itens[iq];
+    if(!itE.retirada||itE.retirada.reqId)continue;
+    var rqE={id:uid(),loja:p.loja||lojaAtual,tipo:"retirada",lojaOrigem:itE.retirada.loja||p.loja||lojaAtual,
+      colaborador:responsavelVenda(p)||p.vendedor||usuarioAtual,
+      itens:[{pid:itE.pid,nome:itE.nome,cod:itE.cod,qtd:+itE.retirada.qtd||0,atendida:+itE.retirada.qtd||0}],
+      obs:"Retirada para o pedido "+p.numero+" · "+p.cliente,
+      data:hojeISO(),status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual,
+      pedidoId:p.id,pedidoNumero:p.numero,cliente:p.cliente};
+    itE.retirada.reqId=rqE.id;itE.retirada.status="pendente";
+    requisicoes.push(rqE);await grava("requisicoes",rqE);novasReq++;
+  }
+  var falhou="";
+  if(db){try{await col("pedidos").doc(p.id).set(p);}catch(eG){falhou=(eG&&eG.message)||String(eG);}}
+  if(falhou){
+    $("v_alerta").innerHTML='<div class="note crit"><b>A alteração NÃO foi gravada.</b> O banco recusou: '+
+      esc(falhou)+".<br>Nada se perdeu — o pedido continua montado nesta tela. Confira a internet e finalize de novo.</div>";
+    toast("A alteração não foi gravada — veja o aviso em vermelho.");
+    return null;
+  }
+  try{await gerarAjustes(p,antes,{base:r.base,pontos:r.pontos},"Pedido "+p.numero+" editado");}catch(e){console.warn(e);}
+  var alvo=p;
+  pedEditando=null;
+  try{limparPedido();}catch(e){}
+  render();
+  ir("pedidos");
+  try{abrirPedido(alvo);}catch(e){}
+  toast("Pedido "+alvo.numero+" atualizado."+
+    (novasReq?" · "+novasReq+" solicitação(ões) de retirada de estoque enviada(s).":""));
+  return alvo;
+}
+
 function renderBannerOS(){
   var b=$("v_osBanner");if(!b)return;
   var o=pedOrigemOS;
@@ -21495,6 +21670,10 @@ function abrirPedido(p){
 function renderPedDet(){
   var p=pedAberto;if(!p)return;
   var ed=editavel(p),r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p));
+  /* regra dele (22/09): a ficha do pedido salvo é SÓ LEITURA. Quem quer mudar toca em
+     "Editar o pedido" e o pedido volta às sete etapas, com tudo preenchido. O ajuste solto
+     dentro da ficha continua existindo só no caminho da reabertura de venda já encerrada. */
+  var edInline=ed&&!!p.encerrada;
   var papeis=[{p:"Prospector",q:p.prospector,f:.2},{p:"Vendedor",q:p.vendedor,f:.6},
     {p:"Instalador",q:p.instalador||p.vendedor,f:.2}];
   var tb=$("pd_trio");tb.innerHTML="";
@@ -21513,17 +21692,17 @@ function renderPedDet(){
     ti.innerHTML+="<tr><td><div class=\"t-main\">"+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+"</code>"+
       (i.serie?" · série "+esc(i.serie):"")+(i.garantia?" · "+esc(i.garantia):"")+(i.daInstalacao?" · incluído na instalação":"")+
       (i.planoCobre?" · coberto pelo plano "+esc(i.planoCobre.garantia):"")+"</div></td>"+
-      '<td class="num">'+(ed?'<input type="number" min="1" style="max-width:80px" data-pi="qtd" data-i="'+idx+'" value="'+(i.qtd||1)+'">':(i.qtd||1))+"</td>"+
-      '<td class="num">'+(ed?'<input type="text" inputmode="decimal" style="max-width:120px" data-pi="valor" data-i="'+idx+'" value="'+brMF(+i.valor||0)+'">':BRL(i.valor))+"</td>"+
+      '<td class="num">'+(edInline?'<input type="number" min="1" style="max-width:80px" data-pi="qtd" data-i="'+idx+'" value="'+(i.qtd||1)+'">':(i.qtd||1))+"</td>"+
+      '<td class="num">'+(edInline?'<input type="text" inputmode="decimal" style="max-width:120px" data-pi="valor" data-i="'+idx+'" value="'+brMF(+i.valor||0)+'">':BRL(i.valor))+"</td>"+
       '<td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
-      '<td class="num">'+(ed?'<button class="btn mut sm" type="button" data-pirm="'+idx+'">Remover</button>':"")+"</td></tr>";
+      '<td class="num">'+(edInline?'<button class="btn mut sm" type="button" data-pirm="'+idx+'">Remover</button>':"")+"</td></tr>";
   });
   var tf=$("pd_formas");tf.innerHTML="";
   pedRasc.formas.forEach(function(f,idx){
     tf.innerHTML+="<tr><td>"+esc(f.tipo)+'</td><td class="num">'+f.parc+"×</td>"+
-      '<td class="num">'+(ed?'<input type="text" inputmode="decimal" style="max-width:140px" data-pf="'+idx+'" value="'+brMF(+f.valor||0)+'">':BRL(f.valor))+"</td></tr>";
+      '<td class="num">'+(edInline?'<input type="text" inputmode="decimal" style="max-width:140px" data-pf="'+idx+'" value="'+brMF(+f.valor||0)+'">':BRL(f.valor))+"</td></tr>";
   });
-  $("pd_addBox").hidden=!ed;
+  $("pd_addBox").hidden=!edInline;
 
   /* composição da venda na ficha do pedido (regra dele, 22/09): dá para ver o que é valor
      comercial e o que é acréscimo do parcelamento */
@@ -21550,7 +21729,7 @@ function renderPedDet(){
   /* avisos e ações conforme o estado */
   var av="",ac="";
   var reb=p.reabertura;
-  if(ed&&r.dif!==0){
+  if(edInline&&r.dif!==0){
     av+='<div class="note crit"><b>'+(r.dif>0?"Falta distribuir "+BRL(r.dif):"Sobra "+BRL(-r.dif))+
       ".</b> Ajuste os valores das formas de pagamento antes de salvar.</div>";
   }
@@ -21601,12 +21780,13 @@ function renderPedDet(){
       esc(dataBR(p.devolucaoFin.quando))+"): "+esc(p.devolucaoFin.motivo)+"</div>";
     av+='<div class="note"><b>'+esc(stp)+".</b> "+
       (p.descontoRecusado&&!p.descontoAutorizado?"Desconto recusado por "+esc(p.descontoRecusado.por)+": "+esc(p.descontoRecusado.motivo)+
-         ". Ajuste os valores e toque em Salvar alterações — se continuar abaixo da tabela, escreva o motivo e a autorização é pedida de novo.":
+         ". Toque em Editar o pedido e ajuste os valores — se continuar abaixo da tabela, escreva o motivo e a autorização é pedida de novo.":
        stp.indexOf("desconto")>=0?"Venda abaixo da tabela: o Administrador precisa autorizar e escolher a tabela da comissão antes de seguir."+
          (p.solicitacaoDesconto?"<br>Motivo de "+esc(p.solicitacaoDesconto.por)+": "+esc(p.solicitacaoDesconto.motivo):""):
        stp.indexOf("instalação")>=0?"Abra a instalação para ver a venda, incluir o que foi usado a mais, escrever as observações e finalizar — a venda vai para a Aprovação Financeira.":
        "O estoque está só reservado. A baixa, as parcelas e a comissão acontecem quando o financeiro aprovar o recebimento.")+
-      (ed?"<br><b>Dá para alterar itens, valores e formas até o financeiro aprovar</b> — depois disso a venda trava."
+      (ed?"<br><b>Dá para editar esta venda até o financeiro aprovar</b> — depois disso ela trava. Toque em "+
+          "<b>Editar o pedido</b>: ele volta às sete etapas, com tudo preenchido, inclusive a assinatura do cliente."
         :"<br>Só quem participa desta venda ou a gestão pode alterá-la.")+"</div>";
     if(stp.indexOf("esconto")>=0&&pode("aprovarDesconto"))
       ac+='<button class="btn" type="button" id="pd_desconto">Autorizar desconto</button>';
@@ -21617,7 +21797,7 @@ function renderPedDet(){
       ac+='<button class="btn" type="button" id="pd_instalado">Abrir a instalação</button>';
     if(stp==="Aguardando aprovação financeira"&&pode("aprovarFinanceiro"))
       ac+='<button class="btn" type="button" id="pd_irfin">Ir para a Aprovação Financeira</button>';
-    if(ed)ac+='<button class="btn ghost" type="button" id="pd_salvar">Salvar alterações</button>';
+    if(ed)ac+='<button class="btn ghost" type="button" id="pd_editar">Editar o pedido</button>';
     if(pode("aprovarFinanceiro")||ehGestor())
       ac+='<button class="btn mut" type="button" id="pd_cancelar">Cancelar venda</button>';
   }
@@ -21703,6 +21883,9 @@ function ligarPedDet(){
     renderPedDet();limparInclusao("pd_prod","pd_qtd",["pd_valor"]);};
   function on(id,fn){var e=$(id);if(e)e.onclick=fn;}
   on("pd_pdf",function(){abrirDocVenda(p);});
+  on("pd_editar",function(){
+    pedAberto=null;$("pedDet").hidden=true;$("pedLista").hidden=false;
+    abrirPedidoParaEditar(p);});
   on("pd_zap",function(){enviarVendaWhatsApp(p,$("pd_zap"));});
   on("pd_desconto",function(){abrirAutDesconto(p);});
   on("pd_instalado",async function(){await concluirInstalacao(p);renderPedDet();});
@@ -25597,6 +25780,10 @@ function ir(s){
   var mudou=telaAtual!==s;
   /* saiu do Novo Pedido aberto por uma OS sem salvar: volta ao pedido normal (o "Completar cadastro" mantém) */
   if(mudou&&telaAtual==="venda"&&pedOrigemOS&&!voltaVenda){try{sairModoOS();}catch(e){console.warn(e);}}
+  /* saiu da edição de um pedido salvo sem finalizar: a tela volta a ser o Novo Pedido de sempre
+     e o pedido original continua como estava */
+  if(mudou&&telaAtual==="venda"&&s!=="venda"&&pedEditando&&!voltaVenda){
+    try{pedEditando=null;renderBannerEdicao();limparPedido();}catch(e){console.warn(e);}}
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){b.setAttribute("aria-current",String(b.dataset.s===s));});
   Array.prototype.forEach.call(document.querySelectorAll(".screen"),function(x){x.hidden=true;});
   $("s-"+s).hidden=false;window.scrollTo(0,0);

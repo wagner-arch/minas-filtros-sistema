@@ -21,6 +21,9 @@
 //   3. cria o usuário no Auth com a senha informada (e-mail já confirmado) ou,
 //      se o e-mail já existir, troca a senha dele;
 //   4. grava/atualiza a linha de public.perfis (nome, função, loja, jornada).
+//   5. com {somenteFuncao:true} (v200) só atualiza a linha de public.perfis — serve para
+//      trocar a função de quem já tem acesso sem criar senha nova. É a função gravada
+//      ali que decide o menu e as permissões no login.
 //
 // SEGURANÇA
 //   - Só Administrador ativo passa. Qualquer outro recebe 403.
@@ -97,9 +100,11 @@ Deno.serve(async (req) => {
   const funcao = String(corpo.funcao || "").trim();
   const loja = String(corpo.loja || "").trim();
   const jornada = (corpo.jornada && typeof corpo.jornada === "object") ? corpo.jornada : {};
+  // v200: trocar só a função de quem já tem acesso, sem mexer na senha
+  const somenteFuncao = corpo.somenteFuncao === true;
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return resposta({ erro: "E-mail inválido." }, 400);
-  if (senha.length < 8) return resposta({ erro: "A senha precisa de pelo menos 8 caracteres." }, 400);
+  if (!somenteFuncao && senha.length < 8) return resposta({ erro: "A senha precisa de pelo menos 8 caracteres." }, 400);
   if (!nome) return resposta({ erro: "Informe o nome do colaborador." }, 400);
   if (!funcao) return resposta({ erro: "Informe a função." }, 400);
   if (!["mf", "wf", "dv"].includes(loja)) return resposta({ erro: "Loja inválida (use mf, wf ou dv)." }, 400);
@@ -113,8 +118,12 @@ Deno.serve(async (req) => {
 
   if (achado) {
     idUsuario = achado.id;
-    const { error } = await admin.auth.admin.updateUserById(idUsuario, { password: senha, email_confirm: true });
-    if (error) return resposta({ erro: "Não consegui trocar a senha: " + error.message }, 400);
+    if (!somenteFuncao) {
+      const { error } = await admin.auth.admin.updateUserById(idUsuario, { password: senha, email_confirm: true });
+      if (error) return resposta({ erro: "Não consegui trocar a senha: " + error.message }, 400);
+    }
+  } else if (somenteFuncao) {
+    return resposta({ erro: "Esse e-mail ainda não tem acesso: cadastre a senha primeiro." }, 400);
   } else {
     const { data, error } = await admin.auth.admin.createUser({
       email,
@@ -128,7 +137,9 @@ Deno.serve(async (req) => {
   }
 
   // ---- perfil (quem a pessoa é no sistema) ----
-  const linha: Record<string, unknown> = { user_id: idUsuario, nome, funcao, loja, ativo: true };
+  // v203: {ativo:false} desativa o acesso sem apagar nada; entrarComPerfil recusa perfil inativo
+  const ativo = corpo.ativo === false ? false : true;
+  const linha: Record<string, unknown> = { user_id: idUsuario, nome, funcao, loja, ativo };
   if (Object.keys(jornada).length) linha.jornada = jornada;
   const { error: erroPerfil } = await admin.from("perfis").upsert(linha, { onConflict: "user_id" });
   if (erroPerfil) {
