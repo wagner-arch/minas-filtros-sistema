@@ -1814,6 +1814,7 @@ img{max-width:100%}
             <h2>Precisa de instalação?</h2>
             <div class="chips" id="v_temInst" style="margin-bottom:6px">
               <button type="button" data-ti="nao">Não — o cliente leva</button>
+              <button type="button" data-ti="agora">Com instalação, sem agendamento futuro</button>
               <button type="button" data-ti="sim">Sim — agendar com o técnico</button>
             </div>
             <div id="v_instFut" hidden>
@@ -8153,6 +8154,14 @@ function ajustarInstalador(){
     var ajo=$("v_instAjuda");if(ajo)ajo.textContent="OS "+pedOrigemOS.numero+": o técnico ("+(pedOrigemOS.tecnico||"—")+") é o instalador e fica com os 20%.";
     return;}
   var temInst=!!$("v_idata").value,vend=$("v_vend").value,aj=$("v_instAjuda");
+  /* v210: instalação feita na entrega, sem agendamento — o instalador é escolhido e fica com os 20% */
+  if(!temInst&&temInstalacaoVenda()==="agora"){
+    si.disabled=false;
+    if(aj)aj.textContent=si.value
+      ? "Instalação na entrega: "+si.value+" é o instalador e fica com os 20%."
+      : "Instalação na entrega: escolha o instalador, senão o vendedor ("+(vend||"—")+") fica com os 20%.";
+    return;
+  }
   if(!temInst){
     si.value=vend;si.disabled=true;
     if(aj)aj.textContent="Sem instalação futura: o vendedor ("+(vend||"—")+") é o instalador e fica com os 20%.";
@@ -8220,14 +8229,15 @@ function marcarInstalacao(v){
   Array.prototype.forEach.call(document.querySelectorAll("#v_temInst button"),function(b){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-ti")===v));});
   var w=$("v_instFut");if(w)w.hidden=(v!=="sim");
-  if(v==="nao"){
+  if(v!=="sim"){
     if($("v_idata"))$("v_idata").value="";
     if($("v_ihora"))$("v_ihora").value="";
   }
   var nota=$("v_instNota");
   if(nota)nota.innerHTML=(v==="sim")
     ? "O agendamento entra na agenda do técnico, e a baixa de estoque passa a sair dele depois da instalação."
-    : (v==="nao"?"Sem instalação: o produto sai do estoque de quem vendeu e o cliente leva na hora."
+    : (v==="agora"?"A instalação é feita agora, na entrega: não entra na agenda e a venda segue direto para a Aprovação Financeira. Escolha o instalador em <b>Quem vendeu</b> — é ele que fica com os 20%."
+      : v==="nao"?"Sem instalação: o produto sai do estoque de quem vendeu e o cliente leva na hora."
       :"Responda para seguir — é o que decide se a venda gera agendamento.");
   try{ajustarInstalador();conferirAgendaTecnico();calcular();}catch(e){}
 }
@@ -8786,7 +8796,11 @@ async function salvarPedido(){
     prospector:$("v_prosp").value,vendedor:$("v_vend").value,
     /* regra do Wagner (12/09): sem instalação futura, ou sem instalador informado, o vendedor é o
        instalador e fica com os 20% */
-    instalador:$("v_idata").value?($("v_inst").value||$("v_iresp").value||$("v_vend").value):$("v_vend").value,
+    /* v210: três respostas para a instalação — não / na entrega, sem agendamento / agendada */
+    instalador:($("v_idata").value
+      ?($("v_inst").value||$("v_iresp").value||$("v_vend").value)
+      :(temInstalacaoVenda()==="agora"?($("v_inst").value||$("v_vend").value):$("v_vend").value)),
+    instalacaoAgora:(temInstalacaoVenda()==="agora"&&!$("v_idata").value),
     respInstalacao:$("v_idata").value?($("v_iresp").value||$("v_inst").value||$("v_vend").value):"",
     itens:itens.slice(),formas:formas.slice(),total:r.total,depreciado:r.dep,base:r.base,pontos:r.pontos,
     /* v206: fica gravado o que é valor comercial e o que é acréscimo do parcelamento */
@@ -21462,8 +21476,10 @@ function precisaAutorizar(p){
   return out;
 }
 function editavel(p){
-  /* só gestor mexe em venda encerrada, e só depois da autorização aprovada */
-  if(!p.encerrada)return ehGestor()||p.vendedor===usuarioAtual;
+  /* regra dele (22/09): "tem que ter opção de editar o pedido até antes o financeiro aprovar;
+     depois de aprovado pelo financeiro, impossível editar". Antes só o `p.vendedor` editava —
+     quem lançou como prospector ou instalador ficava de fora (v210). */
+  if(!p.encerrada)return ehGestor()||deMim(p,CAMPOS_PED);
   return ehGestor()&&p.reabertura&&p.reabertura.status==="aprovada";
 }
 function abrirPedido(p){
@@ -21589,7 +21605,9 @@ function renderPedDet(){
        stp.indexOf("desconto")>=0?"Venda abaixo da tabela: o Administrador precisa autorizar e escolher a tabela da comissão antes de seguir."+
          (p.solicitacaoDesconto?"<br>Motivo de "+esc(p.solicitacaoDesconto.por)+": "+esc(p.solicitacaoDesconto.motivo):""):
        stp.indexOf("instalação")>=0?"Abra a instalação para ver a venda, incluir o que foi usado a mais, escrever as observações e finalizar — a venda vai para a Aprovação Financeira.":
-       "O estoque está só reservado. A baixa, as parcelas e a comissão acontecem quando o financeiro aprovar o recebimento.")+"</div>";
+       "O estoque está só reservado. A baixa, as parcelas e a comissão acontecem quando o financeiro aprovar o recebimento.")+
+      (ed?"<br><b>Dá para alterar itens, valores e formas até o financeiro aprovar</b> — depois disso a venda trava."
+        :"<br>Só quem participa desta venda ou a gestão pode alterá-la.")+"</div>";
     if(stp.indexOf("esconto")>=0&&pode("aprovarDesconto"))
       ac+='<button class="btn" type="button" id="pd_desconto">Autorizar desconto</button>';
     if(p.descontoAutorizado&&p.descontoAutorizado.tabela)
@@ -21603,6 +21621,9 @@ function renderPedDet(){
     if(pode("aprovarFinanceiro")||ehGestor())
       ac+='<button class="btn mut" type="button" id="pd_cancelar">Cancelar venda</button>';
   }
+  if(p.instalacaoAgora&&!p.instalacao)
+    av+='<div class="note ok"><b>Instalação feita na entrega</b> · '+esc(p.instalador||"—")+
+      " — sem agendamento futuro, então a venda seguiu direto para a Aprovação Financeira.</div>";
   if(p.instalacao){
     var msI=(p.itens||[]).filter(function(i){return i.daInstalacao;});
     av+='<div class="note'+(p.instaladoEm?" ok":"")+'"><b>Instalação</b> '+esc(String(p.instalacao))+" · "+esc(respInstalacao(p)||"—")+
