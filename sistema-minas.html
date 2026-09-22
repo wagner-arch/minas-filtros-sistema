@@ -191,6 +191,11 @@
   /* pergunta do contato de aniversariante */
   .anv-resp{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0}
   .anv-resp .btn{padding:14px 10px;font-size:16px;justify-content:center}
+  /* contador de pendentes no menu e blocos da Central de Solicitações (22/09) */
+  .rail-badge{display:inline-block;margin-left:6px;background:var(--crit);color:#fff;border-radius:999px;
+    font-size:12px;font-weight:700;padding:1px 7px;vertical-align:middle}
+  .sl-conf{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:8px 0}
+  .sl-conf b{display:block}
   /* retirada de estoque para a venda */
   .aviso-retirada{position:fixed;left:50%;transform:translateX(-50%);bottom:86px;z-index:70;background:var(--warn);color:#fff;border:0;border-radius:999px;
     padding:10px 18px;font:inherit;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25);cursor:pointer;max-width:92vw}
@@ -1220,6 +1225,7 @@ img{max-width:100%}
     <button data-s="dash" aria-current="true">Dashboard</button>
     <div class="grp">Comercial</div>
     <button data-s="funil">Funil de Vendas</button>
+    <button data-s="solic">Solicitações <span class="rail-badge" id="solicBadge" hidden></span></button>
     <div class="grp">Operações</div>
     <button data-s="ponto">Cartão de Ponto</button>
     <button data-s="agenda">Agenda</button>
@@ -2011,6 +2017,26 @@ img{max-width:100%}
 
     <!-- ANIVERSARIANTES (pedido do Wagner, 14/09) -->
     <!-- FUNIL DE VENDAS (v137, pedido do Wagner, 17/09) -->
+    <!-- CENTRAL DE SOLICITAÇÕES (regra dele, 22/09): estrutura genérica, para receber outros
+         tipos de aprovação depois (estoque, desconto, dado sensível, troca de responsável). -->
+    <section class="screen" id="s-solic" hidden>
+      <div class="page-head"><h1>Solicitações</h1><p>Pedidos de autorização que precisam de um administrador. Quem pede acompanha aqui a resposta; quem aprova decide por aqui.</p></div>
+      <div class="kpis" id="slKpis"></div>
+      <div class="card flush">
+        <div class="toolbar">
+          <select id="slStatus" style="max-width:180px"><option value="pendente">Pendentes</option><option value="">Todas</option><option value="aprovada">Aprovadas</option><option value="recusada">Recusadas</option><option value="cancelada">Canceladas</option></select>
+          <select id="slTipo" style="max-width:220px"></select>
+          <input id="slBusca" placeholder="Cliente, solicitante ou motivo" style="max-width:260px">
+          <span class="sp"></span><span class="count" id="slCount"></span>
+        </div>
+        <div class="tw"><table>
+          <thead><tr><th>Data</th><th>Solicitante</th><th>Cliente</th><th>Tipo</th><th>Responsável atual</th><th>Situação</th><th></th></tr></thead>
+          <tbody id="slBody"></tbody>
+        </table></div>
+      </div>
+      <div class="card" id="slOutras"></div>
+    </section>
+
     <section class="screen" id="s-funil" hidden>
       <div class="page-head"><h1>Funil de Vendas</h1><p>Cada lead ou cliente em negociação é um cartão. Ele anda sozinho quando há atendimento, orçamento ou pedido — e você arrasta quando a conversa avança. Perdido pede o motivo.</p></div>
       <div class="kpis" id="fuKpis"></div>
@@ -4965,6 +4991,39 @@ img{max-width:100%}
 
 <!-- purificador usado entregue como troca na venda (pedido do Wagner, 16/09) -->
 <!-- como o cliente pagou o Serviço de Orçamento (pedido do Wagner, 21/09) -->
+<!-- cliente já em atendimento de outro vendedor (regra dele, 22/09) -->
+<div class="modal" id="conflitoModal" hidden>
+  <div class="box">
+    <h3 id="cf_titulo">Cliente em atendimento</h3>
+    <div class="sub" id="cf_sub"></div>
+    <div id="cf_lista"></div>
+    <div class="fld" style="margin-top:12px" id="cf_motivoWrap">
+      <label for="cf_motivo">Por que você precisa atender este cliente? <span class="req">*</span></label>
+      <textarea id="cf_motivo" rows="3" placeholder="Ex.: o cliente me procurou hoje na loja e pediu para fechar comigo"></textarea>
+    </div>
+    <div id="cf_alerta"></div>
+    <div class="actions">
+      <button class="btn mut" type="button" id="cf_voltar">Voltar</button>
+      <button class="btn" type="button" id="cf_pedir">Solicitar autorização</button>
+    </div>
+  </div>
+</div>
+
+<!-- decisão do administrador sobre uma solicitação -->
+<div class="modal" id="solModal" hidden>
+  <div class="box">
+    <h3 id="sl_titulo">Solicitação</h3>
+    <div class="sub" id="sl_sub"></div>
+    <div id="sl_corpo"></div>
+    <div class="fld" style="margin-top:12px" id="sl_obsWrap">
+      <label for="sl_obs">Observação (opcional na aprovação, obrigatória na recusa)</label>
+      <textarea id="sl_obs" rows="3" placeholder="O que o solicitante precisa saber"></textarea>
+    </div>
+    <div id="sl_alerta"></div>
+    <div class="actions" id="sl_acoes"></div>
+  </div>
+</div>
+
 <div class="modal" id="orcRecModal" hidden>
   <div class="box">
     <h3>Recebido do cliente</h3>
@@ -5947,6 +6006,8 @@ async function carregar(){
     pedidos=vs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var ng=await col("negocios").limit(1000).get();
     negocios=ng.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    var sl=await col("solicitacoes").limit(1000).get();
+    solicitacoes=sl.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var os=await col("orcamentos").limit(500).get();
     orcamentos=os.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var fc=await col("fechamentos").limit(200).get();
@@ -5957,6 +6018,7 @@ async function carregar(){
     if(fu.exists&&fu.data()&&fu.data().lista&&fu.data().lista.length){funcoes=fu.data().lista;}
     else{funcoes=JSON.parse(JSON.stringify(SEED_FUNCOES));await gravarFuncoes();}
     await migrarTelasNovas();
+    try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
     /* foto de referência de cada um (coleção própria: cada pessoa grava a sua) */
     try{
       var fc=await col("facial").limit(200).get();
@@ -8452,6 +8514,8 @@ async function salvarPedido(){
     try{avisarPosseVeiculo();}catch(e){}},1800);
   pedidos.push(ped);
   if(db){try{await col("pedidos").doc(ped.id).set(ped);}catch(e){console.warn(e);}}
+  /* autorização de cliente em atendimento: vale para ESTE pedido e acaba aqui (22/09) */
+  try{await consumirAutorizacao(ped.clienteId,"pedido "+ped.numero);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: pedido lançado fecha o cartão como Venda */
   try{await atualizarFunilCliente(ped.clienteId,"pedido");}catch(eF){console.warn("funil",eF);}
   if(solDesc){
@@ -14680,7 +14744,7 @@ async function baixarConciliados(){
 /* ================= DADOS DE TESTE ================= */
 function contaDemo(){
   var n=0;
-  [clientes,produtos,pedidos,orcamentos,atendimentos,titulos,movs,notas,fornecedores,movEst,requisicoes,pontos,ajustes,fechamentos,ordens,equipamentos,veiculos,abastecimentos,manutVeic,posses,vistorias,multas,usados,negocios]
+  [clientes,produtos,pedidos,orcamentos,atendimentos,titulos,movs,notas,fornecedores,movEst,requisicoes,pontos,ajustes,fechamentos,ordens,equipamentos,veiculos,abastecimentos,manutVeic,posses,vistorias,multas,usados,negocios,solicitacoes]
     .forEach(function(l){n+=l.filter(function(x){return x.demo;}).length;});
   return n;
 }
@@ -15391,6 +15455,19 @@ async function gerarDemo(){
   }catch(eV){console.warn("frota demo",eV);}
   /* nenhum lançamento de demonstração pode ficar sem centro de custo */
   try{await normalizarLancamentos();}catch(eL){console.warn(eL);}
+  /* Central de Solicitações: um pedido pendente, para a tela nascer com conteúdo */
+  try{
+    var cliSol=clientes.filter(function(c){return c.loja===lojaAtual&&/Roberto/.test(c.nome||"");})[0]||clientes[0];
+    if(cliSol){
+      var confs=conflitosComerciais(cliSol.id,"Franciele Neves");
+      var sDemo={id:uid(),loja:lojaAtual,tipo:"cliente",status:"pendente",demo:true,
+        clienteId:cliSol.id,cliente:cliSol.nome,solicitante:"Franciele Neves",
+        responsavelAtual:(confs[0]&&confs[0].responsavel)||"Carol",conflitos:confs,origem:"pedido",
+        motivo:"O cliente me procurou hoje na loja e pediu para fechar comigo.",criadoEm:agoraCarimbo()};
+      solicitacoes.push(sDemo);await grava("solicitacoes",sDemo);
+      log.push("1 solicitação de autorização pendente na Central de Solicitações");
+    }
+  }catch(eS){console.warn("solicitação demo",eS);}
   /* funil de vendas: monta os cartões do cenário de teste */
   try{var nFuD=await sincronizarFunil();if(nFuD)log.push(nFuD+" negócio(s) no funil de vendas");}catch(eFu){console.warn("funil demo",eFu);}
   estadoDemo();render();
@@ -15405,7 +15482,7 @@ function proxHora(min){
 async function limparDemo(){
   var mapa=[[clientes,"clientes"],[produtos,"produtos"],[pedidos,"pedidos"],[orcamentos,"orcamentos"],
     [atendimentos,"atendimentos"],[titulos,"titulos"],[movs,"movs"],[notas,"notas"],
-    [fornecedores,"fornecedores"],[movEst,"movest"],[requisicoes,"requisicoes"],[pontos,"pontos"],[ajustes,"ajustes"],[fechamentos,"fechamentos"],[ordens,"ordens"],[equipamentos,"equipamentos"],[veiculos,"veiculos"],[abastecimentos,"abastecimentos"],[manutVeic,"manutveic"],[posses,"posses"],[vistorias,"vistorias"],[multas,"multas"],[usados,"usados"],[negocios,"negocios"]];
+    [fornecedores,"fornecedores"],[movEst,"movest"],[requisicoes,"requisicoes"],[pontos,"pontos"],[ajustes,"ajustes"],[fechamentos,"fechamentos"],[ordens,"ordens"],[equipamentos,"equipamentos"],[veiculos,"veiculos"],[abastecimentos,"abastecimentos"],[manutVeic,"manutveic"],[posses,"posses"],[vistorias,"vistorias"],[multas,"multas"],[usados,"usados"],[negocios,"negocios"],[solicitacoes,"solicitacoes"]];
   var n=0;
   for(var i=0;i<mapa.length;i++){
     var lista=mapa[i][0],col2=mapa[i][1];
@@ -18306,7 +18383,10 @@ function retratoLead(c){
 }
 function renderLeads(){
   var q=($("ldBusca").value||"").toLowerCase(),f=$("ldFiltro").value;
-  var base=clientes.filter(function(c){return c.loja===lojaAtual&&ehLead(c);});
+  /* lead é registro comercial (regra dele, 22/09): cada um vê os seus. O CADASTRO do lead
+     continua achável por todos na busca e na aba Clientes — o que é restrito é a lista de
+     trabalho, com o retrato do atendimento. */
+  var base=clientes.filter(function(c){return c.loja===lojaAtual&&ehLead(c)&&meuLead(c);});
   var lista=base.map(function(c){return {c:c,r:retratoLead(c)};})
     .filter(function(x){
       if(f==="quente")return x.r.abertos.length>0;
@@ -20553,6 +20633,9 @@ function buscarClienteOrc(){
     var b=document.createElement("button");b.type="button";
     b.innerHTML=linhaSugestao(c);
     b.onclick=function(){
+      if(!liberarClienteComercial(c,"orçamento",function(){
+        orcCli=null;$("or_nome").value="";$("or_achou").innerHTML="";
+      })){box.hidden=true;return;}
       orcCli=c;$("or_nome").value=c.nome||"";$("or_tel").value=c.tel||"";
       $("or_email").value=c.email||"";$("or_cidade").value=[c.rua,c.num,c.bairro,c.cidade,c.uf].filter(Boolean).join(", ")||c.cidade||"";$("or_doc").value=c.doc||"";
       $("or_achou").innerHTML='<div class="note ok"><b>Cliente já cadastrado.</b> Dados preenchidos automaticamente.</div>';
@@ -20583,6 +20666,7 @@ async function salvarOrc(){
     orcOrigemAtiv=null;
   }
   if(db){try{await col("orcamentos").doc(o.id).set(o);}catch(e){console.warn(e);}}
+  try{await consumirAutorizacao(o.clienteId,"orçamento "+o.numero);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: cartão vai para Orçamento enviado, com o valor */
   try{await atualizarFunilCliente(o.clienteId,"orçamento");}catch(eF){console.warn("funil",eF);}
   return o;
@@ -22809,6 +22893,15 @@ function atalhoNegocio(k){
 function ligarFunil(){
   ["fuBusca"].forEach(function(id){$(id).oninput=renderFunil;});
   ["fuResp","fuOrigem","fuFechados"].forEach(function(id){$(id).onchange=renderFunil;});
+  /* Central de Solicitações (22/09) */
+  ["slStatus","slTipo"].forEach(function(id){var e=$(id);if(e)e.onchange=renderSolic;});
+  if($("slBusca"))$("slBusca").oninput=renderSolic;
+  if($("cf_voltar"))$("cf_voltar").onclick=function(){
+    $("conflitoModal").hidden=true;
+    var vv=cfCtx&&cfCtx.aoVoltar;cfCtx=null;
+    if(vv)try{vv();}catch(e){console.warn(e);}
+  };
+  if($("cf_pedir"))$("cf_pedir").onclick=pedirAutorizacaoCliente;
   $("fuNovo").onclick=function(){abrirNegocio(null);};
   $("ng_etapa").onchange=ajustarPerdaNeg;
   $("ng_fechar").onclick=function(){$("negModal").hidden=true;negAberto=null;};
@@ -23983,7 +24076,7 @@ var usuarioAtual="Wagner",alertados={},agPend=null,bloqPend=null,timerAg=null;
 /* ---------- funções e permissões ---------- */
 var GRUPOS_TELA=[
   {g:"Painel",telas:[["dash","Dashboard"]]},
-  {g:"Comercial",telas:[["funil","Funil de Vendas"]]},
+  {g:"Comercial",telas:[["funil","Funil de Vendas"],["solic","Solicitações"]]},
   {g:"Operações",telas:[["ponto","Cartão de Ponto"],["agenda","Agenda"],["metasop","Metas"],
     ["ativ","Atividades"],["atend","Atendimentos"],["aniver","Aniversariantes"],["orcam","Orçamentos"],["os","Ordens de Serviço"],["pedidos","Pedidos"]]},
   {g:"Cadastros",telas:[["leads","Leads"],["clientes","Clientes"],["produtos","Produtos"],["manut","Manutenção Periódica"]]},
@@ -24006,6 +24099,7 @@ var ACOES=[
   ["ajustarPonto","Ajustar cartão de ponto"],
   ["editarMetas","Definir metas da equipe"],
   ["gerenciarUsuarios","Cadastrar usuários e funções"],
+  ["aprovarSolicitacoes","Aprovar solicitações da equipe"],
   ["baixarTitulos","Dar baixa em contas a pagar e receber"],
   ["exportar","Imprimir e exportar listas"]
 ];
@@ -24033,6 +24127,16 @@ var SEED_FUNCOES=[
 async function gravarFuncoes(){if(!db)return;try{await db.doc("config/funcoes").set({lista:funcoes});}catch(e){console.warn(e);}}
 /* tela nova que nasceu depois das funções serem gravadas não pode sumir do
    Administrador: quem tem "ver tudo" recebe automaticamente o que ninguém tem */
+/* ação nova em função já gravada: sem isto, o Administrador do banco dele ficaria sem ela */
+async function migrarAcoesNovas(){
+  if(!funcoes.length)return;
+  var mudou=false;
+  funcoes.forEach(function(f){
+    if(f.nome!=="Administrador")return;
+    if((f.acoes||[]).indexOf("aprovarSolicitacoes")<0){f.acoes=(f.acoes||[]).concat(["aprovarSolicitacoes"]);mudou=true;}
+  });
+  if(mudou)await gravarFuncoes();
+}
 async function migrarTelasNovas(){
   if(!funcoes.length)return;
   var conhecidas={};
@@ -24060,7 +24164,7 @@ function pode(acao,quem){
 }
 /* regra do Wagner (12/09): Leads e Clientes aparecem para TODOS os usuários,
    seja qual for a função — não dá para tirar na tela de Permissões */
-var TELAS_TODOS=["leads","clientes","aniver","funil"];
+var TELAS_TODOS=["leads","clientes","aniver","funil","solic"];
 function veTela(s,quem){
   if(TELAS_TODOS.indexOf(s)>=0)return true;
   var f=funcaoDe(quem||usuarioAtual);
@@ -24105,6 +24209,298 @@ function aplicarPerfil(){
   });
   if(precisaSair)ir(veTela("dash")?"dash":"agenda");
 }
+/* ================= CENTRAL DE SOLICITAÇÕES (regra dele, 22/09) =================
+   "CLIENTE e NEGÓCIO/ATENDIMENTO são coisas diferentes para fins de permissão."
+   O cadastro do cliente é de todos (v204). O que é de cada um é o REGISTRO COMERCIAL.
+   Quando um vendedor escolhe um cliente que já tem registro em andamento de OUTRO vendedor,
+   o sistema não bloqueia e não deixa assumir sozinho: avisa e oferece pedir autorização.
+   A estrutura é genérica de propósito — o `tipo` decide o rótulo e o texto, e outros
+   pedidos de aprovação (estoque, desconto, dado sensível, troca de responsável) entram aqui
+   depois sem mexer na tela. */
+var solicitacoes=[];
+var SOLIC_TIPOS={
+  cliente:{n:"Atender cliente de outro vendedor",d:"O cliente já tem registro comercial em andamento com outra pessoa."},
+  estoque:{n:"Retirada de estoque",d:"Venda sem estoque do vendedor."},
+  desconto:{n:"Venda abaixo da tabela",d:"Preço abaixo da tabela cheia."},
+  dado:{n:"Alterar informação sensível",d:"Mudança em dado protegido do cadastro."},
+  responsavel:{n:"Trocar o responsável",d:"Passar o atendimento para outra pessoa."}
+};
+var SOLIC_SIT={pendente:{n:"Pendente",cls:"p-warn"},aprovada:{n:"Aprovada",cls:"p-ok"},
+  recusada:{n:"Recusada",cls:"p-crit"},cancelada:{n:"Cancelada",cls:"p-mut"}};
+function podeAprovarSolic(){return pode("aprovarSolicitacoes")||ehAdministrador();}
+function nomeTipoSolic(t){return (SOLIC_TIPOS[t]||{}).n||t||"Solicitação";}
+function solicMinhas(){
+  return solicitacoes.filter(function(s){
+    if(s.loja!==lojaAtual)return false;
+    return podeAprovarSolic()||s.solicitante===usuarioAtual;
+  });
+}
+/* ---------- o que conta como "cliente em atendimento" ---------- */
+function conflitosComerciais(cid,quem){
+  if(!cid)return [];
+  var out=[];
+  function pessoa(o,campos){
+    for(var i=0;i<campos.length;i++){if(o[campos[i]])return o[campos[i]];}
+    return "";
+  }
+  pedidos.forEach(function(p){
+    if(p.clienteId!==cid||p.loja!==lojaAtual)return;
+    if(p.status==="Cancelada"||p.encerrada)return;
+    if(deOutro(p,CAMPOS_PED,quem))return;
+    out.push({tipo:"pedido",rotulo:"Pedido em aberto",numero:p.numero,id:p.id,
+      responsavel:pessoa(p,["vendedor","prospector","instalador"]),quando:p.data});
+  });
+  orcamentos.forEach(function(o){
+    if(o.clienteId!==cid||o.loja!==lojaAtual)return;
+    if(orcSituacao(o).n!=="Em aberto")return;
+    if(deOutro(o,CAMPOS_ORC,quem))return;
+    out.push({tipo:"orcamento",rotulo:"Orçamento em aberto",numero:o.numero,id:o.id,
+      responsavel:pessoa(o,["vendedor","colaborador","criadoPor"]),quando:o.data});
+  });
+  ordens.forEach(function(o){
+    if(o.clienteId!==cid||o.loja!==lojaAtual)return;
+    if(["concluida","entregue","cancelada","reprovada"].indexOf(o.status)>=0)return;
+    if(deOutro(o,CAMPOS_OS,quem))return;
+    out.push({tipo:"os",rotulo:"OS em aberto",numero:o.numero,id:o.id,
+      responsavel:pessoa(o,["atendente","tecnico","criadoPor"]),quando:o.criadoEm||o.abertura});
+  });
+  atendimentos.forEach(function(a){
+    if(a.clienteId!==cid||a.loja!==lojaAtual)return;
+    if(a.natureza!=="atividade"||a.status==="finalizado"||a.situacao==="reagendada")return;
+    if(deOutro(a,CAMPOS_ATEND,quem))return;
+    out.push({tipo:"atividade",rotulo:"Atividade agendada",numero:"",id:a.id,
+      responsavel:a.colaborador||a.criadoPor||"",quando:a.data});
+  });
+  negocios.forEach(function(n){
+    if(n.clienteId!==cid||n.loja!==lojaAtual)return;
+    if(etapaFechada(n.etapa))return;
+    if(!n.responsavel||n.responsavel===quem)return;
+    out.push({tipo:"negocio",rotulo:"Negócio no funil",numero:"",id:n.id,
+      responsavel:n.responsavel,quando:String(n.etapaEm||n.criadoEm||"").slice(0,10)});
+  });
+  return out.filter(function(c){return c.responsavel&&c.responsavel!==quem;});
+}
+/* ---------- autorização por solicitação, nunca permanente ---------- */
+function autorizacaoCliente(cid,quem){
+  var ls=solicitacoes.filter(function(s){
+    return s.tipo==="cliente"&&s.clienteId===cid&&s.solicitante===quem&&s.loja===lojaAtual;
+  }).sort(function(a,b){return String(b.criadoEm).localeCompare(String(a.criadoEm));});
+  var aprovada=ls.filter(function(s){return s.status==="aprovada"&&!s.usadaEm;})[0];
+  if(aprovada)return {liberado:true,s:aprovada};
+  var pend=ls.filter(function(s){return s.status==="pendente";})[0];
+  if(pend)return {pendente:true,s:pend};
+  var rec=ls.filter(function(s){return s.status==="recusada";})[0];
+  return {recusada:rec||null};
+}
+async function consumirAutorizacao(cid,onde){
+  var a=autorizacaoCliente(cid,usuarioAtual);
+  if(!a.liberado)return;
+  a.s.usadaEm=onde||"";a.s.usadaQuando=agoraCarimbo();
+  await grava("solicitacoes",a.s);
+}
+/* ---------- aviso na tela quando o cliente é de outro vendedor ---------- */
+var cfCtx=null;
+function htmlConflitos(cs){
+  return cs.map(function(c){
+    return '<div class="sl-conf"><b>'+esc(c.rotulo)+(c.numero?" "+esc(String(c.numero)):"")+"</b>"+
+      "com <b>"+esc(c.responsavel)+"</b>"+(c.quando?" · "+esc(dataBR(c.quando)):"")+"</div>";
+  }).join("");
+}
+/* devolve true quando pode seguir; false quando abriu o aviso e a escolha foi desfeita */
+function liberarClienteComercial(c,origem,aoVoltar){
+  if(!c||!c.id)return true;
+  if(!soMeus())return true;
+  var cs=conflitosComerciais(c.id,usuarioAtual);
+  if(!cs.length)return true;
+  var a=autorizacaoCliente(c.id,usuarioAtual);
+  if(a.liberado)return true;
+  cfCtx={cliente:c,conflitos:cs,origem:origem||"",aoVoltar:aoVoltar||null};
+  var resp=cs[0].responsavel;
+  $("cf_titulo").textContent="Cliente em atendimento com outra pessoa";
+  $("cf_sub").innerHTML="<b>"+esc(c.nome||"")+"</b> já tem atendimento em andamento com <b>"+esc(resp)+"</b>.";
+  $("cf_lista").innerHTML=htmlConflitos(cs);
+  $("cf_alerta").innerHTML="";
+  $("cf_motivo").value="";
+  if(a.pendente){
+    $("cf_motivoWrap").hidden=true;$("cf_pedir").hidden=true;
+    $("cf_alerta").innerHTML='<div class="note warn"><b>Você já pediu autorização para este cliente em '+
+      esc(dataBR(a.s.criadoEm))+".</b> Enquanto o administrador não responder, não dá para abrir o atendimento. "+
+      "Acompanhe em <b>Solicitações</b>.</div>";
+  }else{
+    $("cf_motivoWrap").hidden=false;$("cf_pedir").hidden=false;
+    if(a.recusada)$("cf_alerta").innerHTML='<div class="note crit"><b>A última solicitação sua para este cliente foi recusada'+
+      (a.recusada.obsDecisao?": "+esc(a.recusada.obsDecisao):".")+"</b> Você pode pedir de novo explicando o que mudou.</div>";
+  }
+  $("conflitoModal").hidden=false;
+  return false;
+}
+async function pedirAutorizacaoCliente(){
+  if(!cfCtx)return;
+  var mot=$("cf_motivo").value.trim();
+  if(!mot){$("cf_alerta").innerHTML='<div class="note crit"><b>Escreva o motivo.</b> É o que o administrador vai ler para decidir.</div>';return;}
+  var c=cfCtx.cliente,cs=cfCtx.conflitos;
+  var s={id:uid(),loja:lojaAtual,tipo:"cliente",status:"pendente",
+    clienteId:c.id,cliente:c.nome||"",solicitante:usuarioAtual,
+    responsavelAtual:cs[0].responsavel,conflitos:cs,origem:cfCtx.origem||"",
+    motivo:mot,criadoEm:agoraCarimbo()};
+  solicitacoes.push(s);
+  await grava("solicitacoes",s);
+  $("conflitoModal").hidden=true;
+  var vv=cfCtx.aoVoltar;cfCtx=null;
+  if(vv)try{vv();}catch(e){console.warn(e);}
+  render();
+  toast("Solicitação enviada ao administrador. Assim que ele responder, você vê em Solicitações.");
+}
+/* ---------- decisão do administrador ---------- */
+var solAberta=null;
+function abrirSolic(id){
+  var s=solicitacoes.filter(function(x){return x.id===id;})[0];if(!s)return;
+  solAberta=s;
+  var sit=SOLIC_SIT[s.status]||SOLIC_SIT.pendente;
+  $("sl_titulo").textContent=nomeTipoSolic(s.tipo);
+  $("sl_sub").innerHTML='<span class="pill '+sit.cls+'">'+sit.n+"</span> · pedida por <b>"+esc(s.solicitante)+
+    "</b> em "+esc(dataBR(s.criadoEm));
+  $("sl_corpo").innerHTML=
+    '<div class="note"><b>Cliente:</b> '+esc(s.cliente||"—")+
+      (s.responsavelAtual?"<br><b>Responsável atual:</b> "+esc(s.responsavelAtual):"")+
+      "<br><b>Motivo do solicitante:</b> "+esc(s.motivo||"—")+"</div>"+
+    (s.conflitos&&s.conflitos.length?"<p class=\"sect-t\" style=\"margin-top:14px\">O que está em andamento</p>"+htmlConflitos(s.conflitos):"")+
+    (s.decididoPor?'<div class="note '+(s.status==="aprovada"?"ok":"crit")+'" style="margin-top:12px"><b>'+
+      (s.status==="aprovada"?"Aprovada":"Recusada")+" por "+esc(s.decididoPor)+" em "+esc(dataBR(s.decididoEm))+".</b>"+
+      (s.obsDecisao?" "+esc(s.obsDecisao):"")+
+      (s.usadaEm?"<br>Autorização já usada em "+esc(s.usadaEm)+".":"")+"</div>":"");
+  var podeDecidir=podeAprovarSolic()&&s.status==="pendente";
+  $("sl_obsWrap").hidden=!podeDecidir;
+  $("sl_obs").value="";
+  $("sl_alerta").innerHTML="";
+  $("sl_acoes").innerHTML=
+    '<button class="btn mut" type="button" id="sl_fechar">Fechar</button>'+
+    (s.status==="pendente"&&s.solicitante===usuarioAtual?'<button class="btn ghost" type="button" id="sl_cancelar">Cancelar minha solicitação</button>':"")+
+    (podeDecidir?'<button class="btn ghost" type="button" id="sl_recusar">Recusar</button><button class="btn" type="button" id="sl_aprovar">Aprovar</button>':"");
+  var on=function(id2,fn){var e=$(id2);if(e)e.onclick=fn;};
+  on("sl_fechar",function(){$("solModal").hidden=true;solAberta=null;marcarSolicVista(s);});
+  on("sl_cancelar",function(){decidirSolic("cancelada");});
+  on("sl_recusar",function(){decidirSolic("recusada");});
+  on("sl_aprovar",function(){decidirSolic("aprovada");});
+  $("solModal").hidden=false;
+}
+async function marcarSolicVista(s){
+  if(s&&s.solicitante===usuarioAtual&&s.status!=="pendente"&&!s.vistaSolicitante){
+    s.vistaSolicitante=true;await grava("solicitacoes",s);
+    try{atualizarBadgeSolic();}catch(e){}
+  }
+}
+async function decidirSolic(status){
+  var s=solAberta;if(!s)return;
+  var obs=$("sl_obs").value.trim();
+  if(status!=="cancelada"&&!podeAprovarSolic()){
+    $("sl_alerta").innerHTML='<div class="note crit"><b>Só um administrador decide esta solicitação.</b></div>';return;}
+  if(status==="recusada"&&!obs){
+    $("sl_alerta").innerHTML='<div class="note crit"><b>Escreva o motivo da recusa.</b> O solicitante vai ler.</div>';return;}
+  s.status=status;
+  if(status==="cancelada"){s.canceladaEm=agoraCarimbo();}
+  else{s.decididoPor=usuarioAtual;s.decididoEm=agoraCarimbo();s.obsDecisao=obs;s.vistaSolicitante=false;}
+  await grava("solicitacoes",s);
+  $("solModal").hidden=true;solAberta=null;
+  render();
+  toast(status==="aprovada"?("Autorização liberada para "+s.solicitante+".")
+    :status==="recusada"?("Solicitação recusada · "+s.solicitante+" foi avisado.")
+    :"Solicitação cancelada.");
+}
+/* ---------- a Central ---------- */
+function renderSolic(){
+  var body=$("slBody");if(!body)return;
+  var st=$("slStatus").value,tp=$("slTipo").value,q=($("slBusca").value||"").toLowerCase();
+  if($("slTipo").options.length<2){
+    $("slTipo").innerHTML='<option value="">Todos os tipos</option>'+
+      Object.keys(SOLIC_TIPOS).map(function(k){return '<option value="'+k+'">'+esc(SOLIC_TIPOS[k].n)+"</option>";}).join("");
+  }
+  var minhas=solicMinhas();
+  var lista=minhas.filter(function(s){
+      if(st&&s.status!==st)return false;
+      if(tp&&s.tipo!==tp)return false;
+      if(q&&[s.cliente,s.solicitante,s.motivo,s.responsavelAtual].join(" ").toLowerCase().indexOf(q)<0)return false;
+      return true;})
+    .sort(function(a,b){return String(b.criadoEm).localeCompare(String(a.criadoEm));});
+  var pend=minhas.filter(function(s){return s.status==="pendente";});
+  var mes=hojeISO().slice(0,7);
+  $("slKpis").innerHTML=
+    '<div class="kpi"><div class="l">Pendentes</div><div class="v" style="color:'+(pend.length?"var(--warn)":"inherit")+'">'+pend.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Aprovadas no mês</div><div class="v">'+minhas.filter(function(s){return s.status==="aprovada"&&String(s.decididoEm).slice(0,7)===mes;}).length+"</div></div>"+
+    '<div class="kpi"><div class="l">Recusadas no mês</div><div class="v">'+minhas.filter(function(s){return s.status==="recusada"&&String(s.decididoEm).slice(0,7)===mes;}).length+"</div></div>"+
+    '<div class="kpi"><div class="l">'+(podeAprovarSolic()?"Da equipe":"Minhas")+"</div><div class=\"v\">"+minhas.length+"</div></div>";
+  $("slCount").textContent=lista.length+(lista.length===1?" solicitação":" solicitações");
+  body.innerHTML="";
+  if(!lista.length){
+    body.innerHTML='<tr><td colspan="7"><div class="empty"><div class="big">Nada por aqui</div>'+
+      (podeAprovarSolic()?"Quando alguém pedir autorização, aparece nesta lista."
+        :"Quando você pedir autorização para atender um cliente de outra pessoa, ela aparece aqui.")+"</div></td></tr>";
+  }else{
+    lista.forEach(function(s){
+      var sit=SOLIC_SIT[s.status]||SOLIC_SIT.pendente;
+      var tr=document.createElement("tr");tr.className="clickable";
+      tr.innerHTML="<td>"+esc(dataBR(s.criadoEm))+"</td>"+
+        "<td>"+esc(s.solicitante||"—")+"</td>"+
+        "<td>"+esc(s.cliente||"—")+"</td>"+
+        "<td>"+esc(nomeTipoSolic(s.tipo))+"</td>"+
+        "<td>"+esc(s.responsavelAtual||"—")+"</td>"+
+        '<td><span class="pill '+sit.cls+'">'+sit.n+"</span>"+
+          (s.status!=="pendente"&&s.decididoPor?'<div class="t-sub">'+esc(s.decididoPor)+"</div>":"")+"</td>"+
+        '<td class="num"><button class="btn ghost sm" type="button" data-slab="'+esc(s.id)+'">'+
+          (podeAprovarSolic()&&s.status==="pendente"?"Analisar":"Ver")+"</button></td>";
+      tr.onclick=function(){abrirSolic(s.id);};
+      body.appendChild(tr);
+    });
+  }
+  /* as aprovações que já existiam no sistema continuam nas telas delas — aqui ficam os atalhos,
+     para a Central ser o lugar de olhar (a estrutura genérica recebe os outros tipos depois) */
+  var out=$("slOutras");
+  if(out){
+    if(!podeAprovarSolic()){out.hidden=true;}
+    else{
+      var ret=requisicoes.filter(function(r){return r.tipo==="retirada"&&r.status==="pendente"&&(r.lojaOrigem||r.loja)===lojaAtual;}).length;
+      var desc=pedidos.filter(function(p){return p.loja===lojaAtual&&p.solicitacaoDesconto&&!p.descontoAutorizado&&!p.descontoRecusado;}).length;
+      out.hidden=false;
+      out.innerHTML="<h2>Outras aprovações do sistema</h2>"+
+        '<p class="help">Estas já tinham tela própria e continuam lá; a Central mostra quantas esperam por você.</p>'+
+        '<div class="acoes-grid" style="margin-top:12px">'+
+        '<button class="btn ghost" type="button" data-slir="estEmpresa">Retirada de estoque · '+ret+" pendente"+(ret===1?"":"s")+"</button>"+
+        '<button class="btn ghost" type="button" data-slir="fin">Venda abaixo da tabela · '+desc+" pendente"+(desc===1?"":"s")+"</button>"+
+        "</div>";
+      Array.prototype.forEach.call(out.querySelectorAll("[data-slir]"),function(b){
+        b.onclick=function(){ir(b.getAttribute("data-slir"));};});
+    }
+  }
+  atualizarBadgeSolic();
+}
+function solicPendentesParaMim(){
+  if(podeAprovarSolic())return solicitacoes.filter(function(s){return s.loja===lojaAtual&&s.status==="pendente";});
+  return solicitacoes.filter(function(s){return s.loja===lojaAtual&&s.solicitante===usuarioAtual&&
+    s.status!=="pendente"&&s.status!=="cancelada"&&!s.vistaSolicitante;});
+}
+function atualizarBadgeSolic(){
+  var b=$("solicBadge");if(!b)return;
+  var n=solicPendentesParaMim().length;
+  b.textContent=n||"";b.hidden=!n;
+}
+function avisarSolicitacoes(){
+  var el=$("avisoSolic");
+  if(!el){
+    el=document.createElement("button");el.type="button";el.id="avisoSolic";el.className="aviso-retirada";el.hidden=true;
+    el.style.bottom="126px";
+    document.body.appendChild(el);
+    el.onclick=function(){el.hidden=true;el.__visto=el.__chave;ir("solic");};
+  }
+  var ls=solicPendentesParaMim(),txt="";
+  if(ls.length){
+    txt=podeAprovarSolic()
+      ? "🔔 "+ls.length+(ls.length===1?" solicitação aguardando":" solicitações aguardando")+" sua autorização"
+      : "🔔 Sua solicitação foi "+(ls[0].status==="aprovada"?"aprovada":"recusada")+" · "+ls[0].cliente;
+  }
+  el.__chave=txt+"|"+usuarioAtual+"|"+lojaAtual;
+  el.textContent=txt;
+  el.hidden=!txt||el.__visto===el.__chave;
+}
 /* ================= O QUE CADA UM ENXERGA (regra do Wagner, 21/09) =================
    "só vai aparecer para o usuário aquilo que ele fez, cadastrou, ou que os outros usuários
    tenham colocado ele." Quem tem a permissão verTudo (Administrador, Financeiro, gestão)
@@ -24128,6 +24524,22 @@ function minhaOS(o){return !soMeus()||deMim(o,CAMPOS_OS);}
 /* O CADASTRO DE CLIENTE NÃO ENTRA NESTA REGRA (decisão dele, 22/09): a base é da LOJA e
    aparece para todos dela — separar por pessoa deixava o vendedor novo com a aba vazia.
    O que é de cada um é o movimento (as funções acima). */
+/* lead meu = eu cadastrei, eu atendi ou é meu no funil (v205) */
+var _meusLeads=null;
+function esquecerMeusLeads(){_meusLeads=null;}
+function meuLead(c){
+  if(!soMeus())return true;
+  if(!c)return false;
+  if(c.criadoPor===usuarioAtual)return true;
+  if(!_meusLeads){
+    var s={};
+    atendimentos.forEach(function(a){if(a.clienteId&&deMim(a,CAMPOS_ATEND))s[a.clienteId]=1;});
+    negocios.forEach(function(n){if(n.clienteId&&n.responsavel===usuarioAtual)s[n.clienteId]=1;});
+    orcamentos.forEach(function(o){if(o.clienteId&&deMim(o,CAMPOS_ORC))s[o.clienteId]=1;});
+    _meusLeads=s;
+  }
+  return !!_meusLeads[c.id];
+}
 /* filtro de pessoa que vira "Meus registros" e trava para quem não é da gestão */
 function travarSelectPessoa(sel,rot){
   if(!sel)return false;
@@ -24567,9 +24979,12 @@ function renderAniversariantes(){
       ir(ehLead(c)?"leads":"clientes");try{abrirCliente(c);}catch(e){console.warn(e);}};});
 }
 function render(){
+  esquecerMeusLeads();
   renderClientes();renderProdutos();renderPedidos();renderAgenda();
   try{if(!$("s-aniver").hidden)renderAniversariantes();}catch(e){console.warn(e);}
   try{if($("s-funil")&&!$("s-funil").hidden)renderFunil();}catch(e){console.warn(e);}
+  try{renderSolic();}catch(e){console.warn("solicitações",e);}
+  try{avisarSolicitacoes();}catch(e){console.warn(e);}
   try{avisarRetiradas();}catch(e){console.warn(e);}
   try{avisarDescontos();}catch(e){console.warn(e);}
   try{avisarPosseVeiculo();}catch(e){console.warn(e);}
@@ -24589,6 +25004,9 @@ function clienteDaVenda(){
 }
 function escolherClienteVenda(c){
   var sc=$("v_cliente");if(!sc)return;
+  /* cliente já em atendimento de outro vendedor (regra dele, 22/09): avisa e oferece pedir
+     autorização. O pedido que nasce de uma OS não passa por aqui — o atendimento é o da OS. */
+  if(c&&c.id&&!pedOrigemOS&&!liberarClienteComercial(c,"pedido",limparClienteVenda))return;
   sc.innerHTML="";
   if(c){var o=document.createElement("option");o.value=c.id;o.textContent=c.nome;sc.appendChild(o);sc.value=c.id;}
   $("v_cliSug").hidden=true;
@@ -24677,6 +25095,12 @@ function ligarCamposValor(){
     }).observe(document.body,{attributes:true,attributeFilter:["hidden"],subtree:true});
   }catch(e){console.warn("formato de valor nas fichas",e);}
 }
+function limparClienteVenda(){
+  var sc=$("v_cliente");if(sc)sc.innerHTML="";
+  if($("v_cliBusca"))$("v_cliBusca").value="";
+  if($("v_cliSug"))$("v_cliSug").hidden=true;
+  try{opcoesClienteVenda();}catch(e){}
+}
 function opcoesClienteVenda(){
   var inp=$("v_cliBusca"),nota=$("v_cliNota");if(!inp||!nota)return;
   var c=clienteDaVenda();
@@ -24721,6 +25145,7 @@ function ir(s){
   if(mudou&&s==="produtos")resetarProdutos();
   if(s==="aniver")try{renderAniversariantes();}catch(e){console.warn(e);}
   if(s==="funil")try{opcoesFunil();renderFunil();}catch(e){console.warn(e);}
+  if(s==="solic")try{renderSolic();}catch(e){console.warn(e);}
   /* Relatórios (e a DRE dentro dele) são recalculados ao abrir */
   if(s==="relat")try{abrirRelatorios(abaRel);}catch(e){console.warn(e);}
   /* saiu de Veículos e voltou: a lista começa fechada, como em Produtos */
