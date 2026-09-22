@@ -6101,7 +6101,11 @@ function unicos(lista,campo){
 }
 var cliPag=1;
 function renderClientes(){
-  var base=clientes.filter(function(c){return c.loja===lojaAtual&&meuCliente(c);});
+  /* o cadastro de cliente é da LOJA e aparece para todos dela (regra dele, 22/09: "os clientes
+     devem aparecer para todos; a única coisa que tem que separar é a loja"). O que continua
+     restrito a quem fez é o MOVIMENTO: atividades, atendimentos, agenda, pedidos, orçamentos,
+     OS e funil. A separação por loja já vem do c.loja em toda lista e na busca. */
+  var base=clientes.filter(function(c){return c.loja===lojaAtual;});
   /* os filtros de endereço se encadeiam: bairro só mostra os da cidade escolhida, e assim por diante */
   encherFiltro("cliCidade",unicos(base,"cidade"),"Todas as cidades");
   var cid=$("cliCidade").value;
@@ -18302,7 +18306,7 @@ function retratoLead(c){
 }
 function renderLeads(){
   var q=($("ldBusca").value||"").toLowerCase(),f=$("ldFiltro").value;
-  var base=clientes.filter(function(c){return c.loja===lojaAtual&&ehLead(c)&&meuCliente(c);});
+  var base=clientes.filter(function(c){return c.loja===lojaAtual&&ehLead(c);});
   var lista=base.map(function(c){return {c:c,r:retratoLead(c)};})
     .filter(function(x){
       if(f==="quente")return x.r.abertos.length>0;
@@ -19163,11 +19167,7 @@ async function manutencaoPelaVenda(ped){
   return {baixadas:baixadas,agendadas:agendadas,trocas:trocas,plano:migPlano};
 }
 function renderManut(){
-  var base=equipamentos.filter(function(e){
-    if(e.loja!==lojaAtual)return false;
-    if(!soMeus())return true;
-    return meuCliente(clientes.filter(function(x){return x.id===e.clienteId;})[0]);
-  });
+  var base=equipamentos.filter(function(e){return e.loja===lojaAtual;});
   /* endereço vem do cadastro do cliente, para os filtros encadearem */
   base.forEach(function(e){
     var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
@@ -23674,9 +23674,7 @@ function achaCliente(q){
 }
 function linhaSugestao(c){
   var lead=ehLead(c),n=vendasDe(c.id).length;
-  /* a busca acha a loja inteira para ninguém cadastrar o mesmo cliente duas vezes (v200) */
-  var deOutro=(soMeus()&&!meuCliente(c))?' <span class="pill p-warn">cadastro de outro atendente</span>':"";
-  return "<b>"+esc(c.nome)+deOutro+(lead?' <span class="pill p-acc">lead</span>':' <span class="pill p-ok">cliente</span>')+
+  return "<b>"+esc(c.nome)+(lead?' <span class="pill p-acc">lead</span>':' <span class="pill p-ok">cliente</span>')+
     "</b><span>"+esc(c.codigo||"")+" · "+esc(c.doc||"sem documento")+" · "+esc(c.cidade||"—")+
     (c.tel?" · "+esc(c.tel):"")+(n?" · "+n+" venda"+(n===1?"":"s"):"")+"</span>";
 }
@@ -24127,25 +24125,9 @@ function meuAtend(a){return !soMeus()||deMim(a,CAMPOS_ATEND);}
 function meuPedido(p){return !soMeus()||deMim(p,CAMPOS_PED);}
 function meuOrc(o){return !soMeus()||deMim(o,CAMPOS_ORC);}
 function minhaOS(o){return !soMeus()||deMim(o,CAMPOS_OS);}
-/* cliente é meu quando eu cadastrei ou quando tenho atendimento, pedido, orçamento ou OS dele */
-var _meusCli=null;
-function esquecerMeusClientes(){_meusCli=null;}
-function meusClientesIds(){
-  if(_meusCli)return _meusCli;
-  var s={};
-  atendimentos.forEach(function(a){if(a.clienteId&&deMim(a,CAMPOS_ATEND))s[a.clienteId]=1;});
-  pedidos.forEach(function(p){if(p.clienteId&&deMim(p,CAMPOS_PED))s[p.clienteId]=1;});
-  orcamentos.forEach(function(o){if(o.clienteId&&deMim(o,CAMPOS_ORC))s[o.clienteId]=1;});
-  ordens.forEach(function(o){if(o.clienteId&&deMim(o,CAMPOS_OS))s[o.clienteId]=1;});
-  negocios.forEach(function(n){if(n.clienteId&&n.responsavel===usuarioAtual)s[n.clienteId]=1;});
-  _meusCli=s;return s;
-}
-function meuCliente(c){
-  if(!soMeus())return true;
-  if(!c)return false;
-  if(c.criadoPor===usuarioAtual)return true;
-  return !!meusClientesIds()[c.id];
-}
+/* O CADASTRO DE CLIENTE NÃO ENTRA NESTA REGRA (decisão dele, 22/09): a base é da LOJA e
+   aparece para todos dela — separar por pessoa deixava o vendedor novo com a aba vazia.
+   O que é de cada um é o movimento (as funções acima). */
 /* filtro de pessoa que vira "Meus registros" e trava para quem não é da gestão */
 function travarSelectPessoa(sel,rot){
   if(!sel)return false;
@@ -24490,8 +24472,7 @@ function renderAniversariantes(){
     $("anBusca").oninput=renderAniversariantes;
   }
   var sq=$("anQuem");
-  if(soMeus())travarSelectPessoa(sq,"Meus clientes");
-  else if(sq.options.length!==EQUIPE.length+1){
+  if(sq.options.length!==EQUIPE.length+1){
     var atq=sq.value;
     sq.innerHTML='<option value="">Todos os vendedores</option>'+EQUIPE.map(function(n){return "<option>"+esc(n)+"</option>";}).join("");
     sq.value=atq||"";
@@ -24502,7 +24483,7 @@ function renderAniversariantes(){
     var op=ss.querySelector('option[value="'+o[0]+'"]');if(op)op.textContent=o[1];});
   var sit=ss.value,per=$("anPer").value,tipo=$("anTipo").value,quem=$("anQuem").value;
   var q=semAcento($("anBusca").value||"").trim(),qd=($("anBusca").value||"").replace(/\D/g,"");
-  var base=clientes.filter(function(c){return c.loja===lojaAtual&&c.nasc&&meuCliente(c);})
+  var base=clientes.filter(function(c){return c.loja===lojaAtual&&c.nasc;})
     .map(function(c){return situacaoAniv(c,h);}).filter(Boolean);
   function noPeriodo(dt,p){
     var dd=diasEntre(h,dt),m=+dt.slice(5,7)-1,y=+dt.slice(0,4);
@@ -24586,7 +24567,6 @@ function renderAniversariantes(){
       ir(ehLead(c)?"leads":"clientes");try{abrirCliente(c);}catch(e){console.warn(e);}};});
 }
 function render(){
-  esquecerMeusClientes();
   renderClientes();renderProdutos();renderPedidos();renderAgenda();
   try{if(!$("s-aniver").hidden)renderAniversariantes();}catch(e){console.warn(e);}
   try{if($("s-funil")&&!$("s-funil").hidden)renderFunil();}catch(e){console.warn(e);}
