@@ -8824,7 +8824,24 @@ async function salvarPedido(){
     try{avisarRetiradas();}catch(e){}
     try{avisarPosseVeiculo();}catch(e){}},1800);
   pedidos.push(ped);
-  if(db){try{await col("pedidos").doc(ped.id).set(ped);}catch(e){console.warn(e);}}
+  /* A VENDA NÃO PODE SUMIR EM SILÊNCIO (relato dele, 22/09: "finalizei, vi o pedido, fechei o PDF,
+     e quando reabri os pedidos não estava mais lá"). Até aqui a gravação engolia o erro: a venda
+     ficava só na memória e desaparecia no próximo carregamento. Agora, se o banco recusar, o
+     pedido sai da lista da memória, o formulário fica inteiro e a tela diz o que houve. */
+  if(db){
+    try{
+      await col("pedidos").doc(ped.id).set(ped);
+    }catch(eGr){
+      console.warn("gravar pedido",eGr);
+      pedidos=pedidos.filter(function(x){return x!==ped;});
+      $("v_alerta").innerHTML='<div class="note crit"><b>O pedido NÃO foi gravado.</b> O banco recusou: '+
+        esc((eGr&&eGr.message)||String(eGr))+'.<br>Nada foi perdido — o pedido continua montado nesta tela. '+
+        "Confira a internet e clique em <b>Finalizar pedido</b> de novo.</div>";
+      toast("O pedido não foi gravado — veja o aviso em vermelho.");
+      irEtapa(7);
+      return null;
+    }
+  }
   /* autorização de cliente em atendimento: vale para ESTE pedido e acaba aqui (22/09) */
   try{await consumirAutorizacao(ped.clienteId,"pedido "+ped.numero);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: pedido lançado fecha o cartão como Venda */
@@ -8964,6 +8981,14 @@ async function salvarPedido(){
 }
 function limparPedido(){
   itens=[];formas=[{tipo:"Cartão de Crédito Sipag",valor:0,base:0,parc:12}];
+  /* cada venda nova começa com quem está logado nos papéis (v209): o select guardava o
+     valor do usuário anterior, e o pedido nascia no nome de outra pessoa — some da lista
+     de "Meus pedidos" de quem vendeu */
+  if(EQUIPE.indexOf(usuarioAtual)>=0){
+    ["v_prosp","v_vend","v_inst"].forEach(function(id){
+      var s=$(id);if(s&&[].slice.call(s.options).some(function(o){return o.value===usuarioAtual||o.textContent===usuarioAtual;}))s.value=usuarioAtual;
+    });
+  }
   if($("v_frete"))$("v_frete").value="";
   if($("v_descGeral"))$("v_descGeral").value="";
   instRespVenda="";try{marcarInstalacao("");}catch(e){}
@@ -25446,6 +25471,14 @@ function limparClienteVenda(){
   if($("v_cliBusca"))$("v_cliBusca").value="";
   if($("v_cliSug"))$("v_cliSug").hidden=true;
   try{opcoesClienteVenda();}catch(e){}
+  /* v209: voltando do aviso, o pedido fica SEM cliente — dizer isso na cara, na etapa 1,
+     senão ele monta a venda inteira e só descobre no fim */
+  try{
+    irEtapa(1);
+    var av=$("v_cadAviso");
+    if(av)av.innerHTML='<div class="note warn"><b>O pedido ficou sem cliente.</b> '+
+      "Escolha outro cliente ou peça a autorização para atender este.</div>";
+  }catch(e){}
 }
 function opcoesClienteVenda(){
   var inp=$("v_cliBusca"),nota=$("v_cliNota");if(!inp||!nota)return;
@@ -27074,7 +27107,13 @@ function navegacaoBasica(){
     b.onclick=function(){
       fecha();
       var q=b.getAttribute("data-novo");
-      if(q==="pedido"){ir("venda");}
+      if(q==="pedido"){
+        /* "+ Novo › Pedido" é venda NOVA: sem isto a tela reaproveitava o que estava montada —
+         inclusive o vendedor do usuário anterior, e o pedido nascia no nome de outra pessoa (v209) */
+        if(itens.length&&!confirm("Há uma venda em andamento com "+itens.length+" item(ns). Começar uma venda nova e descartar essa?")){ir("venda");return;}
+        try{limparPedido();}catch(err){}
+        ir("venda");
+      }
       else if(q==="produto"){ir("produtos");try{abrirProduto(null);}catch(err){}}
       else if(q==="atend"){ir("atend");try{abrirAtend(null);}catch(err){}}
       else if(q==="ativ"){ir("ativ");try{$("avNova").click();}catch(err){}}
