@@ -1717,12 +1717,17 @@ img{max-width:100%}
           <div class="card vstep" data-s="2">
             <h2>1 · O que está sendo vendido</h2>
             <p class="help" style="margin:-6px 0 14px">Monte primeiro o <b>valor comercial</b> da venda. O valor de cada item é o da tabela cheia e pode ser negociado; o acréscimo do parcelamento entra depois, na forma de pagamento.</p>
-            <div class="grid g2" style="margin-bottom:16px">
-              <div class="fld"><label for="v_prod">Produto</label><select id="v_prod"></select></div>
-              <div class="fld"><label for="v_gar">Garantia deste item</label>
-                <select id="v_gar"><option>Bronze</option><option>Premium I</option><option>Premium II</option></select></div>
-              <div class="fld" id="v_planoWrap" hidden><label for="v_planoValor">Valor do Plano Premium I</label>
-                <input id="v_planoValor" type="text" inputmode="decimal" step="0.01" min="0"><div class="help" id="v_planoAjuda"></div></div>
+            <div class="fld" style="margin-bottom:14px"><label for="v_prod">Produto</label><select id="v_prod"></select></div>
+            <!-- GARANTIA em linha própria (relato dele, 22/09: "não vi nenhuma pergunta sobre garantia") -->
+            <div class="sect" style="margin:0 0 16px">
+              <p class="sect-t">Garantia deste item</p>
+              <div class="grid g2">
+                <div class="fld"><label for="v_gar">Plano de garantia</label>
+                  <select id="v_gar"><option>Bronze</option></select></div>
+                <div class="fld" id="v_planoWrap" hidden><label for="v_planoValor">Valor do Plano</label>
+                  <input id="v_planoValor" type="text" inputmode="decimal" step="0.01" min="0"><div class="help" id="v_planoAjuda"></div></div>
+              </div>
+              <div id="v_garNota"></div>
             </div>
             <div class="grid g4">
               <div class="fld"><label for="v_qtd">Qtd</label><input id="v_qtd" type="number" step="1" min="1" value="" placeholder="Qtd" inputmode="numeric"></div>
@@ -1740,7 +1745,6 @@ img{max-width:100%}
             <div class="grid g4">
               <div class="fld" style="justify-content:flex-end"><button class="btn ghost" type="button" id="v_add">Adicionar</button></div>
             </div>
-            <div id="v_garNota"></div>
             <div id="v_planoCli"></div>
             <div class="tw" style="margin-top:20px"><table>
               <thead><tr><th>Item</th><th class="num">Qtd</th><th class="num">Valor base</th><th class="num">Cobrado</th><th>Faixa</th><th class="num">Fator</th><th></th></tr></thead>
@@ -7719,12 +7723,35 @@ function notaGarantia(){
         ". Abaixo da tabela baixa, o pedido precisa de autorização.";
     }
   }
-  $("v_garNota").innerHTML = g==="Bronze"
-    ? '<div class="note"><b>Bronze</b> é a garantia padrão, sem custo. Não gera contrato.'+
-        (semPlanoNoGrupo?" Nenhum plano atende produtos do grupo <b>"+esc(prodG.grupo||"sem grupo")+"</b> (Configurações › Planos de Garantia).":"")+"</div>"
-    : pl
-      ? '<div class="note warn"><b>'+g+'</b> entra no pedido como <b>'+esc(pl.nome)+'</b> (linha de garantia, soma no total), gera o Contrato de Assistência Técnica e <b>exige o número de série</b> do equipamento.</div>'
-      : '<div class="note crit"><b>'+g+'</b> não é um plano ativo. Cadastre ou ative em Configurações › Planos de Garantia, ou escolha Bronze.</div>';
+  /* a resposta sobre a garantia fica sempre à vista, e dizendo o motivo quando não há plano
+     para oferecer (v207) */
+  var gnota="";
+  if(!prodG)gnota='<div class="note">Escolha o produto: os planos de garantia dele aparecem aqui.</div>';
+  else if(g!=="Bronze"&&pl)
+    gnota='<div class="note warn"><b>'+g+'</b> entra no pedido como <b>'+esc(pl.nome)+
+      '</b> (linha própria na composição, soma no total), gera o Contrato de Assistência Técnica e <b>exige o número de série</b> do equipamento.</div>';
+  else if(g!=="Bronze"&&!pl)
+    gnota='<div class="note crit"><b>'+g+'</b> não é um plano ativo. Cadastre ou ative em Configurações › Planos de Garantia, ou escolha Bronze.</div>';
+  else{
+    var gp=prodG.grupo||"sem grupo";
+    var atendeGrupo=produtos.filter(function(x){
+      return x.grupo==="Planos"&&x.garantia&&(x.status||"ativo")==="ativo"&&planoAtende(x,prodG);});
+    if(semPlanoNoGrupo&&!atendeGrupo.length)
+      gnota='<div class="note warn"><b>Este produto sai com a garantia Bronze</b>, sem custo e sem contrato. '+
+        "Nenhum plano atende o grupo <b>"+esc(gp)+"</b>. Para poder oferecer o Premium neste produto, "+
+        'marque o grupo em <b>Configurações › Planos de Garantia</b>.<div class="actions" style="justify-content:flex-start;margin-top:8px">'+
+        '<button class="btn ghost sm" type="button" id="v_irPlanos">Abrir Planos de Garantia</button></div></div>';
+    else if(atendeGrupo.length&&!temSerieGrupo(prodG))
+      gnota='<div class="note crit"><b>O plano '+esc(atendeGrupo[0].garantia)+" atende o grupo "+esc(gp)+
+        ", mas este grupo não está marcado em Número de série.</b> O plano é amarrado ao aparelho pela série — "+
+        'marque o grupo em <b>Configurações › Planos de Garantia › Número de série</b>.<div class="actions" style="justify-content:flex-start;margin-top:8px">'+
+        '<button class="btn ghost sm" type="button" id="v_irPlanos">Abrir Planos de Garantia</button></div></div>';
+    else
+      gnota='<div class="note"><b>Bronze</b> é a garantia padrão, sem custo e sem contrato. '+
+        "Escolha um plano acima para incluir a garantia estendida na venda.</div>";
+  }
+  $("v_garNota").innerHTML=gnota;
+  var bIr=$("v_irPlanos");if(bIr)bIr.onclick=function(){ir("planos");};
   /* entrou ou saiu plano: a entrada sem juros passa a ser dividida por outro total, então o
      preço do PRODUTO também tem de ser refeito (20/09) */
   try{atualizarPrecoItemNovo(true);}catch(e){}
@@ -9762,10 +9789,21 @@ function resumoDireitos(pl){
   return l.slice(0,4).map(function(d){return d.qtd+" "+(d.tipo==="visita"?"visita"+(d.qtd===1?"":"s"):d.item.toLowerCase());}).join(" · ")+(l.length>4?" · +"+(l.length-4):"");
 }
 /* regra do Wagner (12/09): plano só para os grupos de produtos marcados na configuração do plano */
-function planoAtende(pl,prod){return !!(pl&&prod&&(pl.grupos||[]).indexOf(prod.grupo)>=0);}
+/* o grupo do produto casa com o do plano sem depender de maiúscula, acento ou plural:
+   os 604 produtos importados vieram com o nome do grupo escrito do jeito do arquivo
+   ("PURIFICADORES"), e o plano estava preso ao literal "Purificadores" (v207). */
+function chaveGrupo(n){
+  var s=semAcento(String(n||"").toLowerCase()).replace(/[^a-z0-9]+/g," ").trim();
+  return s.replace(/s/g,"");
+}
+function mesmoGrupo(a,b){var x=chaveGrupo(a),y=chaveGrupo(b);return !!x&&x===y;}
+function grupoNaLista(lista,g){
+  return (lista||[]).some(function(n){return mesmoGrupo(n,g);});
+}
+function planoAtende(pl,prod){return !!(pl&&prod&&grupoNaLista(pl.grupos,prod.grupo));}
 /* regra do Wagner (12/09): número de série só para os grupos marcados (config/serie) */
 var GRUPOS_SERIE=["Purificadores"],srSujo=false;
-function temSerieGrupo(p){return !!(p&&GRUPOS_SERIE.indexOf(p.grupo)>=0);}
+function temSerieGrupo(p){return !!(p&&grupoNaLista(GRUPOS_SERIE,p.grupo));}
 function planosDoProduto(prod){
   return produtos.filter(function(x){
     return x.grupo==="Planos"&&x.garantia&&(x.status||"ativo")==="ativo"&&planoAtende(x,prod)&&temSerieGrupo(prod);});
