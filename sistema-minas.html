@@ -21621,6 +21621,17 @@ function renderPedDet(){
     if(pode("aprovarFinanceiro")||ehGestor())
       ac+='<button class="btn mut" type="button" id="pd_cancelar">Cancelar venda</button>';
   }
+  if(p.assinaturaImg)
+    av+='<div class="note'+(p.alteradaAposAssinatura?" warn":" ok")+'"><b>Assinatura do cliente guardada.</b>'+
+      '<div style="margin:8px 0"><img src="'+p.assinaturaImg+'" alt="Assinatura do cliente" '+
+      'style="max-height:56px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px"></div>'+
+      (p.alteradaAposAssinatura
+        ? "A venda foi alterada depois de assinada ("+esc(dataBR(p.alteradaAposAssinatura.quando))+
+          ", de "+BRL(p.alteradaAposAssinatura.de)+" para "+BRL(p.alteradaAposAssinatura.para)+
+          "). A assinatura continua no documento; se quiser, colete de novo em <b>PDF da venda</b>."
+        : "Ela é usada em todos os De Acordo do documento e não se perde ao alterar o pedido.")+"</div>";
+  else if(p.encerrada||p.status)
+    av+='<div class="note warn"><b>Sem assinatura do cliente.</b> Abra o <b>PDF da venda</b> e use "Coletar assinatura do cliente".</div>';
   if(p.instalacaoAgora&&!p.instalacao)
     av+='<div class="note ok"><b>Instalação feita na entrega</b> · '+esc(p.instalador||"—")+
       " — sem agendamento futuro, então a venda seguiu direto para a Aprovação Financeira.</div>";
@@ -21637,16 +21648,49 @@ function renderPedDet(){
     '<button class="btn zap" type="button" id="pd_zap">'+(ehOS?"Enviar a OS para o cliente via WhatsApp":"Enviar Pedido Venda para cliente via WhatsApp")+"</button>"+ac;
   ligarPedDet();
 }
+/* mexeu nos itens da venda já gravada: as formas acompanham sozinhas, como no Novo Pedido (v211).
+   Antes, mudar a quantidade deixava "Falta distribuir R$ X" e o Salvar era recusado — quem estava
+   corrigindo o pedido tinha de refazer a conta das formas à mão. */
+function recomporFormasPedido(rasc,p){
+  if(!rasc||!rasc.formas||!rasc.formas.length)return;
+  var novoModelo=(p&&p.modelo==="base")||rasc.itens.some(function(i){return i.valorBase!=null;});
+  if(novoModelo){
+    normalizarValoresItens(rasc.itens);
+    var base=composicaoVenda(rasc.itens,{frete:+((p||{}).frete)||0,desconto:+((p||{}).descontoGeral)||0}).base;
+    var fixas=0,alvo=null;
+    rasc.formas.forEach(function(f){
+      if(f.base==null)f.base=centavos((+f.valor||0)/(acrescimoForma(f)||1));
+    });
+    /* a maior forma com juros recebe a diferença; sem forma com juros, a maior de todas */
+    rasc.formas.forEach(function(f){if(!alvo||(+f.base||0)>(+alvo.base||0))alvo=f;});
+    var comJ=rasc.formas.filter(function(f){return !semJuros(f);});
+    if(comJ.length){alvo=comJ[0];comJ.forEach(function(f){if((+f.base||0)>(+alvo.base||0))alvo=f;});}
+    rasc.formas.forEach(function(f){if(f!==alvo)fixas+=(+f.base||0);});
+    alvo.base=centavos(Math.max(0,base-fixas));
+    aplicarBrutos(rasc.formas);
+    aplicarCobradoNosItens(rasc.itens,rasc.formas,base,
+      rasc.formas.reduce(function(a,f){return a+(+f.valor||0);},0));
+    return;
+  }
+  /* pedido do modelo antigo: a diferença vai para a maior forma, pelo valor cobrado */
+  var tot=rasc.itens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
+  var maior=rasc.formas[0];
+  rasc.formas.forEach(function(f){if((+f.valor||0)>(+maior.valor||0))maior=f;});
+  var outras=rasc.formas.reduce(function(a,f){return a+((f===maior)?0:(+f.valor||0));},0);
+  maior.valor=centavos(Math.max(0,tot-outras));
+}
 function ligarPedDet(){
+
   var p=pedAberto;
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-pi]"),function(el){
     el.onchange=function(){
       var i=pedRasc.itens[+el.getAttribute("data-i")];
       if(el.getAttribute("data-pi")==="qtd")i.qtd=Math.max(1,parseInt(el.value,10)||1);
-      else i.valor=numMF(el.value);
+      else {i.valor=numMF(el.value);if(i.valorBase!=null)i.valorBase=numMF(el.value);}
+      recomporFormasPedido(pedRasc,p);
       renderPedDet();};});
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-pirm]"),function(b){
-    b.onclick=function(){pedRasc.itens.splice(+b.getAttribute("data-pirm"),1);renderPedDet();};});
+    b.onclick=function(){pedRasc.itens.splice(+b.getAttribute("data-pirm"),1);recomporFormasPedido(pedRasc,p);renderPedDet();};});
   Array.prototype.forEach.call($("pd_formas").querySelectorAll("[data-pf]"),function(el){
     el.onchange=function(){pedRasc.formas[+el.getAttribute("data-pf")].valor=numMF(el.value);renderPedDet();};});
   var add=$("pd_add");
@@ -21655,6 +21699,7 @@ function ligarPedDet(){
     var qp=qtdInformada("pd_qtd");if(!qp)return;
     pedRasc.itens.push({pid:pr.id,nome:pr.nome,cod:pr.cod,qtd:qp,
       valor:numMF($("pd_valor").value)||0,serie:"",pontos:+pr.pontos||0,garantia:"Bronze"});
+    recomporFormasPedido(pedRasc,p);
     renderPedDet();limparInclusao("pd_prod","pd_qtd",["pd_valor"]);};
   function on(id,fn){var e=$(id);if(e)e.onclick=fn;}
   on("pd_pdf",function(){abrirDocVenda(p);});
@@ -21720,8 +21765,21 @@ function ligarPedDet(){
       de:{total:p.total,base:p.base},para:{total:r.total,base:r.base},
       motivo:motivo,
       autorizaram:(p.reabertura?p.reabertura.precisa.map(function(x){return x.quem;}):[])});
+    /* A ASSINATURA DO CLIENTE NÃO SE PERDE (regra dele, 22/09: "no reabrir pedido não pode
+       perder a assinatura"). Ela é guardada antes e devolvida depois de qualquer alteração —
+       nenhuma mudança futura nesta função consegue apagá-la sem querer. */
+    var assGuardada=p.assinaturaImg||"",assinadoAntes=!!p.assinado;
     p.itens=pedRasc.itens.slice();p.formas=pedRasc.formas.slice();
     p.total=r.total;p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
+    if(assGuardada){p.assinaturaImg=assGuardada;p.assinado=true;}
+    else if(assinadoAntes)p.assinado=true;
+    /* mudou o conteúdo depois de assinado: o documento continua com a assinatura, mas a venda
+       que o cliente assinou não é mais a mesma — fica marcado para recoletar se ele quiser */
+    var mudouValor=(Math.round((+antes.total||0)*100)!==Math.round((+r.total||0)*100));
+    if(assGuardada&&mudouValor){
+      p.alteradaAposAssinatura={quando:agoraCarimbo(),por:usuarioAtual,
+        de:antes.total,para:r.total,motivo:motivo};
+    }
     if(p.descontoAutorizado)p.descontoAutorizado.depAbaixo=Math.round((r.depAbaixo||0)*100)/100;
     if(emEtapa){
       p.abaixoTabela=!!r.abaixo;
@@ -23555,7 +23613,8 @@ function abrirDocVenda(p){
   esquecerPdf("ped:"+p.id);
   var zd=$("docv_zap");zd.hidden=false;zd.disabled=false;if(zd.__rotulo)zd.textContent=zd.__rotulo;
   docVendaAberta=p;
-  $("docv_assinar").hidden=!!p.assinaturaImg;
+  $("docv_assinar").hidden=!(!p.assinaturaImg||p.alteradaAposAssinatura);
+  $("docv_assinar").textContent=p.assinaturaImg?"Atualizar a assinatura do cliente":"Coletar assinatura do cliente";
   $("docv_assinaBox").hidden=true;
   document.body.classList.add("doc-aberta");
   $("docVenda").hidden=false;
@@ -25707,6 +25766,7 @@ function ligar(){
     var p=docVendaAberta;if(!p)return;
     if(!docSigFeita){toast("O cliente precisa assinar no espaço em branco.");return;}
     p.assinaturaImg=assinaturaParaDoc("docv_sig",true);p.assinado=true;
+    if(p.alteradaAposAssinatura)p.alteradaAposAssinatura=null;
     registrarEvento(p,"Assinatura do cliente coletada no documento da venda");
     await gravarPedido(p);
     abrirDocVenda(p);
