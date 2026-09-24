@@ -1176,6 +1176,26 @@ img{max-width:100%}
   .tw.cartoes>table>tbody>tr>td[colspan]::before{content:none}
   .tw.cartoes>table>tbody>tr>td:empty{display:none}
 
+  /* LISTA DE PEDIDOS no celular (relato dele, 24/09, com print: "está muito ruim"): cada pedido
+     ocupava quase a tela inteira, com sete linhas rotuladas. Agora é um cartão de três linhas —
+     número e data com o total ao lado, o cliente, e o pagamento com a situação. Depreciado e
+     base saem: são informação de Remunerações (mesma regra da v213). */
+  .tw.cartoes>table>tbody#pedBody>tr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);
+    gap:3px 12px;padding:11px 12px}
+  .tw.cartoes>table>tbody#pedBody>tr>td{display:block;text-align:left;padding:1px 0}
+  .tw.cartoes>table>tbody#pedBody>tr>td::before{content:none}
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(1){grid-area:1/1;display:flex;gap:8px;align-items:baseline}
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(1) .t-main{font-weight:700}
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(1) .t-sub{margin:0}
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(4){grid-area:1/2;text-align:right;font-weight:700;font-size:15.5px;
+    white-space:nowrap}
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(2){grid-area:2/1/auto/3;font-weight:500;line-height:1.3}
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(3){grid-area:3/1;font-size:12.5px;color:var(--ink-3)}
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(5),
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(6){display:none}
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(7){grid-area:3/2;text-align:right}
+  .tw.cartoes>table>tbody#pedBody>tr>td:nth-child(7) .pill{white-space:normal}
+
   /* itens do pedido (pedido do Wagner, 12/09): o nome usa o cartão inteiro, no máximo 2 linhas,
      e código · plano · série ficam na linha de baixo */
   #v_itens>tr>td:first-child{display:block;text-align:left;padding-top:6px}
@@ -6050,6 +6070,13 @@ async function carregar(){
     if(EMPRESA.gmapsChave)sincChaveGoogle();
     var ce=await db.doc("config/celebracoes").get();
     if(ce.exists&&ce.data()&&ce.data().dados)celebracoes=ce.data().dados;
+    /* o que este aparelho já mostrou entra junto: quando o banco recusa a gravação (documento
+       sem permissão), a lembrança fica só aqui e o parabéns não se repete (regra de 24/09) */
+    try{
+      var loc=JSON.parse(localStorage.getItem("mf_celebracoes")||"{}");
+      for(var kC in loc)if(!celebracoes[kC])celebracoes[kC]=loc[kC];
+    }catch(eC){}
+    celebracoesSalvas=JSON.stringify(celebracoes);
     var mt=await db.doc("config/metas").get();
     if(mt.exists&&mt.data()){
       if(mt.data().porUsuario)metas=mt.data().porUsuario;
@@ -17171,9 +17198,28 @@ function blocoMetas(quem,de,ate){
 }
 
 /* ---------- parabéns por meta batida ---------- */
-var celebracoes={};
-async function gravarCelebracoes(){if(!db)return;try{
-  await db.doc("config/celebracoes").set({dados:celebracoes});}catch(e){console.warn(e);}}
+var celebracoes={},celebracoesSalvas="";
+/* Guardar quais parabéns já apareceram é enfeite, não registro de trabalho. Por isso:
+   (1) só vai ao banco quando MUDA — antes o boot gastava uma gravação toda vez;
+   (2) fica sempre guardado neste aparelho; e
+   (3) se o banco recusar (o documento config/celebracoes precisa de permissão própria, que nem
+   todo projeto tem), o aviso vermelho de "o último registro NÃO foi gravado" NÃO acende —
+   ele é para venda, OS e cadastro, não para um parabéns (relato dele, 24/09, com print). */
+async function gravarCelebracoes(){
+  var txt="";try{txt=JSON.stringify(celebracoes);}catch(e){return;}
+  if(txt===celebracoesSalvas)return;
+  celebracoesSalvas=txt;
+  try{localStorage.setItem("mf_celebracoes",txt);}catch(e){}
+  if(!db)return;
+  try{await db.doc("config/celebracoes").set({dados:celebracoes});}
+  catch(e){
+    console.warn("celebrações",e);
+    try{
+      var f=db.falhaPendente;
+      if(f&&/celebracoes/.test(String(f.contexto||"")))db.reconhecerFalha();
+    }catch(e2){}
+  }
+}
 var MSG_PARABENS=[
   "Meta batida. E olha que ninguém bate meta por sorte — bate por ter feito, um a um, os contatos que a maioria deixa para depois.",
   "Você fechou o combinado. O que separa quem vende de quem quase vende quase nunca é talento: é ter voltado a ligar no dia em que não deu vontade.",
