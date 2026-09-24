@@ -5821,6 +5821,7 @@ var EQUIPE=USUARIOS.map(function(u){return u.nome;}).sort(ordAZ);
 function usuarioPor(n){return USUARIOS.filter(function(u){return u.nome===n;})[0]||null;}
 function colabAtivo(n){var u=usuarioPor(n);return !!(u&&u.ativo);}
 
+var clientesCarregando=false;
 var db=null,lojaAtual="mf",clientes=[],produtos=[],pedidos=[],itens=[],editandoCli=null,editandoProd=null;
 
 /* Contratos dos planos de garantia — modelos dos Pedidos 20882 (Premium I) e 20835 (Premium II).
@@ -6040,8 +6041,24 @@ async function carregar(){
     if(antigo)await gravarFormas();
   }catch(e){console.warn("formas",e);}
   try{
-    var cs=await jaPedido("col:clientes",function(){return col("clientes").limit(30000).get();});
-    clientes=cs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    /* OS CADASTROS CHEGAM DEPOIS, SEM SEGURAR A ABERTURA (regra de 24/09: "demora um pouco").
+       São 21.909 clientes — de longe a maior resposta do banco, alguns megabytes. Esperar por
+       ela era ficar olhando a tela parada. Agora o pedido sai junto com os outros, o sistema
+       abre e os cadastros entram quando chegam; aí a tela se redesenha sozinha e o funil é
+       recalculado. Quem abrir Clientes antes disso vê "carregando os cadastros", não uma lista
+       vazia — que foi o susto do teste com o Renan (v204). */
+    clientesCarregando=true;
+    jaPedido("col:clientes",function(){return col("clientes").limit(30000).get();})
+      .then(function(cs){
+        clientes=cs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+        clientesCarregando=false;
+        try{render();}catch(e){console.warn(e);}
+        try{sincronizarFunil();}catch(e){console.warn("funil",e);}
+      },function(e){
+        clientesCarregando=false;
+        console.warn("clientes",e);
+        try{render();}catch(e2){}
+      });
     var ps=await jaPedido("col:produtos",function(){return col("produtos").limit(3000).get();});
     produtos=ps.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     if(!produtos.length){
@@ -6347,7 +6364,9 @@ function renderClientes(){
     $("cliProx").disabled=$("cliUltima").disabled=(cliPag>=paginas);
   }
   var b=$("cliBody");b.innerHTML="";
-  if(!total){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum cliente ainda</div>Use o botão <b>+ Novo</b> no topo para cadastrar o primeiro.</div></td></tr>';return;}
+  if(!total){b.innerHTML=clientesCarregando
+    ? '<tr><td colspan="6"><div class="empty"><div class="big">Carregando os cadastros…</div>São 20 mil e poucos: leva alguns segundos. A tela se preenche sozinha.</div></td></tr>'
+    : '<tr><td colspan="6"><div class="empty"><div class="big">Nenhum cliente ainda</div>Use o botão <b>+ Novo</b> no topo para cadastrar o primeiro.</div></td></tr>';return;}
   lista.forEach(function(c){
     var f=faltantes(c),ind=estrelasDe(c.id),indTot=indicadosPor(c.id).length;
     var tr=document.createElement("tr");tr.className="clickable";
@@ -24534,6 +24553,10 @@ function linhaSugestao(c){
 }
 function buscarCliente(){
   var box=$("at_sug"),achados=achaCliente($("at_nome").value);
+  /* enquanto os cadastros não chegaram, não deixar a busca parecer "não existe" (24/09) */
+  if(!achados.length&&clientesCarregando&&($("at_nome").value||"").trim().length>=2){
+    box.innerHTML='<button type="button" disabled>Ainda carregando os cadastros — tente de novo em alguns segundos</button>';
+    box.hidden=false;return;}
   if(!achados.length){box.hidden=true;return;}
   box.innerHTML="";
   achados.forEach(function(c){
@@ -25889,7 +25912,7 @@ function buscarClienteVenda(){
   if(q.length<2){box.hidden=true;return;}
   var achados=achaCliente(q).slice(0,8);
   if(!achados.length){
-    box.innerHTML='<button type="button" disabled>Nenhum cliente com esse dado</button>';
+    box.innerHTML='<button type="button" disabled>'+(clientesCarregando?"Ainda carregando os cadastros — tente de novo em alguns segundos":"Nenhum cliente com esse dado")+"</button>";
     box.hidden=false;return;}
   box.innerHTML="";
   achados.forEach(function(c){
