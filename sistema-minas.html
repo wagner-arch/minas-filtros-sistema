@@ -4905,6 +4905,34 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- DESTINO DO PURIFICADOR SUCATA (regra dele, 25/09): o aparelho da troca chega ao almoxarifado,
+     é avaliado, e daí sai como SEMINOVO (volta ao estoque, com série) ou vai para DESMANCHE —
+     que NÃO gera estoque nenhum: a baixa é definitiva e o aparelho acaba ali. -->
+<div class="modal" id="sucModal" hidden>
+  <div class="box" style="width:min(560px,100%)">
+    <h3 id="sc_titulo">Purificador Sucata</h3>
+    <div class="sub" id="sc_sub"></div>
+    <div id="sc_secRec" hidden>
+      <div class="fld"><label for="sc_prod">Virou qual seminovo? <span class="req">*</span></label>
+        <select id="sc_prod"></select>
+        <p class="help">Só aparecem os purificadores seminovos do catálogo. O aparelho sai da sucata e entra no estoque como este produto.</p></div>
+      <div class="fld"><label for="sc_serie">Número de série <span class="req">*</span></label>
+        <input id="sc_serie" type="text" placeholder="a série que o aparelho recebeu na revisão"></div>
+    </div>
+    <div class="note warn" id="sc_avisoDes" hidden>
+      <b>Desmanche é definitivo.</b> O aparelho sai do estoque e não volta como produto nenhum —
+      não fica saldo de sucata nem entra seminovo. O registro fica no histórico do estoque.
+    </div>
+    <div class="fld"><label for="sc_obs">Observação</label>
+      <textarea id="sc_obs" rows="2" placeholder="o que foi trocado, o que foi aproveitado, quem avaliou…"></textarea></div>
+    <div id="sc_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="sc_ok">Confirmar</button>
+      <button class="btn mut" type="button" id="sc_cancelar">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <!-- JANELA DA INSTALAÇÃO: abre pela agenda, pelo pedido ou pela Aprovação Financeira -->
 <div class="modal" id="instModal" hidden>
   <div class="box">
@@ -8088,13 +8116,73 @@ function usadoTrocaDoColab(quem){
   var pend=ent.slice(sai),h=hojeISO();
   return {saldo:pend.length,desde:pend[0]||"",atrasado:!!(pend.length&&pend[0]<h)};
 }
+/* ---------- o que o almoxarifado faz com o Purificador Sucata (regra dele, 25/09) ----------
+   Avaliado o aparelho, ele tem dois destinos e nenhum outro:
+   · RECUPERADO → sai da sucata e entra no estoque como o purificador SEMINOVO escolhido, com a
+     série que recebeu na revisão. É daí que vem o seminovo que a loja revende.
+   · DESMANCHE  → sai do estoque e acaba ali. NÃO vira estoque de coisa nenhuma; fica só o
+     registro no histórico, com quem avaliou e o que foi aproveitado na observação. */
+var LOC_RECUP="recuperacao",LOC_DESM="desmanche";
+var sucPend=null;
+function podeAvaliarSucata(){
+  return ehGestor()||podeAprovarRetirada();
+}
+function produtosSeminovos(){
+  return porNomeAZ(produtos.filter(function(p){
+    return (p.status||"ativo")==="ativo"&&!ehProdutoSucata(p)&&/seminov/i.test(p.nome||"");}));
+}
+function abrirSucata(p,modo){
+  if(!podeAvaliarSucata()){toast("Só o responsável pelo estoque avalia o purificador da sucata.");return;}
+  var s=estEmpresaDe(p);
+  if(!(s>0)){toast("Não há Purificador Sucata no almoxarifado.");return;}
+  sucPend={pid:p.id,modo:modo};
+  var rec=(modo==="rec");
+  $("sc_titulo").textContent=rec?"Recuperado — virou seminovo":"Desmanche do purificador";
+  $("sc_sub").textContent="Purificador Sucata · "+s+(s===1?" unidade":" unidades")+" no almoxarifado";
+  $("sc_secRec").hidden=!rec;
+  $("sc_avisoDes").hidden=rec;
+  $("sc_obs").value="";$("sc_serie").value="";$("sc_alerta").innerHTML="";
+  $("sc_ok").textContent=rec?"Confirmar — entrou como seminovo":"Confirmar o desmanche";
+  if(rec){
+    var sel=$("sc_prod"),ls=produtosSeminovos();
+    sel.innerHTML=ls.length
+      ? ls.map(function(x){return '<option value="'+x.id+'">'+esc(x.nome)+"</option>";}).join("")
+      : '<option value="">— nenhum produto seminovo no catálogo —</option>';
+    if(!ls.length)$("sc_alerta").innerHTML='<div class="note warn">Nenhum produto com "seminovo" no nome está cadastrado. '+
+      "Cadastre o seminovo em Produtos antes de recuperar este aparelho.</div>";
+  }
+  $("sucModal").hidden=false;
+}
+async function confirmarSucata(){
+  var x=sucPend;if(!x)return;
+  if(!podeAvaliarSucata()){toast("Só o responsável pelo estoque avalia o purificador da sucata.");return;}
+  var pu=produtos.filter(function(p){return p.id===x.pid;})[0];
+  if(!pu){$("sucModal").hidden=true;sucPend=null;return;}
+  if(!(estEmpresaDe(pu)>0)){$("sc_alerta").innerHTML='<div class="note crit">O almoxarifado não tem mais Purificador Sucata em estoque.</div>';return;}
+  var obs=($("sc_obs").value||"").trim();
+  if(x.modo==="rec"){
+    var novoId=$("sc_prod").value,serie=($("sc_serie").value||"").trim();
+    var pn=produtos.filter(function(p){return p.id===novoId;})[0];
+    if(!pn){$("sc_alerta").innerHTML='<div class="note crit">Escolha em qual seminovo este aparelho se transformou.</div>';return;}
+    if(!serie){$("sc_alerta").innerHTML='<div class="note crit">Informe o número de série que o aparelho recebeu.</div>';
+      try{$("sc_serie").focus();}catch(e){}return;}
+    var det="Série "+serie+(obs?" · "+obs:"");
+    await lancarMov(pu.id,1,LOC_EMPRESA,LOC_RECUP,"Recuperado","Virou "+pn.nome+" · "+det);
+    await lancarMov(pn.id,1,LOC_RECUP,LOC_EMPRESA,"Recuperado","Recuperado de Purificador Sucata · "+det);
+    toast("1 "+pn.nome+" no estoque do almoxarifado · série "+serie+". A sucata baixou.");
+  }else{
+    await lancarMov(pu.id,1,LOC_EMPRESA,LOC_DESM,"Desmanche",obs||"Aparelho desmontado");
+    toast("Purificador desmontado. Ele saiu do estoque e não gera saldo de nenhum produto.");
+  }
+  $("sucModal").hidden=true;sucPend=null;
+  renderEstEmpresa();renderEstColab();renderProdutos();
+}
 async function registrarTrocaDaVenda(ped){
   if(!ped||!ped.troca||!ped.troca.tem)return null;
   var pu=produtoUsadoTroca();if(!pu)return null;
   var quem=ped.vendedor||usuarioAtual;
-  /* quantos aparelhos o cliente entregou (regra dele, 25/09): antes entrava sempre 1, mesmo
-     quando a troca tinha dois ou três aparelhos */
-  var nUsados=Math.max(1,parseInt(ped.troca.qtd,10)||1);
+  /* um purificador por venda (regra dele, 25/09) */
+  var nUsados=1;
   var r={id:uid(),loja:ped.loja,tipo:"requisicao",origem:"troca",colaborador:quem,data:hojeISO(),
     itens:[{pid:pu.id,nome:pu.nome,cod:pu.cod,qtd:nUsados,atendida:nUsados}],
     obs:"Pego na troca · Pedido "+ped.numero+" · "+nUsados+(nUsados===1?" aparelho":" aparelhos")+
@@ -8262,15 +8350,13 @@ function renderFormas(){
         :(formas.length>1?'<button class="btn mut sm" type="button" data-rmf="'+i+'">Remover</button>':'<span class="help" style="margin:0">à vista não deprecia</span>'))+'</div>'+
       /* quanto fica cada parcela desta forma (pedido dele, 20/09) */
       '<div class="pg-parc" data-pgp="'+i+'"></div>'+
-      /* NEGOCIAÇÃO COM TROCA (regra dele, 25/09): marcou a troca, tem de dizer QUANTOS aparelhos
-         o cliente está entregando — é essa quantidade que entra no estoque como sucata — e o
-         valor da troca não pode ser zero. */
+      /* NEGOCIAÇÃO COM TROCA: a empresa pega UM purificador por venda (regra dele, 25/09) — não
+         há campo de quantidade. O que a troca exige é o VALOR, que não pode ser zero. */
       (f.tipo===FORMA_TROCA
-        ?'<div class="fld" style="grid-column:1/-1"><label for="v_qtdTroca'+i+'">Aparelhos recebidos na troca <span class="req">*</span></label>'+
-         '<input id="v_qtdTroca'+i+'" type="number" min="1" step="1" inputmode="numeric" style="max-width:120px" '+
-         'data-f="qtdTroca" data-i="'+i+'" value="'+(+f.qtdTroca>0?+f.qtdTroca:1)+'">'+
-         '<span class="help">Cada aparelho entra no seu estoque como <b>Purificador Sucata</b>. '+
-         'Depois você transfere para o almoxarifado, que encaminha para avaliação.</span></div>'
+        ?'<div class="fld" style="grid-column:1/-1"><span class="help" style="margin:0">'+
+         'A troca aceita <b>um purificador por venda</b>. Ele entra no seu estoque como '+
+         '<b>Purificador Sucata</b>; depois você transfere para o almoxarifado, que encaminha '+
+         'para avaliação.</span></div>'
         :"");
     w.appendChild(d);
   });
@@ -8278,7 +8364,6 @@ function renderFormas(){
     el.oninput=el.onchange=function(){
       var i=+el.getAttribute("data-i"),k=el.getAttribute("data-f");
       if(k==="valor"){formas[i].base=numMF(el.value);formas[i].__auto=false;}
-      else if(k==="qtdTroca"){formas[i].qtdTroca=Math.max(1,parseInt(el.value,10)||1);el.classList.remove("campo-falta");}
       else formas[i][k]=(k==="parc"?parseInt(el.value,10):el.value);
       /* trocou a forma ou o parcelamento: o preço do item novo se refaz pela tabela cheia,
          a menos que alguém já tenha digitado um valor à mão (v161) */
@@ -8948,12 +9033,6 @@ async function salvarPedido(){
       toast("A negociação com troca precisa do valor da troca — ele não pode ser R$ 0,00.");
       return;
     }
-    if(!((+fT.qtdTroca||0)>=1)){
-      var cq=$("v_qtdTroca"+ixTroca);
-      if(cq){cq.classList.add("campo-falta");try{cq.focus();}catch(e){}}
-      toast("Informe quantos aparelhos o cliente está entregando na troca.");
-      return;
-    }
   }
   if(!$("v_vend").value){toast("Informe quem vendeu.");irEtapa(6);return;}
   if(!temInstalacaoVenda()){toast("Responda se a venda precisa de instalação.");irEtapa(6);return;}
@@ -8974,10 +9053,8 @@ async function salvarPedido(){
   /* troca (regra do Wagner, 16/09): não há mais pergunta — a forma "Desconto de Troca" é que diz que o cliente
      deu um purificador usado; o usado vai para o estoque do vendedor depois que ele confirmar o recebimento */
   var trocaV=formas.filter(function(f){return f.tipo===FORMA_TROCA;}).reduce(function(a,f){return a+(+f.valor||0);},0);
-  /* quantos aparelhos o cliente entregou: informado pelo vendedor na forma da troca (25/09) */
-  var qtdTrocaV=formas.filter(function(f){return f.tipo===FORMA_TROCA;})
-    .reduce(function(a,f){return a+Math.max(1,parseInt(f.qtdTroca,10)||1);},0);
-  trocaResp=trocaV>0?{tem:true,viaForma:true,valor:Math.round(trocaV*100)/100,qtd:qtdTrocaV||1,
+  /* a troca pega UM purificador por venda (regra dele, 25/09) */
+  trocaResp=trocaV>0?{tem:true,viaForma:true,valor:Math.round(trocaV*100)/100,qtd:1,
     serie:"",quando:hojeISO()+" "+agoraHM(),por:usuarioAtual}:null;
   /* venda abaixo da tabela (regra do Wagner, 16/09): o vendedor pede a autorização com o motivo antes de finalizar */
   if(r.abaixo&&!descSolResp){abrirSolDesconto(recalcPedido(itens,formas));return;}
@@ -9515,6 +9592,8 @@ function nomeLocal(l){
   if(l&&l.indexOf("loja:")===0)return "Loja "+nomeLojaId(l.slice(5));
   if(l==="venda")return "Venda ao cliente";
   if(l==="troca")return "Troca com o cliente";
+  if(l===LOC_RECUP)return "Recuperado (virou seminovo)";
+  if(l===LOC_DESM)return "Desmanche (baixa definitiva)";
   if(l==="fornecedor")return "Fornecedor";
   if(l==="ajuste")return "Ajuste";
   return l||"—";
@@ -10600,13 +10679,20 @@ function renderEstEmpresa(){
       var cls=s<0?"p-crit":(mn>0&&s<mn?"p-warn":(s>0?"p-ok":"p-mut"));
       var sit=s<0?"negativo":(mn>0&&s<mn?"abaixo do mínimo":(s>0?"normal":"zerado"));
       var tr=document.createElement("tr");tr.className="clickable";
-      tr.innerHTML='<td><div class="t-main">'+esc(p.nome)+'</div><div class="t-sub"><code>'+esc(p.cod)+"</code></div></td>"+
+      /* purificador da troca no almoxarifado: aqui ele é avaliado e sai como seminovo ou desmanche */
+      var ehSuc=ehProdutoSucata(p)&&s>0&&podeAvaliarSucata();
+      tr.innerHTML='<td><div class="t-main">'+esc(p.nome)+'</div><div class="t-sub"><code>'+esc(p.cod)+"</code></div>"+
+        (ehSuc?'<div class="actions" style="margin-top:8px;justify-content:flex-start">'+
+          '<button class="btn sm" type="button" data-suc="rec">Recuperado → seminovo</button>'+
+          '<button class="btn mut sm" type="button" data-suc="des">Desmanche</button></div>':"")+"</td>"+
         "<td>"+esc((p.local&&p.local[lojaAtual])||"—")+"</td>"+
         '<td class="num"><b>'+s+'</b></td><td class="num">'+(mn||"—")+"</td>"+
         '<td class="num">'+(comVend||"—")+"</td>"+
         '<td class="num">'+BRL(custoTotalDe(p))+'</td><td class="num">'+BRL(s*custoTotalDe(p))+"</td>"+
         '<td><span class="pill '+cls+'">'+sit+"</span></td>";
       tr.onclick=function(){ir("produtos");abrirProduto(p);};
+      Array.prototype.forEach.call(tr.querySelectorAll("[data-suc]"),function(bt){
+        bt.onclick=function(ev){ev.stopPropagation();abrirSucata(p,bt.getAttribute("data-suc"));};});
       b.appendChild(tr);
     });
   }
@@ -26162,6 +26248,10 @@ function ligar(){
   $("rp_sim").onclick=confirmarReposicaoItens;
   $("rp_nao").onclick=function(){$("repModal").hidden=true;repPend=null;};
 
+  /* ---- destino do purificador da sucata: seminovo ou desmanche (25/09) ---- */
+  $("sc_ok").onclick=function(){confirmarSucata();};
+  $("sc_cancelar").onclick=function(){$("sucModal").hidden=true;sucPend=null;};
+
   /* ---- janela da instalação ---- */
   $("ins_add").onclick=async function(){
     var p=instAberta;if(!p||!podeInstalar(p))return;
@@ -26966,7 +27056,7 @@ function ligar(){
          ainda não foi digitado continua recebendo a sobra, senão o pedido fechava com "Passou
          R$ X" e o vendedor tinha de refazer a conta à mão (defeito pego no teste da v220) */
       formas.forEach(function(f){if(semJuros(f))f.__auto=false;});
-      formas.push({tipo:FORMA_TROCA,valor:0,base:0,parc:1,qtdTroca:1,__auto:false});
+      formas.push({tipo:FORMA_TROCA,valor:0,base:0,parc:1,__auto:false});
       renderFormas();calcular();
       toast("Informe quanto vale o purificador usado. Esse valor não gera comissão.");
     }
