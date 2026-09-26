@@ -22260,17 +22260,37 @@ async function virarVenda(o){
     $("at_nome").value=o.cliente||"";$("at_tel").value=o.tel||"";$("at_cidade").value=o.cidade||"";
     return;
   }
-  itens=o.itens.map(function(i){
-    return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:i.qtd||1,valor:+i.valor||0,
-      serie:"",pontos:+i.pontos||0,garantia:"Bronze"};});
-  formas=[{tipo:o.forma,valor:o.total,parc:o.parc||1}];
+  /* v230: a venda nasce IGUAL ao orçamento — produtos, valores, desconto e forma de pagamento.
+     Antes vinham só os itens pelo valor final, sem `valorBase`, e uma forma sem a fatia da base:
+     o pedido do modelo v206 não tinha como refazer a conta e o desconto ficava para trás. */
+  limparPedido();
+  formas=[{tipo:o.forma,parc:o.parc||1,valor:0,base:0}];
+  var acr=acrescimoForma(formas[0])||1;
+  itens=(o.itens||[]).map(function(i){
+    var fin=+i.valor||0,q=i.qtd||1;
+    var pr=produtos.filter(function(x){return x.id===i.pid;})[0]||{};
+    return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:q,
+      /* o valor do orçamento é o COBRADO; o comercial é ele dividido pelo acréscimo da forma */
+      valorBase:baseDoFinal(fin,q,0),valorTabela:+pr.cheia||fin,valor:fin,
+      serie:"",pontos:+i.pontos||0,garantia:"Bronze",vinculo:uid()};});
+  /* Desconto Especial: no orçamento ele abate o valor final; no pedido, o valor comercial.
+     Vem dividido pelo mesmo acréscimo, para o cliente pagar exatamente o mesmo total. */
+  var dOrc=+o.descontoEspecial||0;
+  if(!(dOrc>0)){
+    var somaF=(o.itens||[]).reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
+    dOrc=Math.max(0,centavos(somaF-(+o.total||0)));   /* orçamento gravado antes da v226 */
+  }
+  var dPed=(dOrc>0)?baseDoFinal(dOrc,1,0):0;
   o.situacao="convertido";o.convertidoEm=iso(new Date());
   if(db){try{await col("orcamentos").doc(o.id).set(o);}catch(e){console.warn(e);}}
   render();ir("venda");
   try{escolherClienteVenda(c);atualizarEtapas();}catch(e){}
   try{$("v_vend").value=o.vendedor;}catch(e){}
+  try{if($("v_descGeral"))$("v_descGeral").value=(dPed>0)?brMF(dPed):"";}catch(e){}
   calcular();
-  toast("Orçamento "+o.numero+" carregado no pedido. Falta série, garantia e assinatura.");
+  toast("Orçamento "+o.numero+" carregado no pedido: "+(o.itens||[]).length+" item(ns), "+
+    esc(o.forma)+" "+(o.parc||1)+"×"+(dOrc>0?", desconto de "+BRL(dOrc):"")+
+    " — o cliente paga "+BRL(o.total)+". Falta série, garantia e assinatura.");
 }
 
 /* ---------- detalhe do pedido · encerrar · reabrir com autorização ---------- */
