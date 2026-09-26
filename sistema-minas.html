@@ -1827,9 +1827,9 @@ img{max-width:100%}
                    Preenchido, é lançado na venda e o total final sai já com ele descontado. -->
               <div class="r"><span>Desconto Especial</span>
                 <span><input id="v_descGeral" class="v-unit v-desc" type="text" inputmode="decimal" placeholder="0,00" aria-label="Desconto Especial"></span></div>
-              <div class="r sep big"><span>Total base da venda</span><span id="o_cBase">—</span></div>
+              <div class="r sep big"><span>Total da venda</span><span id="o_cBase">—</span></div>
             </div>
-            <p class="help">É este valor que vai ser repartido entre as formas de pagamento.</p>
+            <div id="o_cNota"></div>
           </div>
 
           <!-- ETAPA 3 — GARANTIA (regra dele, 22/09: "a garantia deveria aparecer como uma etapa
@@ -7988,9 +7988,10 @@ function baseDoFinal(finalUnit,qtd,T){
   var tot=(+T>0)?+T:F,k=tot>0?(Math.min(entradaSemJuros(),tot)/tot):0;
   var f=k+(1-k)*acrescimoForma(comJuros[0]);
   if(!(f>0))return Math.round((+finalUnit||0)*100)/100;
-  /* arredonda ao centavo MAIS PRÓXIMO: para cima, o valor digitado voltava dois centavos maior
-     na tela (R$ 2.500,00 virava R$ 2.500,02). A tolerância de um centavo da `faixa` cobre o resto. */
-  return Math.round(((F/f)/q)*100)/100;
+  /* NÃO arredonda no centavo: o valor comercial é guardado com seis casas para que o caminho de
+     volta (base × acréscimo) devolva EXATAMENTE o valor final digitado. Arredondando aqui, o
+     pedido saía um centavo diferente do orçamento em cada item (26/09). */
+  return Math.round(((F/f)/q)*1e6)/1e6;
 }
 /* o valor que está no campo, convertido para o comercial. Se o vendedor não mexeu no campo, a
    base é a tabela cheia exata — sem o centavo de ida e volta do arredondamento. */
@@ -8831,6 +8832,7 @@ function composicaoVenda(lista,extras){
   /* o Desconto Especial nunca passa do valor da venda — senão o total base ficaria negativo */
   var desc=Math.min(centavos(+e.desconto||0),centavos(prod+gar+frete));
   return {prod:centavos(prod),gar:centavos(gar),frete:frete,desc:desc,
+    descFinal:centavos(+e.descontoFinal||0),   /* o valor que o cliente vê, igual ao do orçamento */
     base:centavos(prod+gar+frete-desc)};
 }
 /* quanto do valor comercial sobra depois do Desconto Especial. É por este fator que o valor de
@@ -8865,27 +8867,21 @@ function aplicarBrutos(fs){
    O último centavo do arredondamento fica na maior forma, para a soma das formas
    continuar batendo exatamente com o total do pedido. */
 function aplicarCobradoNosItens(lista,fs,totalBase,totalBruto){
-  /* o peso de cada item é a fatia dele na soma das bases DOS ITENS — não no `totalBase`, que já
-     traz frete somado e Desconto Especial abatido. Com desconto os pesos somavam mais que 1 e o
-     rateio se deslocava: um item de R$ 3.500 com R$ 500 de desconto no pedido saía por R$ 3.000
-     e o outro ficava intacto, em vez de os dois caírem proporcionalmente (25/09). */
-  var somaItens=(lista||[]).reduce(function(a,i){return i.planoCobre?a:a+baseDoItem(i);},0);
-  var pesos=(lista||[]).map(function(i){
-    if(i.planoCobre)return 0;
-    return somaItens>0?(baseDoItem(i)/somaItens):0;
+  /* v234: o valor final de cada item é o comercial dele vezes o acréscimo do parcelamento —
+     SEM o Desconto Especial, que aparece como linha própria no quadro, exatamente como o
+     orçamento faz. Antes o desconto era diluído nos itens e o pedido mostrava R$ 3.119,06 onde
+     a proposta dizia R$ 3.500,00 — "como passou um orçamento para um cliente e depois manda um
+     pedido diferente" (relato dele, 26/09). */
+  /* acréscimo exato: com uma forma é o dela; com várias, a média ponderada pelas bases. Usar
+     `totalBruto/totalBase` trazia o ruído dos arredondamentos e devolvia um centavo a mais. */
+  var somaB=(fs||[]).reduce(function(a,f){return a+(+f.base||0);},0);
+  var acr=(somaB>0)
+    ?((fs||[]).reduce(function(a,f){return a+((+f.base||0)*acrescimoForma(f));},0)/somaB)
+    :((totalBase>0)?(totalBruto/totalBase):1);
+  (lista||[]).forEach(function(i){
+    i.valor=i.planoCobre?0:centavos(valorBaseItem(i)*acr);
   });
-  var partes=repartirDep(totalBruto,pesos);
-  (lista||[]).forEach(function(i,ix){
-    i.valor=i.planoCobre?0:centavos((partes[ix]||0)/(i.qtd||1));
-  });
-  var soma=(lista||[]).reduce(function(a,i){return a+centavos((+i.valor||0)*(i.qtd||1));},0);
-  var dif=Math.round((soma-totalBruto)*100)/100;
-  if(dif!==0&&fs&&fs.length){
-    var maior=fs[0];
-    fs.forEach(function(f){if((+f.valor||0)>(+maior.valor||0))maior=f;});
-    maior.valor=centavos((+maior.valor||0)+dif);
-  }
-  return centavos(soma);
+  return centavos((lista||[]).reduce(function(a,i){return a+centavos((+i.valor||0)*(i.qtd||1));},0));
 }
 function normalizarFormasVenda(fs){
   (fs||[]).forEach(function(f){
@@ -8896,19 +8892,20 @@ function normalizarFormasVenda(fs){
   });
 }
 function extrasVenda(){
+  /* v234: o Desconto Especial digitado é o valor FINAL — o que o cliente deixa de pagar, igual
+     ao orçamento. Por dentro a venda trabalha em valor comercial, então ele entra dividido pelo
+     acréscimo da forma. Sem isso o pedido mostrava R$ 366,30 onde a proposta dizia R$ 400,00. */
+  var dFinal=numMF(($("v_descGeral")||{}).value||0)||0;
   return {frete:numMF(($("v_frete")||{}).value||0)||0,
-    desconto:numMF(($("v_descGeral")||{}).value||0)||0};
+    desconto:(dFinal>0?baseDoFinal(dFinal,1,0):0),descontoFinal:dFinal};
 }
 function calcular(){
   normalizarValoresItens(itens);
   normalizarFormasVenda(formas);
   /* ETAPA A: o valor comercial da venda */
-  var comp=composicaoVenda(itens,extrasVenda());
+  var xv=extrasVenda();
+  var comp=composicaoVenda(itens,xv);
   var totalBase=comp.base;
-  $("o_cProd").textContent=BRL(comp.prod);
-  $("o_cGar").textContent=BRL(comp.gar);
-  $("o_cFreteR").hidden=!(comp.frete>0);$("o_cFrete").textContent=BRL(comp.frete);
-  $("o_cBase").textContent=BRL(totalBase);
   var elCT=$("v_compTotal");
   if(elCT)elCT.innerHTML='<div class="calc" style="margin-top:18px">'+
     '<div class="r"><span>Produtos</span><span>'+BRL(comp.prod)+"</span></div>"+
@@ -8921,7 +8918,28 @@ function calcular(){
   /* ETAPA B: como ele paga */
   distribuirBase(formas,totalBase);
   aplicarBrutos(formas);
-  var total=aplicarCobradoNosItens(itens,formas,totalBase,formas.reduce(function(a,f){return a+(+f.valor||0);},0));
+  var total=centavos(formas.reduce(function(a,f){return a+(+f.valor||0);},0));
+  aplicarCobradoNosItens(itens,formas,totalBase,total);
+  /* QUADRO DA ETAPA 2 em valores FINAIS — os mesmos números da proposta que o cliente recebeu
+     (regra dele, 26/09: "vc deve alinhar o que está no orçamento igual ao pedido, pois o
+     orçamento foi criado primeiro"). O valor comercial, que forma a comissão, vai na nota. */
+  var acrMedio=(totalBase>0)?(total/totalBase):1;
+  var prodF=0,garF=0;
+  itens.forEach(function(i){
+    if(i.planoCobre)return;
+    var v=centavos((+i.valor||0)*(i.qtd||1));
+    if(ehPlano(i))garF+=v;else prodF+=v;
+  });
+  prodF=centavos(prodF);garF=centavos(garF);
+  var freteF=centavos((+comp.frete||0)*acrMedio),descF=centavos(+xv.descontoFinal||0);
+  var totalVenda=centavos(prodF+garF+freteF-descF);
+  $("o_cProd").textContent=BRL(prodF);
+  $("o_cGar").textContent=BRL(garF);
+  $("o_cFreteR").hidden=!(freteF>0);$("o_cFrete").textContent=BRL(freteF);
+  $("o_cBase").textContent=BRL(totalVenda);
+  if($("o_cNota"))$("o_cNota").innerHTML='<p class="help">É este o valor que o cliente paga — o mesmo da proposta. '+
+    "Valor comercial da venda, que forma a comissão: <b>"+BRL(totalBase)+"</b>"+
+    ((descF>0)?" (o Desconto Especial de "+BRL(descF)+" equivale a "+BRL(comp.desc)+" no comercial)":"")+".</p>";
   /* os campos de valor das formas acompanham a distribuição automática */
   var campos=$("v_formas")?$("v_formas").querySelectorAll('[data-f="valor"]'):[];
   formas.forEach(function(f,ix){
@@ -9321,6 +9339,7 @@ async function salvarPedido(){
     /* v206: fica gravado o que é valor comercial e o que é acréscimo do parcelamento */
     modelo:"base",totalBase:r.totalBase,acrescimo:r.acrescimo,
     frete:(r.comp?r.comp.frete:0),descontoGeral:(r.comp?r.comp.desc:0),
+    descontoEspecial:(r.comp?r.comp.descFinal:0),   /* o desconto como o cliente vê (v234) */
     obs:$("v_obs").value.trim(),usoImagem:$("v_imagem").value,anexos:anexados,arquivos:arquivos,assinado:true,assinaturaImg:assinaturaParaDoc(),
     abaixoTabela:!!r.abaixo,status:etapaVenda({abaixoTabela:!!r.abaixo,instalacao:$("v_idata").value}),
     instalacao:$("v_idata").value?($("v_idata").value+" "+($("v_ihora").value||"")):"",
@@ -18858,7 +18877,9 @@ function abrirPedidoParaEditar(p){
   normalizarFormasVenda(formas);
   try{
     if($("v_frete"))$("v_frete").value=brMF(+p.frete||0);
-    if($("v_descGeral"))$("v_descGeral").value=brMF(+p.descontoGeral||0);
+    /* o campo é o valor FINAL (v234); pedido antigo só tem o comercial, então é convertido */
+    if($("v_descGeral"))$("v_descGeral").value=brMF((+p.descontoEspecial>0)?+p.descontoEspecial
+      :((+p.descontoGeral>0)?cobradoPara(+p.descontoGeral):0));
     if(p.prospector)$("v_prosp").value=p.prospector;
     if(p.vendedor)$("v_vend").value=p.vendedor;
     if(p.instalador)$("v_inst").value=p.instalador;
@@ -18906,6 +18927,7 @@ async function aplicarEdicaoPedido(cli,r,solDesc){
   p.total=r.total;p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
   p.modelo="base";p.totalBase=r.totalBase;p.acrescimo=r.acrescimo;
   p.frete=(r.comp?r.comp.frete:0);p.descontoGeral=(r.comp?r.comp.desc:0);
+  p.descontoEspecial=(r.comp?r.comp.descFinal:0);
   p.prospector=$("v_prosp").value;p.vendedor=$("v_vend").value;
   p.instalador=($("v_idata").value
     ?($("v_inst").value||$("v_iresp").value||$("v_vend").value)
@@ -22359,7 +22381,8 @@ async function virarVenda(o){
     var somaF=(o.itens||[]).reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
     dOrc=Math.max(0,centavos(somaF-(+o.total||0)));   /* orçamento gravado antes da v226 */
   }
-  var dPed=(dOrc>0)?baseDoFinal(dOrc,1,0):0;
+  /* v234: o campo do pedido agora é o valor FINAL, igual ao do orçamento — vai sem converter */
+  var dPed=dOrc;
   /* guarda de qual orçamento esta venda nasceu: ao salvar o pedido, os dois passam a se
      apontar e o orçamento ganha o botão "Abrir a venda" (pedido dele, 26/09) */
   pedOrigemOrc=o;
