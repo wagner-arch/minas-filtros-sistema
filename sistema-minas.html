@@ -598,6 +598,9 @@
   .tw table input.v-qtd::-webkit-outer-spin-button,
   .tw table input.v-qtd::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
   .tw table input.v-unit{max-width:140px}
+  /* Desconto Especial dentro do quadro de totais (pedido dele, 25/09) */
+  .calc input.v-desc{width:140px;max-width:100%;text-align:right;padding:7px 8px;font-size:14px}
+  .calc .r>span:last-child:has(input.v-desc){display:flex;justify-content:flex-end}
   .tw>table.t-itens>tbody>tr>td .pill{white-space:normal}
   /* Ficha do pedido: Produto · Qtd · Valor unit. · Subtotal · (remover) */
   .tw>table.t-itens.t-ped>thead>tr>th:nth-child(1){width:42%}
@@ -1818,7 +1821,10 @@ img{max-width:100%}
               <div class="r"><span>Produtos</span><span id="o_cProd">—</span></div>
               <div class="r"><span>Garantia</span><span id="o_cGar">—</span></div>
               <div class="r" id="o_cFreteR" hidden><span>Frete</span><span id="o_cFrete">—</span></div>
-              <div class="r" id="o_cDescR" hidden><span>Descontos</span><span id="o_cDesc">—</span></div>
+              <!-- Desconto Especial (pedido dele, 25/09): última linha antes do total, opcional.
+                   Preenchido, é lançado na venda e o total final sai já com ele descontado. -->
+              <div class="r"><span>Desconto Especial</span>
+                <span><input id="v_descGeral" class="v-unit v-desc" type="text" inputmode="decimal" placeholder="0,00" aria-label="Desconto Especial"></span></div>
               <div class="r sep big"><span>Total base da venda</span><span id="o_cBase">—</span></div>
             </div>
             <p class="help">É este valor que vai ser repartido entre as formas de pagamento.</p>
@@ -1840,9 +1846,7 @@ img{max-width:100%}
             <div class="grid g2">
               <div class="fld"><label for="v_frete">Frete cobrado do cliente</label>
                 <input id="v_frete" type="text" inputmode="decimal" placeholder="0,00"></div>
-              <div class="fld"><label for="v_descGeral">Desconto no total da venda</label>
-                <input id="v_descGeral" type="text" inputmode="decimal" placeholder="0,00">
-                <div class="help">Desconto que não é de um item só. Abaixo da tabela, a venda vai para autorização.</div></div>
+              <!-- o Desconto Especial saiu daqui: foi para a última linha do quadro dos itens (25/09) -->
             </div>
             <div id="v_compTotal"></div>
           </div>
@@ -2461,7 +2465,7 @@ img{max-width:100%}
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="os_mao">Mão de obra</label><input id="os_mao" type="text" inputmode="decimal" step="0.01" value="0"></div>
             <div class="fld"><label for="os_taxa">Outros custos</label><input id="os_taxa" type="text" inputmode="decimal" step="0.01" value="0"></div>
-            <div class="fld"><label for="os_desc">Desconto</label><input id="os_desc" type="text" inputmode="decimal" step="0.01" value="0"></div>
+            <div class="fld"><label for="os_desc">Desconto Especial</label><input id="os_desc" type="text" inputmode="decimal" step="0.01" value="0"></div>
             <div class="fld"><label for="os_total">Total do orçamento</label><input id="os_total" readonly></div>
           </div>
           <div class="actions" style="justify-content:flex-start">
@@ -2571,6 +2575,13 @@ img{max-width:100%}
             <thead><tr><th>Produto</th><th class="num">Qtd</th><th class="num">Unitário</th><th class="num">Subtotal</th><th class="num">Depreciado</th><th>Faixa</th><th class="num">Entra como</th><th></th></tr></thead>
             <tbody id="or_itens"></tbody>
           </table></div>
+          <!-- Desconto Especial (pedido dele, 25/09): opcional; o total sai já com ele descontado -->
+          <div class="calc" style="margin-top:20px">
+            <div class="r"><span>Produtos</span><span id="or_cProd">—</span></div>
+            <div class="r"><span>Desconto Especial</span>
+              <span><input id="or_descEsp" class="v-unit v-desc" type="text" inputmode="decimal" placeholder="0,00" aria-label="Desconto Especial"></span></div>
+            <div class="r sep big"><span>Total do orçamento</span><span id="or_cTotal">—</span></div>
+          </div>
         </div>
 
         <div class="sect">
@@ -8780,9 +8791,20 @@ function composicaoVenda(lista,extras){
     if(ehPlano(i))gar+=v;else prod+=v;
   });
   var e=extras||{};
-  var frete=centavos(+e.frete||0),desc=centavos(+e.desconto||0);
+  var frete=centavos(+e.frete||0);
+  /* o Desconto Especial nunca passa do valor da venda — senão o total base ficaria negativo */
+  var desc=Math.min(centavos(+e.desconto||0),centavos(prod+gar+frete));
   return {prod:centavos(prod),gar:centavos(gar),frete:frete,desc:desc,
     base:centavos(prod+gar+frete-desc)};
+}
+/* quanto do valor comercial sobra depois do Desconto Especial. É por este fator que o valor de
+   cada item é multiplicado antes de decidir a tabela e a comissão — o desconto no total da venda
+   pesa igual a um desconto dado item a item. O frete fica fora: ele não comissiona (v208). */
+function fatorDescontoComissao(comp){
+  if(!comp)return 1;
+  var pg=centavos((+comp.prod||0)+(+comp.gar||0)),d=+comp.desc||0;
+  if(!(pg>0)||!(d>0))return 1;
+  return Math.max(0,(pg-d)/pg);
 }
 /* a fatia da base que ninguém digitou cai na forma COM JUROS de menor acréscimo —
    a mesma regra de distribuição de sempre, agora sobre a BASE e não sobre o cobrado */
@@ -8845,7 +8867,6 @@ function calcular(){
   $("o_cProd").textContent=BRL(comp.prod);
   $("o_cGar").textContent=BRL(comp.gar);
   $("o_cFreteR").hidden=!(comp.frete>0);$("o_cFrete").textContent=BRL(comp.frete);
-  $("o_cDescR").hidden=!(comp.desc>0);$("o_cDesc").textContent="− "+BRL(comp.desc);
   $("o_cBase").textContent=BRL(totalBase);
   var elCT=$("v_compTotal");
   if(elCT)elCT.innerHTML='<div class="calc" style="margin-top:18px">'+
@@ -8913,6 +8934,13 @@ function calcular(){
      sem o acréscimo do parcelamento. Antes a conta passava pelo depreciado rateado, que
      trazia ruído de centavo; agora a comparação é direta com a tabela do cadastro. */
   var base=0,pontos=0,abaixo=false,tb=$("v_itens"),linhasFaixa=[];
+  /* DESCONTO ESPECIAL na comissão (25/09). Era um defeito antigo: o desconto no total da venda
+     derrubava o depreciado e NÃO derrubava a base — a venda ficava com base maior que o
+     depreciado e o vendedor dava desconto sem perder nada. Agora ele é repartido entre os itens
+     proporcionalmente, exatamente como se o vendedor tivesse baixado o valor de cada um: vale
+     para decidir a tabela em que o item cai e para a base. O frete fica de fora, porque não
+     comissiona. */
+  var fatorDescCom=fatorDescontoComissao(comp);
   /* a tabela é redesenhada a cada conta: se o cursor está num valor de item, ele volta para lá */
   var focoVU=(document.activeElement&&document.activeElement.getAttribute&&document.activeElement.getAttribute("data-vu"));
   tb.innerHTML="";
@@ -8920,7 +8948,9 @@ function calcular(){
   itens.forEach(function(i,idx){
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
     var cobPl=!!i.planoCobre;
-    var depI=cobPl?0:baseDoItem(i),unit=cobPl?0:valorBaseItem(i),fx=cobPl?{f:0,n:"plano",cls:"p-ok"}:faixa(unit,p);
+    var depI=cobPl?0:centavos(baseDoItem(i)*fatorDescCom),
+        unit=cobPl?0:centavos(valorBaseItem(i)*fatorDescCom),
+        fx=cobPl?{f:0,n:"plano",cls:"p-ok"}:faixa(unit,p);
     if(!cobPl){base+=depI*fx.f;pontos+=(i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;}
     /* em que tabela este produto caiu — mostrado na Comissão ao vivo e refeito a cada mudança
        de valor, forma ou parcelas (regra dele, 20/09) */
@@ -9226,7 +9256,7 @@ async function salvarPedido(){
   trocaResp=trocaV>0?{tem:true,viaForma:true,valor:Math.round(trocaV*100)/100,qtd:1,
     serie:"",quando:hojeISO()+" "+agoraHM(),por:usuarioAtual}:null;
   /* venda abaixo da tabela (regra do Wagner, 16/09): o vendedor pede a autorização com o motivo antes de finalizar */
-  if(r.abaixo&&!descSolResp){abrirSolDesconto(recalcPedido(itens,formas));return;}
+  if(r.abaixo&&!descSolResp){abrirSolDesconto(recalcPedido(itens,formas,null,numMF(($("v_descGeral")||{}).value||0)||0));return;}
   var solDesc=r.abaixo?descSolResp:null;descSolResp=null;
   /* pedido reaberto pelo botão "Editar o pedido": atualiza o MESMO pedido, com o mesmo número,
      a mesma data e a mesma assinatura — não nasce outro (regra dele, 22/09) */
@@ -19033,7 +19063,13 @@ function renderItensDiagOS(){
         '</td><td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
         "<td>"+((podeMexer&&!i.orcamentoOS)?'<button class="btn mut sm" type="button" data-osdrm="'+ix+'">Remover</button>':"")+"</td></tr>";
     }).join("")+
-    '<tr><td colspan="3"><b>Total das peças e serviços</b></td><td class="num"><b>'+BRL(tot)+"</b></td><td></td></tr>"+
+    /* Desconto Especial (regra dele, 25/09): última linha antes do total, opcional */
+    '<tr><td colspan="3">Desconto Especial</td><td class="num">'+(podeMexer
+      ? '<input class="v-unit v-desc" type="text" inputmode="decimal" data-osdesc placeholder="0,00" value="'+
+        ((+o.desconto>0)?brMF(+o.desconto):"")+'" aria-label="Desconto Especial">'
+      : ((+o.desconto>0)?"− "+BRL(+o.desconto):"—"))+"</td><td></td></tr>"+
+    '<tr><td colspan="3"><b>Total das peças e serviços</b></td><td class="num"><b>'+
+      BRL(Math.max(0,centavos(tot-(+o.desconto||0))))+"</b></td><td></td></tr>"+
     "</tbody></table></div>";
   Array.prototype.forEach.call(w.querySelectorAll("[data-osdrm]"),function(bt){
     bt.onclick=async function(){
@@ -19054,6 +19090,17 @@ function renderItensDiagOS(){
     mexerItemOS(inp,"data-osdq",function(it,el){it.qtd=Math.max(1,parseInt(el.value,10)||1);});});
   Array.prototype.forEach.call(w.querySelectorAll("[data-osdv]"),function(inp){
     mexerItemOS(inp,"data-osdv",function(it,el){var v=numMF(el.value);it.valor=(v<0?0:v);});});
+  /* Desconto Especial da OS: grava no mesmo `o.desconto` do bloco de valores (25/09) */
+  Array.prototype.forEach.call(w.querySelectorAll("[data-osdesc]"),function(inp){
+    inp.onchange=async function(){
+      var v=numMF(inp.value);
+      o.desconto=Math.min(Math.max(0,v),tot);
+      if($("os_desc"))$("os_desc").value=brMF(+o.desconto||0);
+      o.total=totalOS(o);
+      await grava("ordens",o);renderItensDiagOS();try{renderPedOS();calcOS();}catch(e){}
+    };
+    inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};
+  });
 }
 async function addItemDiagOS(){
   var o=editandoOS;if(!o){toast("Abra a OS antes de lançar as peças.");return;}
@@ -20959,9 +21006,12 @@ function calcOS(){
     inp.onchange=function(){var it=osPecas[+inp.getAttribute("data-ospv")];if(!it)return;
       var v=numMF(inp.value);it.valor=(v<0?0:v);calcOS();};
     inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};});
-  var o={pecas:osPecas,mao:numMF($("os_mao").value)||0,
+  /* o total do bloco de valores esquecia as peças lançadas no diagnóstico (`itensOS`): com o
+     Desconto Especial preenchido ele chegava a ficar NEGATIVO. Agora soma as duas listas. */
+  var o={pecas:osPecas,itensOS:(editandoOS&&editandoOS.itensOS)||[],
+    mao:numMF($("os_mao").value)||0,
     taxa:numMF($("os_taxa").value)||0,desconto:numMF($("os_desc").value)||0};
-  $("os_total").value=BRL(totalOS(o));
+  $("os_total").value=BRL(Math.max(0,totalOS(o)));
   var st=osStatusO($("os_status").value);
   $("os_sitPill").textContent=st.n;$("os_sitPill").className="pill "+st.cls;
   var ac="";
@@ -21018,7 +21068,11 @@ async function salvarOS(){
   o.laudo=$("os_laudo").value.trim();
   o.reparo=$("os_reparo").value.trim();o.pecasNec=$("os_pecasNec").value.trim();o.infoTec=$("os_infoTec").value.trim();
   o.pecas=osPecas.slice();o.mao=numMF($("os_mao").value)||0;
-  o.taxa=numMF($("os_taxa").value)||0;o.desconto=numMF($("os_desc").value)||0;
+  o.taxa=numMF($("os_taxa").value)||0;
+  /* Desconto Especial: nunca maior que o que está sendo cobrado */
+  o.desconto=Math.max(0,numMF($("os_desc").value)||0);
+  var semDescOS=totalOS(Object.assign({},o,{desconto:0}));
+  if(o.desconto>semDescOS)o.desconto=semDescOS;
   o.status=$("os_status").value;o.entrega=$("os_entrega").value;
   o.retiradoPor=$("os_retirado").value.trim();o.pagto=$("os_pagto").value;
   o.total=totalOS(o);
@@ -21605,6 +21659,7 @@ function abrirOrc(o){
   orcParcRef=(!v.forma&&refO)?refO.parc:0;
   if(v.clienteId)orcCli=clientes.filter(function(c){return c.id===v.clienteId;})[0]||null;
   orcItens=v.itens?JSON.parse(JSON.stringify(v.itens)):[];
+  if($("or_descEsp"))$("or_descEsp").value=(+v.descontoEspecial>0)?brMF(+v.descontoEspecial):"";
   $("or_achou").innerHTML="";$("or_sug").hidden=true;$("or_alerta").innerHTML="";
   orcParcelas();sincOrcValor();calcOrc();
 }
@@ -21649,7 +21704,11 @@ function notaPrecoOrc(p){
     ". Tabela cheia "+BRL(+p.cheia||0)+". Trocando a forma acima, o valor acompanha.</div>";
 }
 function calcOrc(){
-  var total=orcItens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
+  var soma=orcItens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
+  /* Desconto Especial (regra dele, 25/09): opcional, abatido do total do orçamento. Nunca passa
+     do valor dos produtos — desconto maior que a venda deixaria o total negativo. */
+  var descEsp=Math.min(Math.max(0,numMF(($("or_descEsp")||{}).value||0)||0),soma);
+  var total=centavos(soma-descEsp);
   var n=+$("or_parc").value||1,coef=coefDe($("or_forma").value,n)||1;
   var parcela=total/n,dep=coef?parcela/coef:0,desc=total-dep;
   /* rateio do depreciado pelo VALOR VENDIDO de cada item — mesma conta do pedido (20/09) */
@@ -21694,6 +21753,9 @@ function calcOrc(){
     ? n+"× de <b>"+BRL(parcela)+"</b> · parcela ÷ coeficiente "+coef.toFixed(4).replace(".",",")+
       " = <b>"+BRL(dep)+"</b> líquido · a operadora fica com "+BRL(desc)
     : "À vista · <b>"+BRL(total)+"</b> · sem depreciação";
+  /* quadro de totais com o Desconto Especial (25/09) */
+  if($("or_cProd"))$("or_cProd").textContent=BRL(soma);
+  if($("or_cTotal"))$("or_cTotal").textContent=BRL(total);
   $("or_kpis").innerHTML=
     '<div class="kpi"><div class="l">Total da proposta</div><div class="v">'+BRL(total)+"</div></div>"+
     '<div class="kpi"><div class="l">Depreciado</div><div class="v">'+BRL(dep)+"</div></div>"+
@@ -21746,6 +21808,8 @@ async function salvarOrc(){
   o.vendedor=$("or_vend").value;o.validade=$("or_validade").value;o.obs=$("or_obs").value.trim();
   o.forma=$("or_forma").value;o.parc=+$("or_parc").value||1;
   o.itens=orcItens.slice();o.total=r.total;
+  /* Desconto Especial gravado no orçamento (25/09) */
+  o.descontoEspecial=Math.max(0,numMF(($("or_descEsp")||{}).value||0)||0);
   if(!editandoOrc)orcamentos.push(o);
   editandoOrc=o;
   if(orcOrigemAtiv&&!o.origemAtiv){
@@ -22149,7 +22213,14 @@ var pedAberto=null,pedRasc=null,avisoAjuste="";
 /* fatorAbaixo: tabela escolhida pelo Administrador ao autorizar a venda abaixo da tabela (regra do Wagner, 16/09);
    sem ele, o item abaixo da tabela entra zerado */
 function fatorDesc(p){return (p&&p.descontoAutorizado&&p.descontoAutorizado.fator!=null)?+p.descontoAutorizado.fator:null;}
-function recalcPedido(itens,formas,fatorAbaixo){
+function recalcPedido(itens,formas,fatorAbaixo,descEspecial){
+  /* Desconto Especial: repartido entre os itens antes de decidir a tabela e a comissão — a mesma
+     conta da tela (`fatorDescontoComissao`). Sem ele, o desconto derrubava só o depreciado. */
+  var fDesc=1;
+  if(+descEspecial>0){
+    var pgR=itens.reduce(function(a,i){return i.planoCobre?a:a+((i.valorBase!=null)?centavos((+i.valorBase||0)*(i.qtd||1)):0);},0);
+    if(pgR>0)fDesc=Math.max(0,(pgR-(+descEspecial||0))/pgR);
+  }
   var total=itens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
   var soma=0,dep=0;
   formas.forEach(function(f){
@@ -22174,8 +22245,8 @@ function recalcPedido(itens,formas,fatorAbaixo){
     /* pedido do modelo novo (v206) guarda o valor base do item: a tabela é decidida por ele.
        Pedido antigo continua pela repartição do depreciado, como sempre foi. */
     var novoM=(i.valorBase!=null);
-    var depI=novoM?centavos((+i.valorBase||0)*(i.qtd||1)):(partesP[ix]||0);
-    var unit=novoM?(+i.valorBase||0):centavos(depI/(i.qtd||1));
+    var depI=novoM?centavos((+i.valorBase||0)*(i.qtd||1)*fDesc):(partesP[ix]||0);
+    var unit=novoM?centavos((+i.valorBase||0)*fDesc):centavos(depI/(i.qtd||1));
     var fx=faixa(unit,p);
     var f=(fx.f===0&&fatorAbaixo!=null)?+fatorAbaixo:fx.f;
     base+=depI*f;pontos+=(+i.pontos||0)*(i.qtd||1)*f;
@@ -22218,7 +22289,7 @@ function abrirPedido(p){
 }
 function renderPedDet(){
   var p=pedAberto;if(!p)return;
-  var ed=editavel(p),r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p));
+  var ed=editavel(p),r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0);
   /* regra dele (22/09): a ficha do pedido salvo é SÓ LEITURA. Quem quer mudar toca em
      "Editar o pedido" e o pedido volta às sete etapas, com tudo preenchido. O ajuste solto
      dentro da ficha continua existindo só no caminho da reabertura de venda já encerrada. */
@@ -22507,7 +22578,7 @@ function ligarPedDet(){
     pedRasc={itens:JSON.parse(JSON.stringify(p.itens||[])),formas:JSON.parse(JSON.stringify(p.formas||[]))};
     gravarPedido(p);toast("Alterações descartadas — venda reencerrada.");renderPedDet();render();});
   on("pd_salvar",async function(){
-    var r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p));
+    var r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0);
     if(!pedRasc.itens.length){toast("A venda precisa de ao menos um item.");return;}
     if(r.dif!==0){toast("A soma das formas não bate com o total.");return;}
     /* abaixo da tabela sem autorização (ou com o desconto recusado): pede de novo, com o motivo */
@@ -22757,7 +22828,7 @@ function abrirAutDesconto(p){
   if(!pode("aprovarDesconto")){toast("Só quem aprova venda abaixo da tabela autoriza o desconto.");return;}
   ligarDesconto();
   descAutPed=p;descAutFator=null;
-  var r=recalcPedido(p.itens||[],p.formas||[]),s=p.solicitacaoDesconto;
+  var r=recalcPedido(p.itens||[],p.formas||[],null,+p.descontoGeral||0),s=p.solicitacaoDesconto;
   $("da_sub").textContent="Pedido "+p.numero+" · "+p.cliente+" · vendedor "+(p.vendedor||"—")+" · total "+BRL(p.total)+" · depreciado "+BRL(r.dep);
   $("da_motivo").innerHTML=s
     ? '<div class="note warn"><b>Motivo de '+esc(s.por)+"</b> ("+esc(dataCurta(s.quando))+String(s.quando||"").slice(10)+"): "+esc(s.motivo)+"</div>"
@@ -22770,7 +22841,7 @@ function abrirAutDesconto(p){
 }
 function previaAutDesconto(){
   var p=descAutPed;if(!p||descAutFator==null)return;
-  var r=recalcPedido(p.itens||[],p.formas||[],descAutFator),conta=r.dep-r.depAbaixo*(1-descAutFator);
+  var r=recalcPedido(p.itens||[],p.formas||[],descAutFator,+p.descontoGeral||0),conta=r.dep-r.depAbaixo*(1-descAutFator);
   $("da_alerta").innerHTML="";
   $("da_previa").innerHTML='<div class="note ok"><b>'+esc(nomeTabelaDesc(descAutFator))+":</b> a venda conta "+BRL(conta)+
     " na comissão, nas metas e na folha ("+BRL(r.depAbaixo)+" abaixo da tabela × "+Math.round(descAutFator*100)+"%"+
@@ -22780,7 +22851,7 @@ async function autorizarDesconto(p,fator){
   if(!pode("aprovarDesconto")){toast("Só quem aprova venda abaixo da tabela autoriza o desconto.");return false;}
   if((p.status||"").indexOf("esconto")<0)return false;
   if(fator==null){abrirAutDesconto(p);return false;}
-  var r=recalcPedido(p.itens||[],p.formas||[],fator),tab=nomeTabelaDesc(fator);
+  var r=recalcPedido(p.itens||[],p.formas||[],fator,+p.descontoGeral||0),tab=nomeTabelaDesc(fator);
   p.abaixoTabela=true;
   p.descontoAutorizado={por:usuarioAtual,quando:hojeISO()+" "+agoraHM(),tabela:tab,fator:+fator,depAbaixo:Math.round(r.depAbaixo*100)/100};
   p.descontoRecusado=null;
@@ -22851,7 +22922,7 @@ var instAberta=null,instPag={tipo:""},instModo="";
 /* produto incluído na instalação faz parte da venda (regra do Wagner, 12/09): total,
    depreciação, base de comissão e pontos são recalculados */
 function atualizarTotaisPedido(p){
-  var r=recalcPedido(p.itens||[],p.formas||[],fatorDesc(p));
+  var r=recalcPedido(p.itens||[],p.formas||[],fatorDesc(p),+p.descontoGeral||0);
   p.total=r.total;p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
   if(p.descontoAutorizado)p.descontoAutorizado.depAbaixo=Math.round((r.depAbaixo||0)*100)/100;
   return r;
@@ -22944,7 +23015,7 @@ function renderInstalacao(){
       toast(it.nome+" saiu da venda.");};});
   /* cobrança: o que entrou na instalação precisa de forma de pagamento — o financeiro
      só aprova com as formas somando o total */
-  var r=recalcPedido(p.itens||[],p.formas||[]),falta=r.dif;
+  var r=recalcPedido(p.itens||[],p.formas||[],null,+p.descontoGeral||0),falta=r.dif;
   var pagInst=(p.formas||[]).map(function(f,ix){return {f:f,ix:ix};}).filter(function(x){return x.f.daInstalacao;});
   var pag='<div class="calc">'+
     '<div class="r"><span>Total da venda</span><span>'+BRL(r.total)+"</span></div>"+
@@ -27510,6 +27581,7 @@ function ligar(){
   $("or_prod").onchange=function(){$("or_valor").__manual=false;sincOrcValor();};
   $("or_valor").oninput=function(){$("or_valor").__manual=true;};
   $("or_forma").onchange=orcParcelas;
+  $("or_descEsp").oninput=calcOrc;
   $("or_parc").onchange=function(){reprecificarOrc();calcOrc();};
   $("or_vend").onchange=calcOrc;
   $("or_add").onclick=function(){
