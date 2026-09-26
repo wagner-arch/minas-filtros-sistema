@@ -2610,6 +2610,7 @@ img{max-width:100%}
           <button class="btn ghost" type="button" id="orcImprimir">Ver proposta</button>
           <button class="btn ghost" type="button" id="orcEnviar">Enviar proposta</button>
           <!-- excluir orçamento: o vendedor só no mesmo dia; depois, só o Administrador (25/09) -->
+          <button class="btn ghost" type="button" id="orcVerVenda" hidden>Abrir a venda</button>
           <button class="btn mut" type="button" id="orcExcluir" hidden>Excluir orçamento</button>
           <span class="sp"></span>
           <button class="btn" type="button" id="orcEfetivar">Efetivar a venda</button>
@@ -9327,6 +9328,9 @@ async function salvarPedido(){
     creditoPlano:(credV>0?montarCreditoPlano(cliSel.id,credV):null)};
   /* pedido das peças e serviços de uma OS interna (regra do Wagner, 14/09) */
   var osDoPed=pedOrigemOS,ativContatoOS=pedOSAtiv,msgOSFim="",servAtendPed=pedOSServAtend;
+  /* orçamento de origem: guardado aqui porque `limparPedido` zera a variável no fim (26/09) */
+  var orcDoPed=pedOrigemOrc;
+  if(orcDoPed){ped.orcamentoId=orcDoPed.id;ped.orcamentoNumero=orcDoPed.numero;}
   if(osDoPed){
     ped.osId=osDoPed.id;ped.osNumero=osDoPed.numero;ped.osLocal=osDoPed.local||"";
     if(osDoPed.tecnico)ped.instalador=osDoPed.tecnico;
@@ -9426,6 +9430,14 @@ async function salvarPedido(){
     await grava("ordens",osDoPed);
     pedOrigemOS=null;pedOSModo="";pedOSAtiv=null;pedOSServAtend=false;renderBannerOS();
   }
+  /* agora sim o orçamento virou venda: os dois passam a se apontar (26/09) */
+  if(orcDoPed){
+    orcDoPed.situacao="convertido";
+    orcDoPed.convertidoEm=iso(new Date());
+    orcDoPed.pedidoId=ped.id;orcDoPed.pedidoNumero=ped.numero;
+    if(db){try{await col("orcamentos").doc(orcDoPed.id).set(orcDoPed);}catch(e){console.warn(e);}}
+    pedOrigemOrc=null;
+  }
 
   /* a venda só RESERVA o estoque de quem vai entregar. A baixa, a reposição, as
      parcelas no Contas a Receber e a comissão acontecem na Aprovação Financeira. */
@@ -9509,6 +9521,7 @@ async function salvarPedido(){
 }
 function limparPedido(){
   itens=[];formas=formasIniciais();
+  pedOrigemOrc=null;   /* venda nova não herda o orçamento da anterior (26/09) */
   /* cada venda nova começa com quem está logado nos papéis (v209): o select guardava o
      valor do usuário anterior, e o pedido nascia no nome de outra pessoa — some da lista
      de "Meus pedidos" de quem vendeu */
@@ -18573,6 +18586,8 @@ var pedOrigemAtiv=null,orcOrigemAtiv=null;
       técnico → diagnóstico → peças e serviços);
    3. o atendente fala com o cliente, "Lançar forma de pagamento" abre o mesmo pedido na etapa Pagamento, e
       finalizado o pedido segue a finalização de sempre da atividade (o que aconteceu + agendar outra). */
+/* orçamento que gerou a venda que está sendo montada: o vínculo é feito ao SALVAR o pedido */
+var pedOrigemOrc=null;
 var pedOrigemOS=null,pedOSModo="",pedOSAtiv=null,pedOSServAtend=false,TIPO_CONTATO_OS="Contactar Cliente OS",MOT_RETORNO_OS="Aguardando Retorno Cliente";
 function produtoServicoAtendimento(){
   return produtos.filter(function(p){return p.cod==="SRV-ATEND";})[0]||
@@ -21830,19 +21845,49 @@ function calcOrc(){
 function podeExcluirOrc(o){
   if(!o)return {pode:false,motivo:""};
   if(o.situacao==="convertido")
-    return {pode:false,motivo:"Este orçamento virou venda — não dá para excluir. Cancele o pedido, se for o caso."};
+    return {pode:false,motivo:"Não dá para excluir um orçamento que virou venda. Cancele o pedido, se for o caso."};
   if(ehAdministrador())return {pode:true,motivo:"Como Administrador, você pode excluir a qualquer momento."};
   var meu=(o.vendedor===usuarioAtual)||ehGestor();
   if(!meu)return {pode:false,motivo:"Este orçamento é de "+esc(o.vendedor||"outro vendedor")+"."};
   if(o.data===hojeISO())return {pode:true,motivo:"Feito hoje — dá para excluir até o fim do dia."};
   return {pode:false,motivo:"Feito em "+dataBR(o.data)+". Passado o dia, só o Administrador exclui."};
 }
+/* a venda que nasceu deste orçamento — pelo vínculo gravado ou, em orçamento antigo, pelo
+   pedido do mesmo cliente feito a partir da conversão (26/09) */
+function pedidoDoOrcamento(o){
+  if(!o)return null;
+  if(o.pedidoId){
+    var p=pedidos.filter(function(x){return x.id===o.pedidoId;})[0];
+    if(p)return p;
+  }
+  var p2=pedidos.filter(function(x){return x.orcamentoId===o.id;})[0];
+  if(p2)return p2;
+  if(!o.clienteId||!o.convertidoEm)return null;
+  return pedidos.filter(function(x){
+    return x.clienteId===o.clienteId&&x.loja===o.loja&&x.status!=="Cancelada"&&
+      String(x.data||"")>=String(o.convertidoEm||"").slice(0,10);})[0]||null;
+}
 function renderExcluirOrc(){
-  var bt=$("orcExcluir"),nota=$("or_exclNota");if(!bt)return;
-  if(!editandoOrc){bt.hidden=true;if(nota)nota.innerHTML="";return;}
-  var r=podeExcluirOrc(editandoOrc);
+  var bt=$("orcExcluir"),nota=$("or_exclNota"),bv=$("orcVerVenda");if(!bt)return;
+  if(!editandoOrc){bt.hidden=true;if(bv)bv.hidden=true;if(nota)nota.innerHTML="";return;}
+  var o=editandoOrc,pv=pedidoDoOrcamento(o);
+  /* orçamento marcado como convertido mas SEM venda: o vendedor abandonou o pedido no meio.
+     Destrava sozinho — senão ele fica preso, sem poder excluir e sem venda nenhuma. */
+  if(o.situacao==="convertido"&&!pv){
+    o.situacao="";o.convertidoEm="";o.pedidoId="";o.pedidoNumero="";
+    if(db){try{col("orcamentos").doc(o.id).set(o);}catch(e){console.warn(e);}}
+    try{renderOrc();}catch(e){}
+  }
+  if(bv){
+    bv.hidden=!pv;
+    if(pv){bv.textContent="Abrir a venda "+pv.numero;bv.onclick=function(){ir("pedidos");abrirPedido(pv);};}
+  }
+  var r=podeExcluirOrc(o);
   bt.hidden=!r.pode;
-  if(nota)nota.innerHTML=r.motivo?'<div class="note" style="margin-top:12px">'+r.motivo+"</div>":"";
+  if(nota)nota.innerHTML=(r.motivo||pv)
+    ? '<div class="note" style="margin-top:12px">'+
+      (pv?"<b>Virou a venda "+pv.numero+"</b> ("+BRL(pv.total||0)+" · "+esc(pv.status||"—")+"). ":"")+
+      (r.motivo||"")+"</div>" : "";
 }
 async function excluirOrcamento(){
   var o=editandoOrc;if(!o)return;
@@ -22315,7 +22360,12 @@ async function virarVenda(o){
     dOrc=Math.max(0,centavos(somaF-(+o.total||0)));   /* orçamento gravado antes da v226 */
   }
   var dPed=(dOrc>0)?baseDoFinal(dOrc,1,0):0;
-  o.situacao="convertido";o.convertidoEm=iso(new Date());
+  /* guarda de qual orçamento esta venda nasceu: ao salvar o pedido, os dois passam a se
+     apontar e o orçamento ganha o botão "Abrir a venda" (pedido dele, 26/09) */
+  pedOrigemOrc=o;
+  /* o orçamento NÃO vira "convertido" aqui: a venda só existe quando o pedido é salvo. Antes
+     ele era marcado neste ponto e, se o vendedor não finalizasse, ficava travado como vendido
+     sem pedido nenhum na lista — foi o que ele pegou em 26/09. */
   if(db){try{await col("orcamentos").doc(o.id).set(o);}catch(e){console.warn(e);}}
   render();ir("venda");
   try{escolherClienteVenda(c);atualizarEtapas();}catch(e){}
