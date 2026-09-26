@@ -7923,6 +7923,7 @@ function textoPrecoReferencia(cheia){
 window.__htmlDocVendaMF=function(p){return htmlDocVenda(p);};
 window.__pedAbertoMF=function(){return pedAberto;};
 window.__pedidosMF=function(){return pedidos;};
+window.__caixaDaFormaMF=function(n){var c=caixaDaForma(n);return c?(c.nome+" ("+(c.banco||"sem banco")+")"):"(sem caixa)";};
 window.__refMF=function(){var r=formaReferencia();return r?{nome:r.nome,parc:r.parc}:null;};
 window.__precoRefMF=function(cheia){return precoReferencia(cheia);};
 /* a OS não escolhe forma de pagamento nesta tela (isso é do pedido que sai dela): então o campo
@@ -22865,6 +22866,22 @@ function registrarEvento(p,texto){
   p.eventos.push({quando:iso(new Date()),por:usuarioAtual,texto:texto});
 }
 var aprovandoVenda={};
+/* Onde o dinheiro de cada forma vai cair — lido do cadastro da forma, sem escolha na tela.
+   Forma sem caixa cadastrado fica marcada em vermelho, com o caminho para resolver. */
+function htmlCaixasDaVenda(fs){
+  var linhas=(fs||[]).map(function(f){
+    var cx=caixaDaForma(f.tipo);
+    return '<div>'+esc(f.tipo)+" · <b>"+BRL(+f.valor||0)+"</b> → "+
+      (cx?("<b>"+esc(cx.nome)+"</b>"+(cx.banco?' <span class="t-sub">'+esc(cx.banco)+"</span>":""))
+         :'<b style="color:var(--bad)">sem caixa cadastrado nesta forma</b>')+"</div>";
+  }).join("");
+  var falta=(fs||[]).some(function(f){return !caixaDaForma(f.tipo);});
+  return '<div class="note'+(falta?" warn":" ok")+'" style="margin-top:12px">'+
+    "<b>Onde o dinheiro cai</b> — definido no cadastro da forma de pagamento."+
+    '<div style="margin-top:6px">'+(linhas||"—")+"</div>"+
+    (falta?' <button class="btn ghost sm" type="button" data-fincfg="1" style="margin-top:8px">Abrir Formas de Pagamento</button>'
+         :"")+"</div>";
+}
 async function aprovarVenda(p,caixaId){
   if(!pode("aprovarFinanceiro")){toast("Só quem tem a permissão de aprovar no financeiro aprova o recebimento.");return false;}
   if(!vendaPendente(p)){toast("O pedido "+p.numero+" já foi aprovado ou está cancelado.");return false;}
@@ -24710,10 +24727,11 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
           return (trava?'<div class="note crit" style="margin-top:10px"><b>Aprovação travada.</b> '+trava.texto+
               " O financeiro só libera esta venda depois que a retirada for <b>aceita</b> pelo responsável pelo estoque."+
               ' <button class="btn ghost sm" type="button" data-finreq="'+p.id+'" style="margin-top:8px">Ver as requisições de estoque</button></div>':"")+
+            /* o caixa NÃO é escolhido aqui: ele vem do cadastro da forma de pagamento, que é
+               onde a empresa define onde o dinheiro cai (regra dele, 26/09 — o cartão da
+               Rendimentos aparecia caindo na Caixa da Loja, e ele é creditado no Ascicred). */
+            htmlCaixasDaVenda(formas)+
             '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:12px">'+
-            '<div class="fld" style="margin:0;flex:1 1 200px"><label>Caixa de destino</label><select data-fincx="'+p.id+'"'+(trava?" disabled":"")+">"+
-              cxs.map(function(c){return '<option value="'+c.id+'"'+(c.id===cxPadrao?" selected":"")+">"+esc(c.nome)+"</option>";}).join("")+
-            "</select></div>"+
             '<button class="btn'+(trava?" mut":"")+'" type="button" data-finok="'+p.id+'"'+(trava?" disabled":"")+
               ' title="'+(trava?"Retirada de estoque não regularizada":"Aprovar o recebimento")+'">Aprovar recebimento</button>'+
             '<button class="btn mut" type="button" data-findev="'+p.id+'">Devolver</button>'+
@@ -24846,15 +24864,18 @@ function renderFin(){
   Array.prototype.forEach.call(tela.querySelectorAll("[data-finok]"),function(bt){
     bt.onclick=async function(){
       var p=porId(bt.getAttribute("data-finok"));if(!p)return;
-      var sel=tela.querySelector('[data-fincx="'+p.id+'"]');
+      /* o caixa vem da forma de pagamento; este é só a reserva para forma sem caixa cadastrado */
+      var cxRes=(daLoja(caixas).filter(function(c){return c.padrao==="sim";})[0]||daLoja(caixas)[0]||{}).id||"";
       if(!confirm("Aprovar o recebimento do pedido "+p.numero+" · "+BRL(p.total)+"?\n\n"+
         "• baixa do estoque de "+nomeLocal(localDaVenda(p))+"\n"+
         "• parcelas no Contas a Receber\n"+
         "• entra na comissão de "+rotuloComp(p.aprovadoEm?comp(p.aprovadoEm):compAtual())))return;
       bt.disabled=true;
-      await aprovarVenda(p,sel?sel.value:"");
+      await aprovarVenda(p,cxRes);
       render();try{renderEstEmpresa();renderEstColab();}catch(e){}
     };});
+  Array.prototype.forEach.call(tela.querySelectorAll("[data-fincfg]"),function(bt){
+    bt.onclick=function(){ir("pgto");};});
   Array.prototype.forEach.call(tela.querySelectorAll("[data-findev]"),function(bt){
     bt.onclick=function(){var p=porId(bt.getAttribute("data-findev"));if(p)devolverVenda(p);};});
   Array.prototype.forEach.call(tela.querySelectorAll("[data-finver]"),function(bt){
