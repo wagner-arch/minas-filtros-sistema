@@ -1864,10 +1864,9 @@ img{max-width:100%}
               <button class="btn ghost sm" type="button" id="v_addTroca">Desconto de troca</button>
             </div>
             <div class="calc" style="margin-top:20px">
-              <div class="r"><span>Total base da venda</span><span id="o_base">—</span></div>
+              <div class="r big"><span>Total da venda</span><span id="o_base">—</span></div>
               <div class="r"><span>Repartido nas formas</span><span id="o_formas">—</span></div>
-              <div class="r sep"><span>Acréscimos financeiros</span><span id="o_acresc">—</span></div>
-              <div class="r big"><span>Total final cobrado</span><span id="o_total">—</span></div>
+              <div class="r" hidden><span>Total</span><span id="o_total">—</span></div>
               <div class="r sep"><span>Depreciação do parcelamento</span><span id="o_desc">—</span></div>
               <div class="r"><span>Recebido líquido (valor presente)</span><span id="o_liq">—</span></div>
             </div>
@@ -8487,11 +8486,14 @@ function atualizarParcelasFormas(){
   Array.prototype.forEach.call(w.querySelectorAll("[data-pgp]"),function(el){
     var f=formas[+el.getAttribute("data-pgp")];
     if(!f){el.innerHTML="";return;}
-    var b=centavos(+f.base||0),br=centavos(+f.valor||0),ac=centavos(br-b);
+    /* v235: o valor repartido JÁ é o que o cliente paga nesta forma — não há acréscimo por cima.
+       O que muda por dentro é a depreciação, que aparece como "a empresa recebe". */
+    var br=centavos(+f.valor||0),dp=centavos(+f.baseDep||br);
     var linha=textoParcelaForma(f);
-    el.innerHTML=(b>0)
-      ? '<div class="t-sub">'+BRL(b)+" da venda"+(ac>0?" + "+BRL(ac)+" de acréscimo":"")+
-        " = <b>"+BRL(br)+"</b> nesta forma</div>"+(linha?"<div>"+linha+"</div>":"")
+    el.innerHTML=(br>0)
+      ? '<div class="t-sub"><b>'+BRL(br)+"</b> nesta forma"+
+        ((br-dp>0.004)?(" · a empresa recebe "+BRL(dp)+" (a operadora fica com "+BRL(centavos(br-dp))+")"):"")+
+        "</div>"+(linha?"<div>"+linha+"</div>":"")
       : (linha||"");
   });
 }
@@ -8517,7 +8519,7 @@ function renderFormas(){
     if(ps.indexOf(f.parc)<0){f.parc=ps[ps.length-1];}
     var pOpts=ps.map(function(n){return '<option value="'+n+'"'+(n===f.parc?" selected":"")+">"+n+"× · coef "+coefDe(f.tipo,n).toFixed(4).replace(".",",")+"</option>";}).join("");
     d.innerHTML='<div class="fld"><label>Forma '+(i+1)+'</label><select data-f="tipo" data-i="'+i+'"'+(travadaORC?" disabled":"")+'>'+opts+'</select></div>'+
-      '<div class="fld"><label>Quanto da venda</label><input type="text" inputmode="decimal" data-f="valor" data-i="'+i+'" value="'+brMF(f.base||0)+'"'+(travadaORC?" readonly":"")+'></div>'+
+      '<div class="fld"><label>Quanto da venda</label><input type="text" inputmode="decimal" data-f="valor" data-i="'+i+'" value="'+brMF(f.valor||0)+'"'+(travadaORC?" readonly":"")+'></div>'+
       '<div class="fld"><label>Parcelas</label><select data-f="parc" data-i="'+i+'">'+pOpts+'</select></div>'+
       '<div class="fld" style="justify-content:flex-end">'+(travadaORC
         ?'<span class="help" style="margin:0">já recebido na abertura da OS</span>'
@@ -8872,14 +8874,12 @@ function aplicarCobradoNosItens(lista,fs,totalBase,totalBruto){
      orçamento faz. Antes o desconto era diluído nos itens e o pedido mostrava R$ 3.119,06 onde
      a proposta dizia R$ 3.500,00 — "como passou um orçamento para um cliente e depois manda um
      pedido diferente" (relato dele, 26/09). */
-  /* acréscimo exato: com uma forma é o dela; com várias, a média ponderada pelas bases. Usar
-     `totalBruto/totalBase` trazia o ruído dos arredondamentos e devolvia um centavo a mais. */
-  var somaB=(fs||[]).reduce(function(a,f){return a+(+f.base||0);},0);
-  var acr=(somaB>0)
-    ?((fs||[]).reduce(function(a,f){return a+((+f.base||0)*acrescimoForma(f));},0)/somaB)
-    :((totalBase>0)?(totalBruto/totalBase):1);
+  /* o preço final de cada item é a MESMA conta que sugere o valor no campo (`precoPelaForma`),
+     então o que está na tela e o que é recalculado nunca divergem — inclusive quando há entrada
+     sem juros, que entra pelo valor de face e só o resto recebe o acréscimo (v173). */
+  var T=(lista||[]).reduce(function(a,i){return i.planoCobre?a:a+((+valorBaseItem(i)||0)*(i.qtd||1));},0);
   (lista||[]).forEach(function(i){
-    i.valor=i.planoCobre?0:centavos(valorBaseItem(i)*acr);
+    i.valor=i.planoCobre?0:precoPelaForma(valorBaseItem(i),i.qtd||1,T);
   });
   return centavos((lista||[]).reduce(function(a,i){return a+centavos((+i.valor||0)*(i.qtd||1));},0));
 }
@@ -8915,15 +8915,13 @@ function calcular(){
     '<div class="r big sep"><span>Total base da venda</span><span>'+BRL(totalBase)+"</span></div>"+
     "</div>"+
     '<p class="help">É este valor que será repartido entre as formas de pagamento, na etapa seguinte.</p>';
-  /* ETAPA B: como ele paga */
-  distribuirBase(formas,totalBase);
-  aplicarBrutos(formas);
-  var total=centavos(formas.reduce(function(a,f){return a+(+f.valor||0);},0));
-  aplicarCobradoNosItens(itens,formas,totalBase,total);
-  /* QUADRO DA ETAPA 2 em valores FINAIS — os mesmos números da proposta que o cliente recebeu
-     (regra dele, 26/09: "vc deve alinhar o que está no orçamento igual ao pedido, pois o
-     orçamento foi criado primeiro"). O valor comercial, que forma a comissão, vai na nota. */
-  var acrMedio=(totalBase>0)?(total/totalBase):1;
+  /* ETAPA B: como ele paga.
+     v235 — O VALOR FINAL É FINAL. O preço do item já sai com o acréscimo do parcelamento
+     (é o que o campo mostra desde a v224 e o que vai na proposta); a forma de pagamento
+     apenas REPARTE esse total, sem somar nada por cima. Antes a etapa 5 pegava o valor
+     comercial e aplicava o acréscimo de novo, o que inflava o pedido e fazia aparecer um
+     "Acréscimos financeiros" que ele nunca pediu — e o pedido saía diferente do orçamento. */
+  aplicarCobradoNosItens(itens,formas,totalBase,0);
   var prodF=0,garF=0;
   itens.forEach(function(i){
     if(i.planoCobre)return;
@@ -8931,8 +8929,18 @@ function calcular(){
     if(ehPlano(i))garF+=v;else prodF+=v;
   });
   prodF=centavos(prodF);garF=centavos(garF);
-  var freteF=centavos((+comp.frete||0)*acrMedio),descF=centavos(+xv.descontoFinal||0);
+  var freteF=centavos(+comp.frete||0),descF=centavos(+xv.descontoFinal||0);
+  /* é ESTE o valor que o cliente paga, e é ele que as formas repartem */
   var totalVenda=centavos(prodF+garF+freteF-descF);
+  distribuirBase(formas,totalVenda);
+  formas.forEach(function(f){
+    /* o que foi repartido JÁ é o valor cobrado; a base é o que sobra depois da depreciação */
+    f.valor=centavos(+f.base||0);
+    var n=Math.max(1,+f.parc||1),coef=coefDe(f.tipo,n)||1;
+    /* arredondamento normal, como o orçamento faz — para cima sobrava um centavo contra ele */
+    f.baseDep=coef?(Math.round(((f.valor/n)/coef)*100)/100):f.valor;
+  });
+  var total=centavos(formas.reduce(function(a,f){return a+(+f.valor||0);},0));
   $("o_cProd").textContent=BRL(prodF);
   $("o_cGar").textContent=BRL(garF);
   $("o_cFreteR").hidden=!(freteF>0);$("o_cFrete").textContent=BRL(freteF);
@@ -8943,31 +8951,29 @@ function calcular(){
   /* os campos de valor das formas acompanham a distribuição automática */
   var campos=$("v_formas")?$("v_formas").querySelectorAll('[data-f="valor"]'):[];
   formas.forEach(function(f,ix){
-    if(campos[ix]&&campos[ix]!==document.activeElement)campos[ix].value=brMF(+f.base||0);
+    if(campos[ix]&&campos[ix]!==document.activeElement)campos[ix].value=brMF(+f.valor||0);
   });
 
   var somaFormas=0,dep=0,descV=0,partes=[],somaBases=0;
   formas.forEach(function(f){
-    var v=+f.valor||0;somaFormas+=v;somaBases+=(+f.base||0);
-    var n=f.parc||1,coef=coefDe(f.tipo,n)||1,parcela=v/n;
+    var v=+f.valor||0;somaFormas+=v;somaBases+=v;
+    var n=Math.max(1,+f.parc||1),coef=coefDe(f.tipo,n)||1,parcela=v/n;
     /* em centavos, arredondando para cima (regra dele, 20/09) */
-    dep+=(coef?centavos(parcela/coef):0);
-    descV+=(coef>0?(v-centavos(parcela/coef)):0);
+    dep+=(+f.baseDep||0);
+    descV+=(v-(+f.baseDep||0));
     if(v>0)partes.push(coef===1?BRL(v):(BRL(parcela)+" ÷ "+coef.toFixed(4).replace(".",",")));
   });
-  somaBases=centavos(somaBases);
-  /* no modelo da v206 o depreciado É a base repartida: a conta por forma arredonda duas vezes
-     e sobrava um centavo de ruído contra o total base (v208) */
-  if(formas.some(function(f){return (+f.base||0)>0;})){dep=somaBases;descV=centavos(total-somaBases);}
-  var acresc=centavos(total-somaBases);
+  somaBases=centavos(somaBases);dep=centavos(dep);descV=centavos(descV);
+  /* o valor comercial da venda passa a ser o DEPRECIADO do que foi repartido — é dele que sai
+     a comissão, exatamente como o orçamento calcula (v235) */
+  totalBase=dep;
 
-  $("o_base").textContent=BRL(totalBase);
+  $("o_base").textContent=BRL(totalVenda);
   $("o_formas").textContent=BRL(somaBases);
-  $("o_acresc").textContent=BRL(acresc);
   $("o_total").textContent=BRL(total);
   $("o_desc").textContent="− "+BRL(descV);
   $("o_liq").textContent=BRL(dep);
-  var dif=Math.round((totalBase-somaBases)*100)/100;
+  var dif=Math.round((totalVenda-somaBases)*100)/100;
   /* caixa de informação pedindo o valor da forma sem juros (regra dele, 20/09) */
   if(travaSemJuros()){
     $("o_alertaPag").innerHTML='<div class="note crit"><b>Informe o valor de '+
@@ -9113,7 +9119,7 @@ function calcular(){
     '<tr><td>Uso de Imagem</td><td class="num">'+(temImagem?'<span class="pill p-acc">vai sair</span>':'<span class="pill p-mut">não autorizado</span>')+"</td></tr>";
   try{notaPlanoVenda();}catch(e){console.warn(e);}
   return {total:total,dep:dep,base:base,pontos:pontos,abaixo:abaixo,somaFormas:somaFormas,dif:dif,
-    totalBase:totalBase,acrescimo:acresc,comp:comp};
+    totalBase:totalBase,acrescimo:0,totalVenda:totalVenda,comp:comp};
 }
 /* O lead pode ter nascido só com nome, telefone, cidade, origem e tipo de atendimento.
    Para TIRAR O PEDIDO o cadastro precisa estar completo (CO_CLI): CPF, identidade,
@@ -22543,15 +22549,13 @@ function renderPedDet(){
      garantia e frete, quando houver — e o TOTAL FINAL COBRADO; a decomposição comercial
      (produtos, total base, acréscimo do parcelamento) fica só na edição e nos relatórios. */
   var compP=composicaoVenda(pedRasc.itens,{frete:+p.frete||0,desconto:+p.descontoGeral||0});
-  var acrescP=centavos(r.total-compP.base);
   $("pd_impacto").innerHTML=
     '<div class="calc" style="margin-top:18px">'+
       (verRemun?'<div class="r"><span>Produtos</span><span>'+BRL(compP.prod)+"</span></div>":"")+
       (compP.gar>0?'<div class="r"><span>Garantia</span><span>'+BRL(compP.gar)+"</span></div>":"")+
       (compP.frete>0?'<div class="r"><span>Frete</span><span>'+BRL(compP.frete)+"</span></div>":"")+
       (verRemun?'<div class="r sep"><span>Total base da venda</span><span>'+BRL(compP.base)+"</span></div>":"")+
-      (verRemun&&Math.abs(acrescP)>=0.01?'<div class="r"><span>Acréscimos financeiros</span><span>'+BRL(acrescP)+"</span></div>":"")+
-      '<div class="r big"><span>Total final cobrado</span><span>'+BRL(r.total)+"</span></div>"+
+      '<div class="r big"><span>Total da venda</span><span>'+BRL(r.total)+"</span></div>"+
     "</div>"+
     '<div class="kpis" style="margin-top:18px">'+
     (verRemun?'<div class="kpi"><div class="l">Depreciado</div><div class="v">'+BRL(r.dep)+"</div></div>"+
