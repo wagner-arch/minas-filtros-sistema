@@ -2422,7 +2422,7 @@ img{max-width:100%}
               <div class="fld"><label for="os_dqtd">Quantidade</label>
                 <input id="os_dqtd" type="number" min="1" step="1" value=""></div>
               <div class="fld"><label for="os_dvalor">Valor unitário</label>
-                <input id="os_dvalor" type="text" inputmode="decimal" placeholder="0,00"></div>
+                <input id="os_dvalor" type="text" inputmode="decimal" placeholder="0,00"><div id="os_dprecoNota"></div></div>
               <div class="fld"><label>&nbsp;</label>
                 <button class="btn ghost" type="button" id="os_dadd">Incluir na OS</button></div>
             </div>
@@ -2441,7 +2441,7 @@ img{max-width:100%}
           <div class="grid g4" style="margin-top:6px">
             <div class="fld"><label for="os_peca">Peça ou produto</label><select id="os_peca"></select></div>
             <div class="fld"><label for="os_pqtd">Qtd</label><input id="os_pqtd" type="number" min="1" value="" placeholder="Qtd" inputmode="numeric"></div>
-            <div class="fld"><label for="os_pvalor">Valor unitário</label><input id="os_pvalor" type="text" inputmode="decimal" step="0.01"></div>
+            <div class="fld"><label for="os_pvalor">Valor unitário</label><input id="os_pvalor" type="text" inputmode="decimal" step="0.01"><div id="os_pprecoNota"></div></div>
             <div class="fld" style="align-self:end"><button class="btn ghost" type="button" id="os_addPeca">Adicionar peça</button></div>
           </div>
           <div class="tw" style="margin-top:14px"><table>
@@ -2555,7 +2555,7 @@ img{max-width:100%}
           <div class="grid g4">
             <div class="fld"><label for="or_prod">Produto</label><select id="or_prod"></select></div>
             <div class="fld"><label for="or_qtd">Qtd</label><input id="or_qtd" type="number" min="1" value="" placeholder="Qtd" inputmode="numeric"></div>
-            <div class="fld"><label for="or_valor">Valor unitário</label><input id="or_valor" type="text" inputmode="decimal" step="0.01"></div>
+            <div class="fld"><label for="or_valor">Valor unitário</label><input id="or_valor" type="text" inputmode="decimal" step="0.01"><div id="or_precoNota"></div></div>
             <div class="fld" style="align-self:end"><button class="btn ghost" type="button" id="or_add">Adicionar</button></div>
           </div>
           <div class="tw" style="margin-top:14px"><table>
@@ -4463,6 +4463,17 @@ img{max-width:100%}
         <div class="grid g2" style="margin-bottom:22px">
           <div class="fld"><label for="pg_nome">Nome <span class="req">*</span></label><input id="pg_nome"></div>
         </div>
+        <!-- preço que aparece na tela (pedido dele, 25/09) -->
+        <div class="sect">
+          <p class="sect-t">Preço que aparece na tela</p>
+          <label class="chk" style="display:flex;gap:9px;align-items:center;margin:8px 0"><input type="checkbox" id="pg_ref"> Esta forma define o valor final que o sistema mostra ao incluir um produto</label>
+          <div class="grid g3" style="margin-top:12px">
+            <div class="fld"><label for="pg_refParc">Parcelas de referência</label>
+              <input id="pg_refParc" type="number" step="1" min="1" max="24" placeholder="24"></div>
+          </div>
+          <div id="pg_refNota"></div>
+          <p class="help">Marcando aqui, todo pedido, orçamento e OS passam a mostrar o produto já pelo <b>valor final nesta forma e neste número de parcelas</b>. Só uma forma pode ser a de referência. Quem quiser o valor à vista escolhe a forma à vista na tela do pagamento.</p>
+        </div>
         <div class="sect" id="pg_secCredito">
           <p class="sect-t">Onde o dinheiro cai</p>
           <div class="grid g3">
@@ -6064,6 +6075,10 @@ async function carregar(){
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
   motivos=SEED_MOTIVOS.slice();
+  /* preço de referência (25/09): a forma que define o valor da tela precisa do coeficiente da
+     parcela de referência JÁ AQUI — o modo demonstração sai desta função antes do bloco do banco */
+  garantirCoefReferencia();
+  if(!itens.length)formas=formasIniciais();
   if(!db){
     /* modo demonstração: sem caixa e sem centro de custo o financeiro nasce mudo */
     produtos=SEED.map(function(p,i){var o=JSON.parse(JSON.stringify(p));o.id="seed"+i;return o;});
@@ -6095,8 +6110,18 @@ async function carregar(){
         caixaNome:"Ascicred",caixaId:"",diasCredito:0,conferir:true});antigo=true;}
     /* coeficiente 1 em 2× ou mais era conta errada: dividia a base pelo nº de parcelas (20/09) */
     if(corrigirCoefSemJuros())antigo=true;
+    /* a forma de referência precisa ter o coeficiente da parcela que define o preço da tela (25/09).
+       Completar na memória basta para o preço sair certo; só o Administrador GRAVA — config/* é
+       dele e do Financeiro, e uma gravação recusada acende a faixa vermelha no login dos outros. */
+    var compl=garantirCoefReferencia();
+    if(compl&&ehAdministrador())antigo=true;
     if(antigo)await gravarFormas();
   }catch(e){console.warn("formas",e);}
+  /* fora do try de propósito: sem banco o bloco acima nem começa, e o preço de referência tem de
+     valer também na demonstração e em qualquer leitura que tenha falhado */
+  garantirCoefReferencia();
+  /* venda nova já nasce na forma de referência, para o valor do item sair no final de 24× */
+  if(!itens.length)formas=formasIniciais();
   try{
     /* OS CADASTROS CHEGAM DEPOIS, SEM SEGURAR A ABERTURA (regra de 24/09: "demora um pouco").
        São 21.909 clientes — de longe a maior resposta do banco, alguns megabytes. Esperar por
@@ -7813,6 +7838,79 @@ function textoPrecoForma(cheia,qtd,T){
   return "Tabela cheia <b>"+BRL(alvo)+"</b> em <b>"+esc(f.tipo)+" "+n+"×</b> = <b>"+BRL(v)+"</b>"+
     (n>1?" ("+BRL(v/n)+" por parcela)":"")+".";
 }
+/* ---------- preço de referência na tela (pedido dele, 25/09) ----------
+   Regra: "toda vez que for incluído algum produto em qualquer pedido, OS ou orçamento o sistema já
+   carrega o valor final do produto pela forma de pagamento de 24 parcelas da forma Cartão de
+   Crédito Rendimentos" e "se o usuário quiser saber o valor à vista ele tem que buscar a forma de
+   pagamento à vista".
+   Qual forma manda nisso NÃO fica preso ao nome: ela é marcada em Configurações › Formas de
+   Pagamento ("define o preço que aparece na tela"), com o número de parcelas ao lado. Sem nenhuma
+   marcada, vale a Máquina de Rendimentos e, na falta dela, qualquer forma com "rendimento" no nome
+   — que é como ele chama a máquina. */
+var REF_PARC_PADRAO=24;
+function formaReferencia(){
+  var f=(formasPgto||[]).filter(function(x){return x.referencia;})[0];
+  if(!f)f=(formasPgto||[]).filter(function(x){return x.nome===FORMA_RENDIMENTOS;})[0];
+  if(!f)f=(formasPgto||[]).filter(function(x){return /rendiment/i.test(x.nome||"");})[0];
+  if(!f)return null;
+  return {forma:f,nome:f.nome,parc:Math.min(MAX_PARC,Math.max(1,+f.refParc||REF_PARC_PADRAO))};
+}
+/* a tabela da operadora pode estar cadastrada só até 12×: completa o que falta ATÉ a parcela de
+   referência pela mesma conta do botão "Completar até 24×" (v165) e deixa marcado que o
+   coeficiente foi estimado — o aviso "conferir os coeficientes com a operadora" continua valendo */
+function garantirCoefReferencia(){
+  var r=formaReferencia();if(!r)return false;
+  if(+r.forma.coef[r.parc]>0)return false;
+  if(!completarCoefAte(r.forma.coef,r.parc).novos.length)return false;
+  r.forma.coefEstimado=true;
+  return true;
+}
+/* valor final de UMA unidade numa forma/parcelamento. Arredonda para CIMA no centavo, como
+   `precoPelaForma`: por baixo, a venda nasceria um milésimo abaixo da tabela (v162/v163). */
+function precoNaForma(cheia,nome,n){
+  var v=+cheia||0,p=Math.max(1,+n||1);
+  if(!(v>0))return 0;
+  var c=coefDe(nome,p);
+  if(!c)return Math.round(v*100)/100;
+  return Math.ceil(v*p*c*100)/100;
+}
+function precoReferencia(cheia){
+  var r=formaReferencia();
+  return r?precoNaForma(cheia,r.nome,r.parc):(Math.round((+cheia||0)*100)/100);
+}
+/* a parcela sai pela mesma divisão do pedido impresso: em centavos, o resto na primeira */
+function parcelaDe(total,n){
+  var p=Math.max(1,+n||1),c=Math.round((+total||0)*100),b=Math.floor(c/p);
+  return {parc:b/100,primeira:(b+(c-b*p))/100};
+}
+function textoPrecoReferencia(cheia){
+  var r=formaReferencia(),v=+cheia||0;
+  if(!r||!(v>0))return "";
+  var fim=precoReferencia(v),pc=parcelaDe(fim,r.parc);
+  return "<b>"+BRL(fim)+"</b> em <b>"+r.parc+"× de "+BRL(pc.parc)+"</b>"+
+    (Math.abs(pc.primeira-pc.parc)>0.004?" (a 1ª de "+BRL(pc.primeira)+")":"")+
+    " no "+esc(r.nome)+
+    (r.forma.coefEstimado?' · <b style="color:var(--bad)">coeficiente estimado</b>, confira a tabela da operadora':"");
+}
+/* o módulo de celular e os testes precisam saber qual é a forma de referência */
+window.__refMF=function(){var r=formaReferencia();return r?{nome:r.nome,parc:r.parc}:null;};
+window.__precoRefMF=function(cheia){return precoReferencia(cheia);};
+/* a OS não escolhe forma de pagamento nesta tela (isso é do pedido que sai dela): então o campo
+   já vem com o valor final da forma de referência e a nota diz de onde ele veio */
+function notaPrecoRefOS(idNota,p){
+  var el=$(idNota);if(!el)return;
+  if(!p||!(+p.cheia>0)){el.innerHTML="";return;}
+  var r=formaReferencia();
+  if(!r){el.innerHTML='<div class="note">Tabela cheia '+BRL(+p.cheia||0)+".</div>";return;}
+  el.innerHTML='<div class="note ok">'+textoPrecoReferencia(+p.cheia||0)+
+    ". Tabela cheia "+BRL(+p.cheia||0)+" — dá para alterar o valor.</div>";
+}
+/* a venda nasce na forma de referência: assim o valor que aparece no item já é o final de 24× */
+function formasIniciais(){
+  var r=formaReferencia();
+  if(r)return [{tipo:r.nome,valor:0,base:0,parc:r.parc}];
+  return [{tipo:"Cartão de Crédito Sipag",valor:0,base:0,parc:12}];
+}
 function notaPrecoForma(p){
   var el=$("v_precoNota");if(!el)return;
   if(travaSemJuros()){
@@ -7823,11 +7921,16 @@ function notaPrecoForma(p){
     return;
   }
   if(!p||!(+p.cheia>0)){el.innerHTML="";return;}
-  /* v206: aqui é o valor COMERCIAL. O acréscimo do parcelamento entra na etapa do pagamento. */
-  el.innerHTML='<div class="note" style="margin-top:8px"><b>Tabela cheia '+BRL(+p.cheia||0)+"</b>"+
+  /* v206: aqui é o valor COMERCIAL. O acréscimo do parcelamento entra na etapa do pagamento.
+     v224: o preço que o cliente ouve é o da forma de referência (24× Rendimentos) e vem primeiro. */
+  var ref=textoPrecoReferencia(+p.cheia||0);
+  el.innerHTML=
+    (ref?'<div class="note ok" style="margin-top:8px"><b>Preço para o cliente:</b> '+ref+
+      ". Para saber o valor à vista, escolha a forma à vista na etapa do pagamento.</div>":"")+
+    '<div class="note" style="margin-top:8px"><b>Tabela cheia '+BRL(+p.cheia||0)+"</b>"+
     ((+p.campanha>0)?" · tabela 70% "+BRL(+p.campanha||0):"")+
-    ". Pode negociar o valor — abaixo da tabela, a venda vai para autorização do Administrador. "+
-    "O acréscimo do parcelamento é calculado depois, na forma de pagamento.</div>";
+    ". É este o valor comercial que fica no campo — pode negociar; abaixo da tabela, a venda vai "+
+    "para autorização do Administrador. O acréscimo do parcelamento é calculado na forma de pagamento.</div>";
 }
 /* forma ou parcelamento mudou: refaz o preço do item que está sendo montado.
    `soProduto` evita o vaivém com `notaGarantia`, que também chama esta função: produto e plano
@@ -9273,7 +9376,7 @@ async function salvarPedido(){
   abrirVendaOk(ped);
 }
 function limparPedido(){
-  itens=[];formas=[{tipo:"Cartão de Crédito Sipag",valor:0,base:0,parc:12}];
+  itens=[];formas=formasIniciais();
   /* cada venda nova começa com quem está logado nos papéis (v209): o select guardava o
      valor do usuário anterior, e o pedido nascia no nome de outra pessoa — some da lista
      de "Meus pedidos" de quem vendeu */
@@ -21402,22 +21505,55 @@ function abrirOrc(o){
   $("or_vend").value=v.vendedor||usuarioAtual;
   if(v.validade)$("or_validade").value=v.validade;
   else{var d=new Date();d.setDate(d.getDate()+15);$("or_validade").value=iso(d);}
+  /* orçamento novo nasce na forma de referência: o valor do item já sai no final de 24× (25/09) */
+  var refO=formaReferencia();
   if(v.forma)sf.value=v.forma;
+  else if(refO)sf.value=refO.nome;
+  orcParcRef=(!v.forma&&refO)?refO.parc:0;
   if(v.clienteId)orcCli=clientes.filter(function(c){return c.id===v.clienteId;})[0]||null;
   orcItens=v.itens?JSON.parse(JSON.stringify(v.itens)):[];
   $("or_achou").innerHTML="";$("or_sug").hidden=true;$("or_alerta").innerHTML="";
   orcParcelas();sincOrcValor();calcOrc();
 }
+var orcParcRef=0;   /* parcelas que a forma de referência pede, no orçamento recém-aberto */
 function orcParcelas(){
   var f=formaPor($("or_forma").value),sp=$("or_parc"),atual=sp.value;sp.innerHTML="";
   var ks=f?Object.keys(f.coef).map(Number).sort(function(a,b){return a-b;}):[1];
   ks.forEach(function(k){var o=document.createElement("option");o.value=k;o.textContent=k+"×";sp.appendChild(o);});
   if(atual&&ks.indexOf(+atual)>=0)sp.value=atual;
+  /* orçamento novo já abre nas parcelas da forma de referência */
+  if(orcParcRef&&ks.indexOf(orcParcRef)>=0){sp.value=orcParcRef;orcParcRef=0;}
+  reprecificarOrc();
   calcOrc();
+}
+/* trocou a forma ou as parcelas: os itens que entraram pelo valor sugerido acompanham. É a regra
+   dele de 25/09 — "se o usuário quiser saber o valor à vista ele tem que buscar a forma à vista".
+   Valor digitado à mão (sem `precoAuto`) fica como está. */
+function reprecificarOrc(){
+  var nome=$("or_forma").value,n=+$("or_parc").value||1;
+  (orcItens||[]).forEach(function(i){
+    if(!i.precoAuto)return;
+    var p=produtos.filter(function(x){return x.id===i.pid;})[0];
+    if(!p||!(+p.cheia>0))return;
+    i.valor=precoNaForma(p.cheia,nome,n);
+  });
+  sincOrcValor();
 }
 function sincOrcValor(){
   var p=produtos.filter(function(x){return x.id===$("or_prod").value;})[0];
-  if(p)$("or_valor").value=(+p.cheia||0).toFixed(2);
+  var vv=$("or_valor");
+  if(p&&!vv.__manual)vv.value=brMF(precoNaForma(p.cheia,$("or_forma").value,$("or_parc").value));
+  notaPrecoOrc(p);
+}
+/* diz na tela de onde vem o valor que apareceu no campo */
+function notaPrecoOrc(p){
+  var el=$("or_precoNota");if(!el)return;
+  if(!p||!(+p.cheia>0)){el.innerHTML="";return;}
+  var nome=$("or_forma").value,n=+$("or_parc").value||1,fim=precoNaForma(p.cheia,nome,n);
+  var pc=parcelaDe(fim,n);
+  el.innerHTML='<div class="note ok"><b>'+BRL(fim)+"</b> em <b>"+esc(nome)+" "+n+"×</b>"+
+    (n>1?" · "+n+"× de "+BRL(pc.parc)+(Math.abs(pc.primeira-pc.parc)>0.004?" (a 1ª de "+BRL(pc.primeira)+")":""):" · à vista")+
+    ". Tabela cheia "+BRL(+p.cheia||0)+". Trocando a forma acima, o valor acompanha.</div>";
 }
 function calcOrc(){
   var total=orcItens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
@@ -26866,15 +27002,18 @@ function ligar(){
   $("os_tipoSel").onchange=function(){notaFabricante();calcOS();};
   $("os_status").onchange=calcOS;
   ["os_mao","os_taxa","os_desc"].forEach(function(id){$(id).oninput=calcOS;});
+  /* v224: a OS também carrega o valor final da forma de referência (24× Rendimentos) */
   $("os_dprod").onchange=function(){
     var pd=produtos.filter(function(x){return x.id===$("os_dprod").value;})[0];
-    $("os_dvalor").value=pd?brMF(+pd.cheia||0):"";
+    $("os_dvalor").value=pd?brMF(precoReferencia(+pd.cheia||0)):"";
+    notaPrecoRefOS("os_dprecoNota",pd);
   };
   $("os_dadd").onclick=addItemDiagOS;
   $("os_peca").onchange=function(){
     var pid=$("os_peca").value;
     var p=produtos.filter(function(x){return x.id===pid;})[0];
-    $("os_pvalor").value=p?(+p.cheia||0).toFixed(2):"";
+    $("os_pvalor").value=p?brMF(precoReferencia(+p.cheia||0)):"";
+    notaPrecoRefOS("os_pprecoNota",p);
     try{notaPlanoOS();}catch(e){console.warn(e);}};
   $("os_addPeca").onclick=function(){
     var p=produtos.filter(function(x){return x.id===$("os_peca").value;})[0];if(!p){toast("Escolha a peça.");return;}
@@ -27260,14 +27399,21 @@ function ligar(){
   $("orcCancelar").onclick=function(){$("orcForm").hidden=true;$("orcLista").hidden=false;editandoOrc=null;};
   $("or_nome").oninput=function(){orcCli=null;$("or_achou").innerHTML="";buscarClienteOrc();};
   $("or_nome").onblur=function(){setTimeout(function(){$("or_sug").hidden=true;},180);};
-  $("or_prod").onchange=sincOrcValor;
-  $("or_forma").onchange=orcParcelas;$("or_parc").onchange=calcOrc;$("or_vend").onchange=calcOrc;
+  $("or_prod").onchange=function(){$("or_valor").__manual=false;sincOrcValor();};
+  $("or_valor").oninput=function(){$("or_valor").__manual=true;};
+  $("or_forma").onchange=orcParcelas;
+  $("or_parc").onchange=function(){reprecificarOrc();calcOrc();};
+  $("or_vend").onchange=calcOrc;
   $("or_add").onclick=function(){
     var p=produtos.filter(function(x){return x.id===$("or_prod").value;})[0];if(!p){toast("Escolha o produto.");return;}
     var qr=qtdInformada("or_qtd");if(!qr)return;
+    var dig=numMF($("or_valor").value)||0;
+    /* entrou pelo valor sugerido? então acompanha a forma de pagamento (25/09) */
+    var auto=Math.abs(dig-precoNaForma(p.cheia,$("or_forma").value,$("or_parc").value))<0.005;
     orcItens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qr,
-      valor:numMF($("or_valor").value)||0,pontos:+p.pontos||0});
-    calcOrc();limparInclusao("or_prod","or_qtd",["or_valor"]);};
+      valor:dig,pontos:+p.pontos||0,precoAuto:auto});
+    calcOrc();$("or_valor").__manual=false;limparInclusao("or_prod","or_qtd",["or_valor"]);
+    try{$("or_precoNota").innerHTML="";}catch(e){}};
   $("orcEnviar").onclick=async function(){var o=await salvarOrc();if(o)abrirEnvio(o);};
   $("orcEfetivar").onclick=async function(){var o=await salvarOrc();if(o)virarVenda(o);};
   $("opEfetivar").onclick=function(){if(editandoOrc)virarVenda(editandoOrc);};
@@ -27418,6 +27564,7 @@ function renderPgto(){
   var lista=porNomeAZ(formasPgto.filter(function(f){return !q||f.nome.toLowerCase().indexOf(q)>=0;}));
   $("pgtoCount").textContent=lista.length+(lista.length===1?" forma":" formas");
   var b=$("pgtoBody");b.innerHTML="";
+  var refPg=formaReferencia();
   if(!lista.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma forma cadastrada</div>Use o botão <b>Nova forma</b> acima para criar a primeira.</div></td></tr>';return;}
   lista.forEach(function(f){
     var ks=Object.keys(f.coef).map(Number).sort(function(a,b2){return a-b2;});
@@ -27425,8 +27572,11 @@ function renderPgto(){
     var deprecia=ks.some(function(k){return f.coef[k]!==1;});
     var ant=f.recebimento==="antecipada",cx=caixaDaForma(f.nome);
     var tr=document.createElement("tr");tr.className="clickable";
+    var ehRef=(refPg&&refPg.forma===f);
     tr.innerHTML='<td><div class="t-main">'+esc(f.nome)+"</div>"+
-        (f.conferir?'<div class="t-sub"><span class="pill p-crit">conferir os coeficientes com a operadora</span></div>':"")+"</td>"+
+        ((f.conferir||ehRef)?'<div class="t-sub">'+
+          (ehRef?'<span class="pill p-ok">preço da tela · '+refPg.parc+"×</span> ":"")+
+          (f.conferir?'<span class="pill p-crit">conferir os coeficientes com a operadora</span>':"")+"</div>":"")+"</td>"+
       '<td class="num">'+(ks.length?(ks[0]+"× a "+ks[ks.length-1]+"×"):"—")+"</td>"+
       '<td class="num">'+(menor?menor.toFixed(4).replace(".",","):"—")+"</td>"+
       "<td>"+(deprecia?'<span class="pill p-warn">sim</span>':'<span class="pill p-ok">não</span>')+"</td>"+
@@ -27451,11 +27601,18 @@ function abrirPgto(f){
   $("pg_caixa").onchange=notaRecebimentoPg;
   $("pg_dias").oninput=notaRecebimentoPg;
   notaRecebimentoPg();
+  /* preço de referência (25/09): sem forma marcada ainda, a Rendimentos já aparece marcada */
+  var r0=formaReferencia();
+  $("pg_ref").checked=!!(f&&((f.referencia)||(!(formasPgto||[]).some(function(x){return x.referencia;})&&r0&&r0.forma===f)));
+  $("pg_refParc").value=(f&&+f.refParc>0)?f.refParc:(($("pg_ref").checked)?REF_PARC_PADRAO:"");
+  $("pg_ref").onchange=notaReferenciaPg;
+  $("pg_refParc").oninput=notaReferenciaPg;
   $("pg_notaParc").innerHTML="";
   pgLinhas=[];
   if(f){Object.keys(f.coef).map(Number).sort(function(a,b){return a-b;}).forEach(function(k){pgLinhas.push({n:k,c:f.coef[k]});});}
   else{pgLinhas=[{n:1,c:1}];}
   renderPgLinhas();
+  notaReferenciaPg();   /* depois de `pgLinhas`: a nota usa os coeficientes da tela */
 }
 function notaRecebimentoPg(){
   var ant=$("pg_receb").value==="antecipada",cx=$("pg_caixa").value;
@@ -27470,6 +27627,28 @@ function notaRecebimentoPg(){
     (nome?" O crédito cai em <b>"+esc(nome)+"</b>.":' <b>Escolha o caixa que recebe o crédito</b> — sem ele o dinheiro fica sem conta e a conciliação não acha o lançamento.')+
     " O recebimento só entra no sistema <b>depois da aprovação do financeiro</b>.</div>";
 }
+/* explica, com número, o que a marcação do preço de referência faz na tela (25/09) */
+function notaReferenciaPg(){
+  var el=$("pg_refNota");if(!el)return;
+  if(!$("pg_ref").checked){
+    var r=formaReferencia();
+    el.innerHTML='<div class="note">Hoje o preço da tela sai '+
+      (r?"pela forma <b>"+esc(r.nome)+"</b> em <b>"+r.parc+"×</b>":"<b>pela tabela cheia</b>, sem acréscimo")+
+      ". Esta forma não interfere nisso.</div>";
+    return;
+  }
+  var n=Math.min(MAX_PARC,Math.max(1,parseInt($("pg_refParc").value,10)||REF_PARC_PADRAO));
+  var coef={};pgLinhas.forEach(function(l){if(l.n>0&&l.c>0)coef[l.n]=l.c;});
+  var c=+coef[n]||0,falta=!(c>0);
+  if(falta){var cp={};Object.keys(coef).forEach(function(k){cp[k]=coef[k];});completarCoefAte(cp,n);c=+cp[n]||0;}
+  var ex=c>0?Math.ceil(1000*n*c*100)/100:0;   /* exemplo com produto de tabela cheia R$ 1.000,00 */
+  el.innerHTML='<div class="note ok"><b>Produto de tabela cheia R$ 1.000,00 vai aparecer por '+
+    (ex?BRL(ex)+" ("+n+"× de "+BRL(parcelaDe(ex,n).parc)+")":"— sem coeficiente")+".</b>"+
+    (falta?" O coeficiente de <b>"+n+"×</b> não está cadastrado aqui: o sistema completa a tabela pela "+
+      "taxa ao mês dos coeficientes que você cadastrou (o mesmo que o botão <b>Completar até 24×</b> faz). "+
+      "<b>Confira com a operadora.</b>":"")+
+    " Só uma forma pode ser a de referência — marcando esta, a outra é desmarcada.</div>";
+}
 function renderPgLinhas(){
   var b=$("pg_linhas");b.innerHTML="";
   pgLinhas.forEach(function(l,i){
@@ -27481,7 +27660,8 @@ function renderPgLinhas(){
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-pg]"),function(el){
     el.oninput=function(){var i=+el.getAttribute("data-i"),k=el.getAttribute("data-pg");
-      pgLinhas[i][k]=(k==="n"?(parseInt(el.value,10)||1):(parseFloat(el.value)||0));};
+      pgLinhas[i][k]=(k==="n"?(parseInt(el.value,10)||1):(parseFloat(el.value)||0));
+      try{notaReferenciaPg();}catch(e){}};
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-rmpg]"),function(bt){
     bt.onclick=function(){pgLinhas.splice(+bt.getAttribute("data-rmpg"),1);renderPgLinhas();};
@@ -27496,16 +27676,24 @@ async function salvarPgto(){
     toast("O máximo é "+MAX_PARC+" parcelas — tire as linhas acima de "+MAX_PARC+"×.");return;}
   var coef={};pgLinhas.forEach(function(l){if(l.n>0&&l.c>0)coef[l.n]=l.c;});
   if(!Object.keys(coef).length){toast("Cadastre ao menos uma parcela com coeficiente.");return;}
+  /* preço de referência (25/09): só uma forma manda no valor que aparece na tela */
+  var ref=$("pg_ref").checked;
+  var refParc=ref?Math.min(MAX_PARC,Math.max(1,parseInt($("pg_refParc").value,10)||REF_PARC_PADRAO)):0;
   var extra={caixaId:$("pg_caixa").value||"",
     recebimento:($("pg_receb").value==="antecipada"?"antecipada":"recorrente"),
-    diasCredito:($("pg_dias").value===""?"":Math.max(0,parseInt($("pg_dias").value,10)||0))};
+    diasCredito:($("pg_dias").value===""?"":Math.max(0,parseInt($("pg_dias").value,10)||0)),
+    referencia:ref,refParc:refParc};
   if(editandoPg){
     editandoPg.nome=nome;editandoPg.coef=coef;
     Object.keys(extra).forEach(function(k){editandoPg[k]=extra[k];});
     if(extra.caixaId)editandoPg.caixaNome="";
     editandoPg.conferir=false;   /* salvou conferindo: o aviso de taxa a checar sai */
+    editandoPg.coefEstimado=false;
   }
   else{var novo={nome:nome,coef:coef};Object.keys(extra).forEach(function(k){novo[k]=extra[k];});formasPgto.push(novo);}
+  if(ref)formasPgto.forEach(function(f){if(f.nome!==nome)f.referencia=false;});
+  garantirCoefReferencia();
+  if(!itens.length)formas=formasIniciais();
   await gravarFormas();
   editandoPg=null;$("pgtoForm").hidden=true;$("pgtoLista").hidden=false;
   toast("Forma de pagamento salva.");renderPgto();renderFormas();calcular();
