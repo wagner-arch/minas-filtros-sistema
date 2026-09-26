@@ -7958,13 +7958,22 @@ function notaPrecoForma(p){
          (Math.abs(pc.primeira-pc.parc)>0.004?" (a 1ª de "+BRL(pc.primeira)+")":""))
        :"é o que o cliente paga <b>à vista</b>")+
     ". <b>Para o valor à vista</b>, troque a forma na etapa <b>5 · Pagamento</b>."+
-    ((r&&r.forma.coefEstimado&&cj&&cj.tipo===r.nome)?' <b style="color:var(--bad)">O coeficiente de '+
-      r.parc+"× é estimado</b> — confira a tabela da operadora em Configurações › Formas de Pagamento.":"")+
+    /* o aviso vale só para as parcelas que o sistema completou (13× a 24×): de 1× a 12× o
+       coeficiente é o que está cadastrado */
+    ((r&&r.forma.coefEstimado&&cj&&cj.tipo===r.nome&&n>=13)?' <b style="color:var(--bad)">O coeficiente de '+
+      n+"× é estimado</b> — confira a tabela da operadora em Configurações › Formas de Pagamento.":"")+
     "</div>"+
     '<div class="note" style="margin-top:8px">Tabela cheia <b>'+BRL(+p.cheia||0)+"</b>"+
     ((+p.campanha>0)?" · tabela 70% "+BRL(+p.campanha||0):"")+
-    " — é ela que forma a comissão. Pode negociar o valor acima; abaixo da tabela, a venda vai "+
-    "para autorização do Administrador.</div>";
+    " — é ela que forma a comissão, e a comparação é com o valor <b>sem o acréscimo do "+
+    "parcelamento</b>. Pode negociar o valor acima; abaixo da tabela, a venda vai para "+
+    "autorização do Administrador."+
+    /* o campo mostra o COBRADO desde a v224: diga o cobrado que corresponde a cada tabela,
+       senão o vendedor compara o número da tela com a tabela do cadastro e não fecha (26/09) */
+    (cj?(" <b>Nesta forma, para cair na tabela cheia o cliente precisa pagar "+
+      BRL(cobradoPara(+p.cheia||0))+"</b>"+
+      ((+p.campanha>0)?" · na de 70%, "+BRL(cobradoPara(+p.campanha||0)):"")+"."):"")+
+    "</div>";
 }
 /* volta do valor final para o valor comercial — o contrário de `precoPelaForma`.
    final = base × (k + (1−k)·acréscimo), onde k é a fatia da entrada sem juros, então
@@ -8599,6 +8608,21 @@ function pillFaixa(fx){
 }
 /* uma linha por item, em blocos — NÃO é tabela: no celular uma tabela de 3 colunas com nome de
    produto estoura a largura do cartão (visto na simulação de 20/09) */
+/* Quanto o cliente precisa PAGAR, na forma escolhida, para o item alcançar um valor comercial.
+   É o caminho de volta do `baseDoFinal`. Decisão dele em 26/09: a faixa continua saindo do valor
+   comercial (a comissão nunca inclui o juro do cartão), então a tela passa a dizer o valor
+   cobrado equivalente — senão o número que o vendedor vê nunca fecha com a tabela do cadastro. */
+function cobradoPara(valorComercial){
+  var v=+valorComercial||0;if(!(v>0))return 0;
+  var cj=formasComJuros()[0];
+  if(!cj)return Math.round(v*100)/100;
+  return Math.ceil(v*acrescimoForma(cj)*100)/100;
+}
+function cobradoParaTabela(alvo){
+  var cj=formasComJuros()[0];
+  if(!(+alvo>0)||!cj)return "";
+  return " · nesta forma, cobrar "+BRL(cobradoPara(alvo));
+}
 function linhaFaixaComissao(l){
   var alvo=(l.fx.f===1)?(+l.p.cheia||0):(l.fx.f===0.7?(+l.p.campanha||0):(l.fx.f===0.5?(+l.p.minimo||0):0));
   var rodape=(l.fx.f===0)
@@ -8608,8 +8632,13 @@ function linhaFaixaComissao(l){
         var piso=(l.p.campativa==="sim"&&+l.p.minimo>0)?+l.p.minimo
                 :((+l.p.campanha>0)?+l.p.campanha:(+l.p.cheia||0));
         var d=Math.max(0,piso-l.unit);
-        return d>0?"faltam "+BRL(d)+" por unidade para pagar comissão":"";})()
-    : (alvo>0?("tabela "+BRL(alvo)):"");
+        /* o vendedor vê o valor COBRADO na tela, e a tabela é comparada com o comercial (decisão
+           dele, 26/09: manter a faixa pelo valor comercial). Então diga, na forma escolhida,
+           quanto o cliente precisa pagar — senão o número da tela nunca fecha com o do cadastro. */
+        return d>0?("faltam "+BRL(d)+" por unidade · para pagar comissão"+cobradoParaTabela(piso)):"";
+      })()
+    : (alvo>0?("tabela "+BRL(alvo)+
+        ((l.fx.f<1&&+l.p.cheia>0)?(" · para a tabela cheia "+BRL(+l.p.cheia)+cobradoParaTabela(+l.p.cheia)):"")):"");
   return '<div class="fx-l"><div class="fx-n">'+esc(l.nome)+(l.qtd>1?" ("+l.qtd+"×)":"")+"</div>"+
     '<div class="fx-v"><b>'+BRL(l.unit)+"</b> depreciado"+(l.qtd>1?" por unidade":"")+
     " &nbsp;·&nbsp; "+pillFaixa(l.fx)+"</div>"+
