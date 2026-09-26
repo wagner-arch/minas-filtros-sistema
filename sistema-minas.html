@@ -580,17 +580,24 @@
      colunas** e as linhas ficam alinhadas. O nome inteiro continua disponível: no computador
      passando o mouse (title) e no celular tocando no nome, que abre e fecha. */
   .tw>table.t-itens{table-layout:fixed;width:100%;min-width:0}
-  /* Novo Pedido: Item · Qtd · Valor base · Cobrado · Faixa · Fator · (remover) */
-  .tw>table.t-itens>thead>tr>th:nth-child(1){width:38%}
-  .tw>table.t-itens>thead>tr>th:nth-child(2){width:6%}
-  .tw>table.t-itens>thead>tr>th:nth-child(3){width:14%}
-  .tw>table.t-itens>thead>tr>th:nth-child(4){width:15%}
-  .tw>table.t-itens>thead>tr>th:nth-child(5){width:15%}
-  .tw>table.t-itens>thead>tr>th:nth-child(6){width:7%}
-  .tw>table.t-itens>thead>tr>th:nth-child(7){width:5%}
+  /* Novo Pedido: Item · Qtd · Valor final · Total · Faixa · Fator · (remover) */
+  .tw>table.t-itens>thead>tr>th:nth-child(1){width:23%}
+  .tw>table.t-itens>thead>tr>th:nth-child(2){width:10%}
+  .tw>table.t-itens>thead>tr>th:nth-child(3){width:18%}
+  .tw>table.t-itens>thead>tr>th:nth-child(4){width:14%}
+  .tw>table.t-itens>thead>tr>th:nth-child(5){width:13%}
+  .tw>table.t-itens>thead>tr>th:nth-child(6){width:8%}
+  .tw>table.t-itens>thead>tr>th:nth-child(7){width:14%}
   /* a pill da faixa ("Abaixo da tabela cheia") nao cabia em uma linha e vazava POR CIMA da coluna
      Fator (relato dele, 25/09, com print): dentro destas tabelas ela quebra e a celula corta */
   .tw>table.t-itens>tbody>tr>td{overflow:hidden}
+  /* quantidade e valor editáveis direto na lista — pedido, orçamento e OS (regra dele, 25/09) */
+  .tw table input.v-qtd,.tw table input.v-unit{width:100%;min-width:0;text-align:right}
+  .tw table input.v-qtd,.tw table input.v-unit{padding:7px 8px;font-size:14px}
+  .tw table input.v-qtd{max-width:74px;text-align:center;-moz-appearance:textfield}
+  .tw table input.v-qtd::-webkit-outer-spin-button,
+  .tw table input.v-qtd::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .tw table input.v-unit{max-width:140px}
   .tw>table.t-itens>tbody>tr>td .pill{white-space:normal}
   /* Ficha do pedido: Produto · Qtd · Valor unit. · Subtotal · (remover) */
   .tw>table.t-itens.t-ped>thead>tr>th:nth-child(1){width:42%}
@@ -1785,12 +1792,14 @@ img{max-width:100%}
             </div>
             <div class="grid g4">
               <div class="fld"><label for="v_qtd">Qtd</label><input id="v_qtd" type="number" step="1" min="1" value="" placeholder="Qtd" inputmode="numeric"></div>
-              <div class="fld"><label for="v_valor">Valor unitário</label><input id="v_valor" type="text" inputmode="decimal" step="10"><div id="v_precoNota"></div></div>
+              <div class="fld"><label for="v_valor">Valor unitário</label><input id="v_valor" type="text" inputmode="decimal" step="10"></div>
               <div class="fld"><label for="v_serie">Número de série</label><input id="v_serie" placeholder="—"></div>
               <div class="fld" id="v_localWrap" hidden><label for="v_local">Localização do produto <span class="req">*</span></label>
                 <input id="v_local" placeholder="Cozinha, refeitório, área externa…" autocomplete="off">
                 <div class="help">Onde o aparelho vai ficar <b>no cliente</b>. Sem número de série, é o que diferencia um aparelho do outro na manutenção periódica.</div></div>
             </div>
+            <!-- a nota do preço ocupa a largura toda: dentro do campo ela virava uma coluna de texto (25/09) -->
+            <div id="v_precoNota"></div>
             <div class="fld" id="v_equipWrap" hidden style="margin-top:14px">
               <label for="v_equip">Esta venda é manutenção de qual aparelho? <span class="req">*</span></label>
               <select id="v_equip"></select>
@@ -1801,7 +1810,7 @@ img{max-width:100%}
             </div>
             <div id="v_planoCli"></div>
             <div class="tw" style="margin-top:20px"><table class="t-itens">
-              <thead><tr><th>Item</th><th class="num">Qtd</th><th class="num">Valor base</th><th class="num">Cobrado</th><th>Faixa</th><th class="num">Fator</th><th></th></tr></thead>
+              <thead><tr><th>Item</th><th class="num">Qtd</th><th class="num">Valor final</th><th class="num">Total</th><th>Faixa</th><th class="num">Fator</th><th></th></tr></thead>
               <tbody id="v_itens"></tbody>
             </table></div>
             <!-- COMPOSIÇÃO DA VENDA (regra dele, 22/09): o valor comercial, antes de qualquer juro -->
@@ -7921,16 +7930,46 @@ function notaPrecoForma(p){
     return;
   }
   if(!p||!(+p.cheia>0)){el.innerHTML="";return;}
-  /* v206: aqui é o valor COMERCIAL. O acréscimo do parcelamento entra na etapa do pagamento.
-     v224: o preço que o cliente ouve é o da forma de referência (24× Rendimentos) e vem primeiro. */
-  var ref=textoPrecoReferencia(+p.cheia||0);
-  el.innerHTML=
-    (ref?'<div class="note ok" style="margin-top:8px"><b>Preço para o cliente:</b> '+ref+
-      ". Para saber o valor à vista, escolha a forma à vista na etapa do pagamento.</div>":"")+
-    '<div class="note" style="margin-top:8px"><b>Tabela cheia '+BRL(+p.cheia||0)+"</b>"+
+  /* v224: no campo Valor unitário fica o VALOR FINAL da forma escolhida — o pedido nasce em 24×
+     na forma de referência, então é esse o valor que aparece; trocando para a forma à vista, cai
+     para a tabela. A base da comissão continua a tabela cheia (`baseDoFinal` faz a volta). */
+  var cj=formasComJuros()[0],n=cj?Math.max(1,+cj.parc||1):1,r=formaReferencia();
+  var fim=precoPelaForma(+p.cheia||0,qtdDoForm(),tabelaTotalVenda(true));
+  var pc=parcelaDe(fim*Math.max(1,qtdDoForm()),n);
+  el.innerHTML='<div class="note ok" style="margin-top:8px"><b>'+BRL(fim)+"</b> — "+
+    (cj?("é o que o cliente paga em <b>"+esc(cj.tipo)+" "+n+"×</b>, "+n+"× de "+BRL(pc.parc)+
+         (Math.abs(pc.primeira-pc.parc)>0.004?" (a 1ª de "+BRL(pc.primeira)+")":""))
+       :"é o que o cliente paga <b>à vista</b>")+
+    ". <b>Para o valor à vista</b>, troque a forma na etapa <b>5 · Pagamento</b>."+
+    ((r&&r.forma.coefEstimado&&cj&&cj.tipo===r.nome)?' <b style="color:var(--bad)">O coeficiente de '+
+      r.parc+"× é estimado</b> — confira a tabela da operadora em Configurações › Formas de Pagamento.":"")+
+    "</div>"+
+    '<div class="note" style="margin-top:8px">Tabela cheia <b>'+BRL(+p.cheia||0)+"</b>"+
     ((+p.campanha>0)?" · tabela 70% "+BRL(+p.campanha||0):"")+
-    ". É este o valor comercial que fica no campo — pode negociar; abaixo da tabela, a venda vai "+
-    "para autorização do Administrador. O acréscimo do parcelamento é calculado na forma de pagamento.</div>";
+    " — é ela que forma a comissão. Pode negociar o valor acima; abaixo da tabela, a venda vai "+
+    "para autorização do Administrador.</div>";
+}
+/* volta do valor final para o valor comercial — o contrário de `precoPelaForma`.
+   final = base × (k + (1−k)·acréscimo), onde k é a fatia da entrada sem juros, então
+   base = final ÷ (k + (1−k)·acréscimo). É assim que o valor negociado na tela vira a base
+   da comissão sem que ninguém precise fazer a conta à mão. */
+function baseDoFinal(finalUnit,qtd,T){
+  var q=Math.max(1,+qtd||1),F=(+finalUnit||0)*q;
+  if(!(F>0))return 0;
+  var comJuros=formasComJuros();
+  if(!comJuros.length)return Math.round((+finalUnit||0)*100)/100;
+  var tot=(+T>0)?+T:F,k=tot>0?(Math.min(entradaSemJuros(),tot)/tot):0;
+  var f=k+(1-k)*acrescimoForma(comJuros[0]);
+  if(!(f>0))return Math.round((+finalUnit||0)*100)/100;
+  /* arredonda ao centavo MAIS PRÓXIMO: para cima, o valor digitado voltava dois centavos maior
+     na tela (R$ 2.500,00 virava R$ 2.500,02). A tolerância de um centavo da `faixa` cobre o resto. */
+  return Math.round(((F/f)/q)*100)/100;
+}
+/* o valor que está no campo, convertido para o comercial. Se o vendedor não mexeu no campo, a
+   base é a tabela cheia exata — sem o centavo de ida e volta do arredondamento. */
+function baseDoCampoValor(p,qtd){
+  if(precoAutoItem(p))return +p.cheia||0;
+  return baseDoFinal(numMF($("v_valor").value)||0,qtd,tabelaTotalVenda(true));
 }
 /* forma ou parcelamento mudou: refaz o preço do item que está sendo montado.
    `soProduto` evita o vaivém com `notaGarantia`, que também chama esta função: produto e plano
@@ -7942,7 +7981,7 @@ function atualizarPrecoItemNovo(soProduto){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if(!p)return;
   if(vv.__manual)  {notaPrecoForma(p);return;}   /* valor digitado à mão fica como está */
-  vv.value=brMF(+p.cheia||0);
+  vv.value=brMF(precoPelaForma(+p.cheia||0,qtdDoForm(),tabelaTotalVenda(true)));
   notaPrecoForma(p);
   if(!soProduto){try{notaGarantia();}catch(e){}}   /* o plano segue o mesmo preço da forma (20/09) */
   try{calcular();}catch(e){}
@@ -7950,14 +7989,14 @@ function atualizarPrecoItemNovo(soProduto){
 function sincronizarValor(){
   var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
   if($("v_valor"))$("v_valor").__manual=false;
-  if(p){$("v_valor").value=brMF(+p.cheia||0);notaPrecoForma(p);
+  if(p){$("v_valor").value=brMF(precoPelaForma(+p.cheia||0,qtdDoForm(),tabelaTotalVenda(true)));notaPrecoForma(p);
     /* número de série só para os grupos marcados em Configurações › Planos de Garantia › Número de série */
     var sg=temSerieGrupo(p);
     $("v_serie").disabled=!sg;
     if(!sg)$("v_serie").value="";
     $("v_serie").placeholder=!sg?"não se aplica ao grupo "+(p.grupo||"sem grupo"):(p.serie==="sim"?"obrigatório":"leia o código ou digite");}
   else{$("v_valor").value="";$("v_serie").value="";$("v_serie").disabled=true;$("v_serie").placeholder="escolha o produto";
-    try{$("v_precoNota").innerHTML="";}catch(e){}}
+    try{$("v_precoNota").innerHTML="";mostrarValorFinal(null);}catch(e){}}
   ajustarEquipItem();
   opcoesGarantia();
   notaGarantia();
@@ -8145,14 +8184,14 @@ function addItem(){
     msgPlano=qc+"× "+p.nome+" pelo plano "+cobV.cobre.e.plano+", sem custo.";
     if(qtd>qc){
       itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd-qc,
-        valorBase:numMF($("v_valor").value)||0,valorTabela:+p.cheia||0,valor:numMF($("v_valor").value)||0,
+        valorBase:baseDoCampoValor(p,qtd-qc),valorTabela:+p.cheia||0,valor:numMF($("v_valor").value)||0,
         precoAuto:precoAutoItem(p),
         serie:serie,equipId:equipId,local:local,pontos:+p.pontos||0,garantia:gar,vinculo:uid()});
       msgPlano+=" O plano não cobrirá as outras "+(qtd-qc)+": os direitos do plano para essa peça se esgotaram — cobradas pelo valor normal.";
     }
   }else{
     itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd,
-      valorBase:numMF($("v_valor").value)||0,valorTabela:+p.cheia||0,valor:numMF($("v_valor").value)||0,
+      valorBase:baseDoCampoValor(p,qtd),valorTabela:+p.cheia||0,valor:numMF($("v_valor").value)||0,
       precoAuto:precoAutoItem(p),
       serie:serie,equipId:equipId,local:local,pontos:+p.pontos||0,garantia:gar,vinculo:vinculo});
     if(cobV&&cobV.esgotado)msgPlano="O plano "+cobV.esgotado.e.plano+" não cobrirá "+p.nome+
@@ -8895,15 +8934,20 @@ function calcular(){
         (i.serie?" · série "+esc(i.serie):"")+(i.local?" · "+esc(i.local):"")+
         (i.planoCobre?' · <span class="pill p-ok">coberto pelo plano '+esc(i.planoCobre.garantia)+"</span>":"")+
         (i.retirada?' · <span class="pill p-warn">'+i.retirada.qtd+" com retirada do "+esc(i.retirada.geral?"estoque geral":"estoque da loja "+i.retirada.lojaNome)+"</span>":"")+"</div></td>"+
-      '<td class="num">'+(i.qtd||1)+"</td>"+
-      /* valor BASE, livre para negociar; o cobrado ao lado é o que a forma de pagamento faz dele (v206) */
+      /* v224: quantidade editável na lista — "mesmo depois que o produto foi incluído o usuário
+         consegue alterar o valor e a quantidade" (regra dele, 25/09) */
+      '<td class="num">'+(cobPl?(i.qtd||1)
+        : '<input class="v-qtd" type="number" min="1" step="1" data-vq="'+idx+'" value="'+(i.qtd||1)+
+          '" aria-label="Quantidade de '+esc(i.nome)+'">')+"</td>"+
+      /* v224: o campo mostra o VALOR FINAL por unidade, o que o cliente paga na forma escolhida —
+         ele acompanha a troca de forma. A tabela cheia que forma a comissão fica na linha de baixo. */
       '<td class="num">'+(cobPl
         ? BRL(0)
-        : '<input class="v-unit" type="text" inputmode="decimal" data-vu="'+idx+'" value="'+brMF(valorBaseItem(i))+
-          '" aria-label="Valor base de '+esc(i.nome)+'">'+
-          ((i.qtd||1)>1?'<div class="t-sub">base '+BRL(depI)+"</div>":""))+"</td>"+
+        : '<input class="v-unit" type="text" inputmode="decimal" data-vu="'+idx+'" value="'+brMF(+i.valor||0)+
+          '" aria-label="Valor final de '+esc(i.nome)+'">'+
+          '<div class="t-sub">tabela '+BRL(valorBaseItem(i))+"</div>")+"</td>"+
       '<td class="num">'+(cobPl?BRL(0):BRL(centavos((+i.valor||0)*(i.qtd||1))))+
-        ((+i.valor||0)>valorBaseItem(i)?'<div class="t-sub">'+BRL(+i.valor||0)+" cada</div>":"")+"</td>"+
+        ((i.qtd||1)>1?'<div class="t-sub">base '+BRL(depI)+"</div>":"")+"</td>"+
       '<td><span class="pill '+fx.cls+'">'+fx.n+'</span></td><td class="num">'+(fx.f*100).toFixed(0)+"%</td>"+
       '<td class="num"><button class="btn mut sm" type="button" data-rm="'+idx+'">Remover</button></td>';
     tb.appendChild(tr);
@@ -8914,10 +8958,28 @@ function calcular(){
       var it=itens[+inp.getAttribute("data-vu")];if(!it)return;
       var v=numMF(inp.value);
       if(v<0)v=0;
-      it.valorBase=v;
+      /* v224: o campo é o valor FINAL — volta para o comercial, que é a base da comissão */
+      it.valorBase=baseDoFinal(v,it.qtd||1,tabelaTotalVenda(false));
+      it.valor=v;
       /* valor digitado à mão: o item para de acompanhar o preço da forma de pagamento */
       it.precoAuto=false;
       /* com uma forma só, o valor dela volta a acompanhar o total */
+      if(formas.length===1)formas[0].__auto=true;
+      calcular();
+    };
+    inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};
+  });
+  /* alterar a QUANTIDADE de um item já incluído (regra dele, 25/09). O valor final por unidade
+     fica como está; total, depreciado, faixa e comissão são refeitos pelo `calcular()` de sempre. */
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-vq]"),function(inp){
+    inp.onchange=function(){
+      var it=itens[+inp.getAttribute("data-vq")];if(!it)return;
+      var q=Math.max(1,parseInt(inp.value,10)||1);
+      it.qtd=q;
+      /* a linha do plano amarrada a este produto acompanha a quantidade */
+      if(it.vinculo)itens.forEach(function(x){if(x.planoDe===it.vinculo)x.qtd=q;});
+      /* a retirada de estoque não pode pedir mais do que o item tem */
+      if(it.retirada&&it.retirada.qtd>q)it.retirada.qtd=q;
       if(formas.length===1)formas[0].__auto=true;
       calcular();
     };
@@ -18961,7 +19023,13 @@ function renderItensDiagOS(){
     '<th class="num">Unitário</th><th class="num">Total</th><th></th></tr></thead><tbody>'+
     l.map(function(i,ix){
       return "<tr><td>"+esc(i.nome)+(i.orcamentoOS?' <span class="pill p-ok">cobrado na abertura</span>':"")+
-        '</td><td class="num">'+(i.qtd||1)+'</td><td class="num">'+BRL(i.valor)+
+        /* v224: quantidade e valor editáveis depois de incluídos, como no pedido (regra dele, 25/09) */
+        '</td><td class="num">'+((podeMexer&&!i.orcamentoOS)
+          ? '<input class="v-qtd" type="number" min="1" step="1" data-osdq="'+ix+'" value="'+(i.qtd||1)+'" aria-label="Quantidade">'
+          : (i.qtd||1))+
+        '</td><td class="num">'+((podeMexer&&!i.orcamentoOS)
+          ? '<input class="v-unit" type="text" inputmode="decimal" data-osdv="'+ix+'" value="'+brMF(+i.valor||0)+'" aria-label="Valor unitário">'
+          : BRL(i.valor))+
         '</td><td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
         "<td>"+((podeMexer&&!i.orcamentoOS)?'<button class="btn mut sm" type="button" data-osdrm="'+ix+'">Remover</button>':"")+"</td></tr>";
     }).join("")+
@@ -18973,6 +19041,19 @@ function renderItensDiagOS(){
       o.itensOS.splice(ix,1);o.total=totalOS(o);
       await grava("ordens",o);renderItensDiagOS();try{renderPedOS();}catch(e){}
     };});
+  /* alterar quantidade e valor do item já lançado (regra dele, 25/09) */
+  function mexerItemOS(inp,attr,aplicar){
+    inp.onchange=async function(){
+      var it=o.itensOS[+inp.getAttribute(attr)];if(!it)return;
+      aplicar(it,inp);o.total=totalOS(o);
+      await grava("ordens",o);renderItensDiagOS();try{renderPedOS();calcOS();}catch(e){}
+    };
+    inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};
+  }
+  Array.prototype.forEach.call(w.querySelectorAll("[data-osdq]"),function(inp){
+    mexerItemOS(inp,"data-osdq",function(it,el){it.qtd=Math.max(1,parseInt(el.value,10)||1);});});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-osdv]"),function(inp){
+    mexerItemOS(inp,"data-osdv",function(it,el){var v=numMF(el.value);it.valor=(v<0?0:v);});});
 }
 async function addItemDiagOS(){
   var o=editandoOS;if(!o){toast("Abra a OS antes de lançar as peças.");return;}
@@ -20860,12 +20941,24 @@ function calcOS(){
   if(!osPecas.length)b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhuma peça</div></div></td></tr>';
   osPecas.forEach(function(i,idx){
     b.innerHTML+="<tr><td>"+esc(i.nome)+(i.planoCobre?' <span class="pill p-ok">coberto pelo plano '+esc(i.planoCobre.garantia)+"</span>":"")+
-      '</td><td class="num">'+(i.qtd||1)+"</td>"+
-      '<td class="num">'+BRL(i.valor)+'</td><td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
+      /* v224: quantidade e valor editáveis depois de incluídos (regra dele, 25/09) */
+      '</td><td class="num">'+(i.planoCobre?(i.qtd||1)
+        : '<input class="v-qtd" type="number" min="1" step="1" data-ospq="'+idx+'" value="'+(i.qtd||1)+'" aria-label="Quantidade">')+"</td>"+
+      '<td class="num">'+(i.planoCobre?BRL(i.valor)
+        : '<input class="v-unit" type="text" inputmode="decimal" data-ospv="'+idx+'" value="'+brMF(+i.valor||0)+'" aria-label="Valor unitário">')+
+      '</td><td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
       '<td class="num"><button class="btn mut sm" type="button" data-osrm="'+idx+'">Remover</button></td></tr>';
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-osrm]"),function(bt){
     bt.onclick=function(){osPecas.splice(+bt.getAttribute("data-osrm"),1);calcOS();};});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-ospq]"),function(inp){
+    inp.onchange=function(){var it=osPecas[+inp.getAttribute("data-ospq")];if(!it)return;
+      it.qtd=Math.max(1,parseInt(inp.value,10)||1);calcOS();};
+    inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-ospv]"),function(inp){
+    inp.onchange=function(){var it=osPecas[+inp.getAttribute("data-ospv")];if(!it)return;
+      var v=numMF(inp.value);it.valor=(v<0?0:v);calcOS();};
+    inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};});
   var o={pecas:osPecas,mao:numMF($("os_mao").value)||0,
     taxa:numMF($("os_taxa").value)||0,desconto:numMF($("os_desc").value)||0};
   $("os_total").value=BRL(totalOS(o));
@@ -21573,7 +21666,11 @@ function calcOrc(){
     base+=depI*fx.f;pontos+=(+i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;
     tb.innerHTML+='<tr><td><div class="t-main"><button class="lixo" type="button" data-orm="'+idx+'" title="Remover este item">&#128465;</button>'+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+
         "</code> · cheia "+BRL(+p.cheia||0)+"</div></td>"+
-      '<td class="num">'+(i.qtd||1)+'</td><td class="num">'+BRL(i.valor)+"</td>"+
+      /* v224: quantidade e valor editáveis depois de incluído, como no pedido (regra dele, 25/09) */
+      '<td class="num"><input class="v-qtd" type="number" min="1" step="1" data-orq="'+idx+
+        '" value="'+(i.qtd||1)+'" aria-label="Quantidade de '+esc(i.nome)+'"></td>'+
+      '<td class="num"><input class="v-unit" type="text" inputmode="decimal" data-orv="'+idx+
+        '" value="'+brMF(+i.valor||0)+'" aria-label="Valor de '+esc(i.nome)+'"></td>'+
       '<td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
       '<td class="num">'+BRL(depI)+'<div class="t-sub">'+BRL(unit)+"/un</div></td>"+
       '<td><span class="pill '+fx.cls+'">'+fx.n+"</span></td>"+
@@ -21582,6 +21679,17 @@ function calcOrc(){
   });
   Array.prototype.forEach.call(tb.querySelectorAll("[data-orm]"),function(b){
     b.onclick=function(){orcItens.splice(+b.getAttribute("data-orm"),1);calcOrc();};});
+  /* alterar quantidade e valor do item já incluído (regra dele, 25/09) */
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-orq]"),function(inp){
+    inp.onchange=function(){var it=orcItens[+inp.getAttribute("data-orq")];if(!it)return;
+      it.qtd=Math.max(1,parseInt(inp.value,10)||1);calcOrc();};
+    inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};});
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-orv]"),function(inp){
+    inp.onchange=function(){var it=orcItens[+inp.getAttribute("data-orv")];if(!it)return;
+      var v=numMF(inp.value);it.valor=(v<0?0:v);
+      /* valor digitado à mão: este item para de acompanhar a forma de pagamento */
+      it.precoAuto=false;calcOrc();};
+    inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};});
   $("or_condNota").innerHTML=n>1
     ? n+"× de <b>"+BRL(parcela)+"</b> · parcela ÷ coeficiente "+coef.toFixed(4).replace(".",",")+
       " = <b>"+BRL(dep)+"</b> líquido · a operadora fica com "+BRL(desc)
