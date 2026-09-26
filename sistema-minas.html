@@ -2543,23 +2543,24 @@ img{max-width:100%}
 
         <div class="sect">
           <p class="sect-t">Cliente</p>
-          <div class="grid g3">
+          <!-- CPF/CNPJ ao lado do nome e o Vendedor fora do cadastro: economiza uma linha
+               inteira nesta seção (regra dele, 25/09) -->
+          <div class="grid g4">
             <div class="fld" style="position:relative">
               <label for="or_nome">Nome <span class="req">*</span></label>
               <input id="or_nome" autocomplete="off" placeholder="Comece a digitar…">
               <div class="auto" id="or_sug" hidden></div>
             </div>
+            <div class="fld"><label for="or_doc">CPF / CNPJ</label><input id="or_doc"></div>
             <div class="fld"><label for="or_tel">Telefone</label><input id="or_tel"></div>
             <div class="fld"><label for="or_email">E-mail</label><input id="or_email"></div>
           </div>
           <div class="grid g2" style="margin-top:16px">
             <div class="fld"><label for="or_cidade">Endereço completo</label><input id="or_cidade" placeholder="Rua, nº, bairro, cidade/UF, CEP"></div>
-            <div class="fld"><label for="or_doc">CPF / CNPJ</label><input id="or_doc"></div>
-          </div>
-          <div class="grid g2" style="margin-top:16px">
-            <div class="fld"><label for="or_vend">Vendedor</label><select id="or_vend"></select></div>
             <div class="fld"><label for="or_validade">Validade da proposta</label><input id="or_validade" type="date"></div>
           </div>
+          <!-- o vendedor do orçamento continua gravado (é quem o fez), só saiu da tela -->
+          <div class="fld" id="or_vendWrap" style="display:none"><label for="or_vend">Vendedor</label><select id="or_vend"></select></div>
           <div id="or_achou"></div>
         </div>
 
@@ -2606,9 +2607,12 @@ img{max-width:100%}
           <button class="btn" type="button" id="orcSalvar">Salvar orçamento</button>
           <button class="btn ghost" type="button" id="orcImprimir">Ver proposta</button>
           <button class="btn ghost" type="button" id="orcEnviar">Enviar proposta</button>
+          <!-- excluir orçamento: o vendedor só no mesmo dia; depois, só o Administrador (25/09) -->
+          <button class="btn mut" type="button" id="orcExcluir" hidden>Excluir orçamento</button>
           <span class="sp"></span>
           <button class="btn" type="button" id="orcEfetivar">Efetivar a venda</button>
         </div>
+        <div id="or_exclNota"></div>
       </div>
 
       <div class="card" id="orcProposta" hidden>
@@ -21649,7 +21653,12 @@ function abrirOrc(o){
   var v=o||{};
   $("or_nome").value=v.cliente||"";$("or_tel").value=v.tel||"";$("or_email").value=v.email||"";
   $("or_cidade").value=v.cidade||"";$("or_doc").value=v.doc||"";$("or_obs").value=v.obs||"";
-  $("or_vend").value=v.vendedor||usuarioAtual;
+  /* o campo saiu da tela (25/09): o vendedor do orçamento é quem o fez. Se o nome não estiver
+     na EQUIPE, entra como opção própria — senão o orçamento nasceria sem vendedor. */
+  var qVend=v.vendedor||usuarioAtual;
+  $("or_vend").value=qVend;
+  if($("or_vend").value!==qVend&&qVend){
+    var opV=document.createElement("option");opV.textContent=qVend;sv.appendChild(opV);$("or_vend").value=qVend;}
   if(v.validade)$("or_validade").value=v.validade;
   else{var d=new Date();d.setDate(d.getDate()+15);$("or_validade").value=iso(d);}
   /* orçamento novo nasce na forma de referência: o valor do item já sai no final de 24× (25/09) */
@@ -21662,6 +21671,7 @@ function abrirOrc(o){
   if($("or_descEsp"))$("or_descEsp").value=(+v.descontoEspecial>0)?brMF(+v.descontoEspecial):"";
   $("or_achou").innerHTML="";$("or_sug").hidden=true;$("or_alerta").innerHTML="";
   orcParcelas();sincOrcValor();calcOrc();
+  renderExcluirOrc();
 }
 var orcParcRef=0;   /* parcelas que a forma de referência pede, no orçamento recém-aberto */
 function orcParcelas(){
@@ -21776,6 +21786,44 @@ function calcOrc(){
       : "");
   return {total:total,parcela:parcela,n:n,coef:coef,dep:dep,base:base,pontos:pontos,abaixo:abaixo};
 }
+/* ---------- excluir orçamento (regra dele, 25/09) ----------
+   "o vendedor só deve conseguir excluir no mesmo dia; depois fica bloqueado, somente o
+   administrador para excluir o mesmo". O dia que vale é o da DATA do orçamento (`o.data`),
+   que é o dia em que ele foi criado. Orçamento já convertido em venda ninguém apaga: o
+   pedido nasceu dele e ficaria sem origem. */
+function podeExcluirOrc(o){
+  if(!o)return {pode:false,motivo:""};
+  if(o.situacao==="convertido")
+    return {pode:false,motivo:"Este orçamento virou venda — não dá para excluir. Cancele o pedido, se for o caso."};
+  if(ehAdministrador())return {pode:true,motivo:"Como Administrador, você pode excluir a qualquer momento."};
+  var meu=(o.vendedor===usuarioAtual)||ehGestor();
+  if(!meu)return {pode:false,motivo:"Este orçamento é de "+esc(o.vendedor||"outro vendedor")+"."};
+  if(o.data===hojeISO())return {pode:true,motivo:"Feito hoje — dá para excluir até o fim do dia."};
+  return {pode:false,motivo:"Feito em "+dataBR(o.data)+". Passado o dia, só o Administrador exclui."};
+}
+function renderExcluirOrc(){
+  var bt=$("orcExcluir"),nota=$("or_exclNota");if(!bt)return;
+  if(!editandoOrc){bt.hidden=true;if(nota)nota.innerHTML="";return;}
+  var r=podeExcluirOrc(editandoOrc);
+  bt.hidden=!r.pode;
+  if(nota)nota.innerHTML=r.motivo?'<div class="note" style="margin-top:12px">'+r.motivo+"</div>":"";
+}
+async function excluirOrcamento(){
+  var o=editandoOrc;if(!o)return;
+  /* confere de novo na hora de apagar: ninguém exclui forçando o botão pela tela */
+  var r=podeExcluirOrc(o);
+  if(!r.pode){toast(r.motivo||"Não dá para excluir este orçamento.");renderExcluirOrc();return;}
+  if(!confirm("Excluir o orçamento "+o.numero+" de "+(o.cliente||"—")+" ("+BRL(o.total||0)+")?\n\nIsso não pode ser desfeito."))return;
+  var ix=orcamentos.indexOf(o);
+  if(ix>=0)orcamentos.splice(ix,1);
+  await apaga("orcamentos",o.id);
+  /* o funil acompanha: o negócio volta ao que os outros registros disserem */
+  try{if(o.clienteId)atualizarFunilCliente(o.clienteId,"orçamento excluído");}catch(e){}
+  editandoOrc=null;
+  $("orcForm").hidden=true;$("orcLista").hidden=false;$("orcProposta").hidden=true;
+  toast("Orçamento "+o.numero+" excluído.");
+  render();
+}
 function buscarClienteOrc(){
   var box=$("or_sug"),achados=achaCliente($("or_nome").value);
   if(!achados.length){box.hidden=true;return;}
@@ -21805,7 +21853,7 @@ async function salvarOrc(){
     data:iso(new Date())};
   o.cliente=nome;o.clienteId=orcCli?orcCli.id:"";
   o.tel=$("or_tel").value.trim();o.email=$("or_email").value.trim();o.cidade=$("or_cidade").value.trim();o.doc=$("or_doc").value.trim();
-  o.vendedor=$("or_vend").value;o.validade=$("or_validade").value;o.obs=$("or_obs").value.trim();
+  o.vendedor=$("or_vend").value||usuarioAtual;o.validade=$("or_validade").value;o.obs=$("or_obs").value.trim();
   o.forma=$("or_forma").value;o.parc=+$("or_parc").value||1;
   o.itens=orcItens.slice();o.total=r.total;
   /* Desconto Especial gravado no orçamento (25/09) */
@@ -21822,6 +21870,8 @@ async function salvarOrc(){
   try{await consumirAutorizacao(o.clienteId,"orçamento "+o.numero);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: cartão vai para Orçamento enviado, com o valor */
   try{await atualizarFunilCliente(o.clienteId,"orçamento");}catch(eF){console.warn("funil",eF);}
+  /* salvo: o botão de excluir já vale para este orçamento (25/09) */
+  try{renderExcluirOrc();}catch(eX){}
   return o;
 }
 var MES_EXT=["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
@@ -27582,6 +27632,7 @@ function ligar(){
   $("or_valor").oninput=function(){$("or_valor").__manual=true;};
   $("or_forma").onchange=orcParcelas;
   $("or_descEsp").oninput=calcOrc;
+  $("orcExcluir").onclick=excluirOrcamento;
   $("or_parc").onchange=function(){reprecificarOrc();calcOrc();};
   $("or_vend").onchange=calcOrc;
   $("or_add").onclick=function(){
