@@ -19259,7 +19259,7 @@ function renderItensDiagOS(){
 }
 async function addItemDiagOS(){
   var o=editandoOS;if(!o){toast("Abra a OS antes de lançar as peças.");return;}
-  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") ou a gestão lança as peças.");return;}
+  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") lança as peças.");return;}
   if(o.pedidoId){toast("O pedido "+(o.numeroPedido||"")+" da OS já foi lançado: altere as peças pelo pedido.");return;}
   var pid=$("os_dprod").value,p=produtos.filter(function(x){return x.id===pid;})[0];
   var qtd=parseInt($("os_dqtd").value,10)||0,val=numMF($("os_dvalor").value);
@@ -19282,9 +19282,11 @@ function renderCampoOS(){
   var o=editandoOS,sec=$("os_secCampo");if(!sec)return;
   var externo=!!(o&&o.local==="externo");
   var fim=!!(o&&["concluida","entregue","cancelada"].indexOf(o.status)>=0);
-  var simples=externo&&!fim&&!osCompletaAberta;
-  sec.hidden=!(externo&&!fim);
-  if(externo&&!fim){
+  /* a tela de campo é do técnico designado: quem não é ele vê a OS completa, em leitura (v243) */
+  var souTec=podeTecnicoOS(o);
+  var simples=externo&&!fim&&!osCompletaAberta&&souTec;
+  sec.hidden=!(externo&&!fim&&souTec);
+  if(externo&&!fim&&souTec){
     $("oc_problema").value=o.laudo||"";
     $("oc_obs").value=o.infoTec||"";
     var comigo=o.equipNaLoja?" <b>O equipamento está com "+esc(o.equipNaLojaPor||"o técnico")+"</b> desde "+esc(dataCurta(o.equipNaLojaEm||""))+".":"";
@@ -19387,7 +19389,7 @@ async function criarContatoAtendenteOS(o,fase){
 /* serviço executado pelo técnico depois da autorização: abre o contato para o cliente buscar o produto */
 async function atividadeRealizadaOS(){
   var o=editandoOS;if(!o)return;
-  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") ou a gestão marca a atividade como realizada.");return;}
+  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") marca a atividade como realizada.");return;}
   if(!o.diagnosticoEm){toast("Salve o diagnóstico técnico antes.");return;}
   var at=ativTecDaOS(o);
   var foiServico=!!(o.autorizadoEm&&at&&at.status!=="finalizado");
@@ -21557,7 +21559,10 @@ async function movEquipCliente(o,quem,entra){
     centroId:"",osId:o.id,data:hojeISO(),por:usuarioAtual,em:new Date().toISOString()};
   movEst.push(m);await grava("movest",m);return m;
 }
-function podeTecnicoOS(o){return !!o&&(ehGestor()||!o.tecnico||o.tecnico===usuarioAtual);}
+/* regra do Wagner (29/09): quem fala o diagnóstico é o TÉCNICO designado na OS — o Administrador
+   não escreve no lugar dele. Sem técnico escolhido ainda, quem está com a OS preenche; para trocar
+   de mão, a gestão troca o técnico responsável no campo da OS. */
+function podeTecnicoOS(o){return !!o&&(!o.tecnico||o.tecnico===usuarioAtual);}
 function ajustarEtapasOS(){
   var o=editandoOS,tec=podeTecnicoOS(o);
   var lojaE=!!(o&&(o.local==="loja"||o.local==="externo")),extE=!!(o&&o.local==="externo");
@@ -21573,7 +21578,7 @@ function ajustarEtapasOS(){
     if(el.id==="os_total"||el.id==="osVerOrc")return;
     el.disabled=!tec;});
   $("os_diagNota").innerHTML=!o?"":(!tec
-    ? '<div class="note warn"><b>Só o técnico responsável ('+esc(o.tecnico||"—")+") ou a gestão lança o diagnóstico.</b></div>"
+    ? '<div class="note warn"><b>Quem lança o diagnóstico é o técnico '+esc(o.tecnico||"—")+".</b> Esta parte da OS é dele: o que ele escrever aparece aqui e no contato com o cliente.</div>"
     : (diag?'<div class="note ok"><b>Diagnóstico lançado</b> em '+esc(dataCurta(o.diagnosticoEm))+" por "+esc(o.diagnosticoPor||"")+". Pode atualizar e salvar de novo.</div>"
       :'<div class="note">A OS está aberta. Informe o problema encontrado e o que o reparo vai precisar; depois de salvar, abre a etapa de valores.</div>'));
   $("os_valNota").innerHTML=!diag?"":(orc
@@ -21587,7 +21592,7 @@ function ajustarEtapasOS(){
 }
 async function salvarDiagnosticoOS(){
   var o=editandoOS;if(!o)return;
-  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") ou a gestão lança o diagnóstico.");return;}
+  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") lança o diagnóstico.");return;}
   if(!$("os_laudo").value.trim()||!$("os_reparo").value.trim()){
     $("os_alerta").innerHTML='<div class="note crit"><b>Informe o problema encontrado e o que será necessário para o reparo.</b></div>';
     try{$("os_laudo").focus();}catch(e){}return;}
@@ -21624,7 +21629,7 @@ async function salvarDiagnosticoOS(){
 }
 async function gerarOrcamentoOS(){
   var o=editandoOS;if(!o)return;
-  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") ou a gestão gera o orçamento.");return;}
+  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") gera o orçamento.");return;}
   if(!o.diagnosticoEm){toast("Faça o diagnóstico técnico antes do orçamento.");return;}
   var mao=numMF($("os_mao").value)||0,outros=numMF($("os_taxa").value)||0;
   if(!osPecas.length&&mao<=0&&outros<=0){
