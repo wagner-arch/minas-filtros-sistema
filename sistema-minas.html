@@ -3771,6 +3771,7 @@ img{max-width:100%}
           <button class="btn ghost" type="button" id="usApagar" hidden>Apagar colaborador</button>
           <button class="btn mut" type="button" id="usCancelar">Voltar</button>
         </div>
+        <div id="u_alerta"></div>
         <div class="sect">
           <p class="sect-t">Foto facial</p>
           <div class="grid g4">
@@ -3936,7 +3937,6 @@ img{max-width:100%}
           <div id="u_acAlerta"></div>
           <p class="help">O colaborador entra no sistema com este e-mail e esta senha. Salve o colaborador antes, para o nome e a função irem junto. Depois, cada um pode trocar a própria senha em <b>Trocar minha senha</b>, na lista de usuários.</p>
         </div>
-        <div id="u_alerta"></div>
         <div class="actions">
           <button class="btn" type="button" id="usSalvar">Salvar colaborador</button>
         </div>
@@ -11718,9 +11718,16 @@ function ajustarBotoesUsuario(){
   if(!pode)return;
   bd.textContent=(u.ativo===false?"Reativar colaborador":"Desativar colaborador");
 }
+/* o aviso da ficha mora logo abaixo dos botões e a tela sobe até ele — antes ele era escrito
+   no rodapé do formulário, muitas telas abaixo, e quem clicava em Apagar achava que nada acontecia */
+function avisoUsuario(html){
+  var al=$("u_alerta");if(!al)return;
+  al.innerHTML=html||"";
+  if(html)try{al.scrollIntoView({block:"center",behavior:"smooth"});}catch(e){try{al.scrollIntoView();}catch(e2){}}
+}
 async function desativarColaborador(){
   var u=editandoUs;if(!u||!u.nome)return;
-  var al=$("u_alerta"),ligar=(u.ativo===false);
+  var ligar=(u.ativo===false);
   if(!confirm((ligar?"Reativar ":"Desativar ")+u.nome+"?\n\n"+
     (ligar?"Ele volta para as listas de responsável e volta a entrar no sistema."
          :"Ele sai do menu de responsáveis e das listas, e não consegue mais entrar no sistema. O histórico dele continua inteiro.")))return;
@@ -11738,30 +11745,41 @@ async function desativarColaborador(){
         " <br>Enquanto isso, ele ainda consegue entrar com o e-mail e a senha dele.</div>";
     }
   }
-  al.innerHTML=aviso||'<div class="note ok"><b>'+esc(u.nome)+(ligar?" reativado.":" desativado.")+"</b> "+
-    (ligar?"Ele volta às listas e ao login.":"Ele saiu das listas de responsável e não entra mais no sistema.")+"</div>";
+  avisoUsuario(aviso||'<div class="note ok"><b>'+esc(u.nome)+(ligar?" reativado.":" desativado.")+"</b> "+
+    (ligar?"Ele volta às listas e ao login.":"Ele saiu das listas de responsável e não entra mais no sistema.")+"</div>");
   ajustarBotoesUsuario();renderUsuarios();render();
   toast(u.nome+(ligar?" reativado.":" desativado."));
 }
 async function apagarColaborador(){
   var u=editandoUs;if(!u||!u.nome)return;
-  var al=$("u_alerta"),uso=usoDoColaborador(u.nome);
+  var uso=usoDoColaborador(u.nome);
   if(uso.length){
-    al.innerHTML='<div class="note crit"><b>'+esc(u.nome)+" não pode ser apagado: já tem "+esc(uso.join(", "))+
+    avisoUsuario('<div class="note crit"><b>'+esc(u.nome)+" não pode ser apagado: já tem "+esc(uso.join(", "))+
       " no sistema.</b> Apagar o cadastro deixaria essas vendas, comissões e batidas de ponto sem dono. "+
-      "Use <b>Desativar colaborador</b> — ele sai das listas e do login, e o histórico continua inteiro.</div>";
+      "Use <b>Desativar colaborador</b> — ele sai das listas e do login, e o histórico continua inteiro.</div>");
     return;
   }
   if(modoBanco()&&u.temLogin&&u.ativo!==false){
-    al.innerHTML='<div class="note crit"><b>'+esc(u.nome)+" tem login no banco.</b> Clique antes em "+
-      "<b>Desativar colaborador</b> — apagar só o cadastro daqui não tira o acesso dele, e ele continuaria entrando.</div>";
+    avisoUsuario('<div class="note crit"><b>'+esc(u.nome)+" tem login no banco.</b> Clique antes em "+
+      "<b>Desativar colaborador</b> — apagar só o cadastro daqui não tira o acesso dele, e ele continuaria entrando.</div>");
     return;
   }
   if(!confirm("Apagar o cadastro de "+u.nome+"?\n\nEle não tem nenhum registro no sistema. Isto não tem volta."))return;
   var ix=USUARIOS.indexOf(u);
   if(ix>=0)USUARIOS.splice(ix,1);
+  /* a gravação normal engole erro do banco: aqui não pode, senão o cadastro some da tela
+     e volta no próximo carregamento. Recusando, o colaborador é devolvido à lista com o motivo */
+  if(db){
+    try{await db.doc("config/usuarios").set({lista:USUARIOS});}
+    catch(e){
+      if(ix>=0)USUARIOS.splice(ix,0,u);
+      avisoUsuario('<div class="note crit"><b>O banco não aceitou apagar '+esc(u.nome)+":</b> "+
+        esc((e&&e.message)||String(e))+" <br>O cadastro continua como estava.</div>");
+      renderUsuarios();return;
+    }
+  }
   if(metas[u.nome]){delete metas[u.nome];try{await gravarMetas();}catch(e){}}
-  await gravarUsuarios();sincronizarEquipe();
+  sincronizarEquipe();
   editandoUs=null;$("usForm").hidden=true;$("usLista").hidden=false;
   renderUsuarios();render();
   toast("Cadastro de "+u.nome+" apagado.");
