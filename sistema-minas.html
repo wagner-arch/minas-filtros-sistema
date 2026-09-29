@@ -7951,6 +7951,8 @@ window.__htmlDocVendaMF=function(p){return htmlDocVenda(p);};
 window.__pedAbertoMF=function(){return pedAberto;};
 window.__pedidosMF=function(){return pedidos;};
 window.__ativsMF=function(){return atendimentos.filter(function(a){return a.natureza==="atividade";});};
+window.__tecnicosOSMF=function(){return tecnicosOS();};
+window.__equipeMF=function(){return EQUIPE.slice();};
 window.__renderAtivsMF=function(){try{renderAtividades();}catch(e){console.warn(e);}};
 window.__caixaDaFormaMF=function(n){var c=caixaDaForma(n);return c?(c.nome+" ("+(c.banco||"sem banco")+")"):"(sem caixa)";};
 window.__refMF=function(){var r=formaReferencia();return r?{nome:r.nome,parc:r.parc}:null;};
@@ -21027,7 +21029,7 @@ function abrirOS(o,ctx){
   var ss=$("os_status");ss.innerHTML="";
   OS_STATUS.forEach(function(t){var x=document.createElement("option");x.value=t.k;x.textContent=t.n;ss.appendChild(x);});
   var stc=$("os_tecnico");stc.innerHTML='<option value="">— a definir —</option>';
-  EQUIPE.forEach(function(n){var x=document.createElement("option");x.textContent=n;stc.appendChild(x);});
+  tecnicosOS(o&&o.tecnico).forEach(function(n){var x=document.createElement("option");x.textContent=n;stc.appendChild(x);});
   var sf=$("os_pagto");sf.innerHTML="";
   var v0=document.createElement("option");v0.value="";v0.textContent="—";sf.appendChild(v0);
   porNomeAZ(formasPgto).forEach(function(f){var x=document.createElement("option");x.textContent=f.nome;sf.appendChild(x);});
@@ -21418,17 +21420,25 @@ function renderAtivTecOS(){
   Array.prototype.forEach.call($("os_local").querySelectorAll("button"),function(b){b.disabled=!!a||fechada;});
   if(!a){
     var sr=$("ot_resp");
-    sr.innerHTML='<option value="">— escolha o técnico —</option>'+EQUIPE.map(function(n){return "<option>"+esc(n)+"</option>";}).join("");
+    sr.innerHTML='<option value="">— escolha o técnico —</option>'+tecnicosOS(o&&o.tecnico).map(function(n){return "<option>"+esc(n)+"</option>";}).join("");
     sr.value=tecnicoSugeridoOS(o);
     var d=new Date();d.setDate(d.getDate()+1);
     $("ot_data").value=iso(d);$("ot_hora").value="09:00";$("ot_obs").value="";
   }
-  $("os_ativTec").innerHTML=a
+  /* quem não enxerga a tela de OS não entra na lista de técnico (v245): diz quantos ficaram de fora e por onde liberar */
+  var fora=a?[]:EQUIPE.filter(function(n){return !veTela("os",n);});
+  var notaFora=fora.length?'<div class="note"><b>Fora da lista de técnico:</b> '+esc(fora.join(" · "))+
+    ". "+(fora.length===1?"Ele não tem":"Eles não têm")+" a aba <b>Ordens de Serviço</b> e não conseguiria"+(fora.length===1?"":"m")+
+    " abrir a OS para lançar o diagnóstico."+
+    (ehAdministrador()?' <button class="btn ghost sm" type="button" id="osPermOS">Abrir Permissões</button>':
+      " Peça ao Administrador para liberar em Configurações › Permissões.")+"</div>":"";
+  $("os_ativTec").innerHTML=(a
     ? '<div class="note ok"><b>Atividade do técnico:</b> '+esc(a.colaborador||"—")+" · "+esc(dataCurta(a.data))+(a.inicio?" às "+esc(a.inicio):"")+
         " · "+(a.status==="finalizado"?"concluída":"a realizar")+"</div>"
     : (o
       ? '<div class="note warn"><b>OS '+o.numero+' aberta.</b> Escolha onde o técnico vai atender, o técnico, a data e a hora e clique em <b>Criar atividade para o técnico</b> — a atividade vai para a agenda dele.</div>'
-      : '<div class="note">Escolha onde o técnico vai atender, o técnico, a data e a hora e clique em <b>Criar atividade para o técnico</b> — a OS é gravada junto e a atividade vai para a agenda dele.</div>');
+      : '<div class="note">Escolha onde o técnico vai atender, o técnico, a data e a hora e clique em <b>Criar atividade para o técnico</b> — a OS é gravada junto e a atividade vai para a agenda dele.</div>'))+notaFora;
+  if($("osPermOS"))$("osPermOS").onclick=function(){ir("permissoes");};
   $("osCriarAtiv").textContent=a?"Criar outra atividade para o técnico":"Criar atividade para o técnico";
   $("osCriarAtiv").hidden=fechada;
 }
@@ -21519,12 +21529,23 @@ async function criarOSDaAcao(a,c){
 /* técnico que já vem escolhido na OS (regra do Wagner, 18/09: "tem que ser automático, o mesmo
    que foi designado no atendimento"): o da OS › o da atividade/atendimento que abriu a OS ›
    quem está operando, se for da equipe. */
+/* regra do Wagner (29/09): "o usuário escolhido não tem aba de OS; se não tem a aba, por que
+   aparece para cadastrar como técnico responsável?" — só entra na lista quem enxerga a tela
+   Ordens de Serviço. Designar quem não tem a aba deixaria a OS parada, porque desde a v243 é
+   o técnico designado quem lança o diagnóstico, e ele não conseguiria nem abrir a OS.
+   `manter` é o técnico já gravado: ele não some da lista mesmo que a permissão mude depois. */
+function tecnicosOS(manter){
+  var l=EQUIPE.filter(function(n){return veTela("os",n);});
+  if(manter&&l.indexOf(manter)<0)l.push(manter);
+  return l.sort(ordAZ);
+}
 function tecnicoSugeridoOS(o){
   if(o&&o.tecnico)return o.tecnico;
+  var l=tecnicosOS();
   var a=osOrigemAtiv;
   if(!a&&o&&o.origemAtiv)a=atendimentos.filter(function(x){return x.id===o.origemAtiv;})[0];
-  if(a&&a.colaborador&&EQUIPE.indexOf(a.colaborador)>=0)return a.colaborador;
-  if(EQUIPE.indexOf(usuarioAtual)>=0)return usuarioAtual;
+  if(a&&a.colaborador&&l.indexOf(a.colaborador)>=0)return a.colaborador;
+  if(l.indexOf(usuarioAtual)>=0)return usuarioAtual;
   return "";
 }
 /* ================= ATENDIMENTO DO TÉCNICO EM CAMPO (v151, 18/09) =================
@@ -25717,8 +25738,9 @@ var SEED_FUNCOES=[
   {nome:"Vendedor",desc:"Vende, atende e cuida do próprio estoque",telas:TELAS_OPERACAO.slice(),acoes:[]},
   {nome:"Prospector",desc:"Prospecta e agenda",
     telas:["dash","agenda","ponto","metasop","ativ","atend","leads","clientes","produtos"],acoes:[]},
-  {nome:"Instalador",desc:"Instala e faz manutenção",
-    telas:["dash","agenda","ponto","metasop","ativ","atend","pedidos","leads","clientes","produtos","manut","estColab"],acoes:[]},
+  {nome:"Instalador",desc:"Instala, faz manutenção e atende as OS",
+    /* a aba "os" entrou aqui em 29/09: quem atende a OS precisa abri-la para lançar o diagnóstico (v245) */
+    telas:["dash","agenda","ponto","metasop","ativ","atend","pedidos","leads","clientes","produtos","manut","estColab","os"],acoes:[]},
   {nome:"Estoquista",desc:"Almoxarifado: confere nota e move estoque",
     telas:["dash","agenda","ponto","leads","clientes","produtos","estEmpresa","estColab","estConsumo","notas","fornec"],
     acoes:["entradaNF","moverEstoque","verCustos"]}
