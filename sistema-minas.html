@@ -580,14 +580,16 @@
      colunas** e as linhas ficam alinhadas. O nome inteiro continua disponível: no computador
      passando o mouse (title) e no celular tocando no nome, que abre e fecha. */
   .tw>table.t-itens{table-layout:fixed;width:100%;min-width:0}
-  /* Novo Pedido: Item · Qtd · Valor final · Total · Faixa · Fator · (remover) */
-  .tw>table.t-itens>thead>tr>th:nth-child(1){width:23%}
-  .tw>table.t-itens>thead>tr>th:nth-child(2){width:10%}
-  .tw>table.t-itens>thead>tr>th:nth-child(3){width:18%}
-  .tw>table.t-itens>thead>tr>th:nth-child(4){width:14%}
-  .tw>table.t-itens>thead>tr>th:nth-child(5){width:13%}
-  .tw>table.t-itens>thead>tr>th:nth-child(6){width:8%}
-  .tw>table.t-itens>thead>tr>th:nth-child(7){width:14%}
+  /* Novo Pedido: Item · Qtd · Valor final · Total · Faixa · Fator
+     v249: a coluna do botão "Remover" saiu — ela levava 14% da largura para repetir o que a
+     lixeira do começo da linha já faz, e o nome do produto ficava com 65 px, ilegível (relato
+     dele, 30/09, com print: "quase não dá para ver o nome do item") */
+  .tw>table.t-itens>thead>tr>th:nth-child(1){width:44%}
+  .tw>table.t-itens>thead>tr>th:nth-child(2){width:9%}
+  .tw>table.t-itens>thead>tr>th:nth-child(3){width:17%}
+  .tw>table.t-itens>thead>tr>th:nth-child(4){width:13%}
+  .tw>table.t-itens>thead>tr>th:nth-child(5){width:10%}
+  .tw>table.t-itens>thead>tr>th:nth-child(6){width:7%}
   /* a pill da faixa ("Abaixo da tabela cheia") nao cabia em uma linha e vazava POR CIMA da coluna
      Fator (relato dele, 25/09, com print): dentro destas tabelas ela quebra e a celula corta */
   .tw>table.t-itens>tbody>tr>td{overflow:hidden}
@@ -1790,6 +1792,9 @@ img{max-width:100%}
           <button class="btn" type="button" id="prodSalvar">Salvar produto</button>
           <button class="btn mut" type="button" id="prodCancelar">Cancelar</button>
         </div>
+        <!-- o motivo de o Salvar ser recusado fica AQUI, junto do botão, e a tela rola até ele
+             (mesma correção da v242: aviso escrito longe do botão parece "o clique não fez nada") -->
+        <div id="p_alerta"></div>
       </div>
     </section>
 
@@ -1857,7 +1862,7 @@ img{max-width:100%}
             </div>
             <div id="v_planoCli"></div>
             <div class="tw" style="margin-top:20px"><table class="t-itens">
-              <thead><tr><th>Item</th><th class="num">Qtd</th><th class="num">Valor final</th><th class="num">Total</th><th>Faixa</th><th class="num">Fator</th><th></th></tr></thead>
+              <thead><tr><th>Item</th><th class="num">Qtd</th><th class="num">Valor final</th><th class="num">Total</th><th>Faixa</th><th class="num">Fator</th></tr></thead>
               <tbody id="v_itens"></tbody>
             </table></div>
             <!-- COMPOSIÇÃO DA VENDA (regra dele, 22/09): o valor comercial, antes de qualquer juro -->
@@ -7058,7 +7063,10 @@ function renderProdutos(){
         esc(p.nome)+(inativo?' <span class="pill p-mut">inativo</span>':"")+
         /* importado sem preço: some da venda até o cadastro ser completado (v143) */
         (!inativo&&produtoIncompleto(p)?' <span class="pill p-crit">completar cadastro</span>':"")+
-        '</div><div class="t-sub"><code>'+esc(p.cod)+"</code> · "+esc(p.marca||"—")+"</div></td>"+
+        /* produto composto (v249): a pill diz na lista que o cadastro pegou, sem abrir a ficha */
+        (composicaoDe(p).length?' <span class="pill p-acc" title="Vem junto: '+esc(textoComposicao(p))+'">vem com '+composicaoDe(p).length+"</span>":"")+
+        '</div><div class="t-sub"><code>'+esc(p.cod)+"</code> · "+esc(p.marca||"—")+
+        (composicaoDe(p).length?" · vem junto: "+esc(textoComposicao(p)):"")+"</div></td>"+
       '<td><div class="t-main">'+esc(p.grupo||"—")+'</div><div class="t-sub">'+esc(p.subgrupo||"sem subgrupo")+"</div></td>"+
       '<td class="num"><span class="pill '+estCls+'">'+est+"</span></td>"+
       '<td class="num">'+(p.custo?BRL(p.custo):"—")+'</td><td class="num">'+(p.frete?BRL(p.frete):"—")+"</td>"+
@@ -7088,7 +7096,7 @@ function abrirProduto(p){
   $("p_local").value=(locs[lojaAtual]||"");
   /* produto composto (v248) */
   prodComposto=JSON.parse(JSON.stringify(v.composto||[]));
-  opcoesComposicao();renderComposicaoProd();
+  opcoesComposicao();renderComposicaoProd();avisoProduto("");
   notaCampanha();notaEstoque();notaCusto();
 }
 /* ---------- produto composto (v248, regra dele: "um produto composto é formado por um produto principal
@@ -7097,7 +7105,18 @@ function abrirProduto(p){
    A composição mora no produto principal (`p.composto=[{pid,qtd}]`) e é SUGESTÃO: os vinculados entram
    como itens normais da venda, cada um com a sua linha, e saem com o Remover de sempre. ---------- */
 var prodComposto=[];
+/* aviso da ficha do produto: escrito junto do botão e com a tela rolando até ele (v249) */
+function avisoProduto(html){
+  var al=$("p_alerta");if(!al)return;
+  al.innerHTML=html?'<div class="note crit" style="margin-top:10px">'+html+"</div>":"";
+  if(html)try{al.scrollIntoView({block:"center",behavior:"smooth"});}catch(e){try{al.scrollIntoView();}catch(e2){}}
+}
 function produtoPor(id){return produtos.filter(function(x){return x.id===id;})[0]||null;}
+/* texto curto da composição, usado na lista de Produtos e na tela de venda (v249) */
+function textoComposicao(p){
+  var c=composicaoDe(p);
+  return c.length?c.map(function(j){return j.qtd+"× "+j.prod.nome;}).join(" e "):"";
+}
 function composicaoDe(p){
   return ((p&&p.composto)||[]).map(function(x){
     var f=produtoPor(x.pid);
@@ -8105,7 +8124,12 @@ function notaPrecoForma(p){
     (cj?(" <b>Nesta forma, para cair na tabela cheia o cliente precisa pagar "+
       BRL(cobradoPara(+p.cheia||0))+"</b>"+
       ((+p.campanha>0)?" · na de 70%, "+BRL(cobradoPara(+p.campanha||0)):"")+"."):"")+
-    "</div>";
+    "</div>"+
+    /* produto composto (v249): o vendedor vê o que vem junto ANTES de incluir — e, se não
+       aparecer nada aqui, é porque a composição não está no cadastro do produto */
+    (composicaoDe(p).length?'<div class="note ok" style="margin-top:8px"><b>Vem junto: '+
+      esc(textoComposicao(p))+"</b> — ao incluir, eles entram na lista com o principal. "+
+      "É sugestão: dá para remover o que o cliente não quiser.</div>":"");
 }
 /* volta do valor final para o valor comercial — o contrário de `precoPelaForma`.
    final = base × (k + (1−k)·acréscimo), onde k é a fatia da entrada sem juros, então
@@ -9156,7 +9180,7 @@ function calcular(){
   /* a tabela é redesenhada a cada conta: se o cursor está num valor de item, ele volta para lá */
   var focoVU=(document.activeElement&&document.activeElement.getAttribute&&document.activeElement.getAttribute("data-vu"));
   tb.innerHTML="";
-  if(!itens.length)tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="big">Nenhum item</div>Escolha um produto acima e clique em Adicionar.</div></td></tr>';
+  if(!itens.length)tb.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum item</div>Escolha um produto acima e clique em Adicionar.</div></td></tr>';
   itens.forEach(function(i,idx){
     var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
     var cobPl=!!i.planoCobre;
@@ -9192,8 +9216,9 @@ function calcular(){
           '<div class="t-sub">tabela '+BRL(valorBaseItem(i))+"</div>")+"</td>"+
       '<td class="num">'+(cobPl?BRL(0):BRL(centavos((+i.valor||0)*(i.qtd||1))))+
         ((i.qtd||1)>1?'<div class="t-sub">base '+BRL(depI)+"</div>":"")+"</td>"+
-      '<td><span class="pill '+fx.cls+'">'+fx.n+'</span></td><td class="num">'+(fx.f*100).toFixed(0)+"%</td>"+
-      '<td class="num"><button class="btn mut sm" type="button" data-rm="'+idx+'">Remover</button></td>';
+      /* a coluna do botão "Remover" saiu na v249: a lixeira no começo da linha faz o mesmo e
+         o espaço voltou para o nome do produto */
+      '<td><span class="pill '+fx.cls+'">'+fx.n+'</span></td><td class="num">'+(fx.f*100).toFixed(0)+"%</td>";
     tb.appendChild(tr);
   });
   /* alterar o valor de um item já incluído */
@@ -28331,14 +28356,20 @@ function ligar(){
     try{$("p_compProd").dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}
     renderComposicaoProd();};
   $("prodSalvar").onclick=async function(){
+    avisoProduto("");
     var cod=$("p_cod").value.trim(),nome=$("p_nome").value.trim();
-    if(!cod||!nome){toast("Código e nome são obrigatórios.");return;}
+    if(!cod||!nome){avisoProduto("<b>Código e nome são obrigatórios.</b> O produto não foi salvo.");return;}
     var dup=produtos.filter(function(p){return p.cod===cod&&(!editandoProd||p.id!==editandoProd.id);})[0];
-    if(dup){toast("Já existe produto com o código "+cod+". O Código MF é único.");return;}
+    if(dup){avisoProduto("<b>Já existe produto com o código "+esc(cod)+".</b> O Código MF é único — o produto não foi salvo.");return;}
     var p=editandoProd||{id:uid()};
     var grupo=$("p_grupo").value.trim(),subgrupo=$("p_subgrupo").value.trim();
     if(!grupo||!subgrupo){
-      toast("Todo produto precisa de Grupo e Subgrupo.");
+      /* recusa que mais pega quem edita produto IMPORTADO: ele vem sem subgrupo, e a ficha
+         ficava aberta sem dizer por quê — inclusive perdendo a composição recém-montada */
+      avisoProduto("<b>Todo produto precisa de Grupo e Subgrupo.</b> Falta "+
+        (grupo?"o <b>Subgrupo</b>":(subgrupo?"o <b>Grupo</b>":"os dois"))+
+        " — preencha lá em cima e clique em Salvar produto de novo."+
+        (prodComposto.length?" O que você montou em <b>Produtos que vão junto</b> continua na tela e será salvo junto.":""));
       try{(grupo?$("p_subgrupo"):$("p_grupo")).focus();}catch(e){}
       return;}
     p.cod=cod;p.nome=nome;p.pop=$("p_pop").value.trim();p.marca=$("p_marca").value.trim();p.grupo=grupo;p.subgrupo=subgrupo;
@@ -28363,15 +28394,26 @@ function ligar(){
     var qv=$("p_estoque").value, mv=$("p_estmin").value;
     p.estmin[lojaAtual]=(mv===""?0:parseFloat(mv)||0);
     p.local[lojaAtual]=$("p_local").value.trim();
-    if(!editandoProd)produtos.push(p);
-    if(db){try{await col("produtos").doc(p.id).set(p);}catch(e){console.warn(e);}}
+    var eraNovo=!editandoProd;
+    if(eraNovo)produtos.push(p);
+    /* a gravação NÃO engole mais o erro: banco recusando, o cadastro (e a composição) não se
+       perdem em silêncio — a ficha continua aberta com o motivo escrito (v249) */
+    if(db){try{await col("produtos").doc(p.id).set(p);}catch(e){
+      if(eraNovo)produtos=produtos.filter(function(x){return x!==p;});
+      avisoProduto("<b>O banco não aceitou salvar "+esc(nome)+": "+esc(String(e&&e.message||e))+"</b><br>"+
+        "O cadastro continua aqui na tela — corrija e salve de novo. Nada foi gravado.");
+      return;}}
     /* mudar a quantidade no cadastro é ajuste de inventário: vira movimento com a diferença */
     if(qv!==""){
       var difEst=(parseInt(qv,10)||0)-estEmpresaDe(p);
       if(difEst)await lancarMov(p.id,Math.abs(difEst),difEst>0?"ajuste":LOC_EMPRESA,difEst>0?LOC_EMPRESA:"ajuste",
         "Ajuste de inventário","Quantidade alterada no cadastro do produto",hojeISO(),"");
     }
-    editandoProd=null;$("prodForm").hidden=true;$("prodLista").hidden=false;toast("Produto salvo.");opcoesProduto();render();
+    /* o toast confirma a composição: é a prova de que o cadastro pegou (v249) */
+    var txComp=textoComposicao(p);
+    editandoProd=null;$("prodForm").hidden=true;$("prodLista").hidden=false;
+    toast("Produto salvo."+(txComp?" "+nome+" vem com "+txComp+" — eles entram junto no pedido, no orçamento e na OS.":""));
+    opcoesProduto();render();
   };
   $("v_prod").onchange=sincronizarValor;$("v_add").onclick=addItem;
   $("v_equip").onchange=function(){ajustarLocalItem();try{notaPlanoVenda();}catch(e){}};
