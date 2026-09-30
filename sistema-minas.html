@@ -1761,6 +1761,21 @@ img{max-width:100%}
           </div>
         </div>
 
+        <!-- produto composto (v248): o principal puxa os vinculados para o pedido -->
+        <div class="sect">
+          <p class="sect-t">Produtos que vão junto</p>
+          <p class="help">O que estiver aqui entra no pedido, no orçamento e na OS <b>junto com este produto</b>, toda vez
+            que ele for incluído. É sugestão: o vendedor vê os itens na lista e pode remover os que o cliente não quiser.</p>
+          <div class="grid g4" style="margin-bottom:10px">
+            <div class="fld"><label for="p_compProd">Produto que vem junto</label><select id="p_compProd"></select></div>
+            <div class="fld"><label for="p_compQtd">Quantidade</label>
+              <input id="p_compQtd" type="number" min="1" step="1" value="1"></div>
+            <div class="fld"><label>&nbsp;</label>
+              <button class="btn ghost" type="button" id="p_compAdd">Incluir na composição</button></div>
+          </div>
+          <div id="p_compLista"></div>
+        </div>
+
         <div class="sect">
           <p class="sect-t">Estoque <span id="p_estLoja" style="text-transform:none;letter-spacing:0;font-weight:400"></span></p>
           <div class="grid g4">
@@ -7071,7 +7086,48 @@ function abrirProduto(p){
   $("p_estoque").value=(v.id?estEmpresaDe(v):"");
   $("p_estmin").value=(mins[lojaAtual]!=null?mins[lojaAtual]:"");
   $("p_local").value=(locs[lojaAtual]||"");
+  /* produto composto (v248) */
+  prodComposto=JSON.parse(JSON.stringify(v.composto||[]));
+  opcoesComposicao();renderComposicaoProd();
   notaCampanha();notaEstoque();notaCusto();
+}
+/* ---------- produto composto (v248, regra dele: "um produto composto é formado por um produto principal
+   e um ou mais produtos vinculados a ele… sempre que o vendedor adicionar o Refil X, os produtos Y e Z
+   serão adicionados automaticamente junto… mas o vendedor continuará tendo a opção de removê-los").
+   A composição mora no produto principal (`p.composto=[{pid,qtd}]`) e é SUGESTÃO: os vinculados entram
+   como itens normais da venda, cada um com a sua linha, e saem com o Remover de sempre. ---------- */
+var prodComposto=[];
+function produtoPor(id){return produtos.filter(function(x){return x.id===id;})[0]||null;}
+function composicaoDe(p){
+  return ((p&&p.composto)||[]).map(function(x){
+    var f=produtoPor(x.pid);
+    return f?{pid:x.pid,qtd:Math.max(1,parseInt(x.qtd,10)||1),prod:f}:null;
+  }).filter(Boolean);
+}
+function renderComposicaoProd(){
+  var w=$("p_compLista");if(!w)return;
+  if(!prodComposto.length){
+    w.innerHTML='<p class="help">Nenhum produto vinculado. Este produto entra sozinho no pedido.</p>';return;}
+  w.innerHTML='<div class="tw"><table class="t-itens"><thead><tr><th>Produto que vem junto</th>'+
+    '<th class="num">Quantidade</th><th></th></tr></thead><tbody>'+
+    prodComposto.map(function(x,i){
+      var f=produtoPor(x.pid);
+      return "<tr><td>"+esc(f?f.nome:"(produto apagado)")+(f&&f.cod?'<div class="t-sub">'+esc(f.cod)+"</div>":"")+
+        '</td><td class="num">'+x.qtd+'</td><td class="num"><button class="btn mut sm" type="button" data-cprm="'+i+'">Remover</button></td></tr>';
+    }).join("")+"</tbody></table></div>"+
+    '<p class="help">A quantidade acompanha a do principal: vendendo 3 do principal, entram 3× estas quantidades.</p>';
+  Array.prototype.forEach.call(w.querySelectorAll("[data-cprm]"),function(bt){
+    bt.onclick=function(){prodComposto.splice(+bt.getAttribute("data-cprm"),1);renderComposicaoProd();};});
+}
+function opcoesComposicao(){
+  var s=$("p_compProd");if(!s)return;
+  var atual=s.value;s.innerHTML='<option value="">— escolher —</option>';
+  porNomeAZ(produtos).forEach(function(p){
+    if(editandoProd&&p.id===editandoProd.id)return;         /* o produto não entra nele mesmo */
+    if(ehPlano(p))return;                                    /* plano de garantia tem caminho próprio */
+    var o=document.createElement("option");o.value=p.id;o.textContent=p.nome;
+    o.setAttribute("data-cod",p.cod||"");s.appendChild(o);});
+  if(atual)s.value=atual;
 }
 function custoDe(p){
   /* custo de aquisição = produto + frete + impostos que não geram crédito − ICMS creditado */
@@ -8313,10 +8369,25 @@ function addItem(){
       pontos:+plano.pontos||0,garantia:"",plano:true,planoDe:vinculo});
     $("v_planoValor").value="";
   }
+  /* produto composto (v248): o que é vendido junto entra na hora, cada um na sua linha.
+     É sugestão — o vendedor remove o que o cliente não quiser, com o Remover de sempre. */
+  var juntos=composicaoDe(p),nomesJuntos=[];
+  juntos.forEach(function(j){
+    var qj=j.qtd*qtd;
+    /* o vinculado entra pelo preço DELE — o campo da tela tem o valor do principal (v248) */
+    var cheiaJ=+j.prod.cheia||0;
+    itens.push({pid:j.prod.id,nome:j.prod.nome,cod:j.prod.cod,qtd:qj,
+      valorBase:cheiaJ,valorTabela:cheiaJ,valor:precoPelaForma(cheiaJ,qj,tabelaTotalVenda(true)),
+      precoAuto:true,serie:"",equipId:"",local:"",pontos:+j.prod.pontos||0,garantia:"Bronze",
+      vinculo:uid(),vemCom:vinculo,vemComNome:p.nome});
+    nomesJuntos.push(qj+"× "+j.prod.nome);
+  });
   $("v_serie").value="";$("v_local").value="";render();
   limparInclusao("v_prod","v_qtd",["v_valor"]);
   ajustarEquipItem();
-  if(msgPlano)toast(msgPlano);
+  if(nomesJuntos.length)toast(p.nome+" vem com "+nomesJuntos.join(" e ")+
+    " — já estão na lista. Se o cliente não quiser, é só remover.");
+  else if(msgPlano)toast(msgPlano);
 }
 
 /* ---------- crédito do plano na troca de aparelho (regras do Wagner, 16/09) ----------
@@ -9104,7 +9175,9 @@ function calcular(){
         '<span class="nome-item" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+'</span></div><div class="t-sub"><code>'+esc(i.cod)+"</code> · "+garPill+
         (i.serie?" · série "+esc(i.serie):"")+(i.local?" · "+esc(i.local):"")+
         (i.planoCobre?' · <span class="pill p-ok">coberto pelo plano '+esc(i.planoCobre.garantia)+"</span>":"")+
-        (i.retirada?' · <span class="pill p-warn">'+i.retirada.qtd+" com retirada do "+esc(i.retirada.geral?"estoque geral":"estoque da loja "+i.retirada.lojaNome)+"</span>":"")+"</div></td>"+
+        (i.retirada?' · <span class="pill p-warn">'+i.retirada.qtd+" com retirada do "+esc(i.retirada.geral?"estoque geral":"estoque da loja "+i.retirada.lojaNome)+"</span>":"")+
+        /* produto composto (v248): diz de onde a linha veio, para o vendedor saber o que pode tirar */
+        (i.vemCom?' · <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+"</div></td>"+
       /* v224: quantidade editável na lista — "mesmo depois que o produto foi incluído o usuário
          consegue alterar o valor e a quantidade" (regra dele, 25/09) */
       '<td class="num">'+(cobPl?(i.qtd||1)
@@ -9149,6 +9222,15 @@ function calcular(){
       it.qtd=q;
       /* a linha do plano amarrada a este produto acompanha a quantidade */
       if(it.vinculo)itens.forEach(function(x){if(x.planoDe===it.vinculo)x.qtd=q;});
+      /* os produtos que vêm junto acompanham a quantidade do principal (v248) */
+      if(it.vinculo){
+        var comp=composicaoDe(produtoPor(it.pid));
+        itens.forEach(function(x){
+          if(x.vemCom!==it.vinculo)return;
+          var reg=comp.filter(function(j){return j.pid===x.pid;})[0];
+          x.qtd=(reg?reg.qtd:1)*q;
+        });
+      }
       /* a retirada de estoque não pode pedir mais do que o item tem */
       if(it.retirada&&it.retirada.qtd>q)it.retirada.qtd=q;
       if(formas.length===1)formas[0].__auto=true;
@@ -9164,7 +9246,8 @@ function calcular(){
     var it=itens[+b.getAttribute("data-rm")];if(!it)return;
     /* tirou o produto: o plano dele sai junto; tirou só o plano: o produto volta para Bronze */
     if(it.planoDe)itens.forEach(function(x){if(x.vinculo===it.planoDe)x.garantia="Bronze";});
-    itens=itens.filter(function(x){return x!==it&&!(it.vinculo&&x.planoDe===it.vinculo);});
+    /* tirou o principal: o que veio junto com ele sai também (v248) */
+    itens=itens.filter(function(x){return x!==it&&!(it.vinculo&&(x.planoDe===it.vinculo||x.vemCom===it.vinculo));});
     render();};});
 
   /* Desconto de troca não gera comissão (regra do Wagner, 20/09): o que o cliente pagou com o
@@ -19728,6 +19811,8 @@ function renderItensDiagOS(){
     '<th class="num">Unitário</th><th class="num">Total</th><th></th></tr></thead><tbody>'+
     l.map(function(i,ix){
       return "<tr><td>"+esc(i.nome)+(i.orcamentoOS?' <span class="pill p-ok">cobrado na abertura</span>':"")+
+        /* produto composto (v248) */
+        (i.vemCom?' <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+
         /* v224: quantidade e valor editáveis depois de incluídos, como no pedido (regra dele, 25/09) */
         '</td><td class="num">'+((podeMexer&&!i.orcamentoOS)
           ? '<input class="v-qtd" type="number" min="1" step="1" data-osdq="'+ix+'" value="'+(i.qtd||1)+'" aria-label="Quantidade">'
@@ -19748,8 +19833,10 @@ function renderItensDiagOS(){
     "</tbody></table></div>";
   Array.prototype.forEach.call(w.querySelectorAll("[data-osdrm]"),function(bt){
     bt.onclick=async function(){
-      var ix=+bt.getAttribute("data-osdrm");
-      o.itensOS.splice(ix,1);o.total=totalOS(o);
+      var ix=+bt.getAttribute("data-osdrm"),alvo=o.itensOS[ix];
+      /* tirou o principal: o que veio junto com ele sai também (v248) */
+      o.itensOS=o.itensOS.filter(function(x){return x!==alvo&&!(alvo&&alvo.id&&x.vemCom===alvo.id);});
+      o.total=totalOS(o);
       await grava("ordens",o);renderItensDiagOS();try{renderPedOS();}catch(e){}
     };});
   /* alterar quantidade e valor do item já lançado (regra dele, 25/09) */
@@ -19762,7 +19849,18 @@ function renderItensDiagOS(){
     inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};
   }
   Array.prototype.forEach.call(w.querySelectorAll("[data-osdq]"),function(inp){
-    mexerItemOS(inp,"data-osdq",function(it,el){it.qtd=Math.max(1,parseInt(el.value,10)||1);});});
+    mexerItemOS(inp,"data-osdq",function(it,el){
+      it.qtd=Math.max(1,parseInt(el.value,10)||1);
+      /* os produtos que vêm junto acompanham a quantidade do principal (v248) */
+      if(it.id){
+        var compOS=composicaoDe(produtoPor(it.pid));
+        o.itensOS.forEach(function(x){
+          if(x.vemCom!==it.id)return;
+          var reg=compOS.filter(function(j){return j.pid===x.pid;})[0];
+          x.qtd=(reg?reg.qtd:1)*it.qtd;
+        });
+      }
+    });});
   Array.prototype.forEach.call(w.querySelectorAll("[data-osdv]"),function(inp){
     mexerItemOS(inp,"data-osdv",function(it,el){var v=numMF(el.value);it.valor=(v<0?0:v);});});
   /* Desconto Especial da OS: grava no mesmo `o.desconto` do bloco de valores (25/09) */
@@ -19787,14 +19885,25 @@ async function addItemDiagOS(){
   if(qtd<=0){toast("Informe a quantidade.");try{$("os_dqtd").focus();}catch(e){}return;}
   if(!(val>0))val=+p.cheia||0;
   o.itensOS=o.itensOS||[];
-  o.itensOS.push({id:uid(),pid:p.id,cod:p.cod||"",nome:p.nome,qtd:qtd,valor:val,
+  var idPai=uid();
+  o.itensOS.push({id:idPai,pid:p.id,cod:p.cod||"",nome:p.nome,qtd:qtd,valor:val,
     garantia:"Bronze",serie:"",pontos:+p.pontos||0});
+  /* produto composto (v248): o que vem junto entra na OS também, e o técnico pode remover */
+  var jtsOS=composicaoDe(p),nomesOS=[];
+  jtsOS.forEach(function(j){
+    var qj=j.qtd*qtd;
+    o.itensOS.push({id:uid(),pid:j.prod.id,cod:j.prod.cod||"",nome:j.prod.nome,qtd:qj,
+      valor:precoReferencia(+j.prod.cheia||0),garantia:"Bronze",serie:"",pontos:+j.prod.pontos||0,
+      vemCom:idPai,vemComNome:p.nome});
+    nomesOS.push(qj+"× "+j.prod.nome);
+  });
   o.total=totalOS(o);
   await grava("ordens",o);
   $("os_dprod").value="";$("os_dqtd").value="";$("os_dvalor").value="";
   try{$("os_dprod").dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}
   renderItensDiagOS();try{renderPedOS();}catch(e){}
-  toast(qtd+"× "+p.nome+" lançado na OS · "+BRL(val*qtd)+".");
+  toast(qtd+"× "+p.nome+" lançado na OS · "+BRL(val*qtd)+"."+
+    (nomesOS.length?" Vem com "+nomesOS.join(" e ")+" — remova se não for usar.":""));
 }
 /* contato do atendente criado pelo sistema: "orcamento" logo depois do diagnóstico, "retirada" quando o serviço fica pronto */
 /* ---------- as três saídas do técnico em campo (v151) ---------- */
@@ -22441,7 +22550,8 @@ function calcOrc(){
     var depI=(partesO[idx]||0),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
     base+=depI*fx.f;pontos+=(+i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;
     tb.innerHTML+='<tr><td><div class="t-main"><button class="lixo" type="button" data-orm="'+idx+'" title="Remover este item">&#128465;</button>'+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+
-        "</code> · cheia "+BRL(+p.cheia||0)+"</div></td>"+
+        "</code> · cheia "+BRL(+p.cheia||0)+
+        (i.vemCom?' · <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+"</div></td>"+
       /* v224: quantidade e valor editáveis depois de incluído, como no pedido (regra dele, 25/09) */
       '<td class="num"><input class="v-qtd" type="number" min="1" step="1" data-orq="'+idx+
         '" value="'+(i.qtd||1)+'" aria-label="Quantidade de '+esc(i.nome)+'"></td>'+
@@ -22454,11 +22564,25 @@ function calcOrc(){
       '<td class="num"><button class="btn mut sm" type="button" data-orm="'+idx+'">Remover</button></td></tr>';
   });
   Array.prototype.forEach.call(tb.querySelectorAll("[data-orm]"),function(b){
-    b.onclick=function(){orcItens.splice(+b.getAttribute("data-orm"),1);calcOrc();};});
+    b.onclick=function(){
+      var it=orcItens[+b.getAttribute("data-orm")];
+      /* tirou o principal: o que veio junto com ele sai também (v248) */
+      orcItens=orcItens.filter(function(x){return x!==it&&!(it&&it.vinculo&&x.vemCom===it.vinculo);});
+      calcOrc();};});
   /* alterar quantidade e valor do item já incluído (regra dele, 25/09) */
   Array.prototype.forEach.call(tb.querySelectorAll("[data-orq]"),function(inp){
     inp.onchange=function(){var it=orcItens[+inp.getAttribute("data-orq")];if(!it)return;
-      it.qtd=Math.max(1,parseInt(inp.value,10)||1);calcOrc();};
+      it.qtd=Math.max(1,parseInt(inp.value,10)||1);
+      /* os produtos que vêm junto acompanham a quantidade do principal (v248) */
+      if(it.vinculo){
+        var compO=composicaoDe(produtoPor(it.pid));
+        orcItens.forEach(function(x){
+          if(x.vemCom!==it.vinculo)return;
+          var reg=compO.filter(function(j){return j.pid===x.pid;})[0];
+          x.qtd=(reg?reg.qtd:1)*it.qtd;
+        });
+      }
+      calcOrc();};
     inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};});
   Array.prototype.forEach.call(tb.querySelectorAll("[data-orv]"),function(inp){
     inp.onchange=function(){var it=orcItens[+inp.getAttribute("data-orv")];if(!it)return;
@@ -28194,6 +28318,18 @@ function ligar(){
   ["p_custo","p_frete","p_ipi","p_st","p_federais","p_icms","p_cheia","p_campanha","p_minimo"].forEach(function(id){$(id).oninput=notaCusto;});
   $("p_estoque").oninput=notaEstoque;$("p_estmin").oninput=notaEstoque;
   $("p_status").onchange=function(){notaStatus(true);};ligarImagemProduto();   /* a explicação aparece ao escolher e some sozinha (20/09) */
+  /* produto composto: monta a lista na ficha (v248) */
+  $("p_compAdd").onclick=function(){
+    var pid=$("p_compProd").value,q=Math.max(1,parseInt($("p_compQtd").value,10)||1);
+    var f=produtoPor(pid);
+    if(!f){toast("Escolha o produto que vem junto.");try{$("p_compProd").focus();}catch(e){}return;}
+    if(editandoProd&&pid===editandoProd.id){toast("Um produto não pode vir junto dele mesmo.");return;}
+    var ja=prodComposto.filter(function(x){return x.pid===pid;})[0];
+    if(ja){ja.qtd=q;toast("Quantidade de "+f.nome+" atualizada para "+q+".");}
+    else{prodComposto.push({pid:pid,qtd:q});toast(f.nome+" entra junto com este produto.");}
+    $("p_compProd").value="";$("p_compQtd").value="1";
+    try{$("p_compProd").dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}
+    renderComposicaoProd();};
   $("prodSalvar").onclick=async function(){
     var cod=$("p_cod").value.trim(),nome=$("p_nome").value.trim();
     if(!cod||!nome){toast("Código e nome são obrigatórios.");return;}
@@ -28218,6 +28354,8 @@ function ligar(){
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
     ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
+    /* produtos que vão junto (v248) */
+    if(prodComposto.length)p.composto=JSON.parse(JSON.stringify(prodComposto));else delete p.composto;
     if(prodImagem)p.imagem=prodImagem;else delete p.imagem;   /* imagem do produto (20/09) */
     /* produto importado deixa de ser "a completar" quando ganha grupo de verdade e preço (v143) */
     p.completar=(grupo===GRUPO_COMPLETAR||!(+p.cheia>0));
@@ -28478,10 +28616,21 @@ function ligar(){
     var dig=numMF($("or_valor").value)||0;
     /* entrou pelo valor sugerido? então acompanha a forma de pagamento (25/09) */
     var auto=Math.abs(dig-precoNaForma(p.cheia,$("or_forma").value,$("or_parc").value))<0.005;
+    var vinc=uid();
     orcItens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qr,
-      valor:dig,pontos:+p.pontos||0,precoAuto:auto});
+      valor:dig,pontos:+p.pontos||0,precoAuto:auto,vinculo:vinc});
+    /* produto composto (v248): o que vem junto entra aqui também, e pode ser removido */
+    var jts=composicaoDe(p),nomesJ=[];
+    jts.forEach(function(j){
+      var qj=j.qtd*qr;
+      orcItens.push({pid:j.prod.id,nome:j.prod.nome,cod:j.prod.cod,qtd:qj,
+        valor:precoNaForma(+j.prod.cheia||0,$("or_forma").value,$("or_parc").value),
+        pontos:+j.prod.pontos||0,precoAuto:true,vinculo:uid(),vemCom:vinc,vemComNome:p.nome});
+      nomesJ.push(qj+"× "+j.prod.nome);
+    });
     calcOrc();$("or_valor").__manual=false;limparInclusao("or_prod","or_qtd",["or_valor"]);
-    try{$("or_precoNota").innerHTML="";}catch(e){}};
+    try{$("or_precoNota").innerHTML="";}catch(e){}
+    if(nomesJ.length)toast(p.nome+" vem com "+nomesJ.join(" e ")+" — já estão na lista. Se o cliente não quiser, é só remover.");};
   $("orcEnviar").onclick=async function(){var o=await salvarOrc();if(o)abrirEnvio(o);};
   $("orcEfetivar").onclick=async function(){var o=await salvarOrc();if(o)virarVenda(o);};
   $("opEfetivar").onclick=function(){if(editandoOrc)virarVenda(editandoOrc);};
