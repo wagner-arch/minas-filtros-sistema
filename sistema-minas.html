@@ -3404,6 +3404,7 @@ img{max-width:100%}
           <button type="button" data-t="pagar" aria-current="false">Contas a Pagar</button>
           <button type="button" data-t="receber" aria-current="false">Contas a Receber</button>
           <button type="button" data-t="origens" aria-current="false">Origens</button>
+          <button type="button" data-t="centros" aria-current="false">Centros de Custo</button>
           <button type="button" data-t="dre" aria-current="false">DRE</button>
         </div>
       </div>
@@ -3482,6 +3483,17 @@ img{max-width:100%}
             <select id="rg_det"><option value="">Não detalhar</option><option value="cidade">Cidade</option><option value="quem">Quem cadastrou</option><option value="mes">Mês do cadastro</option><option value="tipo">Pessoa física / jurídica</option></select></div>
           <div class="fld"><label for="rg_modo">Tipo</label>
             <select id="rg_modo"><option value="sintetico">Sintético — totais por origem</option><option value="analitico">Analítico — cadastro a cadastro</option></select></div>
+        </div>
+
+        <!-- Lista de Categorias · centros de custo (v246) -->
+        <div class="grid g4 rl-f" data-rel="centros" style="margin-top:12px">
+          <div class="fld"><label for="rc_class">Classificação</label>
+            <select id="rc_class"><option value="">Crédito e Débito</option><option value="entrada">Só Crédito (entradas)</option><option value="saida">Só Débito (saídas)</option></select></div>
+          <div class="fld"><label for="rc_grupo">Grupo</label><select id="rc_grupo"></select></div>
+          <div class="fld"><label for="rc_uso">Quais categorias</label>
+            <select id="rc_uso"><option value="">Todas as cadastradas</option><option value="usadas">Só as que já têm lançamento</option><option value="sem">Só as que nunca foram usadas</option></select></div>
+          <div class="fld"><label for="rc_modo">Tipo</label>
+            <select id="rc_modo"><option value="lista">Lista de categorias</option><option value="movimento">Com o movimento do período</option></select></div>
         </div>
 
         <div class="grid g4 rl-f" data-rel="pagar receber" style="margin-top:12px">
@@ -4038,10 +4050,11 @@ img{max-width:100%}
           <datalist id="dlCcGrupos"></datalist>
           <input id="ccNome" placeholder="Subgrupo · ex.: Combustível" style="max-width:260px">
           <button class="btn" type="button" id="ccAdd">Adicionar</button>
+          <button class="btn ghost" type="button" id="ccImportar">Importar categorias</button>
           <span class="sp"></span><span class="count" id="ccCount"></span>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Grupo</th><th>Subgrupo (centro de custo)</th><th class="num">Lançamentos</th><th class="num">Movimentado</th><th></th></tr></thead>
+          <thead><tr><th>Código</th><th>Grupo</th><th>Subgrupo (centro de custo)</th><th class="num">Lançamentos</th><th class="num">Movimentado</th><th></th></tr></thead>
           <tbody id="ccBody"></tbody>
         </table></div>
       </div>
@@ -4882,6 +4895,31 @@ img{max-width:100%}
       <button class="btn mut" type="button" id="ic_apagar" hidden>Apagar os importados</button>
     </div>
     <p class="help">Colunas aceitas: <b>código, nome, tipo, CPF/CNPJ, RG/IE, nascimento, sexo, telefone, celular, e-mail, profissão, apelido, CEP, rua, número, complemento, bairro, cidade, UF, origem, referência, geolocalização e observação</b>. Quem entra por aqui já nasce <b>cliente</b> — não passa pelo Atendimento — e fica marcado como importado. Repetido (mesmo CPF/CNPJ, ou mesmo nome e telefone) é pulado.</p>
+  </div>
+</div>
+
+<!-- importar as categorias (centros de custo) do sistema antigo (v246) -->
+<div class="modal" id="impccModal" hidden>
+  <div class="box" style="width:min(760px,100%)">
+    <h3>Importar categorias</h3>
+    <div class="sub">Traz de uma vez as categorias do relatório <b>Lista de Categorias</b>. Entende as duas escritas: o
+      arquivo <b>tipo;grupo;subgrupo;código</b> e o texto do relatório antigo colado do jeito que sai
+      (<b>2.5.4 - Top Life</b>).</div>
+    <div class="actions" style="justify-content:flex-start;margin:14px 0 10px">
+      <button class="btn ghost" type="button" id="icc_arqBt">Escolher o arquivo…</button>
+      <input type="file" id="icc_arq" accept=".csv,.txt" class="os-foto-in">
+      <span class="count" id="icc_arqNome"></span>
+    </div>
+    <div class="fld"><label for="icc_texto">…ou cole as linhas aqui</label>
+      <textarea id="icc_texto" rows="6" placeholder="2 - Débito&#10;2.5 - Pagamento de Mercadorias&#10;2.5.4 - Top Life"></textarea></div>
+    <div id="icc_previa"></div>
+    <div id="icc_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="icc_ok">Importar</button>
+      <button class="btn mut" type="button" id="icc_fechar">Fechar</button>
+    </div>
+    <p class="help">Categoria que já existe (mesma classificação, grupo e subgrupo) é <b>pulada</b> — dá para importar
+      o mesmo arquivo de novo sem duplicar. Grupo sem subgrupo entra com o nome do próprio grupo.</p>
   </div>
 </div>
 
@@ -12194,13 +12232,105 @@ function renderPadroes(){
 }
 /* caminho completo da classificação: Saída › Veículos › Combustível */
 function caminhoCentro(c){return c?(((c.tipo||"saida")==="entrada"?"Entrada":"Saída")+" › "+nomeCentro(c)):"";}
+/* ---------- importar categorias do sistema antigo (v246, pedido dele com os dois PDFs
+   "Lista de Categorias" do LSoft: 1 - Crédito e 2 - Débito, com grupo e subgrupo numerados).
+   Lê as duas escritas: a linha do relatório ("2.5.4 - Top Life") e o arquivo tipo;grupo;subgrupo;código.
+   O código do relatório é guardado no centro e é ele que numera o Fechamento do Mês. ---------- */
+function lerCategoriasTexto(txt){
+  var linhas=String(txt||"").split(/\r?\n/),out=[],erros=0;
+  var tipo="",grupos={},temCabec=false;
+  linhas.forEach(function(l0){
+    var l=String(l0||"").replace(/\s+$/,"").trim();
+    if(!l)return;
+    /* arquivo com ponto e vírgula: tipo;grupo;subgrupo;código */
+    if(l.indexOf(";")>=0){
+      var p=l.split(";").map(function(x){return x.trim();});
+      if(/^tipo$/i.test(p[0])){temCabec=true;return;}
+      if(p.length<3){erros++;return;}
+      var tp=semAcento(p[0]).toLowerCase();
+      tp=(tp.indexOf("entrada")>=0||tp.indexOf("credito")>=0||p[0]==="1")?"entrada":"saida";
+      if(!p[1]||!p[2]){erros++;return;}
+      out.push({tipo:tp,grupo:p[1],nome:p[2],codigo:p[3]||""});
+      return;
+    }
+    /* linha do relatório: "2 - Débito" · "2.5 - Pagamento de Mercadorias" · "2.5.4 - Top Life" */
+    var m=l.match(/^(\d+(?:\.\d+)*)\s*[-–]\s*(.+)$/);
+    if(!m)return;                       /* cabeçalho da folha, rodapé e título são ignorados */
+    var cod=m[1],nome=m[2].trim(),n=cod.split(".");
+    if(n.length===1){tipo=(cod==="1")?"entrada":"saida";return;}
+    if(n.length===2){grupos[cod]=nome;return;}
+    if(n.length>=3){
+      var g=grupos[n[0]+"."+n[1]]||"Sem grupo";
+      if(/nenhuma subclasse/i.test(nome))nome=g;   /* grupo sem subgrupo entra com o nome do grupo */
+      out.push({tipo:tipo||"saida",grupo:g,nome:nome,codigo:cod});
+    }
+  });
+  return {itens:out,erros:erros,cabecalho:temCabec};
+}
+function previaCategorias(){
+  var r=lerCategoriasTexto(($("icc_texto")||{}).value||"");
+  var novos=[],repetidos=0,dentro={};
+  r.itens.forEach(function(x){
+    var k=x.tipo+"|"+semAcento(x.grupo).toLowerCase()+"|"+semAcento(x.nome).toLowerCase();
+    if(dentro[k]){repetidos++;return;}
+    dentro[k]=1;
+    if(centros.some(function(c){return (c.tipo||"saida")===x.tipo&&
+      semAcento(c.grupo||"").toLowerCase()===semAcento(x.grupo).toLowerCase()&&
+      semAcento(c.nome||"").toLowerCase()===semAcento(x.nome).toLowerCase();})){repetidos++;return;}
+    novos.push(x);
+  });
+  var ent=novos.filter(function(x){return x.tipo==="entrada";}).length;
+  var gr={};novos.forEach(function(x){gr[x.tipo+"|"+x.grupo]=1;});
+  var w=$("icc_previa");
+  if(!w)return novos;
+  if(!r.itens.length){
+    w.innerHTML='<div class="note">Cole as linhas do relatório ou escolha o arquivo para ver a prévia.</div>';
+    return novos;
+  }
+  w.innerHTML='<div class="note '+(novos.length?"ok":"warn")+'"><b>'+r.itens.length+" linha"+(r.itens.length===1?"":"s")+" lida"+(r.itens.length===1?"":"s")+
+    ":</b> "+novos.length+" categoria"+(novos.length===1?"":"s")+" nova"+(novos.length===1?"":"s")+
+    " em "+Object.keys(gr).length+" grupo"+(Object.keys(gr).length===1?"":"s")+
+    " ("+ent+" de entrada e "+(novos.length-ent)+" de saída)"+
+    (repetidos?" · <b>"+repetidos+"</b> já existe"+(repetidos===1?"":"m")+" e será"+(repetidos===1?"":"ão")+" pulada"+(repetidos===1?"":"s"):"")+
+    ".</div>"+
+    (novos.length?'<div class="tw" style="max-height:220px;overflow:auto"><table><thead><tr><th>Código</th><th>Classificação</th><th>Grupo</th><th>Subgrupo</th></tr></thead><tbody>'+
+      novos.slice(0,8).map(function(x){return "<tr><td>"+esc(x.codigo||"—")+"</td><td>"+(x.tipo==="entrada"?"Entrada":"Saída")+
+        "</td><td>"+esc(x.grupo)+"</td><td>"+esc(x.nome)+"</td></tr>";}).join("")+
+      (novos.length>8?'<tr><td colspan="4" class="t-sub">…e mais '+(novos.length-8)+"</td></tr>":"")+"</tbody></table></div>":"");
+  return novos;
+}
+async function importarCategorias(){
+  var novos=previaCategorias(),al=$("icc_alerta");
+  if(!novos.length){al.innerHTML='<div class="note warn"><b>Nada para importar.</b> Todas as categorias lidas já estão cadastradas.</div>';return;}
+  $("icc_ok").disabled=true;
+  var n=0;
+  for(var i=0;i<novos.length;i++){
+    var x=novos[i],c={id:uid(),grupo:x.grupo,nome:x.nome,tipo:x.tipo};
+    if(x.codigo)c.codigo=x.codigo;
+    centros.push(c);
+    try{await grava("centros",c);}
+    catch(e){
+      centros.pop();
+      al.innerHTML='<div class="note crit"><b>O banco recusou na categoria '+esc(x.grupo+" › "+x.nome)+":</b> "+
+        esc((e&&e.message)||String(e))+" <br>Entraram "+n+" antes desta.</div>";
+      $("icc_ok").disabled=false;renderCentros();opcoesFinanceiro();return;
+    }
+    n++;
+    if(n%25===0)al.innerHTML='<div class="note">Gravando '+n+" de "+novos.length+"…</div>";
+  }
+  $("icc_ok").disabled=false;
+  al.innerHTML='<div class="note ok"><b>'+n+" categoria"+(n===1?"":"s")+" importada"+(n===1?"":"s")+".</b> Elas já aparecem nos lançamentos e no relatório de Centros de Custo.</div>";
+  renderCentros();opcoesFinanceiro();
+  toast(n+" categoria"+(n===1?"":"s")+" importada"+(n===1?"":"s")+".");
+}
 function renderCentros(){
+  var cods=codigosCentros();
   var nEnt=centros.filter(function(c){return c.tipo==="entrada";}).length;
   $("ccCount").textContent=centros.length+(centros.length===1?" centro":" centros")+" · "+nEnt+" de entrada e "+(centros.length-nEnt)+" de saída";
   var dl=$("dlCcGrupos");
   if(dl)dl.innerHTML=gruposDeCentros($("ccTipo")?$("ccTipo").value:"").map(function(g){return '<option value="'+esc(g)+'">';}).join("");
   var b=$("ccBody");b.innerHTML="";
-  if(!centros.length){b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum centro de custo</div>Sem eles o fluxo de caixa não sabe classificar nada.</div></td></tr>';return;}
+  if(!centros.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum centro de custo</div>Sem eles o fluxo de caixa não sabe classificar nada.</div></td></tr>';return;}
   /* Entrada e Saída são as duas classificações; dentro de cada uma, grupo e subgrupo */
   ["entrada","saida"].forEach(function(tp){
     var doTipo=centros.map(function(c,i){return {c:c,i:i};})
@@ -12211,7 +12341,7 @@ function renderCentros(){
     var tot=doTipo.reduce(function(a,o){
       return a+titulos.filter(function(t){return t.centroId===o.c.id;}).concat(movs.filter(function(m){return m.centroId===o.c.id;}))
         .reduce(function(s,x){return s+(+x.valor||0);},0);},0);
-    b.innerHTML+='<tr class="cc-tipo"><td colspan="3"><span class="pill '+(tp==="entrada"?"p-ok":"p-warn")+'">'+
+    b.innerHTML+='<tr class="cc-tipo"><td colspan="4"><span class="pill '+(tp==="entrada"?"p-ok":"p-warn")+'">'+
       (tp==="entrada"?"Entrada":"Saída")+"</span> · "+doTipo.length+" centro"+(doTipo.length===1?"":"s")+" em "+
       gruposDeCentros(tp).length+" grupo"+(gruposDeCentros(tp).length===1?"":"s")+'</td><td class="num"><b>'+BRL(tot)+"</b></td><td></td></tr>";
     var gAnt="";
@@ -12221,7 +12351,8 @@ function renderCentros(){
         .concat(movs.filter(function(m){return m.centroId===c.id;}));
       var vt=usados.reduce(function(a,x){return a+(+x.valor||0);},0);
       var g=String(c.grupo||"—"),mostraG=(g!==gAnt);gAnt=g;
-      b.innerHTML+="<tr><td>"+(mostraG?"<b>"+esc(g)+"</b>":'<span class="t-sub">'+esc(g)+"</span>")+"</td>"+
+      b.innerHTML+="<tr><td>"+esc(cods.mapa[c.id]?cods.mapa[c.id].cod:"—")+"</td>"+
+        "<td>"+(mostraG?"<b>"+esc(g)+"</b>":'<span class="t-sub">'+esc(g)+"</span>")+"</td>"+
         "<td><b>"+esc(c.nome)+"</b></td>"+
         '<td class="num">'+usados.length+'</td><td class="num">'+BRL(vt)+"</td>"+
         '<td class="num">'+(usados.length?'<span class="pill p-mut">em uso</span>':
@@ -13888,12 +14019,13 @@ async function salvarManutVeic(){
    Cada relatório tem filtros, impressão/PDF (folha A4 própria, window.print) e planilha CSV. */
 var relAba="vendas",relUltimo=null,relLigado=false;
 var REL_TITULOS={vendas:"RELATÓRIO DE VENDAS",fechamento:"RELATÓRIO FECHAMENTO DO MÊS - EXTRATO DE CONTAS POR CENTRO DE CUSTO",
-  pagar:"RELATÓRIO DE CONTAS A PAGAR",receber:"RELATÓRIO DE CONTAS A RECEBER",origens:"RELATÓRIO DE ORIGENS"};
+  pagar:"RELATÓRIO DE CONTAS A PAGAR",receber:"RELATÓRIO DE CONTAS A RECEBER",origens:"RELATÓRIO DE ORIGENS",centros:"L I S T A&nbsp;&nbsp; D E&nbsp;&nbsp; C A T E G O R I A S"};
 var REL_AJUDA={
   vendas:"Pedidos do período, com quem vendeu, pagamento, total e valor depreciado. Agrupe por vendedor, dia, forma de pagamento, produto, cidade ou situação.",
   fechamento:"O que entrou e saiu dos caixas no período, por centro de custo — no modelo do fechamento do LSoft. Créditos (1) e débitos (2), com os totais de cada conta e o total geral.",
   pagar:"Títulos a pagar pela data de vencimento, emissão ou pagamento, com totais pagos, em aberto e vencidos.",
   receber:"Títulos a receber pela data de vencimento, emissão ou recebimento, com totais recebidos, em aberto e vencidos.",
+  centros:"As categorias de entrada e saída cadastradas, com o código, o grupo e o subgrupo — no modelo da Lista de Categorias do sistema antigo. Dá para ver só as que têm lançamento e somar o movimento do período.",
   origens:"Por onde os contatos chegaram e quanto cada origem rendeu no período: novos cadastros, quantos viraram cliente, atendimentos, vendas, total vendido e ticket médio."};
 function numRel(v){return (Number(v)||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});}
 function fimDoMes(m){var p=String(m).split("-");return m+"-"+String(new Date(+p[0],+p[1],0).getDate()).padStart(2,"0");}
@@ -13932,7 +14064,7 @@ function rodapeRel(n,rot){
   return '<div class="rel-reg">'+n+" "+esc(rot||(n===1?"registro":"registros"))+"</div>";
 }
 var REL_NOMES={vendas:"Relatório de Vendas",fechamento:"Relatório Fechamento do Mês",pagar:"Relatório de Contas a Pagar",
-  receber:"Relatório de Contas a Receber",origens:"Relatório de Origens",dre:"DRE - Demonstração do Resultado"};
+  receber:"Relatório de Contas a Receber",origens:"Relatório de Origens",centros:"Lista de Categorias",dre:"DRE - Demonstração do Resultado"};
 function textoRodapeRel(aba){return "Sistema Minas Filtros - Sistema de Gestão Comercial - "+(REL_NOMES[aba]||"Relatório");}
 /* folha: o cabeçalho fica no thead de uma tabela externa — na impressão ele se repete no alto de cada página,
    como no flu009; o rodapé da tela é o mesmo que a impressão põe no pé de cada página (com o número da página) */
@@ -13988,7 +14120,7 @@ function opcoesRelatorios(){
   encher("rf_contaDe",cxOps,null,"1");encher("rf_contaAte",cxOps,null,String(cx.length||1));
   var grupos={};centros.forEach(function(c){grupos[c.grupo||"Geral"]=1;});
   var gl=Object.keys(grupos).sort(function(a,b){return a.localeCompare(b,"pt-BR");});
-  encher("rf_grupo",gl,"Todos");encher("rt_grupo",gl,"Todos");
+  encher("rf_grupo",gl,"Todos");encher("rt_grupo",gl,"Todos");encher("rc_grupo",gl,"Todos");
   var cl=centrosOrdenados().map(function(c){return {v:c.id,t:caminhoCentro(c)};});
   encher("rf_centro",cl,"Todos");encher("rt_centro",cl,"Todos");
   encher("rf_quem",EQUIPE.slice(),"Todos");
@@ -14075,21 +14207,123 @@ function gerarRelatorio(){
   var P=periodoRel();
   if(P.de>P.ate){$("rl_alerta").innerHTML='<div class="note crit"><b>A data inicial é depois da final.</b> Corrija o período.</div>';return;}
   $("rl_alerta").innerHTML="";
-  var r=relAba==="vendas"?relVendas(P):relAba==="fechamento"?relFechamento(P):relAba==="origens"?relOrigens(P):relTitulos(relAba,P);
+  var r=relAba==="vendas"?relVendas(P):relAba==="fechamento"?relFechamento(P):relAba==="origens"?relOrigens(P):relAba==="centros"?relCentros(P):relTitulos(relAba,P);
   relUltimo=r;
   $("rlSaida").innerHTML='<div class="rel-folha" id="relFolha">'+montarFolhaRel(r,relAba)+"</div>";
 }
 
+/* ---------- Lista de Categorias · centros de custo (v246, no modelo do relatório cat.rpt do LSoft
+   que ele mandou: 1 - Crédito e 2 - Débito, grupo e subgrupo numerados) ---------- */
+function relCentros(P){
+  var cls=$("rc_class").value,grupo=$("rc_grupo").value,uso=$("rc_uso").value,modo=$("rc_modo").value;
+  var C=codigosCentros();
+  function lancDe(c){
+    return titulos.filter(function(t){return t.centroId===c.id&&t.status!=="cancelado";})
+      .concat(movs.filter(function(m){return m.centroId===c.id;}));
+  }
+  function noPeriodo(x){
+    var d=x.data||x.vencimento||"";
+    return d>=P.de&&d<=P.ate;
+  }
+  var lista=centrosOrdenados().filter(function(c){
+    var t=(c.tipo||"saida")==="entrada"?"entrada":"saida";
+    if(cls&&t!==cls)return false;
+    if(grupo&&String(c.grupo||"Geral")!==grupo)return false;
+    var n=lancDe(c).length;
+    if(uso==="usadas"&&!n)return false;
+    if(uso==="sem"&&n)return false;
+    return true;
+  });
+  var filt=filtrosUsados([["rc_class","Classificação"],["rc_grupo","Grupo"],["rc_uso","Categorias"],["rc_modo","Tipo","lista"]]);
+  var cabRel=cabecalhoRel(REL_TITULOS.centros,(modo==="movimento"?P.txt:"Cadastro em "+dataCurta(hojeISO())),filt),h="";
+  if(!lista.length)return {cab:cabRel,html:vazioRel()+rodapeRel(0,"categorias"),csv:[["Código","Classificação","Grupo","Subgrupo"]],nome:"Categorias_"+hojeISO()};
+  /* uma seção por classificação, como no relatório dele */
+  ["entrada","saida"].forEach(function(tp){
+    var doTipo=lista.filter(function(c){return ((c.tipo||"saida")==="entrada"?"entrada":"saida")===tp;})
+      /* na ordem do código, como no relatório do sistema antigo: 1.1, 1.3, 1.25 */
+      .sort(function(a,b){return ordCodigo((C.mapa[a.id]||{}).cod,(C.mapa[b.id]||{}).cod);});
+    if(!doTipo.length)return;
+    h+='<div class="rel-nivel">'+(tp==="entrada"?"1 - Crédito":"2 - Débito")+"</div>";
+    var gAnt="",linhas=[],totT=0;
+    function fecharGrupo(){
+      if(!linhas.length)return;
+      h+='<table class="rel-tab"><thead><tr><th style="width:12%">Código</th><th>Subgrupo (centro de custo)</th>'+
+        (modo==="movimento"?'<th class="n" style="width:14%">Lançamentos</th><th class="n" style="width:18%">No período</th>':"")+
+        "</tr></thead><tbody>"+linhas.join("")+"</tbody></table>";
+      linhas=[];
+    }
+    doTipo.forEach(function(c){
+      var cod=C.mapa[c.id]||{},g=String(c.grupo||"Geral");
+      if(g!==gAnt){fecharGrupo();gAnt=g;h+='<div class="rel-grupo">'+esc(cod.gcod||"")+" - "+esc(g)+"</div>";}
+      var ls=lancDe(c),doPer=ls.filter(noPeriodo);
+      var v=doPer.reduce(function(a,x){return a+(+x.valor||0);},0);totT+=v;
+      linhas.push("<tr><td>"+esc(cod.cod||"—")+"</td><td>"+esc(c.nome)+"</td>"+
+        (modo==="movimento"?'<td class="n">'+doPer.length+'</td><td class="n">'+numRel(v)+"</td>":"")+"</tr>");
+    });
+    fecharGrupo();
+    h+=totRel(modo==="movimento"
+      ? [{n:(tp==="entrada"?"Total de Créditos:":"Total de Débitos:"),v:totT},{n:"Categorias:",v:doTipo.length,i:1,s:1}]
+      : [{n:"Categorias:",v:doTipo.length,i:1,s:1}],"grupo");
+  });
+  var nEnt=lista.filter(function(c){return (c.tipo||"saida")==="entrada";}).length;
+  h+=totRel([{n:"Crédito:",v:nEnt,i:1},{n:"Débito:",v:lista.length-nEnt,i:1},{n:"Total de categorias:",v:lista.length,i:1,s:1}],"geral");
+  h+=rodapeRel(lista.length,lista.length===1?"categoria":"categorias");
+  var csv=[["Código","Classificação","Grupo","Subgrupo","Lançamentos","Valor no período"]];
+  lista.forEach(function(c){
+    var cod=C.mapa[c.id]||{},ls=lancDe(c).filter(noPeriodo);
+    csv.push([cod.cod||"",(c.tipo||"saida")==="entrada"?"Crédito":"Débito",c.grupo||"",c.nome||"",ls.length,
+      numRel(ls.reduce(function(a,x){return a+(+x.valor||0);},0))]);});
+  return {cab:cabRel,html:h,csv:csv,nome:"Categorias_"+hojeISO()};
+}
+
 /* ---------- Fechamento do Mês (modelo LSoft flu009) ---------- */
+/* A categoria importada do sistema antigo traz o código dela (2.5.4) — é o que ele conhece e o que
+   sai no Fechamento. Quem não tem código é numerado aqui, e nunca em cima de um número já usado:
+   o grupo pega o menor inteiro livre do lado dele, e o subgrupo o menor livre dentro do grupo (v246). */
 function codigosCentros(){
-  var ord=centrosOrdenados(),grupos={entrada:[],saida:[]},mapa={},sub={};
+  var ord=centrosOrdenados(),grupos={entrada:[],saida:[]},mapa={},cg={},usadosG={entrada:{},saida:{}},usadosS={};
   function lado(c){return (c.tipo||"saida")==="entrada"?"entrada":"saida";}
-  ord.forEach(function(c){var g=c.grupo||"Geral";if(grupos[lado(c)].indexOf(g)<0)grupos[lado(c)].push(g);});
+  function codDe(c){var x=String(c.codigo||"").trim();return /^\d+(\.\d+){2}$/.test(x)?x:"";}
+  /* 1) grupos que já vêm com código: o número deles fica reservado */
   ord.forEach(function(c){
-    var t=lado(c),g=c.grupo||"Geral",k=t+"|"+g,b=(t==="entrada"?"1":"2")+"."+(grupos[t].indexOf(g)+1);
-    sub[k]=(sub[k]||0)+1;
-    mapa[c.id]={cod:b+"."+sub[k],gcod:b,tipo:t,grupo:g,nome:c.nome};});
+    var t=lado(c),g=c.grupo||"Geral",k=t+"|"+g,x=codDe(c);
+    if(grupos[t].indexOf(g)<0)grupos[t].push(g);
+    if(x&&!cg[k]){var n=x.split(".");cg[k]=n[0]+"."+n[1];usadosG[t][n[1]]=1;}
+  });
+  /* 2) os demais recebem o menor inteiro livre */
+  var prox={entrada:1,saida:1};
+  ord.forEach(function(c){
+    var t=lado(c),g=c.grupo||"Geral",k=t+"|"+g;
+    if(cg[k])return;
+    while(usadosG[t][String(prox[t])])prox[t]++;
+    cg[k]=(t==="entrada"?"1":"2")+"."+prox[t];usadosG[t][String(prox[t])]=1;
+  });
+  /* 3) subgrupo: o código gravado, senão o menor livre dentro do grupo */
+  ord.forEach(function(c){
+    var t=lado(c),g=c.grupo||"Geral",k=t+"|"+g,x=codDe(c);
+    if(!usadosS[k])usadosS[k]={};
+    if(x)usadosS[k][x.split(".")[2]]=1;
+  });
+  var proxS={};
+  ord.forEach(function(c){
+    var t=lado(c),g=c.grupo||"Geral",k=t+"|"+g,x=codDe(c),b=cg[k];
+    var cod=x;
+    if(!cod){
+      if(!proxS[k])proxS[k]=1;
+      while(usadosS[k][String(proxS[k])])proxS[k]++;
+      cod=b+"."+proxS[k];usadosS[k][String(proxS[k])]=1;
+    }
+    mapa[c.id]={cod:cod,gcod:b,tipo:t,grupo:g,nome:c.nome};
+  });
   return {mapa:mapa,grupos:grupos};
+}
+/* ordem numérica do código (1.1 antes de 1.3 antes de 1.25), como no relatório do sistema antigo */
+function ordCodigo(a,b){
+  var x=String(a||"").split("."),y=String(b||"").split(".");
+  for(var i=0;i<Math.max(x.length,y.length);i++){
+    var d=(+x[i]||0)-(+y[i]||0);if(d)return d;
+  }
+  return 0;
 }
 function horaMov(m){
   if(m.hora)return m.hora;
@@ -27165,6 +27399,20 @@ function ligar(){
     centros.push(c);await grava("centros",c);$("ccNome").value="";
     renderCentros();opcoesFinanceiro();toast("Centro de custo "+(tp==="entrada"?"Entrada":"Saída")+" › "+g+" › "+n+" adicionado.");};
   $("ccTipo").onchange=function(){renderCentros();};
+  /* importar categorias (v246) */
+  $("ccImportar").onclick=function(){
+    $("icc_texto").value="";$("icc_arqNome").textContent="";$("icc_alerta").innerHTML="";
+    previaCategorias();$("impccModal").hidden=false;};
+  $("icc_fechar").onclick=function(){$("impccModal").hidden=true;};
+  $("icc_arqBt").onclick=function(){$("icc_arq").click();};
+  $("icc_arq").onchange=function(){
+    var f=this.files&&this.files[0];if(!f)return;
+    $("icc_arqNome").textContent=f.name;
+    var r=new FileReader();
+    r.onload=function(){$("icc_texto").value=String(r.result||"");previaCategorias();};
+    r.readAsText(f,"utf-8");};
+  $("icc_texto").oninput=function(){previaCategorias();};
+  $("icc_ok").onclick=importarCategorias;
   $("pdTipo").onchange=renderPadroes;
   $("pdAdd").onclick=async function(){
     var nome=$("pdNome").value.trim(),centro=$("pdCentro").value.trim(),termos=$("pdTermos").value.trim();
