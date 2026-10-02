@@ -3023,11 +3023,30 @@ img{max-width:100%}
             <input id="mpAte" type="date" title="Vence até" style="max-width:160px">
             <span class="count" id="mpCount"></span>
             <span class="sp"></span>
+            <select id="mpPorPag" style="max-width:160px" title="Registros por página">
+              <option value="25">25 por página</option>
+              <option value="50" selected>50 por página</option>
+              <option value="100">100 por página</option>
+              <option value="300">300 por página</option>
+            </select>
             <button class="btn ghost" type="button" id="mpNovo">Cadastrar equipamento</button>
             <button class="btn ghost" type="button" id="mpImportar">Importar manutenções</button>
           </div>
+          <!-- com a base antiga importada são 16 mil aparelhos: desenhar tudo de uma vez trava a
+               aba, como travava a lista de clientes antes da v148 (v257) -->
+          <div class="toolbar" id="mpPaginacao" hidden>
+            <button class="btn mut sm" type="button" id="mpPrimeira">« Primeira</button>
+            <button class="btn mut sm" type="button" id="mpAnt">‹ Anterior</button>
+            <span class="count" id="mpPagInfo"></span>
+            <button class="btn mut sm" type="button" id="mpProx">Próxima ›</button>
+            <button class="btn mut sm" type="button" id="mpUltima">Última »</button>
+          </div>
           <div class="tw"><table>
-            <thead><tr><th>Cliente</th><th>Equipamento</th><th>Endereço</th><th>Compra</th><th class="num">Valor pago</th><th>Pagamento</th><th>Última troca</th><th>Próxima troca</th><th>Situação</th><th>Status</th><th></th></tr></thead>
+            <!-- v257 (regra dele, 02/10, depois de importar 16 mil aparelhos: "não precisa de todas
+                 as informações, deixe só alguma: nome, produto, data da manutenção periódica; só
+                 entrando no cliente que vê as outras"). Endereço, compra, valor pago, pagamento,
+                 última troca e o status de contato saíram da lista e continuam na ficha. -->
+            <thead><tr><th>Cliente</th><th>Equipamento</th><th>Próxima troca</th><th></th></tr></thead>
             <tbody id="mpBody"></tbody>
           </table></div>
         </div>
@@ -6625,6 +6644,7 @@ function unicos(lista,campo){
   return Object.keys(m).sort(function(a,b){return a.localeCompare(b,"pt-BR");});
 }
 var cliPag=1;
+var mpPag=1;   /* página da lista de Manutenção Periódica (v257) */
 function renderClientes(){
   /* o cadastro de cliente é da LOJA e aparece para todos dela (regra dele, 22/09: "os clientes
      devem aparecer para todos; a única coisa que tem que separar é a loja"). O que continua
@@ -21690,8 +21710,8 @@ function renderManut(){
     .sort(function(a,b){return ordAZ(a.cliente,b.cliente)||ordAZ(a.produto,b.produto);});
   var ativos=base.filter(function(e){return e.ativo!==false;});
   var venc=ativos.filter(function(e){return sitEq(e).k==="vencida";});
-  if($("mpStatus")&&!$("mpStatus").__ligado){$("mpStatus").__ligado=true;$("mpStatus").onchange=renderManut;}
-  if($("mpPlano")&&!$("mpPlano").__ligado){$("mpPlano").__ligado=true;$("mpPlano").onchange=renderManut;}
+  if($("mpStatus")&&!$("mpStatus").__ligado){$("mpStatus").__ligado=true;$("mpStatus").onchange=function(){mpPag=1;renderManut();};}
+  if($("mpPlano")&&!$("mpPlano").__ligado){$("mpPlano").__ligado=true;$("mpPlano").onchange=function(){mpPag=1;renderManut();};}
   var nPlano=ativos.filter(planoAtivoEquip).length;
   var stAtivos=ativos.map(function(e){return statusManut(e).k;});
   function contaSt(k){return stAtivos.filter(function(x){return x===k;}).length;}
@@ -21707,33 +21727,47 @@ function renderManut(){
     '<div class="kpi"><div class="l">Visita realizada</div><div class="v">'+(nCom+nSem)+'</div><div class="l" style="margin-top:4px">'+
       nCom+" com venda · "+nSem+" sem venda</div></div>";
   $("mpCount").textContent=lista.length+(lista.length===1?" equipamento":" equipamentos");
+  /* registros por página (v257): com a base antiga importada são 16 mil aparelhos, e desenhar
+     tudo de uma vez trava a aba — mesma correção que a lista de clientes levou na v148 */
+  var totalMp=lista.length;
+  var porPagMp=Math.max(25,parseInt(($("mpPorPag")||{}).value,10)||50);
+  var pagsMp=Math.max(1,Math.ceil(totalMp/porPagMp));
+  if(mpPag>pagsMp)mpPag=pagsMp;
+  if(mpPag<1)mpPag=1;
+  var iniMp=(mpPag-1)*porPagMp;
+  lista=lista.slice(iniMp,iniMp+porPagMp);
+  var pgMp=$("mpPaginacao");
+  if(pgMp){
+    pgMp.hidden=(totalMp<=porPagMp);
+    $("mpPagInfo").textContent="página "+mpPag+" de "+pagsMp+" · mostrando "+
+      (totalMp?(iniMp+1):0)+" a "+Math.min(iniMp+porPagMp,totalMp);
+    $("mpPrimeira").disabled=$("mpAnt").disabled=(mpPag<=1);
+    $("mpProx").disabled=$("mpUltima").disabled=(mpPag>=pagsMp);
+  }
   var b=$("mpBody");b.innerHTML="";
-  if(!lista.length){b.innerHTML='<tr><td colspan="11"><div class="empty"><div class="big">Nenhum equipamento nesta visão</div>Vendas de produto com "Manutenção (dias)" no cadastro entram aqui sozinhas.</div></td></tr>';return;}
+  if(!totalMp){b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum equipamento nesta visão</div>Vendas de produto com "Manutenção (dias)" no cadastro entram aqui sozinhas.</div></td></tr>';return;}
   lista.forEach(function(e){
     var s=sitEq(e),c=e._c,px=proximaDe(e),st=statusManut(e);
     var tr=document.createElement("tr");tr.className="clickable";
-    var idade=idadeDe(c.nasc);
-    tr.innerHTML='<td><div class="t-main"><button type="button" class="lnk-cli" title="Dois cliques abrem o atendimento deste cliente" data-mpeq="'+esc(e.id)+'" data-mpcli="'+esc(e.clienteId||"")+'">'+esc(e.cliente||c.nome||"—")+"</button></div>"+
-        '<div class="t-sub">'+esc(c.tel||"")+(idade!=null?" · "+idade+" anos":"")+"</div></td>"+
-      '<td><div class="t-main">'+esc(e.produto||"—")+'</div><div class="t-sub"><code>'+
-        esc(e.serie||"sem série")+"</code>"+(e.local?" · "+esc(e.local):"")+
-        ((e.plano&&e.plano!=="Bronze")?(function(){
-          var inf=planoDoEquip(e),hj=hojeISO();
-          if(!inf)return ' <span class="pill p-acc">Plano '+esc(e.plano)+"</span>";
-          return (hj>=inf.ini&&hj<=inf.fim)?' <span class="pill p-plano">💧 Plano '+esc(e.plano)+" · ativo até "+esc(dataCurta(inf.fim))+"</span>"
-            :' <span class="pill p-mut">Plano '+esc(e.plano)+" · vencido</span>";})():"")+"</div></td>"+
-      '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
-        '</div><div class="t-sub">'+esc([c.bairro,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
-        mapaLink(c.geo)+"</div></td>"+
-      "<td>"+esc(dataCurta(e.compradoEm||e.instaladoEm||"")||"—")+"</td>"+
-      '<td class="num">'+(e.valorCompra!=null?BRL(e.valorCompra):"—")+"</td>"+
-      "<td>"+esc(e.formaPgto||"—")+"</td>"+
-      '<td><div class="t-main">'+esc(dataCurta(e.ultimaManut||e.instaladoEm||"")||"—")+'</div><div class="t-sub">'+
-        (e.ultimaManut?esc(e.ultimaManutHora||""):esc(horaUltimaVendaDe(e)||"instalação"))+"</div></td>"+
-      "<td><b>"+esc(px?dataCurta(px):"—")+"</b>"+(e.manutDias?'<div class="t-sub">a cada '+e.manutDias+" dias</div>":"")+"</td>"+
-      '<td><span class="pill '+s.cls+'">'+s.n+"</span></td>"+
-      '<td data-mpst="'+esc(st.k)+'"'+(st.revisita?' data-mprev="'+st.revisita.n+'"':"")+'><span class="pill '+st.cls+'">'+esc(st.n)+"</span>"+
-        ((st.revisita&&st.k==="aguardando")?' <span class="pill p-crit">já visitado sem venda</span>':"")+(st.sub?'<div class="t-sub">'+esc(st.sub)+"</div>":"")+"</td>"+
+    /* v257: a lista ficou com NOME · PRODUTO · PRÓXIMA TROCA. Endereço, compra, valor pago, forma
+       de pagamento, última troca e o status de contato continuam na ficha do aparelho — é só clicar
+       na linha. O `data-mpst` subiu para a <tr>, porque o filtro de status e os testes o leem. */
+    tr.setAttribute("data-mpst",st.k);
+    if(st.revisita)tr.setAttribute("data-mprev",st.revisita.n);
+    tr.innerHTML='<td><div class="t-main"><button type="button" class="lnk-cli" title="Dois cliques abrem o atendimento deste cliente" data-mpeq="'+esc(e.id)+'" data-mpcli="'+esc(e.clienteId||"")+'">'+esc(e.cliente||c.nome||"—")+"</button></div></td>"+
+      '<td><div class="t-main">'+esc(e.produto||"—")+"</div>"+
+        /* a série identifica o aparelho quando o cliente tem mais de um, então ela fica — mas só
+           quando existe: o "sem série" encheria a tela depois da importação da base antiga (v257) */
+        ((e.serie||(e.plano&&e.plano!=="Bronze"))?'<div class="t-sub">'+
+          (e.serie?"<code>"+esc(e.serie)+"</code>":"")+
+          ((e.plano&&e.plano!=="Bronze")?(function(){
+            var inf=planoDoEquip(e),hj=hojeISO();
+            if(!inf)return (e.serie?" ":"")+'<span class="pill p-acc">Plano '+esc(e.plano)+"</span>";
+            return (e.serie?" ":"")+((hj>=inf.ini&&hj<=inf.fim)
+              ?'<span class="pill p-plano">💧 Plano '+esc(e.plano)+" · ativo</span>"
+              :'<span class="pill p-mut">Plano '+esc(e.plano)+" · vencido</span>");})():"")+
+          "</div>":"")+"</td>"+
+      "<td><b>"+esc(px?dataCurta(px):"—")+"</b> <span class=\"pill "+s.cls+'">'+s.n+"</span></td>"+
       '<td class="num">'+
         (String(((clientes.filter(function(z){return z.id===e.clienteId;})[0]||{}).tel)||"").replace(/\D/g,"")
           ?'<button class="btn zap sm" type="button" data-zapeq="'+e.id+'">WhatsApp</button> ':"")+
@@ -28657,9 +28691,11 @@ function ligar(){
   $("ac_fechar").onclick=function(){$("acoesModal").hidden=true;acReg=null;};
 
   /* ---- Manutenção periódica ---- */
-  $("mpBusca").oninput=renderManut;
+  /* qualquer filtro volta para a primeira página (v257) */
+  function mpFiltrou(){mpPag=1;renderManut();}
+  $("mpBusca").oninput=mpFiltrou;
   ["mpCidade","mpBairro","mpRua","mpSit","mpProd","mpGrupo","mpIdade","mpDe","mpAte"]
-    .forEach(function(id){$(id).onchange=renderManut;});
+    .forEach(function(id){$(id).onchange=mpFiltrou;});
   $("mpNovo").onclick=function(){abrirEquip(null);};
   /* (14/09) sem "Registrar manutenção": a manutenção é feita pelo atendimento (dois cliques no nome) → pedido com
      a atividade futura (instalação) → aprovação financeira, que dá a baixa (regra do Wagner) */
@@ -28801,6 +28837,14 @@ function ligar(){
   $("cliAnt").onclick=function(){cliPag--;renderClientes();};
   $("cliProx").onclick=function(){cliPag++;renderClientes();};
   $("cliUltima").onclick=function(){cliPag=1e9;renderClientes();};
+  /* paginação da Manutenção Periódica (v257) */
+  if($("mpPrimeira")){
+    $("mpPrimeira").onclick=function(){mpPag=1;renderManut();};
+    $("mpAnt").onclick=function(){mpPag--;renderManut();};
+    $("mpProx").onclick=function(){mpPag++;renderManut();};
+    $("mpUltima").onclick=function(){mpPag=1e9;renderManut();};
+    $("mpPorPag").onchange=function(){mpPag=1;renderManut();};
+  }
   $("c_temconj").onchange=toggleConj;
   /* CPF/CNPJ conferido enquanto digita: cadastro, cônjuge, orçamento e OS */
   ["c_doc","c_conjcpf","or_doc","os_doc"].forEach(function(id){
