@@ -540,6 +540,7 @@
   .chk input[type=checkbox]{flex:0 0 17px;width:17px;height:17px;min-width:17px;margin:2px 0 0;padding:0;accent-color:var(--acc)}
   .chk b{font-weight:600}
   .chk .ajuda{display:block;font-size:12px;color:var(--ink-2);margin-top:3px}
+  .dup-fica td{background:rgba(16,185,129,.10)}
   input,select,textarea{width:100%;font:inherit;font-size:14.5px;padding:10px 13px;
     background:var(--field);border:1px solid var(--field-bd);color:var(--ink);border-radius:var(--r-sm);
     transition:border-color .12s,box-shadow .12s}
@@ -1734,6 +1735,7 @@ img{max-width:100%}
           <span class="count" id="prodCount"></span>
           <span class="sp"></span>
           <button class="btn ghost" type="button" id="prodImportar">Importar lista</button>
+          <button class="btn ghost" type="button" id="prodRepetidos">Produtos repetidos</button>
         </div>
         <div class="tw"><table>
           <thead><tr><th>Produto</th><th>Grupo · Subgrupo</th><th class="num">Estoque</th><th class="num">Custo</th><th class="num">Frete</th><th class="num">100%</th><th class="num">70%</th><th class="num">Campanha</th><th class="num">Pontos</th><th>Série</th><th>Manutenção</th></tr></thead>
@@ -5086,6 +5088,31 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- PRODUTOS REPETIDOS (pedido do Wagner, 02/10): acha o mesmo produto cadastrado mais de uma vez,
+     deixa escolher qual fica e tira os outros — sem apagar nada que já tenha venda, OS ou estoque -->
+<div class="modal" id="dupModal" hidden>
+  <div class="box" style="width:min(860px,100%)">
+    <h3>Produtos repetidos</h3>
+    <div class="sub">O sistema agrupa os cadastros iguais, sugere qual manter e tira os outros. O que fica <b>recebe o que estava faltando nele</b> (preço, código, marca, grupo) do repetido que sai. Produto que já foi vendido, usado em OS ou que tem movimento de estoque <b>nunca é apagado</b> — ele é desativado, para sumir da venda sem perder o histórico.</div>
+    <div class="grid g3" style="margin-top:14px">
+      <div class="fld"><label for="dp_modo">Considerar repetido</label>
+        <select id="dp_modo">
+          <option value="nome">Mesmo nome</option>
+          <option value="cod">Mesmo código</option>
+          <option value="nomecod">Mesmo nome E mesmo código</option>
+        </select></div>
+      <div class="fld"><label for="dp_busca">Procurar</label><input id="dp_busca" placeholder="nome ou código"></div>
+      <div class="fld" style="align-self:end"><span class="count" id="dp_count"></span></div>
+    </div>
+    <div id="dp_resumo"></div>
+    <div id="dp_lista" style="max-height:46vh;overflow:auto;margin-top:10px"></div>
+    <div id="dp_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="dp_ok">Remover os repetidos</button>
+      <button class="btn mut" type="button" id="dp_fechar">Fechar</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="impModal" hidden>
   <div class="box" style="width:min(720px,100%)">
     <h3>Importar lista de produtos</h3>
@@ -7857,6 +7884,182 @@ async function importarProdutos(){
   atualizarBotaoApagarImport();
   opcoesProduto();renderProdutos();
   toast(feitos+" produto(s) gravado(s) — "+mudCod+" com código novo, "+mudPreco+" com valor novo.");
+}
+/* ================= PRODUTOS REPETIDOS (pedido do Wagner, 02/10) =================
+   "Tem muito produto repetido, gostaria de retirar." O cadastro juntou a lista do CRM antigo com a
+   lista nova, e o mesmo produto ficou duas vezes. Aqui o sistema agrupa os iguais, diz qual tem
+   venda/estoque atrás de si e tira os outros — nunca apagando o que já foi usado. */
+var dupEscolha={};
+function usoTotalProduto(p){
+  var u=usoDoProduto(p.id);
+  equipamentos.forEach(function(e){if(e.produtoId===p.id)u++;});
+  produtos.forEach(function(x){(x.composto||[]).forEach(function(c){if(c&&c.pid===p.id)u++;});});
+  return u;
+}
+function gruposRepetidos(modo){
+  var m={};
+  produtos.forEach(function(p){
+    if(p.loja&&p.loja!==lojaAtual)return;
+    var n=normProdImp(p.nome),c=String(p.cod||"").toUpperCase().trim();
+    var k=modo==="cod"?(c?"c:"+c:""):(modo==="nomecod"?((n&&c)?"nc:"+n+"|"+c:""):(n?"n:"+n:""));
+    if(!k)return;
+    (m[k]=m[k]||[]).push(p);
+  });
+  return Object.keys(m).filter(function(k){return m[k].length>1;}).map(function(k){
+    var itens=m[k].map(function(p){
+      return {p:p,usos:usoTotalProduto(p),estoque:estEmpresaDe(p),
+        pontos:0};
+    });
+    /* fica quem tem história: uso, depois estoque, depois preço, depois o mais antigo */
+    itens.forEach(function(x){
+      x.pontos=(x.usos>0?1000000:0)+(x.estoque>0?10000:0)+((+x.p.cheia>0)?100:0)+
+        ((x.p.grupo&&x.p.grupo!==GRUPO_COMPLETAR)?10:0)+(x.p.importado?0:1);
+    });
+    itens.sort(function(a,b){
+      if(b.pontos!==a.pontos)return b.pontos-a.pontos;
+      return String(a.p.criadoEm||"").localeCompare(String(b.p.criadoEm||""));
+    });
+    return {chave:k,nome:itens[0].p.nome,itens:itens};
+  }).sort(function(a,b){return ordAZ(a.nome,b.nome);});
+}
+function renderDuplicados(){
+  var modo=$("dp_modo").value,q=semAcento($("dp_busca").value||"").trim();
+  var gs=gruposRepetidos(modo).filter(function(g){
+    if(!q)return true;
+    return g.itens.some(function(x){
+      return semAcento(x.p.nome).indexOf(q)>=0||semAcento(x.p.cod||"").indexOf(q)>=0;});
+  });
+  var sobrando=gs.reduce(function(a,g){return a+g.itens.length-1;},0);
+  var podem=0,presos=0;
+  gs.forEach(function(g){
+    g.itens.forEach(function(x,i){
+      var manter=dupEscolha[g.chave]||g.itens[0].p.id;
+      if(x.p.id===manter)return;
+      if(x.usos>0)presos++;else podem++;
+    });
+  });
+  $("dp_count").textContent=gs.length+(gs.length===1?" grupo":" grupos")+" · "+sobrando+" cadastro(s) a mais";
+  $("dp_resumo").innerHTML=!gs.length
+    ?'<div class="note ok" style="margin-top:12px"><b>Nenhum produto repetido nesta visão.</b></div>'
+    :'<div class="note" style="margin-top:12px"><b>'+gs.length+" produto(s) com cadastro repetido · "+sobrando+
+      " cadastro(s) a mais.</b><br><b>"+podem+"</b> podem ser apagados (nunca foram usados) · <b>"+presos+
+      "</b> têm venda, OS ou estoque e serão <b>desativados</b> em vez de apagados.</div>";
+  var w=$("dp_lista");
+  w.innerHTML=gs.slice(0,120).map(function(g){
+    var manter=dupEscolha[g.chave]||g.itens[0].p.id;
+    return '<div class="sect" style="margin:0 0 10px"><p class="sect-t">'+esc(g.nome)+"</p>"+
+      '<div class="tw"><table><thead><tr><th>Fica</th><th>Código</th><th>Nome</th><th>Grupo</th>'+
+      '<th class="num">100%</th><th class="num">Estoque</th><th class="num">Usos</th></tr></thead><tbody>'+
+      g.itens.map(function(x){
+        return "<tr"+(x.p.id===manter?' class="dup-fica"':"")+">"+
+          '<td><input type="radio" name="dup_'+esc(g.chave)+'" data-dupg="'+esc(g.chave)+'" data-dupp="'+esc(x.p.id)+'"'+
+            (x.p.id===manter?" checked":"")+"></td>"+
+          "<td><code>"+esc(x.p.cod||"—")+"</code></td>"+
+          "<td>"+esc(x.p.nome)+(x.p.importado?' <span class="pill p-mut">importado</span>':"")+
+            ((x.p.status||"ativo")!=="ativo"?' <span class="pill p-mut">inativo</span>':"")+"</td>"+
+          "<td>"+esc(x.p.grupo||"—")+'</td><td class="num">'+(+x.p.cheia>0?BRL(x.p.cheia):"—")+
+          '</td><td class="num">'+x.estoque+'</td><td class="num">'+
+          (x.usos>0?'<span class="pill p-warn">'+x.usos+"</span>":"0")+"</td></tr>";
+      }).join("")+"</tbody></table></div></div>";
+  }).join("")+(gs.length>120?'<p class="help">… e mais '+(gs.length-120)+" grupo(s). Remova estes e abra de novo.</p>":"");
+  Array.prototype.forEach.call(w.querySelectorAll("[data-dupg]"),function(r){
+    r.onchange=function(){dupEscolha[r.getAttribute("data-dupg")]=r.getAttribute("data-dupp");renderDuplicados();};
+  });
+  $("dp_ok").disabled=!(podem+presos);
+}
+function abrirDuplicados(){
+  dupEscolha={};
+  $("dp_busca").value="";$("dp_alerta").innerHTML="";
+  renderDuplicados();
+  $("dupModal").hidden=false;
+}
+/* o cadastro que fica herda o que estiver FALTANDO nele — preço, código, marca, grupo… — do
+   repetido que sai. Só preenche buraco: nada que já esteja preenchido é sobrescrito. */
+var CAMPOS_FUNDE=["cod","cheia","campanha","minimo","custo","frete","marca","barras","un","pop","pontos","manut","gar"];
+function fundirRepetido(fica,sai){
+  var mudou=false;
+  CAMPOS_FUNDE.forEach(function(k){
+    var a=fica[k],b=sai[k];
+    var vazio=(k==="cod"||k==="marca"||k==="barras"||k==="un"||k==="pop")?!String(a||"").trim():!(+a>0);
+    var tem=(k==="cod"||k==="marca"||k==="barras"||k==="un"||k==="pop")?!!String(b||"").trim():(+b>0);
+    if(vazio&&tem){fica[k]=b;mudou=true;}
+  });
+  if((!fica.grupo||fica.grupo===GRUPO_COMPLETAR)&&sai.grupo&&sai.grupo!==GRUPO_COMPLETAR){
+    fica.grupo=sai.grupo;
+    if(sai.subgrupo&&sai.subgrupo!==GRUPO_COMPLETAR)fica.subgrupo=sai.subgrupo;
+    mudou=true;
+  }
+  if(mudou){
+    fica.completar=((fica.grupo||GRUPO_COMPLETAR)===GRUPO_COMPLETAR||!(+fica.cheia>0));
+    fica.juntadoDe=(fica.juntadoDe||[]).concat([{cod:sai.cod||"",nome:sai.nome||"",quando:hojeISO(),por:usuarioAtual}]);
+  }
+  return mudou;
+}
+async function removerDuplicados(){
+  var modo=$("dp_modo").value,gs=gruposRepetidos(modo);
+  var apagar=[],desativar=[],fundir=[];
+  gs.forEach(function(g){
+    var manter=dupEscolha[g.chave]||g.itens[0].p.id;
+    var fica=g.itens.filter(function(x){return x.p.id===manter;})[0];
+    g.itens.forEach(function(x){
+      if(x.p.id===manter)return;
+      if(fica)fundir.push({fica:fica.p,sai:x.p});
+      if(x.usos>0){if((x.p.status||"ativo")==="ativo")desativar.push(x.p);}
+      else apagar.push(x.p);
+    });
+  });
+  if(!apagar.length&&!desativar.length){
+    $("dp_alerta").innerHTML='<div class="note"><b>Nada a fazer nesta visão.</b></div>';return;}
+  if(!confirm("Apagar "+apagar.length+" cadastro(s) repetido(s) que nunca foram usados"+
+    (desativar.length?" e desativar "+desativar.length+" que têm venda, OS ou estoque":"")+
+    "?\n\nO cadastro que você marcou como \"Fica\" não é tocado. Apagar não tem volta."))return;
+  var bt=$("dp_ok");bt.disabled=true;$("dp_fechar").disabled=true;
+  var apagados=0,desativados=0,erros=0,movs=0,juntados=0;
+  /* primeiro completa o que fica com o que falta nele, senão o preço novo iria embora junto */
+  for(var f=0;f<fundir.length;f++){
+    try{
+      if(fundirRepetido(fundir[f].fica,fundir[f].sai)){
+        juntados++;
+        if(db)await col("produtos").doc(fundir[f].fica.id).set(fundir[f].fica);
+      }
+    }catch(e){erros++;console.warn("juntar",e);}
+  }
+  for(var i=0;i<apagar.length;i++){
+    var p=apagar[i];
+    try{
+      /* o movimento da importação some junto, senão sobra saldo de produto que não existe mais */
+      var meus=movEst.filter(function(m){return m.produtoId===p.id&&m.doc===DOC_IMPORT;});
+      for(var j=0;j<meus.length;j++){await apaga("movest",meus[j].id);movEst.splice(movEst.indexOf(meus[j]),1);movs++;}
+      await apaga("produtos",p.id);
+      produtos.splice(produtos.indexOf(p),1);apagados++;
+    }catch(e){erros++;console.warn("apagar repetido",p.cod,e);}
+    if(i%10===0)$("dp_alerta").innerHTML='<div class="note"><b>Apagando '+(i+1)+" de "+apagar.length+"…</b></div>";
+  }
+  for(var k=0;k<desativar.length;k++){
+    var d=desativar[k],antes=d.status;
+    try{
+      d.status="inativo";d.inativadoEm=hojeISO();d.inativadoPor=usuarioAtual;d.inativadoMotivo="cadastro repetido";
+      if(db)await col("produtos").doc(d.id).set(d);
+      desativados++;
+    }catch(e){d.status=antes;erros++;console.warn("desativar repetido",d.cod,e);}
+  }
+  bt.disabled=false;$("dp_fechar").disabled=false;
+  $("dp_alerta").innerHTML='<div class="note ok"><b>Conferência</b><br><b>'+juntados+"</b> cadastro(s) completado(s) com o preço, o código ou o grupo que faltava<br><b>"+apagados+
+    "</b> cadastro(s) repetido(s) apagado(s)"+(movs?" (e "+movs+" movimento(s) da importação)":"")+
+    "<br><b>"+desativados+"</b> desativado(s) por já terem venda, OS ou estoque"+
+    ((apagados||desativados)?"<br>Agora importe a lista de novo com <b>Atualizar o código e o valor</b> marcado: o preço entra no cadastro que ficou.":"")+
+    (erros?"<br><b>"+erros+"</b> não gravaram — veja o aviso vermelho do topo.":"")+"</div>";
+  dupEscolha={};
+  opcoesProduto();renderProdutos();renderDuplicados();
+  toast(apagados+" repetido(s) apagado(s) · "+desativados+" desativado(s).");
+}
+function ligarDuplicados(){
+  var bt=$("prodRepetidos");if(!bt)return;
+  bt.onclick=abrirDuplicados;
+  $("dp_fechar").onclick=function(){$("dupModal").hidden=true;};
+  $("dp_ok").onclick=removerDuplicados;
+  $("dp_modo").onchange=function(){dupEscolha={};renderDuplicados();};
+  $("dp_busca").oninput=renderDuplicados;
 }
 function ligarImportProdutos(){
   var bt=$("prodImportar");if(!bt)return;
@@ -30231,6 +30434,7 @@ function navegacaoBasica(){
   try{ligarImportManut();}catch(e){console.warn("importar manutenções",e);}
   try{ligarTrocaFeita();}catch(e){console.warn("troca feita",e);}
   try{ligarTipoPessoaAt();}catch(e){console.warn("tipo de pessoa",e);}
+  try{ligarDuplicados();}catch(e){console.warn("produtos repetidos",e);}
   try{ligarCampoOS();}catch(e){console.warn("campo os",e);}
   try{ligarCamposValor();}catch(e){console.warn("campos de valor",e);}
   /* escolher o produto já põe 1 na quantidade, nas telas de venda (v253) */
