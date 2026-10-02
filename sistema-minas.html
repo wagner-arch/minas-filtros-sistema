@@ -6680,8 +6680,10 @@ function mapaLink(geo){
 }
 function faltamObrig(c,modo){
   var base=(modo==="cliente"?CO_CLI:CO_LEAD).slice();
-  /* pessoa jurídica não tem identidade (RG) nem sexo */
-  if(c&&c.tipo==="Pessoa Jurídica")base=base.filter(function(x){return ["rg","sexo"].indexOf(x[0])<0;});
+  /* pessoa jurídica não tem identidade (RG) nem sexo, e a DATA DE FUNDAÇÃO deixou de ser
+     obrigatória (regra dele, 01/10: "Data de fundação *, retirar essa opção como obrigatório").
+     A data de nascimento continua obrigatória na pessoa física. */
+  if(c&&c.tipo==="Pessoa Jurídica")base=base.filter(function(x){return ["rg","sexo","nasc"].indexOf(x[0])<0;});
   /* endereço rural não tem rua, número nem CEP de rua: no lugar deles o
      sistema exige a referência de como chegar e a geolocalização */
   /* lead exige só a cidade no endereço — as exigências do rural valem para cliente */
@@ -6747,8 +6749,10 @@ function toggleTipoPJ(){
   $("c_doc").placeholder=pj?"00.000.000/0000-00":"000.000.000-00";
   $("c_lblNome").innerHTML=(pj?"Razão social":"Nome e sobrenome")+' <span class="req">*</span>';
   $("c_lblApelido").textContent=pj?"Nome fantasia":"Apelido";
+  /* a data de fundação da empresa não é obrigatória (regra dele, 01/10) — o asterisco só
+     aparece na data de nascimento da pessoa física */
   $("c_lblNasc").innerHTML=(pj?"Data de fundação":"Data de nascimento")+
-    ' <span class="req" id="c_reqNasc">*</span>';
+    (pj?"":' <span class="req" id="c_reqNasc">*</span>');
   $("c_ieWrap").hidden=!pj;$("c_rgWrap").hidden=pj;
   $("c_pjWrap").hidden=!pj;
   $("c_profWrap").hidden=pj;
@@ -6822,6 +6826,11 @@ function abrirCliente(c){
   abaCliente("dados");
   try{renderCliHist(c);}catch(e){$("cliHist").hidden=true;}
   travarDadosPessoais(c);
+  /* cadastro com endereço e sem geolocalização: o sistema procura o ponto sozinho (v253).
+     É o caso da base importada — ninguém mexeu no endereço, então a busca nunca disparava. */
+  setTimeout(function(){
+    try{if(window.geoAutosMF&&window.geoAutosMF.c)window.geoAutosMF.c();}catch(e){}
+  },800);
 }
 /* Regra do Wagner (12/09): a ficha de CLIENTE (já comprou) serve para consulta e para
    atualizar endereço e contato — nome, CPF/CNPJ e RG não se editam (nem o tipo PF/PJ,
@@ -7905,6 +7914,27 @@ function qtdInformada(id){
   var n=parseInt(($(id)||{}).value,10);
   if(!(n>=1)){toast("Informe a quantidade.");try{$(id).focus();}catch(e){}return 0;}
   return n;
+}
+/* ---------- quantidade 1 ao escolher o produto (v253) ----------
+   Regra dele, 01/10: "ao incluir o produto, quando o operador escolher o produto o sistema já
+   adiciona no campo de Qtd 01 peça automaticamente e se necessário o usuário altere conforme a
+   necessidade; isso deve servir para todas as telas de venda". Vale nas telas que COBRAM do
+   cliente — pedido, orçamento, as duas listas da OS, a inclusão na ficha do pedido e a da
+   instalação. Entrada de nota fiscal e consumo interno ficam de fora: lá a quantidade é o que
+   veio no documento, e um "1" sugerido viraria erro de estoque.
+   Nessas telas isso substitui a regra da v84 (quantidade sempre em branco). */
+var QTD_AUTO={v_prod:"v_qtd",or_prod:"or_qtd",os_dprod:"os_dqtd",os_peca:"os_pqtd",
+  pd_prod:"pd_qtd",ins_prod:"ins_qtd"};
+function ligarQtdAutomatica(){
+  /* em CAPTURA, de propósito: roda antes do onchange de cada tela, então quem calcula o preço
+     pela quantidade (precoPelaForma/qtdDoForm) já lê 1 e não um campo vazio */
+  document.addEventListener("change",function(e){
+    var al=e.target;if(!al||!al.id)return;
+    var idq=QTD_AUTO[al.id];if(!idq)return;
+    if(!al.value)return;                      /* voltou para "— escolha —": não mexe */
+    var q=$(idq);if(!q)return;
+    if(!(parseInt(q.value,10)>0))q.value="1"; /* só sugere; quem já digitou fica como está */
+  },true);
 }
 function limparInclusao(idSel,idQtd,outros){
   var s=$(idSel);
@@ -28348,6 +28378,14 @@ function ligar(){
       toast("Cadastre o lead pelo Atendimento.");return;}
     var lead=(modoCli()==="lead"),dados=lerForm();
     var falta=faltamObrig(dados,lead?"lead":"cliente");
+    /* faltando SÓ a geolocalização, o sistema procura pelo endereço antes de recusar
+       (regra dele, 01/10) — em vez de travar o cadastro num campo que ele sabe preencher */
+    if(falta.length===1&&falta[0]==="Geolocalização"&&window.geoAutosMF&&window.geoAutosMF.c){
+      $("cliFalta").innerHTML='<div class="note"><b>Procurando a localização pelo endereço…</b></div>';
+      try{await window.geoAutosMF.c();}catch(eG){}
+      dados=lerForm();falta=faltamObrig(dados,lead?"lead":"cliente");
+      if(!falta.length)toast("Localização encontrada pelo endereço e gravada no cadastro.");
+    }
     if(falta.length){
       $("cliFalta").innerHTML='<div class="note crit"><b>Falta preencher:</b> '+falta.join(" · ")+".</div>";
       marcarFaltantes(falta,true);
@@ -29214,6 +29252,8 @@ function navegacaoBasica(){
   try{ligarImportClientes();}catch(e){console.warn("importar clientes",e);}
   try{ligarCampoOS();}catch(e){console.warn("campo os",e);}
   try{ligarCamposValor();}catch(e){console.warn("campos de valor",e);}
+  /* escolher o produto já põe 1 na quantidade, nas telas de venda (v253) */
+  try{ligarQtdAutomatica();}catch(e){console.warn("quantidade automática",e);}
   /* a lista de itens troca de layout quando a janela muda de largura (v252) */
   var tLay=null;
   window.addEventListener("resize",function(){
@@ -31289,6 +31329,28 @@ function erro(msg){
     aplicarTipo();
     if(tipo)tipo.__aplicarTipo=aplicarTipo;
     if(P==="c")window.aplicarTipoEnderecoMF=aplicarTipo;
+    /* v253 (regra dele, 01/10: "o sistema deveria buscar automaticamente e incluir no campo"):
+       busca o ponto quando o cadastro JÁ tem endereço e está SEM geolocalização. É o caso do
+       cadastro importado: ninguém alterou rua, número ou cidade, então o `change` que dispara a
+       busca nunca aconteceu, e o vendedor era barrado num campo que o sistema sabe preencher.
+       Nada é sobrescrito — só entra quando o campo está vazio. Devolve promessa, porque o
+       salvar espera por ela antes de recusar. */
+    window.geoAutosMF=window.geoAutosMF||{};
+    window.geoAutosMF[P]=function(){
+      return new Promise(function(pronto){
+        if(!campo)return pronto("");
+        if(String(campo.value||"").trim())return pronto(campo.value);   /* já tem ponto */
+        if(tipo&&tipo.value==="rural")return pronto("");                /* rural é marcado no local */
+        if(!valorDe(P+"_rua")||!valorDe(P+"_cidade"))return pronto("");
+        geoPeloEndereco(true);
+        var t0=Date.now();
+        (function espera(){
+          if(String(campo.value||"").trim())return pronto(campo.value);
+          if(Date.now()-t0>9000)return pronto("");
+          setTimeout(espera,300);
+        })();
+      });
+    };
   }
   /* a geolocalização vale no cadastro e no atendimento, onde o lead nasce */
   ligarGeo("c");ligarGeo("at");
