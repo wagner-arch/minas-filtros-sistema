@@ -5772,6 +5772,28 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- TROCA FEITA (pedido do Wagner, 02/10): acerta o aparelho que o sistema antigo não baixou —
+     informa a data da última troca e o sistema reagenda a próxima pelo intervalo do produto -->
+<div class="modal" id="trocaFeitaModal" hidden>
+  <div class="box" style="width:min(520px,100%)">
+    <h3>Troca feita</h3>
+    <div class="sub">Informe quando a troca foi feita. O sistema reagenda a próxima sozinho, pelo intervalo do produto.</div>
+    <div class="note" id="tf_eq" style="margin-top:12px"></div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="fld"><label for="tf_data">Data da última troca <span class="req">*</span></label>
+        <input id="tf_data" type="date"></div>
+      <div class="fld"><label for="tf_dias">Trocar a cada (dias) <span class="req">*</span></label>
+        <input id="tf_dias" type="number" min="1" inputmode="numeric">
+        <p class="help" id="tf_diasAjuda"></p></div>
+    </div>
+    <div id="tf_nota"></div>
+    <div id="tf_alerta"></div>
+    <div class="actions">
+      <button class="btn ghost" type="button" id="tf_cancelar">Cancelar</button>
+      <button class="btn" type="button" id="tf_ok">Marcar como feita</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="manutModal" hidden>
   <div class="box" style="width:min(640px,100%)">
     <h3>Registrar manutenção</h3>
@@ -21758,6 +21780,9 @@ function renderManutCli(c,rotAba){
   if(!b||!c)return;
   var L=manutDoCliente(c);
   if(rotAba)rotAba("man",L.length);
+  else{var bAb=$("cliAbas")&&$("cliAbas").querySelector('[data-ab="man"]');
+    if(bAb){if(!bAb.getAttribute("data-nome"))bAb.setAttribute("data-nome",bAb.textContent);
+      bAb.textContent=bAb.getAttribute("data-nome")+(L.length?" ("+L.length+")":"");}}
   var nV=L.filter(function(x){return x.s.k==="vencida";}).length;
   var nP=L.filter(function(x){return x.s.k==="semana"||x.s.k==="mes";}).length;
   var nPl=L.filter(function(x){return planoAtivoEquip(x.e);}).length;
@@ -21786,9 +21811,10 @@ function renderManutCli(c,rotAba){
       "<td><b>"+esc(x.px?dataCurta(x.px):"—")+'</b> <span class="pill '+x.s.cls+'">'+esc(x.s.n)+"</span></td>"+
       '<td><span class="pill '+st.cls+'">'+esc(st.n)+"</span>"+(st.sub?'<div class="t-sub">'+esc(st.sub)+"</div>":"")+"</td>"+
       '<td class="num">'+(tel?'<button class="btn zap sm" type="button" data-zapeq="'+esc(e.id)+'">WhatsApp</button> ':"")+
+        '<button class="btn ghost sm" type="button" data-mcok="'+esc(e.id)+'" title="Marcar a troca como feita e reagendar a próxima">Troca feita</button> '+
         '<button class="btn mut sm" type="button" data-mca="'+esc(e.id)+'">Agendar</button></td>';
     tr.onclick=function(ev){
-      if(ev.target.getAttribute("data-mca")||ev.target.getAttribute("data-zapeq"))return;
+      if(ev.target.getAttribute("data-mca")||ev.target.getAttribute("data-zapeq")||ev.target.getAttribute("data-mcok"))return;
       ir("manut");abrirEquip(e);};
     b.appendChild(tr);
   });
@@ -21797,6 +21823,11 @@ function renderManutCli(c,rotAba){
       ev.stopPropagation();
       var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mca");})[0];
       if(e)agendarVisita(e);};});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-mcok]"),function(bt){
+    bt.onclick=function(ev){
+      ev.stopPropagation();
+      var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mcok");})[0];
+      if(e)abrirTrocaFeita(e);};});
 }
 function renderManut(){
   var base=equipamentos.filter(function(e){return e.loja===lojaAtual;});
@@ -21943,9 +21974,10 @@ function renderManut(){
       '<td class="num">'+
         (String(((clientes.filter(function(z){return z.id===e.clienteId;})[0]||{}).tel)||"").replace(/\D/g,"")
           ?'<button class="btn zap sm" type="button" data-zapeq="'+e.id+'">WhatsApp</button> ':"")+
+        '<button class="btn ghost sm" type="button" data-mpok="'+e.id+'" title="Marcar a troca como feita e reagendar a próxima">Troca feita</button> '+
         '<button class="btn mut sm" type="button" data-mpa="'+e.id+'">Agendar</button></td>';
     tr.onclick=function(ev){
-      if(ev.target.getAttribute("data-mpb")||ev.target.getAttribute("data-mpa"))return;
+      if(ev.target.getAttribute("data-mpb")||ev.target.getAttribute("data-mpa")||ev.target.getAttribute("data-mpok"))return;
       abrirEquip(e);};
     b.appendChild(tr);
   });
@@ -21970,6 +22002,10 @@ function renderManut(){
     bt.onclick=function(ev){ev.stopPropagation();
       var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mpa");})[0];
       if(e)agendarVisita(e);};});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-mpok]"),function(bt){
+    bt.onclick=function(ev){ev.stopPropagation();
+      var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mpok");})[0];
+      if(e)abrirTrocaFeita(e);};});
 }
 function agendarVisita(e){
   var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
@@ -22018,7 +22054,7 @@ function notaEquip(){
   var dias=+$("mp_dias").value||0,base=$("mp_ultima").value||$("mp_inst").value;
   var px=(dias&&base)?somaDias(base,dias):"";
   $("mp_nota").innerHTML=px
-    ? '<div class="note"><b>Próxima manutenção: '+px+"</b> — "+dias+" dias a partir de "+base+
+    ? '<div class="note"><b>Próxima manutenção: '+dataCurta(px)+"</b> — "+dias+" dias a partir de "+dataCurta(base)+
       ($("mp_ultima").value?" (última manutenção)":" (instalação)")+".</div>"
     : '<div class="note warn">Informe o produto com intervalo de manutenção e a data de instalação para o sistema calcular a próxima.</div>';
 }
@@ -22086,6 +22122,92 @@ async function salvarEquip(){
   if(!editandoEq)equipamentos.push(e);
   await grava("equipamentos",e);editandoEq=e;
   return e;
+}
+/* ---------- TROCA FEITA: marcar a manutenção como concluída e reagendar (pedido do Wagner, 02/10) ----------
+   "Tem clientes que o outro sistema não deu baixa na manutenção periódica… um botão onde marcasse como
+   concluído e, ao clicar, aparece um campo qual foi a data da última troca, para o sistema agendar
+   novamente a troca de acordo com o tempo que é necessário daquele produto."
+   Não registra visita, peça nem cobrança (isso continua sendo o caminho do atendimento, regra de 14/09):
+   aqui é só o acerto da data, com o intervalo vindo do cadastro do produto. */
+var tfEq=null;
+function diasManutDe(e){
+  var p=produtos.filter(function(x){return x.id===e.produtoId;})[0]||{};
+  return +e.manutDias||+p.manut||0;
+}
+function abrirTrocaFeita(e){
+  if(!e)return;
+  tfEq=e;
+  var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
+  var p=produtos.filter(function(x){return x.id===e.produtoId;})[0]||{};
+  var dias=diasManutDe(e),s=sitEq(e),px=proximaDe(e);
+  $("tf_eq").innerHTML="<b>"+esc(e.produto||"—")+"</b>"+
+    (e.serie?" · série "+esc(e.serie):(e.local?" · "+esc(e.local):""))+
+    "<br>"+esc(e.cliente||c.nome||"")+
+    "<br>Última troca registrada: <b>"+esc(e.ultimaManut?dataCurta(e.ultimaManut):(e.compradoEm?dataCurta(e.compradoEm)+" (compra)":"nunca"))+
+    "</b> · próxima troca "+esc(px?dataCurta(px):"—")+' <span class="pill '+s.cls+'">'+esc(s.n)+"</span>";
+  $("tf_data").value=hojeISO();
+  $("tf_dias").value=dias||"";
+  $("tf_diasAjuda").textContent=dias
+    ?("Veio do cadastro do produto"+(p.nome?" "+p.nome:"")+". Mude só se este aparelho for diferente.")
+    :"Este produto não tem intervalo de manutenção no cadastro — informe de quantos em quantos dias ele é trocado.";
+  $("tf_alerta").innerHTML="";
+  notaTrocaFeita();
+  $("trocaFeitaModal").hidden=false;
+}
+/* a conta do sistema parte da data mais recente entre a troca informada, a venda e a instalação
+   (`baseManut`) — então a janela mostra a próxima troca REAL, e avisa quando a data informada é
+   mais antiga do que o que já está registrado, para ninguém marcar e achar que nada aconteceu */
+function baseTrocaFeita(e,d){
+  var b=d||"",v=e?(ultimaVendaDe(e)||""):"",c=e?(e.compradoEm||e.instaladoEm||""):"";
+  var qual="";
+  if(v&&v>b){b=v;qual="a última venda deste produto para o cliente";}
+  if(c&&c>b){b=c;qual="a compra/instalação do aparelho";}
+  return {base:b,qual:qual};
+}
+function notaTrocaFeita(){
+  var d=$("tf_data").value,n=+$("tf_dias").value||0;
+  if(!(d&&n>0)){
+    $("tf_nota").innerHTML='<div class="note warn">Informe a data em que a troca foi feita e de quantos em quantos dias este produto é trocado.</div>';
+    return;
+  }
+  var bt=baseTrocaFeita(tfEq,d);
+  $("tf_nota").innerHTML=(bt.base===d)
+    ? '<div class="note ok">Próxima troca: <b>'+esc(dataCurta(somaDias(d,n)))+"</b> — "+n+" dias depois de "+esc(dataCurta(d))+".</div>"
+    : '<div class="note warn">Próxima troca: <b>'+esc(dataCurta(somaDias(bt.base,n)))+"</b>. Este aparelho tem "+
+      esc(bt.qual)+" em <b>"+esc(dataCurta(bt.base))+"</b>, mais recente que a data informada — e é dela que o sistema conta.</div>";
+}
+async function confirmarTrocaFeita(){
+  var e=tfEq;
+  if(!e)return;
+  var d=$("tf_data").value,n=+$("tf_dias").value||0;
+  function aviso(t){$("tf_alerta").innerHTML='<div class="note crit" style="margin-top:10px">'+t+"</div>";}
+  if(!d||n<=0){aviso("<b>Informe a data da troca e de quantos em quantos dias este produto é trocado.</b>");return;}
+  if(d>hojeISO()){aviso("<b>A data da troca não pode ser no futuro.</b> Ela é o dia em que a troca aconteceu.");return;}
+  var antesU=e.ultimaManut,antesD=e.manutDias,antesH=e.historico;
+  e.ultimaManut=d;
+  e.manutDias=n;
+  e.historico=(e.historico||[]).concat([{data:d,hora:agoraHM(),tecnico:usuarioAtual,obs:
+    "Troca marcada como feita na Manutenção Periódica — acerto do cadastro. Próxima troca em "+
+    dataCurta(somaDias(d,n))+".",marcada:true}]);
+  try{
+    await grava("equipamentos",e);
+  }catch(err){
+    e.ultimaManut=antesU;e.manutDias=antesD;e.historico=antesH;
+    aviso("<b>O banco não aceitou gravar: "+esc(String(err&&err.message||err))+"</b><br>Nada foi alterado — tente de novo.");
+    return;
+  }
+  $("trocaFeitaModal").hidden=true;
+  var proxReal=proximaDe(e)||somaDias(d,n);
+  toast("Troca de "+(e.produto||"")+" marcada para "+dataCurta(d)+" · próxima troca "+dataCurta(proxReal)+".");
+  try{renderManut();}catch(er){console.warn(er);}
+  try{if(editandoCli&&!$("cliForm").hidden)renderManutCli(editandoCli);}catch(er){console.warn(er);}
+  try{if(editandoEq===e)notaEquip();}catch(er){}
+}
+function ligarTrocaFeita(){
+  if($("tf_ok"))$("tf_ok").onclick=confirmarTrocaFeita;
+  if($("tf_cancelar"))$("tf_cancelar").onclick=function(){$("trocaFeitaModal").hidden=true;};
+  if($("tf_data"))$("tf_data").onchange=notaTrocaFeita;
+  if($("tf_dias"))$("tf_dias").oninput=notaTrocaFeita;
 }
 /* ---------- registrar manutenção pela série ---------- */
 function abrirManut(e){
@@ -29909,6 +30031,7 @@ function navegacaoBasica(){
   try{ligarImportProdutos();}catch(e){console.warn("importar produtos",e);}
   try{ligarImportClientes();}catch(e){console.warn("importar clientes",e);}
   try{ligarImportManut();}catch(e){console.warn("importar manutenções",e);}
+  try{ligarTrocaFeita();}catch(e){console.warn("troca feita",e);}
   try{ligarCampoOS();}catch(e){console.warn("campo os",e);}
   try{ligarCamposValor();}catch(e){console.warn("campos de valor",e);}
   /* escolher o produto já põe 1 na quantidade, nas telas de venda (v253) */
