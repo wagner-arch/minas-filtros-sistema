@@ -5945,6 +5945,13 @@ var C_SIPAG=[1.0527,0.5226,0.3535,0.269,0.2184,0.1846,0.1605,0.1425,0.1284,0.117
 var C_BOLETO=[1.0527,0.57144,0.38911,0.29801,0.24342,0.20709,0.18118,0.1618,0.14677,0.13478,0.12499,0.11686];
 var C_SANTANDER=[0.353107,0.268528,0.218103,0.184366,0.158378,0.138889,0.124844,0.113766,0.104613,
   0.10101,0.094616,0.089174,0.084495,0.080438,0.081586,0.078468,0.075729,0.073314,0.071073,0.069185,0.067408,0.065824];
+/* Máquina de Rendimentos — tabela REAL da operadora, de 1× a 24×, passada por ele em 02/10.
+   Substitui os coeficientes da Sipag que a forma carregava desde a v142 e os de 13× a 24× que a
+   v224 tinha estimado. `COEF_REND_VERSAO` marca a forma já gravada, para a troca rodar uma vez. */
+var C_RENDIMENTOS=[1.02721,0.520455,0.349247,0.26363,0.212246,0.178142,0.15365,0.135021,0.120922,
+  0.108755,0.099874,0.092061,0.085905,0.080231,0.075308,0.071294,0.067477,0.064091,0.061045,
+  0.058308,0.055827,0.053563,0.051504,0.049611];
+var COEF_REND_VERSAO="rend-2026-10";
 
 var formasPgto=[];
 var SEED_FORMAS=[
@@ -5952,10 +5959,10 @@ var SEED_FORMAS=[
   {nome:"Cartão de Crédito Stone",coef:seq(C_STONE)},
   {nome:"Cartão de Crédito Moderninha",coef:seq(C_MODERNINHA)},
   /* Máquina de Rendimentos: o crédito cai ANTECIPADO, no mesmo dia da venda, no banco Ascicred
-     (regra do Wagner, 18/09). Os coeficientes começam iguais aos da Sipag e ficam marcados
-     "conferir" até alguém salvar a forma com a tabela real da operadora. */
-  {nome:"Máquina de Rendimentos",coef:seq(C_SIPAG),recebimento:"antecipada",
-    caixaNome:"Ascicred",caixaId:"",diasCredito:0,conferir:true},
+     (regra do Wagner, 18/09). Coeficientes REAIS da operadora, de 1× a 24× (ele passou a tabela
+     em 02/10) — é esta forma que define o preço que o vendedor vê na tela. */
+  {nome:"Máquina de Rendimentos",coef:seq(C_RENDIMENTOS),recebimento:"antecipada",
+    caixaNome:"Ascicred",caixaId:"",diasCredito:0,coefVersao:COEF_REND_VERSAO},
   {nome:"Santander",coef:seq(C_SANTANDER,3)},
   {nome:"Boleto Loja",coef:seq(C_BOLETO)},
   {nome:"Promissória",coef:seq(C_BOLETO.slice(0,10))},
@@ -6027,6 +6034,19 @@ function corrigirCoefSemJuros(){
     });
   });
   return mudou;
+}
+/* Tabela real da Máquina de Rendimentos (ele passou em 02/10). A forma já estava gravada no banco
+   com os coeficientes da Sipag e com 13× a 24× ESTIMADOS pela v224 — a troca roda uma vez, pelo
+   marcador `coefVersao`, e tira as marcas "conferir" e "estimado". Depois disso o que ele alterar
+   em Configurações › Formas de Pagamento permanece: a versão já está gravada na forma. */
+function atualizarCoefRendimentos(){
+  var f=(formasPgto||[]).filter(function(x){return x.nome===FORMA_RENDIMENTOS;})[0];
+  if(!f||f.coefVersao===COEF_REND_VERSAO)return false;
+  f.coef=seq(C_RENDIMENTOS);
+  f.coefVersao=COEF_REND_VERSAO;
+  delete f.conferir;          /* a tabela agora é a da operadora */
+  delete f.coefEstimado;      /* 13× a 24× deixaram de ser estimativa */
+  return true;
 }
 var LOJAS=[{id:"mf",nome:"Minas Filtros"},{id:"wf",nome:"WF Filtros"},{id:"dv",nome:"Divinópolis Filtros"}];
 var ORIGENS=["Loja Pará de Minas","Telemarketing","Indicação","Instagram","WhatsApp","Site","Feira","Passagem"];
@@ -6257,12 +6277,16 @@ async function carregar(){
     /* o orçamento da OS interna já foi recebido no caixa quando a OS foi aberta */
     if(!formasPgto.some(function(f){return f.nome===FORMA_ORC;})){
       formasPgto.push({nome:FORMA_ORC,coef:{1:1}});antigo=true;}
-    /* Máquina de Rendimentos: crédito ANTECIPADO no banco Ascicred (regra do Wagner, 18/09).
-       Os coeficientes nascem iguais aos da Sipag só para não ficar sem tabela — ficam marcados
-       "conferir" até alguém abrir a forma e salvar com os números da operadora. */
+    /* Máquina de Rendimentos: crédito ANTECIPADO no banco Ascicred (regra do Wagner, 18/09),
+       com os coeficientes REAIS da operadora de 1× a 24× (tabela dele, 02/10). */
     if(!formasPgto.some(function(f){return f.nome===FORMA_RENDIMENTOS;})){
-      formasPgto.push({nome:FORMA_RENDIMENTOS,coef:seq(C_SIPAG),recebimento:"antecipada",
-        caixaNome:"Ascicred",caixaId:"",diasCredito:0,conferir:true});antigo=true;}
+      formasPgto.push({nome:FORMA_RENDIMENTOS,coef:seq(C_RENDIMENTOS),recebimento:"antecipada",
+        caixaNome:"Ascicred",caixaId:"",diasCredito:0,coefVersao:COEF_REND_VERSAO});antigo=true;}
+    /* a forma já gravada no banco carrega a tabela antiga (Sipag + 13× a 24× estimados): troca
+       pela real UMA vez, pelo marcador de versão — depois disso o que ele editar na tela fica.
+       Vale na memória para todo mundo (o preço da tela sai certo na hora), mas só o Administrador
+       GRAVA: `config/*` é dele e do Financeiro, e gravação recusada acende a faixa vermelha. */
+    if(atualizarCoefRendimentos()&&ehAdministrador())antigo=true;
     /* coeficiente 1 em 2× ou mais era conta errada: dividia a base pelo nº de parcelas (20/09) */
     if(corrigirCoefSemJuros())antigo=true;
     /* a forma de referência precisa ter o coeficiente da parcela que define o preço da tela (25/09).
@@ -6274,6 +6298,7 @@ async function carregar(){
   }catch(e){console.warn("formas",e);}
   /* fora do try de propósito: sem banco o bloco acima nem começa, e o preço de referência tem de
      valer também na demonstração e em qualquer leitura que tenha falhado */
+  atualizarCoefRendimentos();
   garantirCoefReferencia();
   /* venda nova já nasce na forma de referência, para o valor do item sair no final de 24× */
   if(!itens.length)formas=formasIniciais();
