@@ -1500,6 +1500,9 @@ img{max-width:100%}
 
         <!-- histórico do cliente ACIMA do nome (pedido do Wagner, 12/09): toque na aba abre, toque de novo fecha -->
         <div id="cliHist" hidden style="margin:2px 0 18px">
+          <!-- manutenção periódica do cliente (pedido do Wagner, 02/10): abrindo a ficha já se vê
+               se ele tem manutenção vencida, qual é e de quando -->
+          <div id="cliManutAviso"></div>
           <div class="abas abas-cli" id="cliAbas">
             <button type="button" data-ab="dados" aria-current="true">Dados pessoais</button>
             <button type="button" data-ab="hist">Histórico</button>
@@ -1508,6 +1511,7 @@ img{max-width:100%}
             <button type="button" data-ab="ped">Pedidos</button>
             <button type="button" data-ab="orc">Orçamentos</button>
             <button type="button" data-ab="os">OS</button>
+            <button type="button" data-ab="man">Manutenções</button>
             <button type="button" data-ab="anx">Anexos</button>
           </div>
 
@@ -1575,6 +1579,16 @@ img{max-width:100%}
             <div class="tw"><table>
               <thead><tr><th>OS</th><th>Abertura</th><th>Equipamento</th><th>Tipo</th><th>Prazo</th><th>Situação</th></tr></thead>
               <tbody id="ch_os"></tbody>
+            </table></div>
+          </div>
+
+          <!-- MANUTENÇÕES PERIÓDICAS DO CLIENTE (pedido do Wagner, 02/10) -->
+          <div class="ab-corpo" data-ab="man" hidden>
+            <p class="help" style="margin:0 0 10px">Os aparelhos deste cliente na Manutenção Periódica. Toque na linha para abrir a ficha do aparelho.</p>
+            <div class="kpis" id="ch_manKpis"></div>
+            <div class="tw"><table>
+              <thead><tr><th>Equipamento</th><th>Última troca</th><th>Próxima troca</th><th>Contato</th><th></th></tr></thead>
+              <tbody id="ch_man"></tbody>
             </table></div>
           </div>
         </div>
@@ -6705,7 +6719,7 @@ function renderClientes(){
     var f=faltantes(c),ind=estrelasDe(c.id),indTot=indicadosPor(c.id).length;
     var tr=document.createElement("tr");tr.className="clickable";
     tr.innerHTML='<td><div class="t-main">'+esc(c.nome)+
-        (ehLead(c)?' <span class="pill p-acc">lead</span>':"")+seloPlanoCliente(c.id)+'</div>'+
+        (ehLead(c)?' <span class="pill p-acc">lead</span>':"")+seloPlanoCliente(c.id)+seloManutCliente(c)+'</div>'+
         (c.apelido?'<div class="t-sub">'+esc(c.apelido)+'</div>':'')+'</td>'+
       "<td>"+esc(c.doc||"—")+"</td>"+
       '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
@@ -6910,7 +6924,7 @@ function abrirCliente(c){
   preencherIndicados(v.indicado);toggleConj();toggleTipoPJ();renderEstrelas(c);
   $("cliFormTitulo").innerHTML=c
     ? esc("Editar · "+c.nome)+(ehLead(c)?' <span class="pill p-acc" style="vertical-align:middle;margin-left:8px">lead</span>':
-        ' <span class="pill p-ok" style="vertical-align:middle;margin-left:8px">cliente</span>')+seloPlanoCliente(c.id)+
+        ' <span class="pill p-ok" style="vertical-align:middle;margin-left:8px">cliente</span>')+seloPlanoCliente(c.id)+seloManutCliente(c)+
       (String(c.tel||"").replace(/\D/g,"")?' <button type="button" class="btn zap sm" style="vertical-align:middle;margin-left:8px" data-zapcli="'+esc(c.id)+'">💬 WhatsApp</button>':"")
     : "Novo lead";
   /* ficha aberta: começa na aba Dados pessoais */
@@ -8534,6 +8548,9 @@ window.__pedidosMF=function(){return pedidos;};
 /* ganchos de teste da importação de manutenções (v256) */
 window.__clientesMF=function(){return clientes;};
 window.__equipamentosMF=function(){return equipamentos;};
+/* ganchos dos testes da v258 (manutenção no cadastro do cliente) */
+window.__idxManutCliMF=function(refazer){if(refazer)esquecerManutCli();return indiceManutCli();};
+window.__manutCliMF=function(c){return manutDoCliente(c);};
 window.__ativsMF=function(){return atendimentos.filter(function(a){return a.natureza==="atividade";});};
 window.__tecnicosOSMF=function(){return tecnicosOS();};
 window.__catsTextoMF=function(){return CATEGORIAS_MF;};
@@ -20972,6 +20989,7 @@ function renderCliHist(c){
   }
   try{renderHistoricoCli(c);}catch(e){console.warn(e);}
   try{renderAnexosCli(c,rotAba);}catch(e){console.warn(e);}
+  try{renderManutCli(c,rotAba);}catch(e){console.warn(e);}
   var orcs=orcsDe(c.id).sort(function(a,b){return b.numero-a.numero;});
   var conv=orcs.filter(function(o){return o.situacao==="convertido";});
   $("ch_orcKpis").innerHTML=
@@ -21625,6 +21643,160 @@ async function manutencaoPelaVenda(ped){
     }
   }
   return {baixadas:baixadas,agendadas:agendadas,trocas:trocas,plano:migPlano};
+}
+/* ========== MANUTENÇÃO PERIÓDICA DENTRO DO CADASTRO DO CLIENTE (pedido do Wagner, 02/10) ==========
+   Abrindo a ficha do cliente tem de dar para ver na hora se ele tem manutenção vencida, qual é e de
+   quando. O vínculo NÃO se prende só ao clienteId gravado no equipamento: casa também por CPF/CNPJ,
+   telefone e nome (regra dele: "pegar todas as informações e ver qual tem e lincar com o cliente"),
+   porque a base antiga importada pode ter deixado a mesma pessoa em mais de um cadastro.
+   O aparelho que vem de um cadastro irmão aparece com a pill dizendo por onde casou. */
+function chavesCliManut(c){
+  var k=[];
+  if(!c)return k;
+  var d=String(c.doc||"").replace(/\D/g,"");
+  if(d.length>=11)k.push("d:"+d);
+  [c.tel,c.respTel,c.comprasTel].forEach(function(t){
+    var t8=tel8Imp(t);if(t8&&k.indexOf("t:"+t8)<0)k.push("t:"+t8);});
+  var n=normNomeImp(c.nome);
+  if(n.length>=5)k.push("n:"+n);
+  return k;
+}
+/* índice montado UMA vez: 22 mil clientes × 16 mil equipamentos não se cruzam a cada linha da lista
+   (lição da v148). Vale enquanto a loja e as duas listas forem as mesmas. */
+var _idxManutCli=null;
+function esquecerManutCli(){_idxManutCli=null;}
+function indiceManutCli(){
+  if(_idxManutCli&&_idxManutCli.loja===lojaAtual&&_idxManutCli.nE===equipamentos.length&&
+     _idxManutCli.nC===clientes.length)return _idxManutCli;
+  var porChave={},porId={},doCli={};
+  clientes.forEach(function(c){
+    porId[c.id]=c;
+    chavesCliManut(c).forEach(function(k){(porChave[k]=porChave[k]||[]).push(c.id);});
+  });
+  function juntar(cid,e,via){
+    if(!cid)return;
+    var L=doCli[cid]=doCli[cid]||[];
+    for(var i=0;i<L.length;i++)if(L[i].e===e)return;
+    L.push({e:e,via:via});
+  }
+  equipamentos.forEach(function(e){
+    if(e.loja!==lojaAtual)return;
+    juntar(e.clienteId,e,"");
+    var dono=porId[e.clienteId],ks=dono?chavesCliManut(dono):[];
+    var nomeEq=normNomeImp(e.cliente);
+    if(nomeEq.length>=5&&ks.indexOf("n:"+nomeEq)<0)ks.push("n:"+nomeEq);
+    ks.forEach(function(k){
+      var via=k.charAt(0)==="d"?"mesmo CPF/CNPJ":(k.charAt(0)==="t"?"mesmo telefone":"mesmo nome");
+      (porChave[k]||[]).forEach(function(cid){if(cid!==e.clienteId)juntar(cid,e,via);});
+    });
+  });
+  _idxManutCli={loja:lojaAtual,nE:equipamentos.length,nC:clientes.length,mapa:doCli};
+  return _idxManutCli;
+}
+var ORDEM_SIT_MANUT={vencida:0,semana:1,mes:2,emdia:3,semdata:4};
+function manutDoCliente(c){
+  if(!c||!c.id)return [];
+  var L=[];
+  try{L=indiceManutCli().mapa[c.id]||[];}catch(e){return [];}
+  return L.filter(function(x){return x.e.ativo!==false;})
+    .map(function(x){return {e:x.e,via:x.via,s:sitEq(x.e),px:proximaDe(x.e)};})
+    .sort(function(a,b){
+      var oa=ORDEM_SIT_MANUT[a.s.k],ob=ORDEM_SIT_MANUT[b.s.k];
+      if(oa==null)oa=9;
+      if(ob==null)ob=9;
+      if(oa!==ob)return oa-ob;
+      return String(a.px||"9999-99-99").localeCompare(String(b.px||"9999-99-99"));
+    });
+}
+function resumoManutCliente(c){
+  var L=manutDoCliente(c);
+  return {lista:L,
+    vencidas:L.filter(function(x){return x.s.k==="vencida";}),
+    proximas:L.filter(function(x){return x.s.k==="semana"||x.s.k==="mes";})};
+}
+function textoManutLinha(x){
+  return (x.e.produto||"Equipamento")+(x.e.serie?" · série "+x.e.serie:"")+
+    (x.px?" · "+(x.s.k==="vencida"?"venceu em ":"vence em ")+dataCurta(x.px):" · sem data de troca");
+}
+/* pill ao lado do nome, na ficha e na lista de Clientes — só aparece quando há o que resolver */
+function seloManutCliente(c){
+  var r;
+  try{r=resumoManutCliente(c);}catch(e){return "";}
+  if(r.vencidas.length)
+    return ' <span class="pill p-crit" title="'+esc(r.vencidas.map(textoManutLinha).join(" · "))+
+      '">&#128295; '+r.vencidas.length+(r.vencidas.length===1?" manutenção vencida":" manutenções vencidas")+"</span>";
+  if(r.proximas.length)
+    return ' <span class="pill p-warn" title="'+esc(r.proximas.map(textoManutLinha).join(" · "))+
+      '">&#128295; '+r.proximas.length+(r.proximas.length===1?" manutenção a vencer":" manutenções a vencer")+"</span>";
+  return "";
+}
+/* faixa no topo da ficha: diz qual é a manutenção, a data e quantas mais existem */
+function renderAvisoManutCli(c){
+  var w=$("cliManutAviso");
+  if(!w)return;
+  w.innerHTML="";
+  if(!c)return;
+  var r=resumoManutCliente(c);
+  if(!r.vencidas.length&&!r.proximas.length)return;
+  var crit=r.vencidas.length>0,pri=(crit?r.vencidas:r.proximas)[0],mais=[];
+  if(crit&&r.vencidas.length>1)mais.push("mais "+(r.vencidas.length-1)+(r.vencidas.length-1===1?" vencida":" vencidas"));
+  if(r.proximas.length)mais.push(r.proximas.length+" a vencer em até 30 dias");
+  var outros=r.lista.length-r.vencidas.length-r.proximas.length;
+  if(outros>0)mais.push(outros+" em dia");
+  w.innerHTML='<div class="note '+(crit?"crit":"warn")+'" style="margin:0 0 12px">'+
+    "<b>"+(crit?"Manutenção vencida.":"Manutenção a vencer.")+"</b> "+esc(textoManutLinha(pri))+
+    ' <span class="pill '+pri.s.cls+'">'+esc(pri.s.n)+"</span>"+
+    (mais.length?"<br>Este cliente tem ainda "+esc(mais.join(" · "))+".":"")+
+    ' <button class="btn sm ghost" type="button" id="cliManutVer" style="margin-left:6px">Ver as manutenções</button></div>';
+  var bt=$("cliManutVer");
+  if(bt)bt.onclick=function(){abaCliente("man");};
+}
+/* aba Manutenções da ficha */
+function renderManutCli(c,rotAba){
+  try{renderAvisoManutCli(c);}catch(e){console.warn(e);}
+  var b=$("ch_man");
+  if(!b||!c)return;
+  var L=manutDoCliente(c);
+  if(rotAba)rotAba("man",L.length);
+  var nV=L.filter(function(x){return x.s.k==="vencida";}).length;
+  var nP=L.filter(function(x){return x.s.k==="semana"||x.s.k==="mes";}).length;
+  var nPl=L.filter(function(x){return planoAtivoEquip(x.e);}).length;
+  $("ch_manKpis").innerHTML=
+    '<div class="kpi"><div class="l">Aparelhos</div><div class="v">'+L.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Vencidas</div><div class="v" style="color:'+(nV?"var(--crit)":"inherit")+'">'+nV+"</div></div>"+
+    '<div class="kpi"><div class="l">A vencer em 30 dias</div><div class="v" style="color:'+(nP?"var(--warn)":"inherit")+'">'+nP+"</div></div>"+
+    '<div class="kpi"><div class="l">Com plano Premium</div><div class="v">'+nPl+"</div></div>";
+  b.innerHTML="";
+  if(!L.length){
+    b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhuma manutenção periódica</div>'+
+      'Venda de produto com "Manutenção (dias)" no cadastro entra aqui sozinha.</div></td></tr>';
+    return;
+  }
+  L.forEach(function(x){
+    var e=x.e,st=statusManut(e),ult=baseManut(e),tel=String(c.tel||"").replace(/\D/g,"");
+    var tr=document.createElement("tr");
+    tr.className="clickable";
+    tr.setAttribute("data-mcst",x.s.k);
+    tr.innerHTML='<td><div class="t-main">'+esc(e.produto||"—")+"</div>"+
+        '<div class="t-sub">'+(e.serie?"<code>"+esc(e.serie)+"</code> ":"")+esc(e.local||"")+
+          (planoAtivoEquip(e)?' <span class="pill p-plano">&#128167; Plano '+esc(e.plano)+" · ativo</span>":"")+
+          (x.via?' <span class="pill p-mut" title="Este aparelho está em outro cadastro com os mesmos dados">'+esc(x.via)+"</span>":"")+
+        "</div></td>"+
+      "<td>"+esc(ult?dataCurta(ult):"—")+"</td>"+
+      "<td><b>"+esc(x.px?dataCurta(x.px):"—")+'</b> <span class="pill '+x.s.cls+'">'+esc(x.s.n)+"</span></td>"+
+      '<td><span class="pill '+st.cls+'">'+esc(st.n)+"</span>"+(st.sub?'<div class="t-sub">'+esc(st.sub)+"</div>":"")+"</td>"+
+      '<td class="num">'+(tel?'<button class="btn zap sm" type="button" data-zapeq="'+esc(e.id)+'">WhatsApp</button> ':"")+
+        '<button class="btn mut sm" type="button" data-mca="'+esc(e.id)+'">Agendar</button></td>';
+    tr.onclick=function(ev){
+      if(ev.target.getAttribute("data-mca")||ev.target.getAttribute("data-zapeq"))return;
+      ir("manut");abrirEquip(e);};
+    b.appendChild(tr);
+  });
+  Array.prototype.forEach.call(b.querySelectorAll("[data-mca]"),function(bt){
+    bt.onclick=function(ev){
+      ev.stopPropagation();
+      var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mca");})[0];
+      if(e)agendarVisita(e);};});
 }
 function renderManut(){
   var base=equipamentos.filter(function(e){return e.loja===lojaAtual;});
