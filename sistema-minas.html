@@ -5080,6 +5080,12 @@ img{max-width:100%}
     <label class="chk" style="display:flex;gap:9px;align-items:center;margin:8px 0">
       <input type="checkbox" id="ip_estoque" checked> Lançar a quantidade como estoque inicial desta loja
     </label>
+    <label class="chk" style="display:flex;gap:9px;align-items:center;margin:8px 0">
+      <input type="checkbox" id="ip_atualizar" checked> Atualizar o <b>código</b> e o <b>valor</b> dos produtos que já existem (acha pelo nome; nunca cria repetido)
+    </label>
+    <label class="chk" style="display:flex;gap:9px;align-items:center;margin:8px 0">
+      <input type="checkbox" id="ip_criar"> Cadastrar também os produtos que ainda não existem
+    </label>
     <div id="ip_previa"></div>
     <div id="ip_alerta"></div>
     <div class="actions">
@@ -7642,81 +7648,190 @@ function atualizarBotaoApagarImport(){
   bt.textContent="Apagar os "+n+" produto(s) importado(s)";
 }
 var impLidos=null;
+/* ---------- ATUALIZAR produto que já existe (pedido do Wagner, 02/10) ----------
+   A lista nova do sistema antigo traz o código dentro do nome ("PMF104 - ACQUAFLEX…") e o preço de
+   hoje. O produto JÁ está cadastrado aqui, com o código numérico antigo — então quem localiza é o
+   NOME, e o código é justamente o que muda. Regra dele: não criar duplicado. */
+function normProdImp(s){
+  return String(s||"").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g,"")
+    .replace(/[^A-Z0-9]+/g," ").replace(/\s+/g," ").trim();
+}
+function indiceProdAtu(){
+  var idx={porNome:{},porCod:{}};
+  produtos.forEach(function(p){
+    var n=normProdImp(p.nome);
+    if(n)(idx.porNome[n]=idx.porNome[n]||[]).push(p);
+    var c=String(p.cod||"").toUpperCase().trim();
+    if(c)(idx.porCod[c]=idx.porCod[c]||[]).push(p);
+  });
+  return idx;
+}
+/* Quem manda é o NOME. O código só desempata quando o mesmo nome existe em dois cadastros.
+   Código que bate num produto de OUTRO nome não atualiza nada: fica separado como conflito —
+   senão o preço da lista entraria no produto errado (defeito pego no teste). */
+function acharProdutoImp(it,idx){
+  var c=String(it.cod||"").toUpperCase().trim();
+  var L=idx.porNome[normProdImp(it.nome)]||[];
+  if(L.length===1)
+    return {p:L[0],via:(c&&String(L[0].cod||"").toUpperCase()===c)?"código e nome":"nome"};
+  if(L.length>1){
+    var exato=c?L.filter(function(p){return String(p.cod||"").toUpperCase()===c;}):[];
+    if(exato.length===1)return {p:exato[0],via:"código"};
+    return {ambiguo:L};
+  }
+  if(c&&idx.porCod[c]&&idx.porCod[c].length)return {conflitoCod:idx.porCod[c][0]};
+  return null;
+}
 function previaImport(){
   var r=linhasImportProduto($("ip_texto").value);
   impLidos=r;
-  var novos=[],repete=[],jaTem=[],vistos={};
+  var idx=indiceProdAtu();
+  var novos=[],repete=[],atualizar=[],ambiguos=[],semMudanca=[],conflitos=[],vistos={};
   r.itens.forEach(function(i){
-    if(vistos[i.cod]){repete.push(i);return;}
-    vistos[i.cod]=true;
-    (produtos.some(function(p){return String(p.cod)===String(i.cod);})?jaTem:novos).push(i);
+    /* repetido no arquivo é pelo código E pelo nome: duas linhas com o mesmo nome cairiam no mesmo
+       produto e o código ficaria indo e voltando a cada importação (pego no teste com o arquivo real) */
+    var chaveN="n:"+normProdImp(i.nome),chaveC=String(i.cod||"").toUpperCase();
+    if(vistos[chaveN]||(chaveC&&vistos[chaveC])){repete.push(i);return;}
+    vistos[chaveN]=true;
+    if(chaveC)vistos[chaveC]=true;
+    var ach=acharProdutoImp(i,idx);
+    if(ach&&ach.ambiguo){i.ambiguo=ach.ambiguo;ambiguos.push(i);return;}
+    if(ach&&ach.conflitoCod){i.conflito=ach.conflitoCod;conflitos.push(i);return;}
+    if(!ach){novos.push(i);return;}
+    i.alvo=ach.p;i.via=ach.via;
+    var codNovo=String(i.cod||"").trim();
+    var donoDoCod=codNovo?(idx.porCod[codNovo.toUpperCase()]||[]).filter(function(x){return x!==ach.p;})[0]:null;
+    i.trocaCod=!!codNovo&&String(ach.p.cod||"")!==codNovo&&!donoDoCod;
+    i.codOcupado=donoDoCod||null;
+    i.trocaPreco=(+i.cheia>0)&&Math.abs((+ach.p.cheia||0)-(+i.cheia))>=0.005;
+    (i.trocaCod||i.trocaPreco?atualizar:semMudanca).push(i);
   });
-  impLidos.novos=novos;impLidos.jaTem=jaTem;
+  impLidos.novos=novos;impLidos.jaTem=atualizar;impLidos.atualizar=atualizar;
+  impLidos.ambiguos=ambiguos;impLidos.semMudanca=semMudanca;impLidos.conflitos=conflitos;
+  /* arquivo que só traz produto novo já vem com a caixa de cadastrar marcada; arquivo que
+     atualiza o que existe (o caso da lista do sistema antigo) nasce com ela desmarcada */
+  if($("ip_criar")&&!$("ip_criar").__tocado)$("ip_criar").checked=(novos.length>0&&!atualizar.length);
   if(!r.itens.length){$("ip_previa").innerHTML=$("ip_texto").value.trim()
     ?'<div class="note crit"><b>Não reconheci nenhuma linha.</b> Cada linha precisa começar pelo código do produto.</div>':"";return;}
-  var comPreco=r.itens.some(function(i){return +i.cheia>0;});
-  var semPreco=novos.filter(function(i){return !(+i.cheia>0);}).length;
-  var amostra=novos.slice(0,6).map(function(i){
-    return "<tr><td>"+esc(i.cod)+"</td><td>"+esc(i.nome)+"</td><td>"+esc(i.barras||"—")+"</td><td>"+esc(i.marca||"—")+
-      '</td><td class="num">'+i.qtd+"</td><td>"+esc(i.un)+"</td>"+
-      (comPreco?"<td>"+esc(i.grupo||GRUPO_COMPLETAR)+'</td><td class="num">'+(+i.cheia>0?BRL(i.cheia):"—")+
-        '</td><td class="num">'+(+i.campanha>0?BRL(i.campanha):"—")+"</td>":"")+"</tr>";}).join("");
-  $("ip_previa").innerHTML='<div class="note'+(novos.length?" ok":" warn")+'"><b>'+r.itens.length+" linha(s) lida(s)</b>"+
-    (r.cabecalho?" pelo cabeçalho do arquivo":"")+" · <b>"+
-    novos.length+"</b> produto(s) novo(s)"+(jaTem.length?" · "+jaTem.length+" já cadastrado(s), que serão pulados":"")+
-    (repete.length?" · "+repete.length+" código(s) repetido(s) no arquivo":"")+
-    (r.ruins.length?" · "+r.ruins.length+" linha(s) sem nome":"")+
-    (comPreco&&semPreco?" · "+semPreco+" sem preço, que ficam como <b>completar cadastro</b>":"")+"</div>"+
-    (novos.length?'<div class="tw"><table><thead><tr><th>Código</th><th>Nome</th><th>Barras</th><th>Marca</th><th class="num">Qtd</th><th>Un.</th>'+
-      (comPreco?'<th>Grupo</th><th class="num">100%</th><th class="num">70%</th>':"")+"</tr></thead><tbody>"+
-      amostra+"</tbody></table></div>"+(novos.length>6?'<p class="help">… e mais '+(novos.length-6)+" produto(s).</p>":""):"");
+  var nCod=atualizar.filter(function(i){return i.trocaCod;}).length;
+  var nPre=atualizar.filter(function(i){return i.trocaPreco;}).length;
+  var ocupados=atualizar.filter(function(i){return i.codOcupado;});
+  var amostra=atualizar.slice(0,6).map(function(i){
+    return "<tr><td>"+esc(i.alvo.cod||"—")+" → <b>"+esc(i.trocaCod?i.cod:(i.alvo.cod||"—"))+"</b></td>"+
+      "<td>"+esc(i.alvo.nome)+'</td><td class="num">'+(+i.alvo.cheia>0?BRL(i.alvo.cheia):"—")+
+      "</td>"+'<td class="num"><b>'+(+i.cheia>0?BRL(i.cheia):"—")+"</b></td>"+
+      '<td><span class="pill p-mut">pelo '+esc(i.via)+"</span></td></tr>";}).join("");
+  var amostraN=novos.slice(0,5).map(function(i){
+    return "<tr><td>"+esc(i.cod||"—")+"</td><td>"+esc(i.nome)+'</td><td class="num">'+
+      (+i.cheia>0?BRL(i.cheia):"—")+"</td></tr>";}).join("");
+  $("ip_previa").innerHTML='<div class="note'+(atualizar.length?" ok":" warn")+'"><b>'+r.itens.length+" linha(s) lida(s)</b>"+
+    (r.cabecalho?" pelo cabeçalho do arquivo":"")+"<br><b>"+atualizar.length+"</b> produto(s) já cadastrado(s) para <b>atualizar</b>"+
+    (atualizar.length?" ("+nCod+" mudam o código · "+nPre+" mudam o valor)":"")+
+    (semMudanca.length?" · <b>"+semMudanca.length+"</b> já estão iguais":"")+
+    " · <b>"+novos.length+"</b> não existe(m) aqui"+
+    (ambiguos.length?" · <b>"+ambiguos.length+"</b> com nome repetido, que ficam de fora":"")+
+    (conflitos.length?" · <b>"+conflitos.length+"</b> com o código de outro produto, que ficam de fora":"")+
+    (repete.length?" · "+repete.length+" repetido(s) no arquivo":"")+
+    (r.ruins.length?" · "+r.ruins.length+" linha(s) sem nome":"")+"</div>"+
+    (ocupados.length?'<div class="note crit"><b>'+ocupados.length+" código(s) do arquivo já pertencem a outro produto daqui</b> — nesses, o valor é atualizado e o código fica como está: "+
+      esc(ocupados.slice(0,4).map(function(i){return i.cod+" ("+i.codOcupado.nome+")";}).join(" · "))+"</div>":"")+
+    (ambiguos.length?'<div class="note warn"><b>Nome repetido, não dá para saber qual é:</b> '+
+      esc(ambiguos.slice(0,4).map(function(i){return i.nome;}).join(" · "))+(ambiguos.length>4?" …":"")+"</div>":"")+
+    (conflitos.length?'<div class="note crit"><b>O código destas linhas já é de outro produto aqui — nada foi mexido:</b> '+
+      esc(conflitos.slice(0,4).map(function(i){return i.cod+" ("+i.nome+" → aqui é "+i.conflito.nome+")";}).join(" · "))+(conflitos.length>4?" …":"")+"</div>":"")+
+    (atualizar.length?'<div class="tw"><table><thead><tr><th>Código</th><th>Produto</th><th class="num">Valor hoje</th><th class="num">Novo valor</th><th>Achado</th></tr></thead><tbody>'+
+      amostra+"</tbody></table></div>"+(atualizar.length>6?'<p class="help">… e mais '+(atualizar.length-6)+" produto(s).</p>":""):"")+
+    (novos.length?'<p class="help" style="margin-top:10px"><b>Não existem aqui</b> (só entram se você marcar "cadastrar também"):</p>'+
+      '<div class="tw"><table><thead><tr><th>Código</th><th>Nome</th><th class="num">Valor</th></tr></thead><tbody>'+
+      amostraN+"</tbody></table></div>"+(novos.length>5?'<p class="help">… e mais '+(novos.length-5)+".</p>":""):"");
 }
 function abrirImportProdutos(){
   $("ip_texto").value="";$("ip_arqNome").textContent="";$("ip_previa").innerHTML="";$("ip_alerta").innerHTML="";
   $("ip_estoque").checked=true;impLidos=null;
   atualizarBotaoApagarImport();
+  if($("ip_atualizar")){$("ip_atualizar").checked=true;$("ip_atualizar").__tocado=false;}
+  if($("ip_criar")){$("ip_criar").checked=false;$("ip_criar").__tocado=false;}
   $("impModal").hidden=false;
 }
 async function importarProdutos(){
   if(!impLidos)previaImport();
   var novos=(impLidos&&impLidos.novos)||[];
-  if(!novos.length){$("ip_alerta").innerHTML='<div class="note crit"><b>Nada para importar.</b></div>';return;}
+  var atualizar=(impLidos&&impLidos.atualizar)||[];
+  var querAtualizar=$("ip_atualizar")?$("ip_atualizar").checked:false;
+  var querCriar=$("ip_criar")?$("ip_criar").checked:true;
+  if(!(querAtualizar&&atualizar.length)&&!(querCriar&&novos.length)){
+    $("ip_alerta").innerHTML='<div class="note crit"><b>Nada para fazer.</b> '+
+      (atualizar.length?"Marque <b>atualizar</b> para gravar os "+atualizar.length+" que já existem. ":"")+
+      (novos.length?"Marque <b>cadastrar</b> para incluir os "+novos.length+" que não existem.":"")+"</div>";
+    return;
+  }
   var comEst=$("ip_estoque").checked,bt=$("ip_ok");
   bt.disabled=true;$("ip_fechar").disabled=true;
-  var feitos=0,erros=0;
-  for(var i=0;i<novos.length;i++){
-    var n=novos[i];
-    try{
-      var grupo=(n.grupo||"").trim()||GRUPO_COMPLETAR;
-      var p={id:uid(),cod:n.cod,nome:n.nome,pop:n.pop||"",marca:n.marca,
-        grupo:grupo,subgrupo:(n.subgrupo||"").trim()||GRUPO_COMPLETAR,
-        un:n.un,barras:n.barras,
-        cheia:+n.cheia||0,campanha:+n.campanha||0,minimo:+n.minimo||0,campativa:"nao",
-        custo:+n.custo||0,frete:+n.frete||0,ipi:0,st:0,federais:0,icms:0,
-        pontos:+n.pontos||0,manut:+n.manut||0,gar:+n.gar||0,
-        /* série só quando o ARQUIVO disser: marcar por conta própria travava a venda (18/09) */
-        serie:(n.serie==="sim"?"sim":"nao"),status:"ativo",estmin:{},local:{},estoqueMigrado:true,
-        importado:true,criadoEm:hojeISO(),criadoPor:usuarioAtual};
-      p.completar=(grupo===GRUPO_COMPLETAR||!(+p.cheia>0));
-      produtos.push(p);
-      if(db)await col("produtos").doc(p.id).set(p);
-      if(comEst&&n.qtd>0)await lancarMov(p.id,n.qtd,"ajuste",LOC_EMPRESA,DOC_IMPORT,"Quantidade da lista importada",hojeISO(),"");
-      feitos++;
-    }catch(e){erros++;console.warn("importar",n.cod,e);}
-    if(i%10===0||i===novos.length-1)
-      $("ip_alerta").innerHTML='<div class="note"><b>Gravando '+(i+1)+" de "+novos.length+"…</b> deixe esta janela aberta até terminar.</div>";
+  var feitos=0,erros=0,mudCod=0,mudPreco=0,travados=0,total=(querAtualizar?atualizar.length:0)+(querCriar?novos.length:0),andar=0;
+  function passo(){
+    andar++;
+    if(andar%10===0||andar===total)
+      $("ip_alerta").innerHTML='<div class="note"><b>Gravando '+andar+" de "+total+"…</b> deixe esta janela aberta até terminar.</div>";
+  }
+  /* 1) os que já existem: troca o código e o valor, e nada mais do cadastro é tocado */
+  if(querAtualizar){
+    for(var k=0;k<atualizar.length;k++){
+      var it=atualizar[k],p=it.alvo;
+      var antesCod=p.cod,antesCheia=p.cheia,antesMarca=p.marca,antesCompletar=p.completar;
+      try{
+        if(it.trocaCod){p.codAnterior=p.cod||"";p.cod=String(it.cod).trim();}
+        if(it.trocaPreco)p.cheia=+it.cheia;
+        if(!String(p.marca||"").trim()&&String(it.marca||"").trim())p.marca=it.marca;
+        p.completar=((p.grupo||GRUPO_COMPLETAR)===GRUPO_COMPLETAR||!(+p.cheia>0));
+        p.atualizadoEm=hojeISO();p.atualizadoPor=usuarioAtual;
+        if(db)await col("produtos").doc(p.id).set(p);
+        if(it.trocaCod)mudCod++;
+        if(it.trocaPreco)mudPreco++;
+        feitos++;
+      }catch(e){
+        p.cod=antesCod;p.cheia=antesCheia;p.marca=antesMarca;p.completar=antesCompletar;
+        erros++;console.warn("atualizar",it.cod,e);
+      }
+      passo();
+    }
+  }
+  /* 2) os que não existem, só se ele marcar */
+  if(querCriar){
+    for(var i=0;i<novos.length;i++){
+      var n=novos[i];
+      try{
+        var grupo=(n.grupo||"").trim()||GRUPO_COMPLETAR;
+        var np={id:uid(),cod:n.cod,nome:n.nome,pop:n.pop||"",marca:n.marca,
+          grupo:grupo,subgrupo:(n.subgrupo||"").trim()||GRUPO_COMPLETAR,
+          un:n.un,barras:n.barras,
+          cheia:+n.cheia||0,campanha:+n.campanha||0,minimo:+n.minimo||0,campativa:"nao",
+          custo:+n.custo||0,frete:+n.frete||0,ipi:0,st:0,federais:0,icms:0,
+          pontos:+n.pontos||0,manut:+n.manut||0,gar:+n.gar||0,
+          /* série só quando o ARQUIVO disser: marcar por conta própria travava a venda (18/09) */
+          serie:(n.serie==="sim"?"sim":"nao"),status:"ativo",estmin:{},local:{},estoqueMigrado:true,
+          importado:true,criadoEm:hojeISO(),criadoPor:usuarioAtual};
+        np.completar=(grupo===GRUPO_COMPLETAR||!(+np.cheia>0));
+        produtos.push(np);
+        if(db)await col("produtos").doc(np.id).set(np);
+        if(comEst&&n.qtd>0)await lancarMov(np.id,n.qtd,"ajuste",LOC_EMPRESA,DOC_IMPORT,"Quantidade da lista importada",hojeISO(),"");
+        feitos++;
+      }catch(e){erros++;console.warn("importar",n.cod,e);}
+      passo();
+    }
   }
   bt.disabled=false;$("ip_fechar").disabled=false;
-  var faltam=novos.filter(function(n){return !((+n.cheia>0)&&(n.grupo||"").trim());}).length;
-  $("ip_alerta").innerHTML='<div class="note ok"><b>'+feitos+" produto(s) importado(s).</b>"+
-    (erros?" "+erros+" não gravaram — veja o aviso vermelho do topo.":"")+
-    (faltam?" <b>"+faltam+"</b> ficaram em <b>"+GRUPO_COMPLETAR+"</b>, marcados <b>completar cadastro</b>, até terem grupo e preço — esses não aparecem na venda.":
-            " Todos vieram com grupo e preço, e já aparecem na venda.")+
-    (comEst?" A quantidade entrou como estoque da loja.":"")+"</div>";
+  var criados=querCriar?novos.length:0;
+  var semMud=(impLidos&&impLidos.semMudanca)||[],amb=(impLidos&&impLidos.ambiguos)||[],cfl=(impLidos&&impLidos.conflitos)||[];
+  $("ip_alerta").innerHTML='<div class="note ok"><b>Conferência da importação</b><br>'+
+    (querAtualizar?"<b>"+(atualizar.length-erros>0?mudCod:0)+"</b> produto(s) com o código trocado · <b>"+mudPreco+"</b> com o valor atualizado<br>":"")+
+    (querCriar?"<b>"+criados+"</b> produto(s) novo(s) cadastrado(s)<br>":"<b>0</b> produto novo criado — a caixa de cadastrar ficou desmarcada<br>")+
+    "<b>"+semMud.length+"</b> já estavam iguais · <b>"+amb.length+"</b> de fora por nome repetido · <b>"+cfl.length+"</b> de fora por código de outro produto"+
+    (erros?"<br><b>"+erros+"</b> não gravaram — veja o aviso vermelho do topo.":"")+
+    (travados?"<br><b>"+travados+"</b> com o código já usado por outro produto.":"")+"</div>";
   impLidos=null;$("ip_texto").value="";$("ip_previa").innerHTML="";
   atualizarBotaoApagarImport();
   opcoesProduto();renderProdutos();
-  toast(feitos+" produto(s) importado(s).");
+  toast(feitos+" produto(s) gravado(s) — "+mudCod+" com código novo, "+mudPreco+" com valor novo.");
 }
 function ligarImportProdutos(){
   var bt=$("prodImportar");if(!bt)return;
@@ -7725,6 +7840,8 @@ function ligarImportProdutos(){
   $("ip_ok").onclick=importarProdutos;
   $("ip_apagar").onclick=apagarProdutosImportados;
   $("ip_texto").oninput=previaImport;
+  if($("ip_criar"))$("ip_criar").onchange=function(){this.__tocado=true;};
+  if($("ip_atualizar"))$("ip_atualizar").onchange=function(){this.__tocado=true;};
   $("ip_arqBt").onclick=function(){$("ip_arq").click();};
   $("ip_arq").onchange=function(){
     var f=this.files&&this.files[0];if(!f)return;
@@ -8570,6 +8687,7 @@ window.__pedidosMF=function(){return pedidos;};
 /* ganchos de teste da importação de manutenções (v256) */
 window.__clientesMF=function(){return clientes;};
 window.__equipamentosMF=function(){return equipamentos;};
+window.__produtosMF=function(){return produtos;};
 /* ganchos dos testes da v258 (manutenção no cadastro do cliente) */
 window.__idxManutCliMF=function(refazer){if(refazer)esquecerManutCli();return indiceManutCli();};
 window.__manutCliMF=function(c){return manutDoCliente(c);};
