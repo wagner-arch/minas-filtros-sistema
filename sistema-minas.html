@@ -3024,6 +3024,7 @@ img{max-width:100%}
             <span class="count" id="mpCount"></span>
             <span class="sp"></span>
             <button class="btn ghost" type="button" id="mpNovo">Cadastrar equipamento</button>
+            <button class="btn ghost" type="button" id="mpImportar">Importar manutenções</button>
           </div>
           <div class="tw"><table>
             <thead><tr><th>Cliente</th><th>Equipamento</th><th>Endereço</th><th>Compra</th><th class="num">Valor pago</th><th>Pagamento</th><th>Última troca</th><th>Próxima troca</th><th>Situação</th><th>Status</th><th></th></tr></thead>
@@ -4959,6 +4960,51 @@ img{max-width:100%}
       <button class="btn mut" type="button" id="ic_apagar" hidden>Apagar os importados</button>
     </div>
     <p class="help">Colunas aceitas: <b>código, nome, tipo, CPF/CNPJ, RG/IE, nascimento, sexo, telefone, celular, e-mail, profissão, apelido, CEP, rua, número, complemento, bairro, cidade, UF, origem, referência, geolocalização e observação</b>. Quem entra por aqui já nasce <b>cliente</b> — não passa pelo Atendimento — e fica marcado como importado. Repetido (mesmo CPF/CNPJ, ou mesmo nome e telefone) é pulado.</p>
+  </div>
+</div>
+
+<!-- importar a listagem de manutenções periódicas do sistema antigo (v256) -->
+<div class="modal" id="impmModal" hidden>
+  <div class="box" style="width:min(820px,100%)">
+    <h3>Importar as manutenções periódicas</h3>
+    <div class="sub">Uma manutenção por linha, com o <b>cabeçalho na primeira linha</b>. Cada linha vira um
+      <b>aparelho do cliente</b> com a data da última compra e a data da próxima troca — é isso que alimenta
+      esta tela. <b>Nenhum pedido de venda é criado</b>: compra antiga não pode gerar comissão, título a
+      receber nem baixa de estoque.</div>
+    <div class="actions" style="justify-content:flex-start;margin:14px 0 10px">
+      <button class="btn ghost" type="button" id="im_arqBt">Escolher o arquivo…</button>
+      <input type="file" id="im_arq" accept=".csv,.txt" class="os-foto-in">
+      <span class="count" id="im_arqNome"></span>
+    </div>
+    <div class="fld"><label for="im_texto">…ou cole as linhas aqui</label>
+      <textarea id="im_texto" rows="4" placeholder="codigo;cliente;produto;compra;manutencao;telefone;celular;endereco;bairro;cidade"></textarea></div>
+    <div class="grid g3" style="margin:6px 0 2px">
+      <div class="fld"><label for="im_bloco">Gravar de quantos em quantos</label>
+        <select id="im_bloco">
+          <option value="100" selected>100 por vez</option>
+          <option value="250">250 por vez</option>
+          <option value="500">500 por vez</option>
+        </select></div>
+      <div class="fld"><label for="im_ate">Parar depois de quantos (vazio = todos)</label>
+        <input id="im_ate" type="number" min="100" step="100" placeholder="todos"></div>
+      <div class="fld"><label for="im_novos">Cliente que não existe no CRM</label>
+        <select id="im_novos">
+          <option value="criar" selected>Criar o cadastro</option>
+          <option value="pular">Não criar — só listar para eu ver</option>
+        </select></div>
+    </div>
+    <div id="im_previa"></div>
+    <div id="im_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="im_ok">Importar</button>
+      <button class="btn mut" type="button" id="im_parar" hidden>Parar aqui</button>
+      <button class="btn mut" type="button" id="im_fechar">Fechar</button>
+    </div>
+    <p class="help">O cliente é procurado nesta ordem: <b>código do sistema antigo</b> (o número que vem na
+      frente do nome), depois <b>telefone</b>, depois <b>nome</b> sem acento e sem maiúsculas. Achando, o
+      cadastro existente é usado — <b>nunca cria outro</b>. Nome igual em dois cadastros diferentes, sem
+      código nem telefone para desempatar, fica <b>separado para você decidir</b>. Importar o mesmo arquivo
+      duas vezes não duplica: aparelho do mesmo cliente, produto e data de compra é pulado.</p>
   </div>
 </div>
 
@@ -7855,6 +7901,285 @@ async function importarClientes(){
   atualizarBotaoApagarCli();renderClientes();
   toast(feitos+" cliente(s) importado(s).");
 }
+/* ================= IMPORTAR AS MANUTENÇÕES PERIÓDICAS DO SISTEMA ANTIGO (v256) =================
+   Regra dele, 02/10: pegar a listagem do LSoft e, para cada linha, achar o cliente que JÁ EXISTE
+   (nunca criar outro), registrar a compra e a manutenção periódica.
+
+   Duas decisões de estrutura, tomadas aqui e avisadas a ele:
+   (1) NENHUM pedido de venda é criado. No sistema o aparelho da manutenção nasce de pedido
+       APROVADO no financeiro (`sincronizarEquipamentos`), e criar 16 mil vendas históricas geraria
+       comissão, título no Contas a Receber e baixa de estoque de 2008 para cá. A compra entra
+       dentro do próprio aparelho (`compradoEm`), que é onde esta tela a mostra.
+   (2) A próxima troca não é inventada: a lista traz a data da compra e a da manutenção, e o
+       intervalo é a diferença entre as duas (365 dias em 11.366 linhas, 180 em 3.250). Gravando
+       `ultimaManut` + `manutDias`, a conta do sistema cai exatamente na data da listagem. */
+var impmLidos=null,impmParar=false;
+/* nome sem acento, sem maiúscula e sem espaço dobrado — a comparação que ele pediu */
+function normNomeImp(s){
+  return String(s||"").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g,"")
+    .replace(/[^A-Z0-9 ]+/g," ").replace(/\s+/g," ").trim();
+}
+/* código do sistema antigo: só os dígitos, sem os zeros da frente ("00005445" = "5445") */
+function codImp(s){return String(s||"").replace(/\D/g,"").replace(/^0+/,"");}
+function tel8Imp(s){var d=String(s||"").replace(/\D/g,"");return d.length>=8?d.slice(-8):"";}
+function dataImp(s){
+  var t=String(s||"").trim(),m=t.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if(m)return m[3]+"-"+m[2]+"-"+m[1];
+  if(/^\d{4}-\d{2}-\d{2}$/.test(t))return t;
+  return "";
+}
+function diasEntreImp(a,b){
+  if(!a||!b)return 0;
+  var x=new Date(a+"T12:00:00"),y=new Date(b+"T12:00:00");
+  return Math.round((y-x)/86400000);
+}
+var COLS_MANUT=[
+  ["codigo",/^(codigo|cod|codcliente|codigocliente)$/],
+  ["cliente",/^(cliente|nome|razaosocial)$/],
+  ["produto",/^(produto|equipamento|item|descricao)$/],
+  ["compra",/^(compra|datacompra|dataultimacompra|ultimacompra)$/],
+  ["manutencao",/^(manutencao|datamanutencao|proxima|proximamanutencao|vencimento)$/],
+  ["telefone",/^(telefone|tel|fone)$/],
+  ["celular",/^(celular|cel|whatsapp)$/],
+  ["endereco",/^(endereco|rua|logradouro)$/],
+  ["bairro",/^(bairro)$/],
+  ["cidade",/^(cidade|municipio)$/]
+];
+/* O arquivo da listagem não tem ";" nem quebra de linha dentro de campo, mas TEM aspas no meio do
+   texto — polegadas do produto, como ELEM FILTRANTE PP LISO 6"5 MICRAS. Lendo com o leitor de CSV
+   normal, essas aspas viram delimitador e desalinham a linha: foram 234 linhas perdidas no teste.
+   Então só se a aspa ABRIR um campo é que vale a leitura com aspas. (v256) */
+function partesManut(linha){
+  if(linha.indexOf('"')<0)return linha.split(";");
+  if(/(^|;)\s*"/.test(linha))return partesLinhaImport(linha);
+  return linha.split(";");
+}
+function lerManutTexto(txt){
+  var linhas=String(txt||"").split(/\r?\n/).filter(function(l){return l.trim()!=="";}),regs=[],mapa=null;
+  linhas.forEach(function(linha,ix){
+    var p=partesManut(linha);
+    if(!mapa){
+      /* a primeira linha com conteúdo deveria ser o cabeçalho */
+      var m={},achou=0;
+      p.forEach(function(celula,i){
+        var k=chaveCol(celula);
+        for(var j=0;j<COLS_MANUT.length;j++)
+          if(COLS_MANUT[j][1].test(k)&&m[COLS_MANUT[j][0]]==null){m[COLS_MANUT[j][0]]=i;achou++;return;}
+      });
+      if(m.cliente!=null&&m.produto!=null&&achou>=4){mapa=m;return;}
+      /* sem cabeçalho reconhecido, lê pela ordem do arquivo entregue */
+      mapa={codigo:0,cliente:1,produto:2,compra:3,manutencao:4,telefone:5,celular:6,endereco:7,bairro:8,cidade:9};
+    }
+    var v=function(k){return mapa[k]==null?"":String(p[mapa[k]]||"").trim();};
+    var nome=v("cliente");if(!nome)return;
+    /* o nome pode vir com o código grudado ("00005445 RODRIGO"), como sai do LSoft */
+    var cod=v("codigo"),mc=nome.match(/^(\d{3,10})\s+(.+)$/);
+    if(!cod&&mc){cod=mc[1];nome=mc[2];}
+    regs.push({cod:codImp(cod),nome:nome.trim(),produto:v("produto").replace(/\s+/g," ").trim(),
+      compra:dataImp(v("compra")),manut:dataImp(v("manutencao")),
+      tel:v("telefone"),cel:v("celular"),end:v("endereco"),bairro:v("bairro"),cidade:v("cidade"),
+      linha:ix+1});
+  });
+  return regs;
+}
+/* índices montados UMA vez: com 22 mil cadastros, procurar linha a linha trava a aba (lição da v148) */
+function indicesClientesImp(){
+  var porCod={},porTel={},porNome={};
+  clientes.forEach(function(c){
+    if(c.loja!==lojaAtual)return;
+    var k=codImp(c.codigo);
+    if(k){(porCod[k]=porCod[k]||[]).push(c);}
+    [c.tel,c.tel2,c.celular].forEach(function(t){
+      var d=tel8Imp(t);if(d)(porTel[d]=porTel[d]||[]).push(c);});
+    var n=normNomeImp(c.nome);
+    if(n)(porNome[n]=porNome[n]||[]).push(c);
+  });
+  return {porCod:porCod,porTel:porTel,porNome:porNome};
+}
+/* o casamento que ele pediu, do mais seguro para o menos seguro.
+   Devolve {c,via} quando tem certeza e {ambiguo:[...]} quando dois cadastros disputam. */
+function acharClienteManut(r,idx){
+  var lista;
+  /* 1) código do sistema antigo — a mesma chave que a importação de clientes gravou (v145) */
+  if(r.cod&&(lista=idx.porCod[r.cod])&&lista.length){
+    if(lista.length===1)return {c:lista[0],via:"código"};
+    var pn=lista.filter(function(c){return normNomeImp(c.nome)===normNomeImp(r.nome);});
+    if(pn.length===1)return {c:pn[0],via:"código e nome"};
+    return {ambiguo:lista,motivo:"mesmo código em "+lista.length+" cadastros"};
+  }
+  /* 2) telefone (ou celular), com o nome conferindo quando há mais de um */
+  var tels=[tel8Imp(r.tel),tel8Imp(r.cel)].filter(Boolean);
+  for(var i=0;i<tels.length;i++){
+    lista=idx.porTel[tels[i]];
+    if(!lista||!lista.length)continue;
+    if(lista.length===1)return {c:lista[0],via:"telefone"};
+    var pn2=lista.filter(function(c){return normNomeImp(c.nome)===normNomeImp(r.nome);});
+    if(pn2.length===1)return {c:pn2[0],via:"telefone e nome"};
+  }
+  /* 3) nome, já sem acento e sem maiúscula */
+  lista=idx.porNome[normNomeImp(r.nome)];
+  if(lista&&lista.length===1)return {c:lista[0],via:"nome"};
+  if(lista&&lista.length>1)return {ambiguo:lista,motivo:lista.length+" cadastros com este mesmo nome"};
+  return {c:null};
+}
+/* produto do catálogo pelo nome normalizado; sem casar, o aparelho fica com o nome da lista */
+function indiceProdutosImp(){
+  var m={};
+  produtos.forEach(function(p){var n=normNomeImp(p.nome);if(n&&!m[n])m[n]=p;});
+  return m;
+}
+function acharProdutoManut(nome,idx){
+  var n=normNomeImp(nome);
+  if(!n)return null;
+  if(idx[n])return idx[n];
+  /* o LSoft às vezes repete a marca no fim ("REFIL TOP COLOR COLORMAQ 1075"): tenta pelo começo */
+  var ks=Object.keys(idx);
+  for(var i=0;i<ks.length;i++){
+    if(ks[i].length>=12&&(n.indexOf(ks[i])===0||ks[i].indexOf(n)===0))return idx[ks[i]];
+  }
+  return null;
+}
+/* aparelho que já veio desta mesma linha: não duplica ao importar o arquivo de novo */
+function equipJaImportado(clienteId,produtoNome,compra){
+  var n=normNomeImp(produtoNome);
+  return equipamentos.filter(function(e){
+    return e.clienteId===clienteId&&
+      normNomeImp(e.produtoNomeOrigem||e.produto)===n&&
+      String(e.compradoEm||"")===String(compra||"");})[0]||null;
+}
+function previaImportManut(){
+  var txt=($("im_texto").value||"").trim();
+  if(!txt){$("im_previa").innerHTML="";impmLidos=null;return;}
+  var regs=lerManutTexto(txt);
+  if(!regs.length){
+    $("im_previa").innerHTML='<div class="note crit"><b>Não consegui ler nenhuma linha.</b></div>';
+    impmLidos=null;return;}
+  var idx=indicesClientesImp(),idxP=indiceProdutosImp();
+  var achados=0,novos=0,ambiguos=[],semProduto={},repetidos=0,semData=0,novosNomes={},prontos=[];
+  regs.forEach(function(r){
+    if(!r.compra||!r.manut){semData++;return;}
+    var ca=acharClienteManut(r,idx);
+    if(ca.ambiguo){ambiguos.push({r:r,motivo:ca.motivo,quais:ca.ambiguo.slice(0,3)});return;}
+    var prod=acharProdutoManut(r.produto,idxP);
+    if(!prod)semProduto[r.produto]=(semProduto[r.produto]||0)+1;
+    if(ca.c){
+      achados++;
+      if(equipJaImportado(ca.c.id,r.produto,r.compra)){repetidos++;return;}
+    }else{
+      var ch=r.cod||normNomeImp(r.nome);
+      if(!novosNomes[ch]){novosNomes[ch]=1;novos++;}
+    }
+    prontos.push({r:r,c:ca.c||null,via:ca.via||"",prod:prod||null});
+  });
+  impmLidos={prontos:prontos,ambiguos:ambiguos,semProduto:semProduto,regs:regs.length,
+    achados:achados,novos:novos,repetidos:repetidos,semData:semData};
+  var faltas=Object.keys(semProduto).sort(function(a,b){return semProduto[b]-semProduto[a];});
+  $("im_previa").innerHTML='<div class="note"><b>'+regs.length+" linha(s) lida(s).</b><br>"+
+    "<b>"+achados+"</b> em clientes que já existem no CRM · <b>"+novos+"</b> cadastro(s) novo(s) a criar"+
+    (repetidos?" · <b>"+repetidos+"</b> já importado(s) antes (serão pulados)":"")+
+    (semData?" · <b>"+semData+"</b> sem data de compra ou de manutenção (ficam de fora)":"")+
+    (ambiguos.length?'<br><b style="color:var(--crit)">'+ambiguos.length+" para você decidir</b> — mesmo nome em mais de um cadastro, sem código nem telefone para desempatar.":"")+
+    (faltas.length?"<br><b>"+faltas.length+"</b> produto(s) sem equivalente no catálogo (o aparelho entra com o nome da lista): "+
+      esc(faltas.slice(0,4).join(" · "))+(faltas.length>4?"…":""):"")+
+    "</div>"+
+    (ambiguos.length?'<div class="note warn" style="margin-top:8px"><b>Casos para decidir:</b><br>'+
+      ambiguos.slice(0,8).map(function(a){
+        return esc(a.r.nome)+" <small>("+esc(a.motivo)+")</small>";
+      }).join("<br>")+(ambiguos.length>8?"<br>… e mais "+(ambiguos.length-8):"")+"</div>":"");
+}
+async function importarManutencoes(){
+  if(!impmLidos)previaImportManut();
+  var dados=impmLidos;
+  if(!dados||!dados.prontos.length){
+    $("im_alerta").innerHTML='<div class="note crit"><b>Nada para importar.</b></div>';return;}
+  var criarNovos=($("im_novos")||{}).value!=="pular";
+  var bt=$("im_ok");bt.disabled=true;$("im_fechar").disabled=true;impmParar=false;$("im_parar").hidden=false;
+  var bloco=Math.max(50,parseInt(($("im_bloco")||{}).value,10)||100);
+  var teto=parseInt(($("im_ate")||{}).value,10)||0;
+  var fila=dados.prontos.slice();
+  if(teto>0&&teto<fila.length)fila=fila.slice(0,teto);
+  var agora=iso(new Date()),pre={mf:"MF",wf:"WF",dv:"DV"}[lojaAtual]||"CL",seq=0;
+  try{if(modoBanco()&&db&&typeof db.proximoNumero==="function")seq=await db.proximoNumero(lojaAtual,"cliente");}catch(e){seq=0;}
+  var novosCli={},cliNovos=[],equipNovos=[],pulados=0;
+  fila.forEach(function(x){
+    var r=x.r,c=x.c;
+    if(!c){
+      if(!criarNovos){pulados++;return;}
+      var ch=r.cod||normNomeImp(r.nome);
+      c=novosCli[ch];
+      if(!c){
+        c={id:uid(),loja:lojaAtual,
+          codigo:(r.cod?("0000000"+r.cod).slice(-8):(pre+"-"+("0000"+(++seq)).slice(-5))),
+          criadoEm:agora,criadoPor:usuarioAtual,criadoVia:"importacao",importado:true,
+          tipo:"Pessoa Física",nome:r.nome,
+          tel:(r.tel||r.cel||""),rua:r.end||"",bairro:r.bairro||"",cidade:r.cidade||"",
+          uf:"MG",doc:"",origem:""};
+        novosCli[ch]=c;cliNovos.push(c);
+      }
+    }
+    if(equipJaImportado(c.id,r.produto,r.compra)){pulados++;return;}
+    var dias=diasEntreImp(r.compra,r.manut);
+    equipNovos.push({id:uid(),loja:lojaAtual,ativo:true,criadoEm:agora,historico:[],
+      cliente:c.nome,clienteId:c.id,
+      produtoId:(x.prod?x.prod.id:""),produto:(x.prod?x.prod.nome:r.produto),
+      produtoNomeOrigem:r.produto,
+      serie:"",local:"importado da listagem do sistema antigo",
+      instaladoEm:r.compra,compradoEm:r.compra,compradoHora:"",
+      ultimaManut:r.compra,manutDias:(dias>0?dias:365),
+      plano:"",tecnico:"",
+      obs:"Importado da listagem de manutenções periódicas"+
+        (x.prod?"":" · produto sem equivalente no catálogo: "+r.produto),
+      importado:true,importadoEm:agora,proximaOrigem:r.manut});
+  });
+  var feitosC=0,feitosE=0;
+  $("im_alerta").innerHTML='<div class="note"><b>Gravando…</b></div>';
+  try{
+    for(var i=0;i<cliNovos.length;i+=bloco){
+      if(impmParar)break;
+      var pc=cliNovos.slice(i,i+bloco);
+      if(db&&typeof db.gravarVarios==="function")await db.gravarVarios("clientes",pc,{bloco:bloco});
+      else if(db){for(var j=0;j<pc.length;j++)await col("clientes").doc(pc[j].id).set(pc[j]);}
+      pc.forEach(function(c){clientes.push(c);});
+      feitosC+=pc.length;
+      $("im_alerta").innerHTML='<div class="note"><b>Cadastros novos: '+feitosC+" de "+cliNovos.length+"…</b></div>";
+      await new Promise(function(r){setTimeout(r,0);});
+    }
+    for(var k=0;k<equipNovos.length;k+=bloco){
+      if(impmParar)break;
+      var pe=equipNovos.slice(k,k+bloco);
+      if(db&&typeof db.gravarVarios==="function")await db.gravarVarios("equipamentos",pe,{bloco:bloco});
+      else if(db){for(var m=0;m<pe.length;m++)await col("equipamentos").doc(pe[m].id).set(pe[m]);}
+      pe.forEach(function(e){equipamentos.push(e);});
+      feitosE+=pe.length;
+      $("im_alerta").innerHTML='<div class="note"><b>Aparelhos: '+feitosE+" de "+equipNovos.length+"…</b> "+
+        "pode acompanhar; <b>Parar aqui</b> encerra no fim do bloco.</div>";
+      await new Promise(function(r){setTimeout(r,0);});
+    }
+  }catch(e){
+    console.warn("importar manutenções",e);
+    bt.disabled=false;$("im_fechar").disabled=false;$("im_parar").hidden=true;
+    $("im_alerta").innerHTML='<div class="note crit"><b>A gravação parou:</b> '+esc((e&&e.message)||e)+
+      "<br>Entraram "+feitosC+" cadastro(s) e "+feitosE+" aparelho(s). O que entrou está gravado — "+
+      "importar o mesmo arquivo de novo continua de onde parou.</div>";
+    try{renderManut();}catch(e2){}
+    return;
+  }
+  bt.disabled=false;$("im_fechar").disabled=false;$("im_parar").hidden=true;
+  $("im_alerta").innerHTML='<div class="note ok"><b>Conferência da importação</b><br>'+
+    "Linhas processadas: <b>"+dados.regs+"</b><br>"+
+    "Clientes já existentes reutilizados: <b>"+dados.achados+"</b><br>"+
+    "Cadastros novos criados: <b>"+feitosC+"</b><br>"+
+    "Compras registradas (na ficha do aparelho): <b>"+feitosE+"</b><br>"+
+    "Manutenções periódicas registradas: <b>"+feitosE+"</b><br>"+
+    (pulados?"Linhas puladas: <b>"+pulados+"</b><br>":"")+
+    (dados.semData?"Sem data de compra ou manutenção: <b>"+dados.semData+"</b><br>":"")+
+    (dados.ambiguos.length?'<b style="color:var(--crit)">Separados para você decidir: '+dados.ambiguos.length+
+      "</b> — nenhum deles foi cadastrado.":"Nenhum caso ficou em dúvida.")+
+    "</div>";
+  impmLidos=null;$("im_texto").value="";$("im_previa").innerHTML="";
+  try{renderManut();render();}catch(e3){}
+  toast(feitosE+" manutenção(ões) periódica(s) importada(s).");
+}
 function clientesImportados(){
   return clientes.filter(function(c){return c.importado&&c.loja===lojaAtual;});
 }
@@ -7914,6 +8239,29 @@ function ligarImportClientes(){
     $("ic_arqNome").textContent=f.name;
     var r=new FileReader();
     r.onload=function(){$("ic_texto").value=String(r.result||"");previaImportCli();};
+    r.readAsText(f,"utf-8");
+  };
+}
+/* importador das manutenções periódicas (v256) — mesmo desenho do de clientes */
+function ligarImportManut(){
+  var bt=$("mpImportar");if(!bt||bt.__ligado)return;
+  bt.__ligado=true;
+  bt.onclick=function(){
+    impmLidos=null;$("im_texto").value="";$("im_previa").innerHTML="";$("im_alerta").innerHTML="";
+    $("im_arqNome").textContent="";$("im_parar").hidden=true;
+    $("im_ok").disabled=false;$("im_fechar").disabled=false;
+    $("impmModal").hidden=false;
+  };
+  $("im_fechar").onclick=function(){$("impmModal").hidden=true;};
+  $("im_ok").onclick=importarManutencoes;
+  $("im_parar").onclick=function(){impmParar=true;this.textContent="Parando…";};
+  $("im_texto").oninput=previaImportManut;
+  $("im_arqBt").onclick=function(){$("im_arq").click();};
+  $("im_arq").onchange=function(){
+    var f=this.files&&this.files[0];if(!f)return;
+    $("im_arqNome").textContent=f.name;
+    var r=new FileReader();
+    r.onload=function(){$("im_texto").value=String(r.result||"");previaImportManut();};
     r.readAsText(f,"utf-8");
   };
 }
@@ -8163,6 +8511,9 @@ function textoPrecoReferencia(cheia){
 window.__htmlDocVendaMF=function(p){return htmlDocVenda(p);};
 window.__pedAbertoMF=function(){return pedAberto;};
 window.__pedidosMF=function(){return pedidos;};
+/* ganchos de teste da importação de manutenções (v256) */
+window.__clientesMF=function(){return clientes;};
+window.__equipamentosMF=function(){return equipamentos;};
 window.__ativsMF=function(){return atendimentos.filter(function(a){return a.natureza==="atividade";});};
 window.__tecnicosOSMF=function(){return tecnicosOS();};
 window.__catsTextoMF=function(){return CATEGORIAS_MF;};
@@ -29341,6 +29692,7 @@ function navegacaoBasica(){
   try{ligarMinhaFoto();}catch(e){console.warn("minha foto",e);}
   try{ligarImportProdutos();}catch(e){console.warn("importar produtos",e);}
   try{ligarImportClientes();}catch(e){console.warn("importar clientes",e);}
+  try{ligarImportManut();}catch(e){console.warn("importar manutenções",e);}
   try{ligarCampoOS();}catch(e){console.warn("campo os",e);}
   try{ligarCamposValor();}catch(e){console.warn("campos de valor",e);}
   /* escolher o produto já põe 1 na quantidade, nas telas de venda (v253) */
