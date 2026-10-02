@@ -9764,6 +9764,9 @@ async function salvarPedido(){
     orcDoPed.convertidoEm=iso(new Date());
     orcDoPed.pedidoId=ped.id;orcDoPed.pedidoNumero=ped.numero;
     if(db){try{await col("orcamentos").doc(orcDoPed.id).set(orcDoPed);}catch(e){console.warn(e);}}
+    /* fechou: o lembrete do vencimento não precisa mais tocar o vendedor (v255) */
+    try{await encerrarRetornoOrcamento(orcDoPed,"Orçamento fechado — virou a venda "+ped.numero);}
+    catch(eRO){console.warn("retorno do orçamento",eRO);}
     pedOrigemOrc=null;
   }
 
@@ -22822,6 +22825,8 @@ async function excluirOrcamento(){
   var ix=orcamentos.indexOf(o);
   if(ix>=0)orcamentos.splice(ix,1);
   await apaga("orcamentos",o.id);
+  /* sem orçamento não há o que cobrar: o lembrete do vencimento se encerra junto (v255) */
+  try{await encerrarRetornoOrcamento(o,"Orçamento "+o.numero+" excluído");}catch(eR){}
   /* o funil acompanha: o negócio volta ao que os outros registros disserem */
   try{if(o.clienteId)atualizarFunilCliente(o.clienteId,"orçamento excluído");}catch(e){}
   editandoOrc=null;
@@ -22875,6 +22880,8 @@ async function salvarOrc(){
   try{await consumirAutorizacao(o.clienteId,"orçamento "+o.numero);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: cartão vai para Orçamento enviado, com o valor */
   try{await atualizarFunilCliente(o.clienteId,"orçamento");}catch(eF){console.warn("funil",eF);}
+  /* lembrete do vencimento: nasce com o orçamento, na data da validade (regra dele, 02/10) */
+  try{o.__ativVenc=await agendarRetornoOrcamento(o);}catch(eV){console.warn("retorno do orçamento",eV);}
   /* salvo: o botão de excluir já vale para este orçamento (25/09) */
   try{renderExcluirOrc();}catch(eX){}
   return o;
@@ -23235,7 +23242,66 @@ function temRetorno(o){
   return atendimentos.some(function(a){
     return a.origemOrc===o.id&&a.natureza==="atividade"&&a.status!=="finalizado";});
 }
+/* ---------- lembrete do vencimento do orçamento (v255) ----------
+   Regra dele, 02/10: "ao cadastrar um orçamento deve criar uma atividade automaticamente para a
+   data do vencimento para saber se fechou ou não aquele orçamento e para lembrar o vendedor de
+   entrar em contato". A atividade nasce com o orçamento, na data da VALIDADE, no nome do vendedor.
+   É UMA por orçamento (marcada `autoVenc`): reeditando com outra validade, a data acompanha.
+   Ela se encerra sozinha quando o orçamento vira venda ou é excluído. */
+var TIPO_RETORNO_ORC="Retorno de orçamento";
+function atividadeVencOrc(o){
+  return atendimentos.filter(function(a){
+    return a.origemOrc===o.id&&a.natureza==="atividade"&&a.autoVenc;})[0]||null;
+}
+async function agendarRetornoOrcamento(o){
+  /* sem cadastro não existe atividade: quem for ligar precisa do telefone (regra de 12/09) */
+  if(!o||!o.clienteId)return null;
+  if(o.situacao==="convertido"||o.situacao==="perdido")return null;
+  var hoje=hojeISO();
+  /* sem validade preenchida, lembra em 3 dias; validade já vencida lembra hoje mesmo */
+  var quando=o.validade||somaDias(hoje,3);
+  if(quando<hoje)quando=hoje;
+  var obs="Vencimento do orçamento nº "+o.numero+" — "+BRL(o.total)+
+    ". Falar com o cliente e saber se fechou.";
+  var a=atividadeVencOrc(o);
+  if(a){
+    if(a.status==="finalizado")return a;          /* já foi tratado: não reabre */
+    if(a.data===quando&&a.obs===obs)return a;     /* nada mudou */
+    a.data=quando;a.obs=obs;a.colaborador=o.vendedor||a.colaborador;
+    if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
+    return a;
+  }
+  var vinc=clientes.filter(function(c){return c.id===o.clienteId;})[0]||{};
+  a={id:uid(),loja:lojaAtual,natureza:"atividade",
+    clienteId:o.clienteId,cliente:o.cliente,tel:o.tel||vinc.tel||"",
+    doc:o.doc||vinc.doc||"",cidade:o.cidade||vinc.cidade||"",
+    endereco:[vinc.rua,vinc.num,vinc.bairro,vinc.cidade].filter(Boolean).join(", "),
+    origem:vinc.origem||"",
+    colaborador:o.vendedor||usuarioAtual,vendedor:o.vendedor||"",
+    tipos:[TIPO_RETORNO_ORC],tipo:TIPO_RETORNO_ORC,
+    data:quando,inicio:"09:00",fim:"",
+    obs:obs,origemOrc:o.id,autoVenc:true,
+    situacao:"pendente",status:"aberto"};
+  atendimentos.push(a);
+  if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
+  return a;
+}
+/* orçamento que virou venda ou foi excluído não precisa mais do lembrete */
+async function encerrarRetornoOrcamento(o,texto){
+  var a=atividadeVencOrc(o);
+  if(!a||a.status==="finalizado")return false;
+  return await concluirAtivPorAcao(a,texto);
+}
 function pedirRetornoOrc(o){
+  /* o lembrete do vencimento já foi criado no salvar (v255): a janela de agendar não abre mais
+     por cima dele — o toast diz para quando ficou e em nome de quem */
+  var av=atividadeVencOrc(o);
+  if(av&&av.status!=="finalizado"){
+    toast("Orçamento "+o.numero+" salvo. Atividade criada para "+dataCurta(av.data)+
+      (o.validade?" (vencimento da proposta)":"")+" — "+av.colaborador+
+      " fala com o cliente e marca se fechou ou não.");
+    return;
+  }
   if(temRetorno(o)){toast("Orçamento "+o.numero+" salvo. Retorno já está agendado.");return;}
   abrirNovaAtividade({
     clienteId:o.clienteId,cliente:o.cliente,tel:o.tel,doc:o.doc,cidade:o.cidade,
