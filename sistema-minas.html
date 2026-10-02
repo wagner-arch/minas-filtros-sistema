@@ -2880,6 +2880,16 @@ img{max-width:100%}
 
         <div class="sect">
           <p class="sect-t">Quem está do outro lado</p>
+          <!-- TIPO DE PESSOA do lead (pedido do Wagner, 02/10): escolhido antes de tudo, porque é
+               ele que decide se o cadastro é de pessoa ou de empresa — e o que o sistema vai pedir -->
+          <div class="fld" style="margin-bottom:16px">
+            <label for="at_tipoPessoa">Tipo de pessoa <span class="req">*</span></label>
+            <div class="chips" id="at_tipoPessoa">
+              <button type="button" data-tp="Pessoa Física" aria-pressed="false">Pessoa Física</button>
+              <button type="button" data-tp="Pessoa Jurídica" aria-pressed="false">Pessoa Jurídica</button>
+            </div>
+            <div class="help" id="at_tipoAjuda">Escolha para o sistema pedir os campos certos.</div>
+          </div>
           <div class="grid g3">
             <div class="fld" style="position:relative">
               <label for="at_nome">Nome e sobrenome <span class="req">*</span></label>
@@ -8703,6 +8713,7 @@ window.__pedidosMF=function(){return pedidos;};
 window.__clientesMF=function(){return clientes;};
 window.__equipamentosMF=function(){return equipamentos;};
 window.__produtosMF=function(){return produtos;};
+window.__tiposMF=function(){return tipos;};
 /* ganchos dos testes da v258 (manutenção no cadastro do cliente) */
 window.__idxManutCliMF=function(refazer){if(refazer)esquecerManutCli();return indiceManutCli();};
 window.__manutCliMF=function(c){return manutDoCliente(c);};
@@ -26967,6 +26978,9 @@ function abrirAtend(a){
   $("at_ini").value=v.inicio||(String(ag.getHours()).padStart(2,"0")+":"+String(ag.getMinutes()).padStart(2,"0"));
   $("at_fim").value=v.fim||"";$("at_obs").value=v.obs||"";
   if(v.clienteId)clienteVinc=clientes.filter(function(c){return c.id===v.clienteId;})[0]||null;
+  /* atendimento novo começa SEM tipo de pessoa escolhido — é obrigatório; cadastro que já existe
+     traz o tipo gravado e trava (quem muda PF/PJ é a ficha do cliente) */
+  marcarTipoPessoaAt(clienteVinc?(clienteVinc.tipo||"Pessoa Física"):"",!!clienteVinc);
   tiposSel=(v.tipos||[]).slice();
   /* atendimento que nasce de uma atividade é ativo: nós fomos atrás */
   iniSel=v.iniciativa||(a&&a.natureza==="atividade"?"ativo":"passivo");
@@ -27067,8 +27081,52 @@ function buscarCliente(){
   });
   box.hidden=false;
 }
+/* ---------- TIPO DE PESSOA no atendimento (pedido do Wagner, 02/10) ----------
+   "No cadastro do lead preciso de uma opção de escolha para Tipo de Pessoa: Jurídica ou Física.
+   Essa opção tem que ser obrigatória e, se for jurídica, deixar somente os campos de pessoa jurídica."
+   O lead só nasce aqui (regra de 12/09), então é aqui que o tipo é decidido — e é ele que define
+   os rótulos e o que o sistema exige. Cadastro que já existe traz o tipo gravado e fica travado. */
+var tipoPessoaAt="";
+function ehPJAtend(){return tipoPessoaAt==="Pessoa Jurídica";}
+function marcarTipoPessoaAt(v,travado){
+  tipoPessoaAt=v||"";
+  var cx=$("at_tipoPessoa");
+  if(cx)Array.prototype.forEach.call(cx.querySelectorAll("button"),function(b){
+    b.setAttribute("aria-pressed",String(b.getAttribute("data-tp")===tipoPessoaAt));
+    b.disabled=!!travado;
+  });
+  aplicarTipoPessoaAt(travado);
+}
+function aplicarTipoPessoaAt(travado){
+  var pj=ehPJAtend();
+  var ln=document.querySelector('label[for="at_nome"]');
+  if(ln)ln.innerHTML=(pj?"Razão social":"Nome e sobrenome")+' <span class="req">*</span>';
+  if($("at_nome"))$("at_nome").placeholder=pj
+    ?"Razão social, CNPJ, telefone ou código…":"Nome, telefone, CPF ou código…";
+  var ld=document.querySelector('label[for="at_doc"]');
+  if(ld)ld.innerHTML=pj?'CNPJ':"CPF / CNPJ";
+  /* empresa não tem sexo (mesma regra da ficha do cliente) */
+  var fs=$("at_sexo")?$("at_sexo").closest(".fld"):null;
+  if(fs)fs.hidden=pj;
+  if(pj&&$("at_sexo"))$("at_sexo").value="";
+  var aj=$("at_tipoAjuda");
+  if(aj)aj.textContent=!tipoPessoaAt?"Escolha para o sistema pedir os campos certos."
+    :(pj?("Cadastro de empresa: o documento é o CNPJ e o sexo não se aplica."+(travado?" Vem do cadastro.":""))
+        :("Cadastro de pessoa: CPF, sexo e nome com sobrenome."+(travado?" Vem do cadastro.":"")));
+}
+function ligarTipoPessoaAt(){
+  var cx=$("at_tipoPessoa");if(!cx)return;
+  Array.prototype.forEach.call(cx.querySelectorAll("button"),function(b){
+    b.onclick=function(){
+      if(b.disabled)return;
+      marcarTipoPessoaAt(b.getAttribute("data-tp"),false);
+      if($("at_alerta"))$("at_alerta").innerHTML="";
+    };
+  });
+}
 function preencherCliente(c){
   clienteVinc=c;
+  marcarTipoPessoaAt(c.tipo||"Pessoa Física",true);
   $("at_nome").value=c.nome||"";$("at_tel").value=c.tel||"";$("at_doc").value=c.doc||"";
   $("at_cidade").value=c.cidade||"";$("at_sexo").value=c.sexo||"";
   ["cep","rua","num","comp","bairro","ref"].forEach(function(k){$("at_"+k).value=c[k]||"";});
@@ -27114,6 +27172,8 @@ function abrirLeadCompleto(){
     if(e&&d[k]){e.value=d[k];e.__escolhido=d[k];}
   });
   if(d.sexo)$("c_sexo").value=d.sexo;
+  /* o tipo escolhido no atendimento manda na ficha: PJ abre já com razão social e CNPJ (02/10) */
+  if(tipoPessoaAt&&$("c_tipo")){$("c_tipo").value=tipoPessoaAt;try{toggleTipoPJ();}catch(e){}}
   /* localização exata do atendimento continua exata na ficha */
   $("c_geo").__geoExato=(d.geo&&$("at_geo").__geoExato===d.geo)?d.geo:"";
   $("c_geo").__geoEnd=$("at_geo").__geoEnd||[d.rua,d.num,d.bairro,d.cidade].map(function(x){return String(x||"").trim();}).join("|").toLowerCase();
@@ -27183,21 +27243,26 @@ async function salvarAtend(){
     /* obrigatórios do lead: nome e sobrenome, telefone e cidade.
        CPF, identidade, nascimento, sexo e endereço ficam para quando virar cliente. */
     var faltaLead=[];
-    if(!temSobrenome(nome))faltaLead.push("sobrenome");
+    /* tipo de pessoa é a primeira escolha e é obrigatória (regra dele, 02/10): é ela que decide
+       se o cadastro é de pessoa (nome e sobrenome, CPF, sexo) ou de empresa (razão social, CNPJ) */
+    var pjAt=ehPJAtend()||String($("at_doc").value||"").replace(/\D/g,"").length===14;
+    if(!tipoPessoaAt)faltaLead.push("tipo de pessoa");
+    if(!pjAt&&!temSobrenome(nome))faltaLead.push("sobrenome");
     if(!$("at_cidade").value.trim())faltaLead.push("cidade");
     if(!$("at_origem").value)faltaLead.push("origem");
     /* sexo obrigatório no cadastro (regra dele, 20/09); empresa não tem */
-    var pjAt=String($("at_doc").value||"").replace(/\D/g,"").length===14;
     if(!pjAt&&!$("at_sexo").value)faltaLead.push("sexo");
     /* veio por indicação: sem dizer quem indicou, o indicador não ganha a estrela */
     if(ehOrigemIndicacao($("at_origem").value)&&!$("at_indicado").value)faltaLead.push("quem indicou");
     if(faltaLead.length){
       $("at_alerta").innerHTML='<div class="note crit"><b>Falta preencher: '+faltaLead.join(" · ")+
-        ".</b> Este contato não tem cadastro e vai nascer como lead — nome e sobrenome, sexo, telefone, cidade, origem e tipo de atendimento "+
+        ".</b> Este contato não tem cadastro e vai nascer como lead — "+
+        (pjAt?"tipo de pessoa, razão social, telefone, cidade, origem e tipo de atendimento "
+             :"tipo de pessoa, nome e sobrenome, sexo, telefone, cidade, origem e tipo de atendimento ")+
         "são o mínimo para alguém conseguir voltar a falar com ele. "+
         'Se quiser registrar tudo agora, use <b>Abrir cadastro completo do lead</b>.</div>';
       return;}
-    var c={id:uid(),loja:lojaAtual,codigo:(await codigoClienteNovo()),tipo:"Pessoa Física",
+    var c={id:uid(),loja:lojaAtual,codigo:(await codigoClienteNovo()),tipo:(tipoPessoaAt||"Pessoa Física"),
       nome:nome,sexo:$("at_sexo").value,tel:tel,
       doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
       uf:$("at_uf").value.trim().toUpperCase(),origem:$("at_origem").value,origemEm:iso(new Date()),
@@ -29758,7 +29823,7 @@ function ligar(){
   $("atendSalvar").onclick=salvarAtend;
   $("atendBusca").oninput=renderAtend;$("atendFiltro").onchange=renderAtend;
 
-  $("at_nome").oninput=function(){clienteVinc=null;$("at_achou").innerHTML="";ajustarOrigemAt();buscarCliente();};
+  $("at_nome").oninput=function(){clienteVinc=null;$("at_achou").innerHTML="";ajustarOrigemAt();marcarTipoPessoaAt(tipoPessoaAt,false);buscarCliente();};
   $("at_leadCompleto").onclick=abrirLeadCompleto;
   $("at_nome").onblur=function(){setTimeout(function(){$("at_sug").hidden=true;},180);};
   Array.prototype.forEach.call($("at_completo").querySelectorAll("button"),function(b){
@@ -30165,6 +30230,7 @@ function navegacaoBasica(){
   try{ligarImportClientes();}catch(e){console.warn("importar clientes",e);}
   try{ligarImportManut();}catch(e){console.warn("importar manutenções",e);}
   try{ligarTrocaFeita();}catch(e){console.warn("troca feita",e);}
+  try{ligarTipoPessoaAt();}catch(e){console.warn("tipo de pessoa",e);}
   try{ligarCampoOS();}catch(e){console.warn("campo os",e);}
   try{ligarCamposValor();}catch(e){console.warn("campos de valor",e);}
   /* escolher o produto já põe 1 na quantidade, nas telas de venda (v253) */
