@@ -2132,6 +2132,8 @@ img{max-width:100%}
 
           <div class="step-nav">
             <button class="btn mut" type="button" id="v_voltar">← Voltar</button>
+            <!-- guardar o pedido pela metade, em qualquer etapa (pedido dele, 03/10) -->
+            <button class="btn ghost" type="button" id="v_rascunho">Salvar e continuar depois</button>
             <button class="btn" type="button" id="v_avancar">Avançar →</button>
           </div>
         </div>
@@ -2156,6 +2158,7 @@ img{max-width:100%}
             <div id="v_alerta"></div>
             <div class="actions">
               <button class="btn" type="button" id="v_salvar">Finalizar pedido</button>
+              <button class="btn ghost" type="button" id="v_rascunho2">Salvar e continuar depois</button>
               <button class="btn mut" type="button" id="v_limpar">Limpar</button>
             </div>
           </div>
@@ -6517,7 +6520,7 @@ var LEITURAS_BOOT=[
   ["pontos",2000],["caixas",100],["centros",200],["fornecedores",300],["titulos",1000],
   ["movs",1000],["movest",6000],["requisicoes",500],["ordens",500],["notas",300],
   ["equipamentos",1000],["usados",500],["veiculos",100],["abastecimentos",2000],["manutveic",1000],
-  ["posses",500],["vistorias",500],["multas",500]
+  ["posses",500],["vistorias",500],["multas",500],["rascunhos",300]
 ];
 var CONFIGS_BOOT=["formas_pagamento","usuarios","funcoes","empresa","origens","tipos_atendimento",
   "motivos_finalizacao","tipos_off","motivos_off","canais_tipo","metas","faixas_comissao",
@@ -6721,6 +6724,10 @@ async function carregar(){
     atendimentos=as.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var vs=await jaPedido("col:pedidos",function(){return col("pedidos").limit(500).get();});
     pedidos=vs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    /* pedidos pela metade, guardados pelo vendedor (03/10): ficam FORA de pedidos[], então não
+       entram em comissão, estoque, metas, financeiro nem relatório — só aparecem na lista */
+    try{var rs=await jaPedido("col:rascunhos",function(){return col("rascunhos").limit(300).get();});
+      rascunhos=rs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});}catch(eR){console.warn("rascunhos",eR);}
     var ng=await jaPedido("col:negocios",function(){return col("negocios").limit(1000).get();});
     negocios=ng.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var sl=await jaPedido("col:solicitacoes",function(){return col("solicitacoes").limit(1000).get();});
@@ -9419,6 +9426,16 @@ window.__abrirPedidoDaAtivMF=function(a){return abrirPedidoPelaVenda(a,"teste");
 window.__origemVendaMF=function(){return origemDaVenda();};
 /* gancho de TESTE: põe a venda no caminho do atendimento, como se tivesse vindo do "Vendido".
    Não afrouxa a regra no sistema: quem chama é o harness, nunca a tela. */
+window.__baseDoFinalMF=function(v,q,t){return baseDoFinal(v,q,t);};
+window.__aplicarCobradoMF=function(l,f,tb,tbr){return aplicarCobradoNosItens(l,f,tb,tbr);};
+window.__precoPelaFormaMF=function(c,q,t){return precoPelaForma(c,q,t);};
+window.__itensVendaMF=function(){return itens;};
+window.__irEtapaMF=function(n){return irEtapa(n);};
+window.__etapaMF=function(){return etapa;};
+window.__limparPedidoMF=function(){return limparPedido();};
+window.__rascunhosMF=function(){return rascunhos;};
+window.__salvarRascunhoMF=function(){return salvarRascunhoVenda();};
+window.__retomarRascunhoMF=function(r){return retomarRascunho(r);};
 window.__limpezaTrocaMF=function(){return aplicarLimpezaTroca();};
 window.__ehVersaoTrocaMF=function(p){return ehVersaoTroca(p);};
 window.__formasVendaMF=function(){return formas;};
@@ -9786,14 +9803,14 @@ function addItem(){
     if(qtd>qc){
       itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd-qc,
         valorBase:baseDoCampoValor(p,qtd-qc),valorTabela:+p.cheia||0,valor:numMF($("v_valor").value)||0,
-        precoAuto:precoAutoItem(p),
+        precoAuto:precoAutoItem(p),valorFinal:(precoAutoItem(p)?0:(numMF($("v_valor").value)||0)),
         serie:serie,equipId:equipId,local:local,pontos:+p.pontos||0,garantia:gar,vinculo:uid()});
       msgPlano+=" O plano não cobrirá as outras "+(qtd-qc)+": os direitos do plano para essa peça se esgotaram — cobradas pelo valor normal.";
     }
   }else{
     itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qtd,
       valorBase:baseDoCampoValor(p,qtd),valorTabela:+p.cheia||0,valor:numMF($("v_valor").value)||0,
-      precoAuto:precoAutoItem(p),
+      precoAuto:precoAutoItem(p),valorFinal:(precoAutoItem(p)?0:(numMF($("v_valor").value)||0)),
       serie:serie,equipId:equipId,local:local,pontos:+p.pontos||0,garantia:gar,vinculo:vinculo});
     if(cobV&&cobV.esgotado)msgPlano="O plano "+cobV.esgotado.e.plano+" não cobrirá "+p.nome+
       ": os direitos do plano para essa peça já foram esgotados. Cobrado pelo valor normal.";
@@ -10468,7 +10485,10 @@ function aplicarCobradoNosItens(lista,fs,totalBase,totalBruto){
      sem juros, que entra pelo valor de face e só o resto recebe o acréscimo (v173). */
   var T=(lista||[]).reduce(function(a,i){return i.planoCobre?a:a+((+valorBaseItem(i)||0)*(i.qtd||1));},0);
   (lista||[]).forEach(function(i){
-    i.valor=i.planoCobre?0:precoPelaForma(valorBaseItem(i),i.qtd||1,T);
+    if(i.planoCobre){i.valor=0;return;}
+    /* valor que o vendedor digitou vale como está (03/10) — o recálculo não mexe mais nele */
+    if(+i.valorFinal>0){i.valor=+i.valorFinal;return;}
+    i.valor=precoPelaForma(valorBaseItem(i),i.qtd||1,T);
   });
   return centavos((lista||[]).reduce(function(a,i){return a+centavos((+i.valor||0)*(i.qtd||1));},0));
 }
@@ -10651,6 +10671,12 @@ function calcular(){
       /* v224: o campo é o valor FINAL — volta para o comercial, que é a base da comissão */
       it.valorBase=baseDoFinal(v,it.qtd||1,tabelaTotalVenda(false));
       it.valor=v;
+      /* O VALOR DIGITADO É O VALOR (relato dele, 03/10): "toda vez que coloco um valor no produto
+         ele não aceita e aumenta um pouco — coloquei 3.400,00 e o sistema pôs 3.404,28".
+         O recálculo refazia o preço a partir da base (`precoPelaForma`), e o arredondamento para
+         cima de cada parcela devolvia alguns centavos a mais. Guardando o valor digitado, ele é
+         respeitado em qualquer recálculo; a base da comissão continua saindo dele. */
+      it.valorFinal=v;
       /* valor digitado à mão: o item para de acompanhar o preço da forma de pagamento */
       it.precoAuto=false;
       /* com uma forma só, o valor dela volta a acompanhar o total */
@@ -11097,6 +11123,8 @@ async function salvarPedido(){
       if(db){try{await col("clientes").doc(padrinho.id).set(padrinho);}catch(e){console.warn(e);}}
     }
   }
+  /* o pedido virou venda: o rascunho dele não faz mais sentido (03/10) */
+  if(rascunhoAberto){try{await apagarRascunho(rascunhoAberto.id);}catch(eR){console.warn(eR);}rascunhoAberto=null;}
   var fechouAtiv=false,retornoPosVenda=null;
   if(pedOrigemAtiv){
     ped.origemAtiv=pedOrigemAtiv.id;
@@ -11195,8 +11223,91 @@ function renderBloqueioVenda(){
     if(bloqueia)c.hidden=true;});
   var cm=$("v_comissao");if(cm&&bloqueia)cm.hidden=true;
   var av=$("v_avancar");if(av&&bloqueia)av.hidden=true;
+  var rb=$("v_rascunho");if(rb)rb.hidden=bloqueia||!!pedEditando;
+  var rb2=$("v_rascunho2");if(rb2)rb2.hidden=bloqueia||!!pedEditando;
+}
+/* ---------- pedido guardado pela metade (pedido dele, 03/10) ----------
+   "em todas as fases dele tenha um botão para salvar, e ele fica no campo de pedidos com status de
+   Incompleto, para não perder e poder voltar e finalizar."
+   O rascunho mora numa coleção PRÓPRIA (`rascunhos`), fora de `pedidos`: assim ele não reserva
+   estoque, não gera comissão, não entra em metas, faturamento, financeiro nem relatório. Ele só
+   aparece na lista de Pedidos, marcado Incompleto, e volta para a tela de onde parou. */
+var rascunhos=[],rascunhoAberto=null;
+function montarRascunho(){
+  var c=clienteDaVenda(),r=rascunhoAberto||{id:uid(),criadoEm:agoraCarimbo(),criadoPor:usuarioAtual};
+  r.loja=lojaAtual;
+  r.clienteId=c?c.id:"";r.cliente=c?c.nome:($("v_cliBusca")?$("v_cliBusca").value.trim():"");
+  r.etapa=etapa;
+  r.itens=JSON.parse(JSON.stringify(itens||[]));
+  r.formas=JSON.parse(JSON.stringify(formas||[])).map(function(f){delete f.__auto;return f;});
+  r.frete=numMF($("v_frete").value)||0;
+  r.descontoEspecial=numMF($("v_descGeral").value)||0;
+  r.prospector=$("v_prosp").value||"";r.vendedor=$("v_vend").value||usuarioAtual;
+  r.instalador=$("v_inst").value||"";r.respInstalacao=$("v_iresp")?$("v_iresp").value:"";
+  r.instalacaoResp=temInstalacaoVenda();
+  r.idata=$("v_idata")?$("v_idata").value:"";r.ihora=$("v_ihora")?$("v_ihora").value:"";
+  r.obs=$("v_obs")?$("v_obs").value:"";r.usoImagem=$("v_usoImg")?$("v_usoImg").value:"";
+  r.origemAtiv=pedOrigemAtiv?pedOrigemAtiv.id:"";
+  r.orcamentoId=pedOrigemOrc?pedOrigemOrc.id:"";
+  r.osId=pedOrigemOS?pedOrigemOS.id:"";
+  r.total=(itens||[]).reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0);
+  r.salvoEm=agoraCarimbo();r.salvoPor=usuarioAtual;
+  return r;
+}
+async function salvarRascunhoVenda(){
+  if(vendaSemOrigem()){toast("Esta venda precisa nascer de um atendimento ou de uma atividade.");return;}
+  var c=clienteDaVenda();
+  if(!c){toast("Escolha o cliente antes de guardar o pedido.");irEtapa(1);return;}
+  var r=montarRascunho(),novo=!rascunhoAberto;
+  if(novo)rascunhos.push(r);
+  try{await grava("rascunhos",r);}
+  catch(e){
+    if(novo)rascunhos.pop();
+    toast("O banco não aceitou guardar: "+(e&&e.message||"")+". O pedido continua na tela.");return;
+  }
+  rascunhoAberto=r;
+  try{renderPedidos();}catch(e2){}
+  toast("Pedido de "+(r.cliente||"cliente")+" guardado como Incompleto. Ele está em Pedidos e volta de onde você parou.");
+}
+async function apagarRascunho(id){
+  var r=rascunhos.filter(function(x){return x.id===id;})[0];if(!r)return;
+  var k=rascunhos.indexOf(r);if(k>=0)rascunhos.splice(k,1);
+  if(rascunhoAberto&&rascunhoAberto.id===id)rascunhoAberto=null;
+  try{await apaga("rascunhos",id);}catch(e){console.warn("apagar rascunho",e);}
+  try{renderPedidos();}catch(e2){}
+}
+/* volta para a tela da venda exatamente de onde parou */
+function retomarRascunho(r){
+  if(!r)return;
+  pedOrigemAtiv=r.origemAtiv?(atendimentos.filter(function(a){return a.id===r.origemAtiv;})[0]||{id:r.origemAtiv}):null;
+  pedOrigemOrc=r.orcamentoId?(orcamentos.filter(function(o){return o.id===r.orcamentoId;})[0]||null):null;
+  pedOrigemOS=r.osId?(ordens.filter(function(o){return o.id===r.osId;})[0]||null):null;
+  ir("venda");
+  itens=JSON.parse(JSON.stringify(r.itens||[]));
+  formas=JSON.parse(JSON.stringify(r.formas||[]));
+  if(!formas.length)formas=formasIniciais();
+  var c=clientes.filter(function(x){return x.id===r.clienteId;})[0];
+  try{if(c)escolherClienteVenda(c);}catch(e){}
+  try{
+    if($("v_frete"))$("v_frete").value=r.frete?brMF(r.frete):"";
+    if($("v_descGeral"))$("v_descGeral").value=r.descontoEspecial?brMF(r.descontoEspecial):"";
+    if(r.prospector)$("v_prosp").value=r.prospector;
+    if(r.vendedor)$("v_vend").value=r.vendedor;
+    if(r.instalador)$("v_inst").value=r.instalador;
+    if(r.respInstalacao&&$("v_iresp"))$("v_iresp").value=r.respInstalacao;
+    if(r.instalacaoResp)marcarInstalacao(r.instalacaoResp);
+    if($("v_idata"))$("v_idata").value=r.idata||"";
+    if($("v_ihora"))$("v_ihora").value=r.ihora||"";
+    if($("v_obs"))$("v_obs").value=r.obs||"";
+    if(r.usoImagem&&$("v_usoImg"))$("v_usoImg").value=r.usoImagem;
+  }catch(e2){console.warn(e2);}
+  rascunhoAberto=r;
+  renderFormas();calcular();atualizarEtapas();
+  irEtapa(r.etapa||1);
+  toast("Pedido de "+(r.cliente||"cliente")+" retomado na etapa "+(r.etapa||1)+". Finalize quando quiser.");
 }
 function limparPedido(){
+  rascunhoAberto=null;   /* venda nova não continua o rascunho anterior */
   itens=[];formas=formasIniciais();
   pedOrigemOrc=null;   /* venda nova não herda o orçamento da anterior (26/09) */
   /* cada venda nova começa com quem está logado nos papéis (v209): o select guardava o
@@ -11450,7 +11561,33 @@ function renderPedidos(){
     '<div class="kpi"><div class="l">Faturamento</div><div class="v">'+BRL(tot)+'</div></div>'+
     '<div class="kpi"><div class="l">Base de comissão</div><div class="v">'+BRL(bas)+"</div></div>";
   var b=$("pedBody");b.innerHTML="";
-  if(!lista.length){b.innerHTML='<tr><td colspan="7"><div class="empty"><div class="big">Nenhum pedido ainda</div>Use o botão <b>+ Novo</b> no topo para lançar o primeiro.</div></td></tr>';return;}
+  /* pedidos guardados pela metade aparecem em cima, marcados Incompleto (03/10). Eles não entram
+     na contagem nem nos KPIs: ainda não são venda. */
+  var meus=rascunhos.filter(function(r){
+    return r.loja===lojaAtual&&(!soMeus()||r.vendedor===usuarioAtual||r.criadoPor===usuarioAtual);})
+    .filter(function(r){return !q||((r.cliente||"")+" "+(r.vendedor||"")).toLowerCase().indexOf(q)>=0;})
+    .sort(function(x,y){return String(y.salvoEm||"").localeCompare(String(x.salvoEm||""));});
+  meus.forEach(function(r){
+    var tr=document.createElement("tr");tr.className="clickable";
+    var qt=(r.itens||[]).reduce(function(a,i){return a+(+i.qtd||1);},0);
+    tr.innerHTML='<td><div class="t-main">—</div><div class="t-sub">'+esc(dataBR(String(r.salvoEm||"").slice(0,10)))+"</div></td>"+
+      "<td>"+esc(r.cliente||"(sem cliente)")+'<div class="t-sub">'+qt+" item(ns) · etapa "+(r.etapa||1)+" de 6</div></td>"+
+      "<td>"+((r.formas||[]).filter(function(f){return +f.valor>0;}).map(function(f){return f.parc+"× "+String(f.tipo||"").split(" ")[0];}).join(" + ")||"—")+"</td>"+
+      '<td class="num">'+BRL(r.total||0)+'</td><td class="num">—</td><td class="num">—</td>'+
+      '<td><span class="pill p-warn">Incompleto</span>'+
+      ' <button class="btn mut sm" type="button" data-rascex="'+esc(r.id)+'">Descartar</button></td>';
+    tr.onclick=function(ev){
+      if(ev.target&&ev.target.getAttribute&&ev.target.getAttribute("data-rascex"))return;
+      retomarRascunho(r);};
+    b.appendChild(tr);
+  });
+  Array.prototype.forEach.call(b.querySelectorAll("[data-rascex]"),function(bt){
+    bt.onclick=async function(ev){
+      ev.stopPropagation();
+      if(!confirm("Descartar este pedido incompleto? O que foi montado nele se perde."))return;
+      await apagarRascunho(bt.getAttribute("data-rascex"));};});
+  if(!lista.length&&!meus.length){b.innerHTML='<tr><td colspan="7"><div class="empty"><div class="big">Nenhum pedido ainda</div>Registre o atendimento do cliente e finalize como <b>Vendido</b> — a venda abre preenchida.</div></td></tr>';return;}
+  if(!lista.length)return;
   lista.forEach(function(p){
     var st=p.status||"";
     var cls=p.aprovado?"p-ok":(p.encerrada?"p-mut":(st.indexOf("desconto")>=0?"p-crit":(st.indexOf("instalação")>=0?"p-warn":(st==="Cancelada"?"p-mut":"p-acc"))));
@@ -30337,6 +30474,8 @@ function ligar(){
     renderPadroes();toast("Padrão "+nome+" adicionado.");};
   $("ccNome").onkeydown=function(e){if(e.key==="Enter")$("ccAdd").click();};
   /* editar o centro (03/10) */
+  if($("v_rascunho"))$("v_rascunho").onclick=salvarRascunhoVenda;
+  if($("v_rascunho2"))$("v_rascunho2").onclick=salvarRascunhoVenda;
   if($("pr_ok")){
     $("pr_ok").onclick=salvarProdutoRapido;
     $("pr_fechar").onclick=function(){$("prodRapModal").hidden=true;prodRapCtx=null;};
