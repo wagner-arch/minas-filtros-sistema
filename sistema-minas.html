@@ -9189,6 +9189,11 @@ window.__abrirPedidoDaAtivMF=function(a){return abrirPedidoPelaVenda(a,"teste");
 window.__origemVendaMF=function(){return origemDaVenda();};
 /* gancho de TESTE: põe a venda no caminho do atendimento, como se tivesse vindo do "Vendido".
    Não afrouxa a regra no sistema: quem chama é o harness, nunca a tela. */
+window.__hojeMF=function(){return hojeISO();};
+window.__negociosMF=function(){return negocios;};
+window.__funilClienteMF=function(cid,m){return atualizarFunilCliente(cid,m);};
+window.__sincFunilMF=function(){return sincronizarFunil();};
+window.__ehLeadMF=function(c){return ehLead(c);};
 window.__comOrigemMF=function(a){pedOrigemAtiv=a||atendimentos[0]||{id:"teste",cliente:"",motivos:[]};return origemDaVenda();};
 window.__telaAtualMF=function(){return telaAtual;};
 window.__renderMotivosMF=function(){return renderMotivos();};
@@ -26588,15 +26593,21 @@ async function atualizarFunilCliente(cid,motivo){
   if(!n){
     var ult=ultimoNegocio(cid);
     var temOrcNovo=orcamentos.some(function(o){return o.clienteId===cid&&o.loja===lojaAtual&&(!ult||String(o.data||"")>=String(ult.etapaEm||ult.criadoEm).slice(0,10))&&o.situacao!=="perdido"&&o.situacao!=="convertido";});
-    /* cliente que já comprou só volta ao funil com orçamento novo (atendimento de pós-venda não é negociação) */
+    var desdeUlt=ult?String(ult.etapaEm||ult.criadoEm).slice(0,10):"";
     if(ehLead(c)){
       if(ult&&ult.etapa==="venda")return null;
       if(ult&&ult.etapa==="perdido"&&motivo!=="atendimento"&&!temOrcNovo)return null;
-      n=negocioNovo(c,"novo",motivo?"criado por "+motivo:"criado pelo sistema",ult?String(ult.etapaEm||ult.criadoEm).slice(0,10):"");mudou=true;
+      n=negocioNovo(c,"novo",motivo?"criado por "+motivo:"criado pelo sistema",desdeUlt);mudou=true;
       if(ult&&ult.etapa==="perdido")n.historico[0].obs="retomado depois de perdido";
-    }else if(temOrcNovo){
-      n=negocioNovo(c,"novo","orçamento de cliente",ult?String(ult.etapaEm||ult.criadoEm).slice(0,10):"");mudou=true;
-    }else return null;
+    }else{
+      /* REGRA DELE (03/10): "preciso que todos os atendimentos estejam no funil até virar venda,
+         e quando virar venda tem que ir automático para a fase de venda".
+         Antes, cliente que já tinha venda só voltava ao funil com orçamento novo — e isso deixava
+         de fora justamente QUEM COMPRA NA PRIMEIRA CONVERSA: ao salvar o pedido o cliente já não
+         era mais lead, o cartão nunca nascia e a venda não aparecia no quadro (o caso do pedido
+         20814). Agora o cartão nasce com o contato, e `etapaPelosDados` leva para Venda sozinho. */
+      n=negocioNovo(c,"novo",motivo?"criado por "+motivo:(temOrcNovo?"orçamento de cliente":"criado pelo sistema"),desdeUlt);mudou=true;
+    }
   }
   var e=etapaPelosDados(n,c);
   if(etapaIdx(e.k)>etapaIdx(n.etapa)&&!(n.etapa==="negociacao"&&e.k==="orcamento")){
@@ -26615,6 +26626,10 @@ async function sincronizarFunil(){
   orcamentos.forEach(function(o){if(o.clienteId&&String(o.data||"")>=limite)mov[o.clienteId]=true;});
   atendimentos.forEach(function(a){
     if(a.clienteId&&a.natureza!=="atividade"&&String(a.data||"").slice(0,10)>=limite)mov[a.clienteId]=true;});
+  /* venda recente também é movimento (03/10): quem comprou na primeira conversa não tinha cartão
+     nenhum, e a venda não aparecia no quadro */
+  pedidos.forEach(function(p){
+    if(p.clienteId&&p.status!=="Cancelada"&&!p.cancelada&&String(p.data||"").slice(0,10)>=limite)mov[p.clienteId]=true;});
   for(var i=0;i<clientes.length;i++){
     var c=clientes[i];if(c.loja&&c.loja!==lojaAtual)continue;
     /* base antiga importada NÃO entra no funil por ter sido cadastrada hoje: ela é histórico,
