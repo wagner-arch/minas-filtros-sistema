@@ -5170,6 +5170,34 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- COMPLETAR O CADASTRO SEM SAIR DA VENDA (03/10): o produto existe mas está fora da lista por
+     falta de preço ou de grupo. Antes o aviso levava para a tela de Produtos e o vendedor perdia
+     o pedido de vista — agora resolve aqui e o produto já entra no item. -->
+<div class="modal" id="prodRapModal" hidden>
+  <div class="box" style="width:min(620px,100%)">
+    <h3>Completar o cadastro do produto</h3>
+    <div class="sub" id="pr_sub"></div>
+    <div class="grid g2" style="margin-top:12px">
+      <div class="fld"><label for="pr_cod">Código MF</label><input id="pr_cod" readonly></div>
+      <div class="fld"><label for="pr_cheia">Tabela 100% <span class="req">*</span></label>
+        <input id="pr_cheia" type="text" inputmode="decimal" placeholder="preço de venda"></div>
+    </div>
+    <div class="grid g2">
+      <div class="fld"><label for="pr_grupo">Grupo <span class="req">*</span></label>
+        <input id="pr_grupo" list="dlGrupos" placeholder="ex.: Purificadores"></div>
+      <div class="fld"><label for="pr_subgrupo">Subgrupo <span class="req">*</span></label>
+        <input id="pr_subgrupo" list="dlSubgrupos" placeholder="ex.: Linha branca"></div>
+    </div>
+    <div id="pr_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="pr_ok">Salvar e usar na venda</button>
+      <button class="btn mut" type="button" id="pr_fechar">Cancelar</button>
+    </div>
+    <p class="help">O resto do cadastro (custo, estoque, garantia, manutenção) continua em Produtos.
+      Aqui ficam só os três campos que fazem o produto aparecer na venda.</p>
+  </div>
+</div>
+
 <!-- EDITAR CENTRO DE CUSTO (pedido do Wagner, 03/10): acerta nome, grupo, código e classificação
      sem mexer no histórico — os lançamentos apontam para o centro pelo id, não pelo nome -->
 <div class="modal" id="ccEdModal" hidden>
@@ -9082,6 +9110,66 @@ window.abrirProdutoMF=function(id){
   if(!p)return;
   ir("produtos");try{abrirProduto(p);}catch(e){console.warn(e);}
 };
+/* ---------- completar o cadastro SEM SAIR DA VENDA (relato dele, 03/10) ----------
+   "coloquei o código do produto PMF107 e mandei incluir, e o sistema me tirou da aba de venda e me
+   levou para o cadastro do produto" — era o aviso da v278, que navegava para a tela de Produtos.
+   Agora abre esta janela por cima: preço, grupo e subgrupo, que é o que falta para o produto
+   aparecer na venda; salvando, ele já entra escolhido no item e o pedido continua de pé. */
+var prodRapCtx=null;
+window.completarProdutoMF=function(pid,selId){
+  var p=produtos.filter(function(x){return x.id===pid;})[0];
+  if(!p)return;
+  if(!veTela("produtos",usuarioAtual)){
+    toast(p.nome+" está com o cadastro pela metade. Peça ao Administrador para completar o preço e o grupo.");
+    return;
+  }
+  var motivo=motivoForaDaVenda(p);
+  if(motivo&&!produtoIncompleto(p)){   /* inativo, plano, item de controle: não é caso desta janela */
+    toast(p.nome+" "+motivo+".");
+    return;
+  }
+  prodRapCtx={pid:pid,sel:selId||"v_prod"};
+  $("pr_sub").innerHTML="<b>"+esc(p.nome)+"</b> está no cadastro, mas fora da lista de venda: falta preencher o que vem abaixo.";
+  $("pr_cod").value=p.cod||"";
+  $("pr_cheia").value=(+p.cheia>0)?brMF(+p.cheia):"";
+  $("pr_grupo").value=(p.grupo&&p.grupo!==GRUPO_COMPLETAR)?p.grupo:"";
+  $("pr_subgrupo").value=(p.subgrupo&&p.subgrupo!==GRUPO_COMPLETAR)?p.subgrupo:"";
+  $("pr_alerta").innerHTML="";
+  try{atualizarListasGrupoProd();}catch(e){}
+  $("prodRapModal").hidden=false;
+  setTimeout(function(){$("pr_cheia").focus();},60);
+};
+async function salvarProdutoRapido(){
+  var ctx=prodRapCtx;if(!ctx)return;
+  var p=produtos.filter(function(x){return x.id===ctx.pid;})[0];if(!p)return;
+  var cheia=numMF($("pr_cheia").value)||0,g=$("pr_grupo").value.trim(),sg=$("pr_subgrupo").value.trim();
+  if(!(cheia>0)||!g||!sg){
+    $("pr_alerta").innerHTML='<div class="note crit"><b>Faltam dados.</b> Preço, grupo e subgrupo são os três que fazem o produto aparecer na venda.</div>';
+    return;
+  }
+  var antes={cheia:p.cheia,grupo:p.grupo,subgrupo:p.subgrupo,completar:p.completar};
+  p.cheia=cheia;p.grupo=g;p.subgrupo=sg;p.completar=false;
+  try{await grava("produtos",p);}
+  catch(e){
+    p.cheia=antes.cheia;p.grupo=antes.grupo;p.subgrupo=antes.subgrupo;p.completar=antes.completar;
+    $("pr_alerta").innerHTML='<div class="note crit"><b>O banco não aceitou.</b> '+esc(e&&e.message||"")+"</div>";return;
+  }
+  /* o grupo novo entra no cadastro de grupos, como o Salvar produto faz */
+  try{
+    var gc=grupoCad(g);
+    if(!gc){GRUPOS_PROD.push({nome:g,subgrupos:[sg]});await gravarGruposProd();}
+    else if((gc.subgrupos||[]).indexOf(sg)<0){gc.subgrupos=(gc.subgrupos||[]).concat([sg]);await gravarGruposProd();}
+  }catch(e2){console.warn("grupos",e2);}
+  $("prodRapModal").hidden=true;prodRapCtx=null;
+  try{renderProdutos();}catch(e3){}
+  /* põe o produto na lista daquela tela e já o escolhe */
+  try{
+    if(ctx.sel==="v_prod")opcoesProduto();else montarSelects();
+    var sel=$(ctx.sel);
+    if(sel){sel.value=p.id;sel.dispatchEvent(new Event("change",{bubbles:true}));}
+  }catch(e4){console.warn(e4);}
+  toast(p.nome+" completado: "+BRL(cheia)+" · "+g+" › "+sg+". Já dá para incluir no pedido.");
+}
 /* inclusão de produto (regra do Wagner, 12/09): produto e quantidade começam em branco e voltam a
    ficar em branco depois de adicionar; sem quantidade não inclui */
 function qtdInformada(id){
@@ -30249,6 +30337,11 @@ function ligar(){
     renderPadroes();toast("Padrão "+nome+" adicionado.");};
   $("ccNome").onkeydown=function(e){if(e.key==="Enter")$("ccAdd").click();};
   /* editar o centro (03/10) */
+  if($("pr_ok")){
+    $("pr_ok").onclick=salvarProdutoRapido;
+    $("pr_fechar").onclick=function(){$("prodRapModal").hidden=true;prodRapCtx=null;};
+    $("pr_subgrupo").onkeydown=function(e){if(e.key==="Enter")salvarProdutoRapido();};
+  }
   if($("cce_ok")){
     $("cce_ok").onclick=salvarCentro;
     $("cce_fechar").onclick=function(){ccEditando=null;$("ccEdModal").hidden=true;};
@@ -32473,10 +32566,11 @@ function erro(msg){
           try{if(window.foraDaVendaMF)fora=window.foraDaVendaMF(bx.value)||[];}catch(e){}
           if(fora.length){
             mostrar(bx,fora.map(function(f){
-              return {titulo:(f.cod?f.cod+" · ":"")+f.nome,sub:"está no cadastro, mas fora da lista de venda: "+f.motivo+" — toque para abrir o produto",__pid:f.id};
+              return {titulo:(f.cod?f.cod+" · ":"")+f.nome,sub:"está no cadastro, mas fora da lista de venda: "+f.motivo+" — toque para completar aqui mesmo",__pid:f.id};
             }),function(it){
               fecharCaixa(bx);
-              try{window.abrirProdutoMF(it.__pid);}catch(e){}
+              /* NÃO navega: abre a janela por cima e devolve o produto já escolhido (03/10) */
+              try{window.completarProdutoMF(it.__pid,sel.id);}catch(e){}
             });
             return;
           }
