@@ -541,6 +541,28 @@
   .chk b{font-weight:600}
   .chk .ajuda{display:block;font-size:12px;color:var(--ink-2);margin-top:3px}
   .dup-fica td{background:rgba(16,185,129,.10)}
+  /* sino de pendências no topo (pedido do Wagner, 03/10) */
+  .sino{position:relative;display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;
+    margin-left:8px;border:0;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;cursor:pointer;flex:none}
+  .sino:hover{background:rgba(255,255,255,.26)}
+  .sino svg{width:21px;height:21px}
+  .sino-n{position:absolute;top:-3px;right:-3px;min-width:19px;height:19px;padding:0 5px;border-radius:999px;
+    background:var(--crit);color:#fff;font-size:11.5px;font-weight:700;line-height:19px;text-align:center;
+    box-shadow:0 0 0 2px var(--topo-bg,#2f4fd8)}
+  .sino-painel{position:fixed;top:60px;right:14px;z-index:140;width:min(400px,calc(100vw - 24px));
+    max-height:min(70vh,560px);display:flex;flex-direction:column;background:var(--card);color:var(--ink);
+    border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.28);overflow:hidden}
+  .sino-cab{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;
+    border-bottom:1px solid var(--line);font-size:15px}
+  .sino-lista{overflow:auto;padding:6px}
+  .sino-it{display:flex;gap:11px;width:100%;text-align:left;padding:11px 12px;border:0;border-radius:10px;
+    background:transparent;color:inherit;font:inherit;cursor:pointer;align-items:flex-start}
+  .sino-it:hover{background:var(--bg)}
+  .sino-ic{font-size:17px;line-height:1.2;flex:none}
+  .sino-tx{min-width:0;flex:1}
+  .sino-tx b{display:block;font-size:14px;font-weight:600}
+  .sino-tx span{display:block;font-size:12.5px;color:var(--ink-2);margin-top:2px}
+  .sino-vazio{padding:26px 14px;text-align:center;color:var(--ink-2);font-size:13.5px}
   input,select,textarea{width:100%;font:inherit;font-size:14.5px;padding:10px 13px;
     background:var(--field);border:1px solid var(--field-bd);color:var(--ink);border-radius:var(--r-sm);
     transition:border-color .12s,box-shadow .12s}
@@ -1372,8 +1394,20 @@ img{max-width:100%}
   <span class="sp"></span>
   <div class="lojasel"><select id="usuario" aria-label="Operador"></select></div>
   <span class="pill" id="perfilPill" style="margin-left:10px"></span>
+  <!-- SINO DE PENDÊNCIAS (pedido do Wagner, 03/10): o número do que está parado esperando
+       alguém; clicar abre a lista e cada linha leva ao lugar da pendência -->
+  <button class="sino" type="button" id="sinoBt" aria-label="Pendências" aria-haspopup="true" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a5 5 0 0 0-5 5v3.6l-1.4 2.6A1 1 0 0 0 6.5 16h11a1 1 0 0 0 .9-1.5L17 11.6V8a5 5 0 0 0-5-5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M10 18a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    <span class="sino-n" id="sinoN" hidden>0</span>
+  </button>
   <button class="sair" type="button" id="btSair" style="margin-left:10px">Sair</button>
 </header>
+<!-- lista das pendências do sino -->
+<div class="sino-painel" id="sinoPainel" hidden>
+  <div class="sino-cab"><b id="sinoTitulo">Pendências</b>
+    <button class="btn mut sm" type="button" id="sinoFechar">Fechar</button></div>
+  <div class="sino-lista" id="sinoLista"></div>
+</div>
 
 <div class="app">
   <nav class="rail" aria-label="Menu">
@@ -1742,6 +1776,8 @@ img{max-width:100%}
           <span class="sp"></span>
           <button class="btn ghost" type="button" id="prodImportar">Importar lista</button>
           <button class="btn ghost" type="button" id="prodRepetidos">Produtos repetidos</button>
+          <!-- limpeza do que entrou errado na importação (pedido do Wagner, 03/10) -->
+          <button class="btn mut" type="button" id="prodApagarBusca" hidden>Apagar os da busca</button>
         </div>
         <div class="tw"><table>
           <thead><tr><th>Produto</th><th>Grupo · Subgrupo</th><th class="num">Estoque</th><th class="num">Custo</th><th class="num">Frete</th><th class="num">100%</th><th class="num">70%</th><th class="num">Campanha</th><th class="num">Pontos</th><th>Série</th><th>Manutenção</th></tr></thead>
@@ -7325,6 +7361,7 @@ function renderProdutos(){
       "<td>"+(p.manut?p.manut+" dias":"—")+"</td>";
     tr.onclick=function(){abrirProduto(p);};b.appendChild(tr);
   });
+  try{ajustarApagarBusca();}catch(e){}
 }
 function abrirProduto(p){
   editandoProd=p||null;$("prodLista").hidden=true;$("prodForm").hidden=false;
@@ -8139,6 +8176,71 @@ async function removerDuplicados(){
   opcoesProduto();renderProdutos();renderDuplicados();
   toast(apagados+" repetido(s) apagado(s) · "+desativados+" desativado(s).");
 }
+/* ---------- apagar em massa o que entrou errado na importação (pedido do Wagner, 03/10) ----------
+   "preciso que o sistema elimine todos os produtos que tiver nome de 'kit registro' no seu cadastro,
+   foi importado errado." O botão aparece só com a busca preenchida e só para o Administrador, e
+   segue a regra de sempre: produto que já tem venda, OS, estoque, aparelho ou composição NÃO é
+   apagado — é desativado, para sumir da venda sem perder o histórico. */
+function produtosDaBusca(){
+  var q=semAcento($("prodBusca")?$("prodBusca").value:"").trim();
+  if(q.length<3)return [];
+  return produtos.filter(function(p){
+    if(p.loja&&p.loja!==lojaAtual)return false;
+    return semAcento(p.nome).indexOf(q)>=0||semAcento(p.cod||"").indexOf(q)>=0;
+  });
+}
+function ajustarApagarBusca(){
+  var bt=$("prodApagarBusca");
+  if(!bt)return;
+  var L=ehAdministrador()?produtosDaBusca():[];
+  bt.hidden=!L.length;
+  bt.textContent="Apagar os "+L.length+" da busca";
+}
+async function apagarProdutosDaBusca(){
+  if(!ehAdministrador()){toast("Só o Administrador apaga produto em massa.");return;}
+  var L=produtosDaBusca();
+  if(!L.length){toast("Escreva ao menos 3 letras na busca.");return;}
+  var q=($("prodBusca").value||"").trim();
+  var podem=[],presos=[];
+  L.forEach(function(p){(usoTotalProduto(p)?presos:podem).push(p);});
+  var amostra=L.slice(0,10).map(function(p){return "• "+(p.cod?p.cod+" ":"")+p.nome;}).join("\n");
+  if(!confirm("Apagar "+podem.length+" produto(s) com \""+q+"\" no nome ou no código"+
+    (presos.length?" e DESATIVAR "+presos.length+" que já têm venda, OS ou estoque":"")+"?\n\n"+
+    amostra+(L.length>10?"\n… e mais "+(L.length-10):"")+"\n\nApagar não tem volta."))return;
+  var bt=$("prodApagarBusca");
+  bt.disabled=true;
+  var apagados=0,desativados=0,erros=0,movs=0;
+  for(var i=0;i<podem.length;i++){
+    var p=podem[i];
+    try{
+      var meus=movEst.filter(function(m){return m.produtoId===p.id&&m.doc===DOC_IMPORT;});
+      for(var j=0;j<meus.length;j++){await apaga("movest",meus[j].id);movEst.splice(movEst.indexOf(meus[j]),1);movs++;}
+      await apaga("produtos",p.id);
+      produtos.splice(produtos.indexOf(p),1);
+      apagados++;
+    }catch(e){erros++;console.warn("apagar busca",p.cod,e);}
+  }
+  for(var k=0;k<presos.length;k++){
+    var d=presos[k],antes=d.status;
+    if((d.status||"ativo")!=="ativo")continue;
+    try{
+      d.status="inativo";d.inativadoEm=hojeISO();d.inativadoPor=usuarioAtual;d.inativadoMotivo="importado errado";
+      if(db)await col("produtos").doc(d.id).set(d);
+      desativados++;
+    }catch(e){d.status=antes;erros++;console.warn("desativar busca",d.cod,e);}
+  }
+  bt.disabled=false;
+  opcoesProduto();renderProdutos();ajustarApagarBusca();
+  toast(apagados+" produto(s) apagado(s)"+(desativados?" · "+desativados+" desativado(s) por já terem movimento":"")+
+    (erros?" · "+erros+" não gravaram":"")+".");
+}
+function ligarApagarBusca(){
+  var bt=$("prodApagarBusca");
+  if(!bt)return;
+  bt.onclick=apagarProdutosDaBusca;
+  if($("prodBusca"))$("prodBusca").addEventListener("input",ajustarApagarBusca);
+  ajustarApagarBusca();
+}
 function ligarDuplicados(){
   var bt=$("prodRepetidos");if(!bt)return;
   bt.onclick=abrirDuplicados;
@@ -8763,6 +8865,16 @@ function opcoesProduto(){
   sincronizarValor();
 }
 /* código de barras de cada produto (só dígitos), para a busca de produto do módulo de celular */
+/* nome popular e Código MF para a busca de produto (pedido do Wagner, 03/10):
+   "no campo do produto tenha opção de buscar o produto pelo nome, pelo nome popular e pelo código" */
+window.popProdutosMF=function(){
+  var m={};
+  produtos.forEach(function(p){
+    var t=[p.pop,p.cod].filter(function(x){return String(x||"").trim();}).join(" ");
+    if(t)m[p.id]=t;
+  });
+  return m;
+};
 window.barrasProdutosMF=function(){
   var m={};
   produtos.forEach(function(p){var d=String(p.barras||"").replace(/\D/g,"");if(d)m[p.id]=d;});
@@ -9003,6 +9115,8 @@ window.__clientesMF=function(){return clientes;};
 window.__equipamentosMF=function(){return equipamentos;};
 window.__produtosMF=function(){return produtos;};
 window.__tiposMF=function(){return tipos;};
+window.__requisicoesMF=function(){return requisicoes;};
+window.__renderMF=function(){render();};
 /* ganchos dos testes da v258 (manutenção no cadastro do cliente) */
 window.__idxManutCliMF=function(refazer){if(refazer)esquecerManutCli();return indiceManutCli();};
 window.__manutCliMF=function(c){return manutDoCliente(c);};
@@ -11175,32 +11289,9 @@ async function decidirRetirada(id,aceita){
   avisarRetiradas();
 }
 /* aviso para o responsável pelo estoque (e para quem teve a retirada recusada) */
-function avisarRetiradas(){
-  var el=$("avisoRetirada");
-  if(!el){
-    el=document.createElement("button");el.type="button";el.id="avisoRetirada";el.className="aviso-retirada";el.hidden=true;
-    document.body.appendChild(el);
-    el.onclick=async function(){
-      el.hidden=true;el.__visto=el.__chave;
-      if(el.__modo==="aprovar"){
-        ir("estEmpresa");
-        var t=$("eeAbas")&&$("eeAbas").querySelector('[data-t="req"]');
-        if(t)t.click();else{eeAba="req";renderEstEmpresa();}
-      }else{
-        for(var i=0;i<(el.__recusadas||[]).length;i++){el.__recusadas[i].recusaVista=true;await grava("requisicoes",el.__recusadas[i]);}
-        ir("pedidos");
-      }
-    };
-  }
-  var pend=podeAprovarRetirada()?requisicoes.filter(function(r){return r.tipo==="retirada"&&r.status==="pendente"&&(r.lojaOrigem||r.loja)===lojaAtual;}):[];
-  var rec=requisicoes.filter(function(r){return r.tipo==="retirada"&&r.status==="recusada"&&r.criadoPor===usuarioAtual&&!r.recusaVista;});
-  var txt="";
-  if(pend.length){el.__modo="aprovar";txt="🔔 "+pend.length+(pend.length===1?" solicitação":" solicitações")+" de retirada de estoque aguardando sua aprovação";}
-  else if(rec.length){el.__modo="recusa";el.__recusadas=rec;txt="🔔 Retirada de estoque recusada · pedido "+rec.map(function(r){return r.pedidoNumero;}).join(", ");}
-  el.__chave=txt+"|"+usuarioAtual+"|"+lojaAtual;
-  el.textContent=txt;
-  el.hidden=!txt||el.__visto===el.__chave;
-}
+/* o balão flutuante virou o SINO de pendências (v266) — a função continua pelo nome
+   porque é chamada em vários pontos do arquivo */
+function avisarRetiradas(){renderSino();}
 function locaisComSaldo(pid){
   var m={};
   movEst.forEach(function(x){
@@ -15191,20 +15282,9 @@ async function responderAceite(acao){
   toast("Veículo aceito. A partir de agora "+ps.condutor+" responde por ele.");
 }
 /* aviso para quem tem veículo esperando aceite */
-function avisarPosseVeiculo(){
-  var el=$("avisoPosse");
-  if(!el){
-    el=document.createElement("button");el.type="button";el.id="avisoPosse";el.className="aviso-retirada";el.hidden=true;
-    document.body.appendChild(el);
-    el.onclick=function(){el.hidden=true;if(el.__ps)abrirAceite(el.__ps);};
-  }
-  var meu=posses.filter(function(p){return p.situacao==="pendente"&&p.condutor===usuarioAtual;})[0];
-  if(!meu){el.hidden=true;return;}
-  var v=veicPor(meu.veiculoId)||{};
-  el.__ps=meu;
-  el.innerHTML="<b>Você recebeu um veículo.</b> "+esc(nomeVeic(v))+" — confira as fotos e aceite.";
-  el.hidden=false;
-}
+/* o balão flutuante virou o SINO de pendências (v266) — a função continua pelo nome
+   porque é chamada em vários pontos do arquivo */
+function avisarPosseVeiculo(){renderSino();}
 /* ---------- multa ---------- */
 function abrirMulta(){
   var v=vcAberto;if(!v){toast("Abra o veículo primeiro.");return;}
@@ -25162,42 +25242,9 @@ async function recusarDesconto(p,motivo){
   render();return true;
 }
 /* aviso flutuante: quem aprova vê as solicitações; o vendedor vê a resposta */
-function avisarDescontos(){
-  var el=$("avisoDesconto");
-  if(!el){
-    el=document.createElement("button");el.type="button";el.id="avisoDesconto";el.className="aviso-retirada";el.hidden=true;
-    el.style.bottom="134px";
-    document.body.appendChild(el);
-    el.onclick=async function(){
-      el.hidden=true;el.__visto=el.__chave;
-      if(el.__modo==="aprovar"){if(el.__ped)abrirAutDesconto(el.__ped);return;}
-      var ls=el.__resp||[];
-      for(var i=0;i<ls.length;i++){
-        var x=ls[i].descontoRecusado||ls[i].descontoAutorizado;if(x)x.vistoVendedor=true;await gravarPedido(ls[i]);}
-      if(ls[0]){ir("pedidos");try{abrirPedido(ls[0]);}catch(e){}}
-    };
-  }
-  var pend=pode("aprovarDesconto")?pedidos.filter(function(p){
-    return p.loja===lojaAtual&&!p.encerrada&&p.status!=="Cancelada"&&p.abaixoTabela&&!p.descontoAutorizado&&!p.descontoRecusado;}):[];
-  var resp=pedidos.filter(function(p){
-    if(p.loja!==lojaAtual||p.vendedor!==usuarioAtual)return false;
-    var x=p.descontoRecusado||(p.descontoAutorizado&&p.descontoAutorizado.fator!=null?p.descontoAutorizado:null);
-    return x&&!x.vistoVendedor&&x.por!==usuarioAtual;});
-  var txt="";
-  if(pend.length){
-    el.__modo="aprovar";el.__ped=pend[0];
-    txt="🔔 "+(pend.length===1?"Venda abaixo da tabela aguardando sua autorização · pedido "+pend[0].numero+" ("+(pend[0].vendedor||"—")+")"
-      :pend.length+" vendas abaixo da tabela aguardando sua autorização");
-  }else if(resp.length){
-    el.__modo="resposta";el.__resp=resp;
-    var p0=resp[0];
-    txt="🔔 "+(p0.descontoRecusado?"Desconto recusado · pedido "+p0.numero+": "+p0.descontoRecusado.motivo
-      :"Desconto autorizado · pedido "+p0.numero+" · "+p0.descontoAutorizado.tabela+" na comissão")+(resp.length>1?" (+"+(resp.length-1)+")":"");
-  }
-  el.__chave=txt+"|"+usuarioAtual+"|"+lojaAtual;
-  el.textContent=txt;
-  el.hidden=!txt||el.__visto===el.__chave;
-}
+/* o balão flutuante virou o SINO de pendências (v266) — a função continua pelo nome
+   porque é chamada em vários pontos do arquivo */
+function avisarDescontos(){renderSino();}
 /* ================= INSTALAÇÃO (pedido do Wagner, 12/09) =================
    A venda com instalação futura aparece na agenda de quem instala. A janela da
    instalação mostra a venda inteira; o instalador inclui os produtos que precisou
@@ -28126,24 +28173,179 @@ function atualizarBadgeSolic(){
   var n=solicPendentesParaMim().length;
   b.textContent=n||"";b.hidden=!n;
 }
-function avisarSolicitacoes(){
-  var el=$("avisoSolic");
-  if(!el){
-    el=document.createElement("button");el.type="button";el.id="avisoSolic";el.className="aviso-retirada";el.hidden=true;
-    el.style.bottom="126px";
-    document.body.appendChild(el);
-    el.onclick=function(){el.hidden=true;el.__visto=el.__chave;ir("solic");};
-  }
-  var ls=solicPendentesParaMim(),txt="";
-  if(ls.length){
-    txt=podeAprovarSolic()
-      ? "🔔 "+ls.length+(ls.length===1?" solicitação aguardando":" solicitações aguardando")+" sua autorização"
-      : "🔔 Sua solicitação foi "+(ls[0].status==="aprovada"?"aprovada":"recusada")+" · "+ls[0].cliente;
-  }
-  el.__chave=txt+"|"+usuarioAtual+"|"+lojaAtual;
-  el.textContent=txt;
-  el.hidden=!txt||el.__visto===el.__chave;
+/* ================= SINO DE PENDÊNCIAS (pedido do Wagner, 03/10) =================
+   "quero um ícone do sino no canto superior direito, onde se tiver notificações ele apresenta
+   quantas tem pendente em número; clicando no sino ele abre as pendências, e clicando na
+   pendência ele direciona para a mesma."
+   Ele substitui os quatro balões flutuantes (retirada de estoque, venda abaixo da tabela,
+   veículo a aceitar e solicitações), que cobriam os botões da tela e sumiam depois de vistos. */
+function itensReqTexto(r){
+  return (r.itens||[]).map(function(i){return (i.qtd||1)+"× "+(i.nome||"");}).join(", ").slice(0,90);
 }
+function pendenciasMF(){
+  var L=[];
+  function põe(o){L.push(o);}
+  /* 1. retirada de estoque esperando quem responde pelo estoque */
+  try{
+    if(podeAprovarRetirada()){
+      requisicoes.filter(function(r){
+        return r.tipo==="retirada"&&r.status==="pendente"&&(r.lojaOrigem||r.loja)===lojaAtual;
+      }).forEach(function(r){
+        põe({chave:"ret:"+r.id,icone:"📦",titulo:"Retirada de estoque para aprovar",
+          texto:(r.pedidoNumero?"Pedido "+r.pedidoNumero+" · ":"")+(r.criadoPor||"")+
+            (itensReqTexto(r)?" · "+itensReqTexto(r):""),
+          quando:r.criadoEm||"",
+          ir:function(){
+            ir("estEmpresa");
+            var t=$("eeAbas")&&$("eeAbas").querySelector('[data-t="req"]');
+            if(t)t.click();else{eeAba="req";renderEstEmpresa();}
+          }});
+      });
+    }
+  }catch(e){console.warn("pend retirada",e);}
+  /* 2. a minha retirada foi recusada */
+  try{
+    requisicoes.filter(function(r){
+      return r.tipo==="retirada"&&r.status==="recusada"&&r.criadoPor===usuarioAtual&&!r.recusaVista;
+    }).forEach(function(r){
+      põe({chave:"retr:"+r.id,icone:"⛔",titulo:"Retirada de estoque recusada",
+        texto:(r.pedidoNumero?"Pedido "+r.pedidoNumero:"")+(r.motivoRecusa?" · "+r.motivoRecusa:""),
+        quando:r.decididoEm||r.criadoEm||"",
+        ir:async function(){
+          r.recusaVista=true;
+          try{await grava("requisicoes",r);}catch(e){console.warn(e);}
+          ir("pedidos");
+          var p=pedidos.filter(function(x){return x.id===r.pedidoId;})[0];
+          if(p)try{abrirPedido(p);}catch(e){}
+        }});
+    });
+  }catch(e){console.warn("pend recusa",e);}
+  /* 3. venda abaixo da tabela esperando autorização */
+  try{
+    if(pode("aprovarDesconto")){
+      pedidos.filter(function(p){
+        return p.loja===lojaAtual&&!p.encerrada&&p.status!=="Cancelada"&&p.abaixoTabela&&
+          !p.descontoAutorizado&&!p.descontoRecusado;
+      }).forEach(function(p){
+        põe({chave:"desc:"+p.id,icone:"🏷️",titulo:"Venda abaixo da tabela para autorizar",
+          texto:"Pedido "+p.numero+" · "+(p.vendedor||"—")+" · "+(p.cliente||""),
+          quando:p.data||"",
+          ir:function(){try{abrirAutDesconto(p);}catch(e){console.warn(e);}}});
+      });
+    }
+  }catch(e){console.warn("pend desconto",e);}
+  /* 4. resposta do desconto para quem vendeu */
+  try{
+    pedidos.filter(function(p){
+      if(p.loja!==lojaAtual||p.vendedor!==usuarioAtual)return false;
+      var x=p.descontoRecusado||(p.descontoAutorizado&&p.descontoAutorizado.fator!=null?p.descontoAutorizado:null);
+      return x&&!x.vistoVendedor&&x.por!==usuarioAtual;
+    }).forEach(function(p){
+      var rec=!!p.descontoRecusado;
+      põe({chave:"descr:"+p.id,icone:rec?"⛔":"✅",
+        titulo:rec?"Desconto recusado":"Desconto autorizado",
+        texto:"Pedido "+p.numero+" · "+(rec?(p.descontoRecusado.motivo||""):(p.descontoAutorizado.tabela+" na comissão")),
+        quando:(rec?p.descontoRecusado.quando:p.descontoAutorizado.quando)||"",
+        ir:async function(){
+          var x=p.descontoRecusado||p.descontoAutorizado;
+          if(x)x.vistoVendedor=true;
+          try{await gravarPedido(p);}catch(e){console.warn(e);}
+          ir("pedidos");try{abrirPedido(p);}catch(e){}
+        }});
+    });
+  }catch(e){console.warn("pend desconto resposta",e);}
+  /* 5. veículo entregue esperando o aceite */
+  try{
+    posses.filter(function(p){return p.situacao==="pendente"&&p.condutor===usuarioAtual;})
+      .forEach(function(ps){
+        var v=veicPor(ps.veiculoId)||{};
+        põe({chave:"posse:"+ps.id,icone:"🚗",titulo:"Veículo esperando o seu aceite",
+          texto:nomeVeic(v)+" — confira as fotos e aceite",quando:ps.de||"",
+          ir:function(){try{abrirAceite(ps);}catch(e){console.warn(e);}}});
+      });
+  }catch(e){console.warn("pend posse",e);}
+  /* 6. solicitações (para quem aprova) e as respostas das minhas */
+  try{
+    var aprova=podeAprovarSolic();
+    solicPendentesParaMim().forEach(function(s){
+      põe({chave:"solic:"+s.id,icone:"🔑",
+        titulo:aprova?"Solicitação para autorizar":("Sua solicitação foi "+(s.status==="aprovada"?"aprovada":"recusada")),
+        texto:(s.cliente||"")+(aprova&&s.solicitante?" · "+s.solicitante:""),
+        quando:s.quando||s.criadoEm||"",
+        ir:function(){ir("solic");}});
+    });
+  }catch(e){console.warn("pend solic",e);}
+  return L;
+}
+var _pendSino=[];
+function renderSino(){
+  var bt=$("sinoBt");
+  if(!bt)return;
+  var L=[];
+  try{L=pendenciasMF();}catch(e){console.warn("sino",e);}
+  _pendSino=L;
+  var n=L.length,bn=$("sinoN");
+  if(bn){bn.textContent=n>99?"99+":String(n);bn.hidden=!n;}
+  bt.title=n?(n===1?"1 pendência":n+" pendências"):"Nenhuma pendência";
+  bt.setAttribute("aria-label",bt.title);
+  if($("sinoPainel")&&!$("sinoPainel").hidden)desenharSino();
+}
+function desenharSino(){
+  var w=$("sinoLista");
+  if(!w)return;
+  var L=_pendSino||[];
+  if($("sinoTitulo"))$("sinoTitulo").textContent=L.length?("Pendências · "+L.length):"Pendências";
+  if(!L.length){
+    w.innerHTML='<div class="sino-vazio">Nada pendente para você agora.</div>';
+    return;
+  }
+  w.innerHTML=L.map(function(it,ix){
+    return '<button class="sino-it" type="button" data-pend="'+ix+'">'+
+      '<span class="sino-ic">'+it.icone+"</span>"+
+      '<span class="sino-tx"><b>'+esc(it.titulo)+"</b><span>"+esc(it.texto||"")+
+        (it.quando?" · "+esc(dataBR(String(it.quando).slice(0,16))):"")+"</span></span></button>";
+  }).join("");
+  Array.prototype.forEach.call(w.querySelectorAll("[data-pend]"),function(b){
+    b.onclick=function(){
+      var it=(_pendSino||[])[+b.getAttribute("data-pend")];
+      fecharSino();
+      if(it&&it.ir)try{it.ir();}catch(e){console.warn(e);}
+      setTimeout(renderSino,400);
+    };
+  });
+}
+function abrirSino(){
+  renderSino();
+  desenharSino();
+  var p=$("sinoPainel");
+  if(p)p.hidden=false;
+  if($("sinoBt"))$("sinoBt").setAttribute("aria-expanded","true");
+}
+function fecharSino(){
+  var p=$("sinoPainel");
+  if(p)p.hidden=true;
+  if($("sinoBt"))$("sinoBt").setAttribute("aria-expanded","false");
+}
+function ligarSino(){
+  var bt=$("sinoBt");
+  if(!bt)return;
+  bt.onclick=function(e){
+    e.stopPropagation();
+    if($("sinoPainel")&&$("sinoPainel").hidden)abrirSino();else fecharSino();
+  };
+  if($("sinoFechar"))$("sinoFechar").onclick=fecharSino;
+  document.addEventListener("click",function(e){
+    var p=$("sinoPainel");
+    if(!p||p.hidden)return;
+    if(p.contains(e.target)||(bt&&bt.contains(e.target)))return;
+    fecharSino();
+  });
+  document.addEventListener("keydown",function(e){if(e.key==="Escape")fecharSino();});
+  renderSino();
+}
+/* o balão flutuante virou o SINO de pendências (v266) — a função continua pelo nome
+   porque é chamada em vários pontos do arquivo */
+function avisarSolicitacoes(){renderSino();}
 /* ================= O QUE CADA UM ENXERGA (regra do Wagner, 21/09) =================
    "só vai aparecer para o usuário aquilo que ele fez, cadastrou, ou que os outros usuários
    tenham colocado ele." Quem tem a permissão verTudo (Administrador, Financeiro, gestão)
@@ -28816,6 +29018,9 @@ function ir(s,doMenu){
   telaAtual=s;
   /* o que a tela escreveu nos campos de valor aparece no padrão brasileiro (v166) */
   try{formatarValoresVisiveis($("s-"+s)||document);}catch(e){}
+  /* o sino acompanha a navegação: `ir` não chama `render`, e sem isto o número ficava velho (v266) */
+  try{renderSino();}catch(e){}
+  try{fecharSino();}catch(e){}
 }
 function resetarProdutos(){
   editandoProd=null;
@@ -30526,6 +30731,8 @@ function navegacaoBasica(){
   try{ligarTrocaFeita();}catch(e){console.warn("troca feita",e);}
   try{ligarTipoPessoaAt();}catch(e){console.warn("tipo de pessoa",e);}
   try{ligarDuplicados();}catch(e){console.warn("produtos repetidos",e);}
+  try{ligarSino();}catch(e){console.warn("sino",e);}
+  try{ligarApagarBusca();}catch(e){console.warn("apagar da busca",e);}
   try{ligarCampoOS();}catch(e){console.warn("campo os",e);}
   try{ligarCamposValor();}catch(e){console.warn("campos de valor",e);}
   /* escolher o produto já põe 1 na quantidade, nas telas de venda (v253) */
@@ -31322,10 +31529,10 @@ function erro(msg){
       envolt.style.cssText="position:relative;margin-bottom:6px";
       var bx=document.createElement("input");
       bx.type="search";bx.id=id+"_busca";
-      bx.placeholder="Buscar: nome, código ou código de barras";
+      bx.placeholder="Buscar: nome, nome popular, Código MF ou código de barras";
       bx.setAttribute("autocomplete","off");
       bx.setAttribute("enterkeyhint","search");
-      bx.setAttribute("aria-label","Buscar produto por nome, código ou código de barras");
+      bx.setAttribute("aria-label","Buscar produto por nome, nome popular, Código MF ou código de barras");
       envolt.appendChild(bx);
       sel.parentNode.insertBefore(envolt,sel);
       /* regra do Wagner (12/09): só a busca aparece; a lista de escolha fica escondida guardando o produto */
@@ -31376,17 +31583,20 @@ function erro(msg){
       function procurar(){
         var q=ibgeTexto(bx.value);
         if(!q){achados=[];fecharCaixa(bx);return;}
-        var termos=q.split(" "),lista=[],digitos=/^\d+$/.test(q)?q:"",exatos=[],barras={};
+        var termos=q.split(" "),lista=[],digitos=/^\d+$/.test(q)?q:"",exatos=[],barras={},pops={};
         try{if(window.barrasProdutosMF)barras=window.barrasProdutosMF()||{};}catch(e){}
+        try{if(window.popProdutosMF)pops=window.popProdutosMF()||{};}catch(e){}
         Array.prototype.forEach.call(sel.options,function(o){
           if(!o.value||o.disabled)return;
           var cb=barras[o.value]||"";
           /* o código saiu do texto da opção (regra dele, 20/09: "o código do produto não pode
              estar no mesmo campo do nome"), mas continua pesquisável pelo atributo data-cod */
           var cod=ibgeTexto(o.getAttribute("data-cod")||String(o.textContent).split("·")[0]);
-          var t=ibgeTexto(o.textContent)+(cod?" "+cod:"")+(cb?" "+cb:"");
+          /* nome popular (apelido do balcão) e Código MF entram na busca (03/10) */
+          var pop=ibgeTexto(pops[o.value]||"");
+          var t=ibgeTexto(o.textContent)+(cod?" "+cod:"")+(pop?" "+pop:"")+(cb?" "+cb:"");
           for(var i=0;i<termos.length;i++)if(t.indexOf(termos[i])<0)return;
-          var nota=(digitos&&cb===digitos)?-1:(cod.indexOf(termos[0])===0?0:(t.indexOf(termos[0])===0?1:2));
+          var nota=(digitos&&cb===digitos)?-1:(cod.indexOf(termos[0])===0?0:(pop.indexOf(termos[0])===0?0.5:(t.indexOf(termos[0])===0?1:2)));
           if(nota===-1)exatos.push(o);
           lista.push({o:o,nota:nota});
         });
@@ -31430,7 +31640,7 @@ function erro(msg){
         }
         setTimeout(sincronizarBusca,0);
       }).observe(sel,{childList:true});}catch(e){}
-      bx.placeholder="Buscar produto: nome, código ou código de barras";
+      bx.placeholder="Buscar: nome, nome popular, Código MF ou código de barras";
       sincronizarBusca();
     });
   }
