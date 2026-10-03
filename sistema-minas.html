@@ -5173,6 +5173,32 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- ENVIO PELO COMPUTADOR (03/10): o WhatsApp Web não aceita anexo por fora, então o sistema
+     mostra os dois passos em vez de baixar e abrir tudo de uma vez, o que parecia só "salvar" -->
+<div class="modal" id="zapPcModal" hidden>
+  <div class="box" style="width:min(560px,100%)">
+    <h3>Enviar pelo WhatsApp do computador</h3>
+    <div class="sub" id="zpc_sub"></div>
+    <div class="note" style="margin-top:12px">No computador o WhatsApp não deixa o sistema anexar o
+      arquivo sozinho. São <b>dois passos</b>: baixar o PDF e arrastá-lo para a conversa.
+      <div style="margin-top:6px">Arquivo: <b id="zpc_arquivo"></b></div></div>
+    <div class="actions" style="justify-content:flex-start;margin-top:12px">
+      <button class="btn" type="button" id="zpc_baixar">1. Baixar o PDF</button>
+    </div>
+    <div id="zpc_passo2" hidden>
+      <div class="note ok" style="margin-top:10px"><b>Agora abra a conversa</b> e arraste o arquivo
+        da pasta de downloads para dentro dela (ou use o clipe 📎 › Documento).</div>
+      <div class="actions" style="justify-content:flex-start">
+        <button class="btn zap" type="button" id="zpc_abrir">2. Abrir a conversa do cliente</button>
+      </div>
+    </div>
+    <div class="actions"><button class="btn mut" type="button" id="zpc_fechar">Fechar</button></div>
+    <p class="help">No celular o envio é direto: o sistema abre o compartilhar com o PDF já anexado.
+      No computador, se você usa o <b>aplicativo</b> do WhatsApp, o botão de compartilhar do Windows
+      também pode enviar sem baixar.</p>
+  </div>
+</div>
+
 <!-- COMPLETAR O CADASTRO SEM SAIR DA VENDA (03/10): o produto existe mas está fora da lista por
      falta de preço ou de grupo. Antes o aviso levava para a tela de Produtos e o vendedor perdia
      o pedido de vista — agora resolve aqui e o produto já entra no item. -->
@@ -27404,26 +27430,51 @@ async function enviarPdfWhatsApp(cfg,botao){
   }
   var f=pdfPronto.file,tel=telWhatsApp(cfg.tel);
   if(botao){botao.disabled=false;botao.textContent=rotulo;}
-  /* compartilhar com arquivo só no celular; no computador a conversa do cliente abre direto no WhatsApp Web */
-  var celular=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent||"")||
-    ((navigator.maxTouchPoints||0)>1&&/Macintosh/.test(navigator.userAgent||""));
-  if(celular&&navigator.canShare&&navigator.canShare({files:[f]})){
+  /* o compartilhar do aparelho é tentado SEMPRE (03/10): no Windows ele abre o painel do sistema,
+     que lista o WhatsApp instalado — quando existe, o arquivo vai direto, sem baixar nada */
+  if(navigator.canShare&&navigator.canShare({files:[f]})){
     try{
       await navigator.share({files:[f],title:cfg.titulo,text:cfg.msg});
       await cfg.registrar("compartilhado do aparelho");
       toast(cfg.titulo+" compartilhado. Confira na conversa de "+quem+".");
     }catch(e){
-      if(!(e&&e.name==="AbortError"))toast("O compartilhar não abriu: "+((e&&e.message)||e));
+      /* cancelou: fica por isso mesmo. Falhou de verdade (acontece no computador, onde o
+         canShare diz que sim e o share não abre): cai no caminho dos dois passos (03/10) */
+      if(e&&e.name==="AbortError")return;
+      abrirEnvioPcWhatsApp(cfg,f,tel,quem);
     }
     return;
   }
-  /* computador: baixa o PDF e abre a conversa do cliente no WhatsApp Web */
-  var url=URL.createObjectURL(f),a=document.createElement("a");
-  a.href=url;a.download=f.name;document.body.appendChild(a);a.click();a.parentNode.removeChild(a);
-  setTimeout(function(){URL.revokeObjectURL(url);},60000);
-  if(tel)abrirJanelaWhatsApp(tel,cfg.msg);
-  await cfg.registrar("PDF baixado e conversa do WhatsApp aberta");
-  toast(tel?"PDF baixado. Anexe "+f.name+" na conversa do WhatsApp que abriu.":"Sem telefone no cadastro — o PDF foi baixado.");
+  /* computador sem o compartilhar do sistema: o WhatsApp Web não aceita anexo por fora, então são
+     dois passos. Antes o sistema baixava o arquivo e abria a conversa de uma vez, e na tela isso
+     parecia que ele tinha só "salvado o pedido" (relato dele, 03/10, com o Salvar como aberto).
+     Agora a janela diz o que vai acontecer e cada passo é um botão. */
+  abrirEnvioPcWhatsApp(cfg,f,tel,quem);
+}
+/* janela do envio pelo computador: baixar o PDF e abrir a conversa, nesta ordem */
+function abrirEnvioPcWhatsApp(cfg,f,tel,quem){
+  var m=$("zapPcModal");if(!m)return;
+  $("zpc_sub").innerHTML="<b>"+esc(cfg.titulo)+"</b> para <b>"+esc(cfg.cliente||quem)+"</b>"+
+    (tel?" · "+esc(tel):" · <b>sem telefone no cadastro</b>");
+  $("zpc_arquivo").textContent=f.name;
+  $("zpc_passo2").hidden=true;
+  $("zpc_baixar").disabled=false;$("zpc_baixar").textContent="1. Baixar o PDF";
+  $("zpc_abrir").disabled=!tel;
+  $("zpc_baixar").onclick=function(){
+    var url=URL.createObjectURL(f),a=document.createElement("a");
+    a.href=url;a.download=f.name;document.body.appendChild(a);a.click();a.parentNode.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},60000);
+    $("zpc_baixar").textContent="PDF baixado ✓";$("zpc_baixar").disabled=true;
+    $("zpc_passo2").hidden=false;
+  };
+  $("zpc_abrir").onclick=async function(){
+    if(tel)abrirJanelaWhatsApp(tel,cfg.msg);
+    try{await cfg.registrar("PDF baixado e conversa do WhatsApp aberta");}catch(e){}
+    m.hidden=true;
+    toast("Conversa de "+quem+" aberta. Arraste "+f.name+" da pasta de downloads para a conversa.");
+  };
+  $("zpc_fechar").onclick=function(){m.hidden=true;};
+  m.hidden=false;
 }
 function cfgVendaWhatsApp(p){
   var osW=osDoPedido(p);
