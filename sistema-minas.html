@@ -1866,6 +1866,13 @@ img{max-width:100%}
           </div>
           <div id="p_campNota"></div>
           <p class="help">Cada tabela paga o percentual do próprio nome: 100%, 70% e Campanha (50%). Só o Administrador liga ou desliga a campanha.</p>
+          <!-- troca na venda com UM campo só (decisão dele, 03/10): o valor preenchido já diz que
+               o produto aceita troca, e some com o cadastro "-TROCA" paralelo -->
+          <div class="grid g4" style="margin-top:12px">
+            <div class="fld"><label for="p_troca">Desconto de troca (R$)</label>
+              <input id="p_troca" type="text" inputmode="decimal" step="0.01" placeholder="em branco: não aceita troca"></div>
+          </div>
+          <div id="p_trocaNota"></div>
         </div>
 
         <div class="sect">
@@ -1994,6 +2001,8 @@ img{max-width:100%}
             </div>
             <!-- a nota do preço ocupa a largura toda: dentro do campo ela virava uma coluna de texto (25/09) -->
             <div id="v_precoNota"></div>
+            <!-- produto que aceita troca (03/10): o desconto vem do cadastro e entra como forma -->
+            <div id="v_trocaNota"></div>
             <div class="fld" id="v_equipWrap" hidden style="margin-top:14px">
               <label for="v_equip">Esta venda é manutenção de qual aparelho? <span class="req">*</span></label>
               <select id="v_equip"></select>
@@ -7427,12 +7436,13 @@ function abrirProduto(p){
   editandoProd=p||null;$("prodLista").hidden=true;$("prodForm").hidden=false;
   $("prodFormTitulo").textContent=p?("Editar produto · "+p.nome):"Novo produto";
   var v=p||{};
-  ["cod","nome","pop","marca","grupo","subgrupo","barras","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){
+  ["cod","nome","pop","marca","grupo","subgrupo","barras","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){
     var el=$("p_"+k);if(el)el.value=(v[k]!=null?v[k]:"");});
   atualizarListasGrupoProd();
   $("p_un").value=v.un||"UN";$("p_serie").value=v.serie||"nao";
   $("p_campativa").value=v.campativa||"nao";
   $("p_status").value=v.status||"ativo";notaStatus();
+  try{notaTrocaProduto();}catch(e){}   /* troca na venda (03/10) */
   prodImagem=v.imagem||null;renderImagemProduto();   /* imagem do produto (20/09) */
   $("p_estLoja").textContent="· "+nomeLoja();
   var mins=v.estmin||{},locs=v.local||{};
@@ -7603,6 +7613,23 @@ function notaEstoque(){
   if(q<0)$("p_estNota").innerHTML='<div class="note crit"><b>Saldo negativo.</b> Entra sozinho na fila de reposição e acende alerta no painel do almoxarifado.</div>';
   else if(m>0&&q<m)$("p_estNota").innerHTML='<div class="note warn"><b>Abaixo do mínimo.</b> '+q+" em estoque, mínimo "+m+". Entra na sugestão de compra.</div>";
   else $("p_estNota").innerHTML='<div class="note ok"><b>Estoque adequado</b> em '+nomeLoja()+".</div>";
+}
+/* ---------- troca no CADASTRO do produto, um campo só (decisão dele, 03/10) ----------
+   "vamos criar somente um campo de desconto de troca no cadastro do produto que tiver opção de
+   troca, e nesse campo alimentamos o valor da diferença". O valor preenchido já diz que o produto
+   aceita troca — e isso dispensa o cadastro paralelo "-TROCA", que partia estoque e histórico. */
+function descontoTrocaDe(p){return p?(+p.troca||0):0;}
+function notaTrocaProduto(){
+  var el=$("p_trocaNota");if(!el)return;
+  var v=numMF($("p_troca").value)||0,cheia=numMF($("p_cheia").value)||0;
+  if(!(v>0)){
+    el.innerHTML='<p class="help">Em branco, este produto <b>não aceita troca</b>. Preenchido, o pedido oferece o '+
+      "desconto ao vendedor e o aparelho usado entra no estoque como Purificador Sucata.</p>";
+    return;
+  }
+  el.innerHTML='<div class="note ok"><b>Aceita troca: '+BRL(v)+" de desconto.</b> "+
+    (cheia>0?"O cliente que entregar o aparelho usado paga <b>"+BRL(cheia-v)+"</b> no lugar de "+BRL(cheia)+". ":"")+
+    "No pedido isso entra como <b>Desconto de Troca</b>: não gera comissão e o usado entra no estoque como Purificador Sucata.</div>";
 }
 function notaCampanha(){
   var on=$("p_campativa").value==="sim", val=numMF($("p_minimo").value)||0;
@@ -9227,6 +9254,7 @@ window.__abrirPedidoDaAtivMF=function(a){return abrirPedidoPelaVenda(a,"teste");
 window.__origemVendaMF=function(){return origemDaVenda();};
 /* gancho de TESTE: põe a venda no caminho do atendimento, como se tivesse vindo do "Vendido".
    Não afrouxa a regra no sistema: quem chama é o harness, nunca a tela. */
+window.__formasVendaMF=function(){return formas;};
 window.__opcoesProdutoMF=function(){return opcoesProduto();};
 window.__hojeMF=function(){return hojeISO();};
 window.__negociosMF=function(){return negocios;};
@@ -9286,7 +9314,27 @@ function ajustarLayoutItens(){
   var estreito=(window.innerWidth>820)&&(tw.clientWidth>0)&&(tw.clientWidth<700);
   tw.classList.toggle("itens-cartao",estreito);
 }
+/* o produto escolhido aceita troca? a nota diz quanto é e põe a forma com um toque (03/10) */
+function notaTrocaVenda(){
+  var el=$("v_trocaNota");if(!el)return;
+  var p=produtos.filter(function(x){return x.id===($("v_prod")?$("v_prod").value:"");})[0];
+  var v=descontoTrocaDe(p);
+  var ja=formas.filter(function(f){return f.tipo===FORMA_TROCA;})[0];
+  if(!v||ja){el.innerHTML="";return;}
+  el.innerHTML='<div class="note ok" style="margin-top:8px"><b>'+esc(p.nome)+" aceita troca: "+BRL(v)+".</b> "+
+    "Se o cliente entregar o aparelho usado, o desconto entra como forma de pagamento — não gera comissão "+
+    "e o usado vira Purificador Sucata no seu estoque."+
+    '<div class="actions" style="justify-content:flex-start;margin-top:8px">'+
+      '<button class="btn sm" type="button" id="v_trocaUsar">Lançar a troca de '+BRL(v)+"</button></div></div>";
+  $("v_trocaUsar").onclick=function(){
+    formas.forEach(function(f){if(semJuros(f))f.__auto=false;});
+    formas.push({tipo:FORMA_TROCA,valor:v,base:v,parc:1,__auto:false});
+    renderFormas();calcular();notaTrocaVenda();
+    toast("Desconto de troca de "+BRL(v)+" lançado. Confira o valor com o aparelho em mãos — ele não gera comissão.");
+  };
+}
 function notaPrecoForma(p){
+  try{notaTrocaVenda();}catch(e){}   /* oferta da troca anda junto com a nota do preço (03/10) */
   var el=$("v_precoNota");if(!el)return;
   if(travaSemJuros()){
     el.innerHTML='<div class="note crit" style="margin-top:8px"><b>Informe o valor de '+
@@ -30631,6 +30679,7 @@ function ligar(){
   $("p_grupo").oninput=atualizarListasGrupoProd;
   $("p_campativa").onchange=notaCampanha;
   ["p_minimo","p_campanha","p_cheia"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaCampanha);});
+  ["p_troca","p_cheia"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaTrocaProduto);});
   ["p_custo","p_frete","p_ipi","p_st","p_federais","p_icms","p_cheia","p_campanha","p_minimo"].forEach(function(id){$(id).oninput=notaCusto;});
   $("p_estoque").oninput=notaEstoque;$("p_estmin").oninput=notaEstoque;
   $("p_status").onchange=function(){notaStatus(true);};ligarImagemProduto();   /* a explicação aparece ao escolher e some sozinha (20/09) */
@@ -30674,7 +30723,7 @@ function ligar(){
       await gravarGruposProd();
     }catch(eGC){console.warn("cadastro de grupos",eGC);}
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
-    ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
+    ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
     /* produtos que vão junto (v248) */
     if(prodComposto.length)p.composto=JSON.parse(JSON.stringify(prodComposto));else delete p.composto;
