@@ -9172,6 +9172,7 @@ window.__motivosSistemaMF=function(){return motivosDoSistema();};
 window.__motivosMF=function(){return motivos;};
 window.__ajusteMotivosMF=function(){return aplicarAjusteMotivos();};
 window.__ajusteCentrosMF=function(){return aplicarAjusteCentros();};
+window.__ajusteDupCentrosMF=function(){return aplicarAjusteDuplicados();};
 window.__motivosOffMF=function(){return MOTIVOS_OFF;};
 window.__atendimentosMF=function(){return atendimentos;};
 window.__recusaMotivoMF=function(m){return recusaMotivoSistema(m);};
@@ -27506,6 +27507,19 @@ var CC_CRIAR_MF=[
   ["saida","Veículos","Manutenção corretiva"],
   ["saida","Despesas de Pessoal","Adiantamento de salário"]
 ];
+/* ---------- os sete duplicados, com a escolha que ele aprovou em 03/10 ----------
+   [classificação, grupo que SAI, nome que sai, grupo que FICA, nome que fica]. "Brindes" aparece
+   duas vezes no MESMO grupo — esse é tratado à parte, pela varredura de cópia exata. */
+var CC_DUPLICADOS_MF=[
+  ["saida","Despesas de Manutenção","Ferramentas","Uso de Recurso/imobilizado","Ferramentas"],
+  ["saida","Despesas de Pessoal","Fgts","Impostos Contabeis","Fgts"],
+  ["saida","Despesas de Pessoal","Inss","Impostos Contabeis","Inss"],
+  ["saida","Serviço de Terceiros e Acessoria","Monitoramento","Despesas Operacionais/ Administrativas","Monitoramento Loja"],
+  /* o nome deste depende de a faxina da v274 já ter corrigido a escrita — os dois entram */
+  ["saida","Desp Financeiras","Aplicação financeira","Investimentos/uso Recurso","Aplicação Financeira"],
+  ["saida","Desp Financeiras","Aplicaçao","Investimentos/uso Recurso","Aplicação Financeira"],
+  ["saida","Desp Financeiras","Debito de Cheque Devolvidos","Cheque Devolvido","Cheque Devolvido"]
+];
 function acharCentro(tipo,grupo,nome){
   return centros.filter(function(c){
     return (c.tipo||"saida")===tipo&&ordAZ(c.grupo||"",grupo)===0&&ordAZ(c.nome||"",nome)===0;})[0]||null;
@@ -27540,6 +27554,51 @@ async function aplicarAjusteCentros(){
     catch(err3){centros.pop();console.warn("centro novo",v[2],err3);}
   }
   return {n:n,mud:mud};
+}
+/* tira os duplicados: a cópia exata (mesmo grupo e nome) e os pares que ele escolheu.
+   O que já tem lançamento nunca é apagado, e o que fica precisa existir — senão a categoria
+   sumiria do cadastro. Separado do banco para o teste exercitar. */
+async function aplicarAjusteDuplicados(){
+  var n={copias:0,pares:0,comUso:0,semDestino:0},mud=false;
+  /* 1) cópia exata: mesma classificação, mesmo grupo, mesmo nome — fica a primeira */
+  var vistos={},copias=[];
+  centros.forEach(function(c){
+    var k=(c.tipo||"saida")+"|"+semAcento(String(c.grupo||"")).toLowerCase()+"|"+semAcento(String(c.nome||"")).toLowerCase();
+    if(vistos[k])copias.push(c);else vistos[k]=c;
+  });
+  for(var i=0;i<copias.length;i++){
+    var c0=copias[i];
+    if(usoDoCentro(c0.id)){n.comUso++;continue;}
+    var k0=centros.indexOf(c0);if(k0>=0)centros.splice(k0,1);
+    try{await apaga("centros",c0.id);n.copias++;mud=true;}
+    catch(e){centros.push(c0);console.warn("cópia de centro",c0.nome,e);}
+  }
+  /* 2) os pares escolhidos por ele */
+  for(var j=0;j<CC_DUPLICADOS_MF.length;j++){
+    var d=CC_DUPLICADOS_MF[j],sai=acharCentro(d[0],d[1],d[2]);
+    if(!sai)continue;
+    if(!acharCentro(d[0],d[3],d[4])){n.semDestino++;continue;}   /* o que fica tem de existir */
+    if(usoDoCentro(sai.id)){n.comUso++;continue;}
+    var k1=centros.indexOf(sai);if(k1>=0)centros.splice(k1,1);
+    try{await apaga("centros",sai.id);n.pares++;mud=true;}
+    catch(e2){centros.push(sai);console.warn("centro duplicado",d[2],e2);}
+  }
+  return {n:n,mud:mud};
+}
+async function ajustarDuplicadosCentros(){
+  if(!db||!ehAdministrador())return 0;
+  var doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.centrosDuplicados)return 0;}
+  var r=await aplicarAjusteDuplicados(),n=r.n;
+  antes.centrosDuplicados={quando:hojeISO(),por:usuarioAtual,copias:n.copias,pares:n.pares,comUso:n.comUso};
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador dos duplicados",e);}
+  if(r.mud){
+    try{renderCentros();opcoesFinanceiro();}catch(e){}
+    toast("Centros repetidos retirados: "+(n.copias+n.pares)+
+      (n.comUso?" · "+n.comUso+" ficaram porque já têm lançamento":"")+".");
+  }
+  return n.copias+n.pares;
 }
 async function ajustarCentrosDaLista(){
   if(!db||!ehAdministrador())return 0;
@@ -31344,6 +31403,7 @@ async function continuarBoot(){
   try{await garantirCategoriasLSoft();}catch(e){console.warn("categorias do sistema antigo",e);}
   try{await ajustarMotivosDaLista();}catch(e){console.warn("acerto dos motivos",e);}
   try{await ajustarCentrosDaLista();}catch(e){console.warn("acerto dos centros",e);}
+  try{await ajustarDuplicadosCentros();}catch(e){console.warn("centros repetidos",e);}
   try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
   try{await normalizarLancamentos();}catch(e){console.warn("centro de custo dos lançamentos",e);}
   try{await lancarVagasDoMes();}catch(e){console.warn("vaga de estacionamento",e);}
