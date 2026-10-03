@@ -8029,6 +8029,83 @@ function usoTotalProduto(p){
   produtos.forEach(function(x){(x.composto||[]).forEach(function(c){if(c&&c.pid===p.id)u++;});});
   return u;
 }
+/* produto que o SISTEMA usa pelo código: nenhuma limpeza em massa pode levá-lo junto, senão o
+   caminho da troca, da OS e dos planos quebra em silêncio (03/10) */
+var CODS_SISTEMA_MF=["SUCATA","USADO-TROCA","OS-CLIENTE","SRV-ATEND","SRV-ORC","PLANO-PI","PLANO-PII"];
+function produtoDeSistema(p){
+  if(!p)return false;
+  if(CODS_SISTEMA_MF.indexOf(String(p.cod||"").toUpperCase())>=0)return true;
+  return p.grupo==="Planos";
+}
+/* ---------- os cadastros "-TROCA" saem, e o preço deles vira o Desconto de troca (03/10) ----------
+   "pode excluir todos os produtos que tiver a palavra troca". O valor não se perde: a diferença
+   entre o preço do principal e o da versão de troca vai para o campo novo do produto principal —
+   é exatamente o que ele queria guardar. Produto de sistema (Purificador Sucata, planos, serviços)
+   NUNCA entra aqui, e o que já tem venda é desativado em vez de apagado. */
+function ehVersaoTroca(p){
+  if(produtoDeSistema(p))return false;
+  var cod=String(p.cod||"").toUpperCase();
+  if(/-TROCA(-\d+)?$/.test(cod))return true;
+  var n=normProdImp(p.nome);
+  return /(^|[ -])(BASE DE TROCA|TROCA)$/.test(n)||/ TROCA /.test(" "+n+" ");
+}
+function principalDaTroca(p){
+  var base=codigoBaseProd(p),nb=nomeBaseProd(p);
+  return produtos.filter(function(x){
+    if(x.id===p.id||produtoDeSistema(x)||ehVersaoTroca(x))return false;
+    if(base&&codigoBaseProd(x)===base&&String(x.cod||"").toUpperCase()===base)return true;
+    return nb&&nomeBaseProd(x)===nb;
+  })[0]||null;
+}
+async function aplicarLimpezaTroca(){
+  var n={apagados:0,desativados:0,valorPara:0,semPrincipal:0},mud=false;
+  var alvos=produtos.filter(ehVersaoTroca);
+  for(var i=0;i<alvos.length;i++){
+    var p=alvos[i],pr=principalDaTroca(p);
+    /* o valor da troca vai para o principal ANTES de o cadastro sair */
+    if(pr){
+      var dif=Math.round(((+pr.cheia||0)-(+p.cheia||0))*100)/100;
+      if(dif>0&&!(+pr.troca>0)){
+        pr.troca=dif;
+        try{await grava("produtos",pr);n.valorPara++;mud=true;}catch(e){delete pr.troca;console.warn("troca",pr.nome,e);}
+      }
+    }else n.semPrincipal++;
+    if(usoTotalProduto(p)){
+      if((p.status||"ativo")!=="inativo"){
+        p.status="inativo";p.inativadoMotivo="versão de troca retirada do cadastro em "+dataCurta(hojeISO());
+        try{await grava("produtos",p);n.desativados++;mud=true;}catch(e2){p.status="ativo";console.warn(e2);}
+      }
+      continue;
+    }
+    var k=produtos.indexOf(p);if(k>=0)produtos.splice(k,1);
+    try{
+      await apaga("produtos",p.id);n.apagados++;mud=true;
+      /* o movimento da importação some junto, senão sobra saldo de produto que não existe mais (v263) */
+      var movs2=movEst.filter(function(m){return m.produtoId===p.id&&m.doc===DOC_IMPORT;});
+      for(var j=0;j<movs2.length;j++){
+        var im=movEst.indexOf(movs2[j]);if(im>=0)movEst.splice(im,1);
+        try{await apaga("movest",movs2[j].id);}catch(e3){}
+      }
+    }catch(e4){produtos.push(p);console.warn("apagar versão de troca",p.nome,e4);}
+  }
+  return {n:n,mud:mud,alvos:alvos.length};
+}
+async function limparVersoesTroca(){
+  if(!db||!ehAdministrador())return 0;
+  var doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.versoesTroca)return 0;}
+  var r=await aplicarLimpezaTroca(),n=r.n;
+  antes.versoesTroca={quando:hojeISO(),por:usuarioAtual,apagados:n.apagados,desativados:n.desativados,valorPara:n.valorPara};
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador das versões de troca",e);}
+  if(r.mud){
+    try{renderProdutos();opcoesProduto();}catch(e){}
+    toast("Versões de troca retiradas: "+n.apagados+" apagada(s)"+
+      (n.desativados?", "+n.desativados+" desativada(s) por já ter venda":"")+
+      (n.valorPara?" · o desconto de troca foi para "+n.valorPara+" produto(s)":"")+".");
+  }
+  return n.apagados+n.desativados;
+}
 /* VARIAÇÕES DO MESMO PRODUTO (pedido dele, 02/10): o mesmo código com o nome mudando no fim —
    "… PLANO PREMIUM", "… INST", "… SEMINOVO", "… SITE". São o mesmo produto cadastrado em versões,
    e ele quer ficar só com o principal. O sufixo é reconhecido no código e no fim do nome. */
@@ -9254,6 +9331,8 @@ window.__abrirPedidoDaAtivMF=function(a){return abrirPedidoPelaVenda(a,"teste");
 window.__origemVendaMF=function(){return origemDaVenda();};
 /* gancho de TESTE: põe a venda no caminho do atendimento, como se tivesse vindo do "Vendido".
    Não afrouxa a regra no sistema: quem chama é o harness, nunca a tela. */
+window.__limpezaTrocaMF=function(){return aplicarLimpezaTroca();};
+window.__ehVersaoTrocaMF=function(p){return ehVersaoTroca(p);};
 window.__formasVendaMF=function(){return formas;};
 window.__opcoesProdutoMF=function(){return opcoesProduto();};
 window.__hojeMF=function(){return hojeISO();};
@@ -31631,6 +31710,7 @@ async function continuarBoot(){
   try{await ajustarMotivosDaLista();}catch(e){console.warn("acerto dos motivos",e);}
   try{await ajustarCentrosDaLista();}catch(e){console.warn("acerto dos centros",e);}
   try{await ajustarDuplicadosCentros();}catch(e){console.warn("centros repetidos",e);}
+  try{await limparVersoesTroca();}catch(e){console.warn("versões de troca",e);}
   try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
   try{await normalizarLancamentos();}catch(e){console.warn("centro de custo dos lançamentos",e);}
   try{await lancarVagasDoMes();}catch(e){console.warn("vaga de estacionamento",e);}
