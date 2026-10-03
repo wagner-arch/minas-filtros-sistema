@@ -816,7 +816,10 @@
      saía cortado, defeito que ele pegou no Pedido 20813) */
   .html2pdf__container,.pdf-captura{letter-spacing:.01px}
   /* com a margem de 12 mm da folha, o espaço interno do documento diminui para caber igual */
-  .html2pdf__container .docm,.pdf-captura .docm{padding-top:6px!important;padding-bottom:6px!important}
+  /* no papel não existe espaço ENTRE folhas: os 18 px que separam uma da outra na tela só gastariam
+     altura de página (economia de papel pedida em 03/10) */
+  .html2pdf__container .docm,.pdf-captura .docm{padding-top:6px!important;padding-bottom:6px!important;
+    margin-bottom:0!important}
   .html2pdf__container .docm p,.html2pdf__container .docm li,
   .pdf-captura .docm p,.pdf-captura .docm li{text-align:left}
   .html2pdf__container .docm .lista-pdf,.pdf-captura .docm .lista-pdf{list-style:none}
@@ -9113,7 +9116,8 @@ function textoPrecoReferencia(cheia){
 /* o módulo de celular e os testes precisam saber qual é a forma de referência */
 /* ganchos para o teste do PDF medir as folhas do documento sem gerar o arquivo */
 window.__htmlDocVendaMF=function(p){return htmlDocVenda(p);};
-window.__paginarPdfMF=function(raiz,u,l){return paginarFolhasPdf(raiz,u,l);};
+window.__paginarPdfMF=function(raiz,u,l,s,e){return paginarFolhasPdf(raiz,u,l,s,e);};
+window.__gerarPdfVendaMF=function(p){return gerarPdfVenda(p);};
 window.__emoldurarMF=function(raiz){emoldurarTabelas(raiz);numerarListasPdf(raiz);};
 window.__pedAbertoMF=function(){return pedAberto;};
 window.__pedidosMF=function(){return pedidos;};
@@ -18777,8 +18781,8 @@ async function gerarPdfFolha(){
   tmp.appendChild(folhas);document.body.appendChild(tmp);
   try{
     var file=await pdfDoElemento(folhas,nomeArquivoPdf("Folha",f.c,f.todos?"todos":f.nomes[0]),
-      {mode:["css"],before:".folha-pg + .folha-pg",avoid:["tr",".fp-assin",".fp-obs","h4",".fp-cab",".fp-liq"]},[4,0,4,0],
-      {orientation:"landscape",largura:1123});
+      {mode:["css"],avoid:["tr",".fp-assin",".fp-obs","h4",".fp-cab",".fp-liq"]},[4,0,4,0],
+      {orientation:"landscape",largura:1123,paginar:".folha-pg",mmUtil:202,mmLargura:297,encaixar:false});
     folhaPdf={file:file,f:f};
     if(!ehCelular())baixarArquivo(file);
     bt.textContent="Gerar o PDF de novo";
@@ -26066,7 +26070,7 @@ function nomeArquivoPdf(prefixo,numero,cliente){
 async function pdfDoElemento(el,nome,pagebreak,margem,opcoes){
   await carregarHtml2pdf();
   var op=opcoes||{};
-  var blob=await window.html2pdf().set({
+  var tarefa=window.html2pdf().set({
     margin:margem||0,
     image:{type:"jpeg",quality:0.96},
     /* a área capturada é EXATAMENTE o elemento: sem isso, no celular o html2canvas parte da
@@ -26083,7 +26087,16 @@ async function pdfDoElemento(el,nome,pagebreak,margem,opcoes){
       x:0,y:0,scrollX:0,scrollY:0},
     jsPDF:{unit:"mm",format:"a4",orientation:op.orientation||"portrait"},
     pagebreak:pagebreak||{mode:["css"]}
-  }).from(el).outputPdf("blob");
+  }).from(el);
+  /* a folga que leva cada folha ao começo de uma página é posta na CÓPIA que o html2pdf monta, e
+     não no documento da tela: as duas não têm a mesma altura (no celular as regras de tela valem no
+     original e não na cópia), e medir no lugar errado gastava uma página a mais (03/10). */
+  if(op.paginar){
+    tarefa=tarefa.toContainer().then(function(){
+      try{paginarFolhasPdf(this.prop.container,op.mmUtil,op.mmLargura,op.paginar,op.encaixar);}catch(e){}
+    });
+  }
+  var blob=await tarefa.outputPdf("blob");
   return new File([blob],nome,{type:"application/pdf"});
 }
 /* ---------- cada folha do documento começa em PÁGINA NOVA (v268, 03/10) ----------
@@ -26095,21 +26108,26 @@ async function pdfDoElemento(el,nome,pagebreak,margem,opcoes){
    Aqui a conta é feita ANTES de capturar, no próprio documento: mede-se onde cada folha começa e
    um espaçador branco completa o que falta para o começo da página seguinte. A altura útil é a
    mesma que o html2pdf usa — largura da folha × (altura útil ÷ largura da página em mm). */
-function paginarFolhasPdf(raiz,mmUtil,mmLargura){
+function paginarFolhasPdf(raiz,mmUtil,mmLargura,sel,encaixar){
   if(!raiz)return 0;
   var larg=raiz.offsetWidth||794;
   var util=larg*(mmUtil||273)/(mmLargura||210);
   if(!(util>100))return 0;
-  var folhas=Array.prototype.slice.call(raiz.querySelectorAll(".docm")),postos=0;
-  var topoRaiz=raiz.getBoundingClientRect().top;
+  var folhas=Array.prototype.slice.call(raiz.querySelectorAll(sel||".docm")),postos=0;
   folhas.forEach(function(f,i){
     if(!i)return;                                    /* a primeira já começa na página 1 */
-    var topo=f.getBoundingClientRect().top-topoRaiz;
-    var falta=util-(topo%util);
-    if(falta<=0.5||falta>=util-0.5)return;           /* já está no começo de uma página */
+    var topoRaiz=raiz.getBoundingClientRect().top;   /* medido a cada passo: a folga anterior desloca o resto */
+    var r=f.getBoundingClientRect(),topo=r.top-topoRaiz,alt=r.height;
+    var usado=topo%util,resta=util-usado;
+    if(usado<=0.5)return;                            /* já está no começo de uma página */
+    /* ECONOMIA DE PAPEL (pedido dele, 03/10): a folha só desce para a página seguinte quando NÃO
+       cabe no que restou desta — duas folhas curtas (pedido à vista + termos) saem na mesma folha
+       de papel. Folha mais alta que a página inteira começa no topo, senão quebraria em posição ruim.
+       Na FOLHA DE PAGAMENTO isso não vale (encaixar=false): cada colaborador tem a folha dele. */
+    if(encaixar!==false&&alt<=resta-0.5)return;
     var esp=document.createElement("div");
     esp.className="folga-pdf";
-    esp.style.cssText="height:"+falta.toFixed(2)+"px;background:#fff";
+    esp.style.cssText="height:"+resta.toFixed(2)+"px;background:#fff";
     f.parentNode.insertBefore(esp,f);
     postos++;
   });
@@ -26151,14 +26169,13 @@ async function gerarPdfVenda(p){
     var junto=document.createElement("div");junto.className="junto-pdf";
     h.parentNode.insertBefore(junto,h);junto.appendChild(h);junto.appendChild(prox);
   });
-  /* a folga que leva cada folha para o começo de uma página (v268); feita aqui, no documento
-     montado, e não por seletor na cópia do html2pdf, que era cortada pela altura capturada */
-  paginarFolhasPdf(folhas,273,210);
   try{
     /* margem de 12 mm em cima e embaixo de TODA folha: o contrato do plano, que corre por várias
-       folhas, não encosta na borda (pedido do Wagner, 12/09) */
+       folhas, não encosta na borda (pedido do Wagner, 12/09); `paginar` encaixa as folhas sem
+       deixar papel em branco (03/10) */
     return await pdfDoElemento(folhas,nomeArquivoPedido(p),
-      {mode:["css"],avoid:[".assin",".tbw","li","h5","p",".cab",".junto-pdf"]},[12,0,12,0]);
+      {mode:["css"],avoid:[".assin",".tbw","li","h5","p",".cab",".junto-pdf"]},[12,0,12,0],
+      {paginar:".docm",mmUtil:273,mmLargura:210});
   }finally{
     if(tmp.parentNode)tmp.parentNode.removeChild(tmp);
   }
