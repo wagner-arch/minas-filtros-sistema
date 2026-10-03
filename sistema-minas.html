@@ -810,13 +810,19 @@
      - texto justificado sobrepõe palavras no fim da linha — alinhado à esquerda, como o modelo 20835;
      - letter-spacing diferente de zero faz o html2canvas desenhar letra a letra (negrito que quebra linha não se sobrepõe);
      - a proposta e a ficha da OS saem sempre no tamanho da folha, mesmo com as regras do celular ligadas */
-  .html2pdf__container{letter-spacing:.01px}
+  /* as mesmas regras valem na caixa onde o documento é MONTADO (.pdf-captura) e na cópia que o
+     html2pdf cria (.html2pdf__container): é medindo a folha já no estado da captura que o sistema
+     sabe onde cada página termina (v268 — sem isso a folha seguinte era emendada e o último termo
+     saía cortado, defeito que ele pegou no Pedido 20813) */
+  .html2pdf__container,.pdf-captura{letter-spacing:.01px}
   /* com a margem de 12 mm da folha, o espaço interno do documento diminui para caber igual */
-  .html2pdf__container .docm{padding-top:6px!important;padding-bottom:6px!important}
-  .html2pdf__container .docm p,.html2pdf__container .docm li{text-align:left}
-  .html2pdf__container .docm .lista-pdf{list-style:none}
-  .html2pdf__container .docm .lista-pdf>li{position:relative}
-  .html2pdf__container .docm .lista-pdf .marca-li{position:absolute;left:-26px;width:20px;text-align:right;letter-spacing:0;font-weight:400}
+  .html2pdf__container .docm,.pdf-captura .docm{padding-top:6px!important;padding-bottom:6px!important}
+  .html2pdf__container .docm p,.html2pdf__container .docm li,
+  .pdf-captura .docm p,.pdf-captura .docm li{text-align:left}
+  .html2pdf__container .docm .lista-pdf,.pdf-captura .docm .lista-pdf{list-style:none}
+  .html2pdf__container .docm .lista-pdf>li,.pdf-captura .docm .lista-pdf>li{position:relative}
+  .html2pdf__container .docm .lista-pdf .marca-li,
+  .pdf-captura .docm .lista-pdf .marca-li{position:absolute;left:-26px;width:20px;text-align:right;letter-spacing:0;font-weight:400}
   .html2pdf__container .folha-os .canhoto{margin-top:16px!important}
   .html2pdf__container .folha-os .tesoura{display:none!important}
   .html2pdf__container .folha{width:794px!important;max-width:none!important;min-height:1120px!important;margin:0!important;box-shadow:none!important;transform:none!important}
@@ -9107,6 +9113,8 @@ function textoPrecoReferencia(cheia){
 /* o módulo de celular e os testes precisam saber qual é a forma de referência */
 /* ganchos para o teste do PDF medir as folhas do documento sem gerar o arquivo */
 window.__htmlDocVendaMF=function(p){return htmlDocVenda(p);};
+window.__paginarPdfMF=function(raiz,u,l){return paginarFolhasPdf(raiz,u,l);};
+window.__emoldurarMF=function(raiz){emoldurarTabelas(raiz);numerarListasPdf(raiz);};
 window.__pedAbertoMF=function(){return pedAberto;};
 window.__pedidosMF=function(){return pedidos;};
 /* ganchos de teste da importação de manutenções (v256) */
@@ -25616,17 +25624,37 @@ function cabecalhoEmpresaDoc(){
           .filter(Boolean).join(" · ")+"</div>"+
       "</div></div>";
 }
+/* ---------- a Garantia Fiduciária só na venda A PRAZO (regra dele, 03/10) ----------
+   "quando for pagamento no pix, dinheiro, não ter o termo na venda da Garantia Fiduciária."
+   A alienação fiduciária existe para garantir uma DÍVIDA: pago tudo na hora, não há o que
+   garantir. Formas internas (troca, crédito do plano, adiantamento da OS) não contam — elas
+   não são dinheiro a receber. */
+function vendaAPrazo(p){
+  var internas=[FORMA_TROCA,FORMA_CREDITO,FORMA_ORC];
+  return (p.formas||[]).some(function(f){
+    if(!f)return false;
+    if(internas.indexOf(f.tipo)>=0)return false;
+    if(!((+f.valor||0)>0||(+f.base||0)>0))return false;
+    if((+f.parc||1)>1)return true;      /* parcelado é a prazo, mesmo no cartão de uma vez só não */
+    return !aVista(f.tipo);             /* boleto, carnê, cheque e cartão à vista continuam a prazo */
+  });
+}
 function docTermos(p,extra){
   var dataV=String(p.data||hojeISO()).slice(0,10),cidadeEmp=esc(EMPRESA.cidade||"Pará de Minas");
+  /* venda paga na hora (PIX, dinheiro, débito, transferência) não tem dívida a garantir:
+     o bloco da alienação fiduciária sai do documento (regra dele, 03/10) */
+  var prazo=vendaAPrazo(p);
   return '<div class="docm pag2">'+
     '<div class="tit-c">Termo de condições de Garantia.</div>'+
-    "<h5>DA GARANTIA FIDUCIÁRIA</h5>"+
+    (prazo
+    ? "<h5>DA GARANTIA FIDUCIÁRIA</h5>"+
     "<p>Em garantia das obrigações principais e acessórias ora contratadas. o CONSUMIDOR transfere à Minas Filtros LTDA, em alienação fiduciária, o(s) produto(s) relacionados nesse contrato de compra, tornando-se possuidor direto e depositário do(s) mesmo(s), com todas as responsabilidades e encargos que lhe incumbem de acordo com a lei civil e penal.</p>"+
     "<p>O vencimento da dívida será considerado antecipado nos seguintes casos:</p>"+
     "<ol><li>a) se houver deterioração do(s) produto(s) alienado(s);</li><li>b) insolvência ou falência do devedor;</li>"+
       "<li>c) perecimento do(s) produto(s);</li>"+
       "<li>Em caso de inadimplemento, caberá à Minas Filtros LTDA os direitos e ações de acordo com a legislação aplicável, ficando desde já investida dos necessários poderes para retomar, vender e transferir o(s) bens dos quais, por este contrato, se tornou proprietária fiduciária.</li></ol>"+
-    "<p>De Acordo:</p>"+docAssinatura(p)+
+    "<p>De Acordo:</p>"+docAssinatura(p)
+    : "")+
     "<h5>DECLARAÇÃO</h5>"+
     "<p>Eu, <b>"+docMaiusc(p.cliente)+"</b>, declaro para os devidos fins de Direito que o fornecedor Minas Filtros LTDA representado pelo consultor de Vendas <b>"+esc(p.vendedor||"")+"</b> pessoalmente, fez toda apresentação do produto in loco por mim adquirido, ofereceu oportunidade na escolha do referido, de suas características, dentre elas, a cor, tamanho, modelo, etc. Conferi o funcionamento do Bem citado e concordei na aquisição deste, tendo total conhecimento das condições de funcionamento, manutenção e garantia, bem como forma de pagamento, portanto tive acesso ilimitado à totalidade do produto em questão, ficando assim excluído a incidência do Artigo 49 CDC. Iniciando a garantia do produto na data de <b>"+esc(dataCurta(dataV))+"</b>.</p>"+
     "<p>Diante do exposto acima, estou ciente e de acordo com as condições pré-estabelecidas:</p>"+
@@ -25714,9 +25742,14 @@ function planosDaVenda(p){
 }
 function htmlDocVenda(p){
   var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
-  /* Termo de Uso de Imagem logo depois da Declaração; o contrato de cada plano nas últimas páginas */
-  var imagem=p.usoImagem==="sim"?'<div class="dupla"></div>'+docImagem(p,c):"";
-  return docPedido(p,c)+docTermos(p,imagem)+
+  /* Termo de Uso de Imagem logo depois da Declaração (regra dele, 12/09) — mas só quando CABE:
+     com a Garantia Fiduciária na mesma folha ele estourava a página e saía cortado no PDF
+     (defeito que ele pegou no pedido 20813). Nesse caso o termo ganha folha própria. */
+  var querImagem=p.usoImagem==="sim";
+  var juntos=querImagem&&!vendaAPrazo(p);
+  var imagem=juntos?'<div class="dupla"></div>'+docImagem(p,c):"";
+  var imagemSolta=(querImagem&&!juntos)?'<div class="docm">'+docImagem(p,c)+"</div>":"";
+  return docPedido(p,c)+docTermos(p,imagem)+imagemSolta+
     planosDaVenda(p).map(function(x){return '<div class="docm">'+docContratoPlano(p,c,x.itens,x.plano)+"</div>";}).join("");
 }
 /* cada tabela dentro de uma moldura: no PDF do Chrome a borda de baixo da tabela sumia,
@@ -26040,15 +26073,47 @@ async function pdfDoElemento(el,nome,pagebreak,margem,opcoes){
        viewport (390 px) e do rolamento da página, e o documento de 794 px saía deslocado — o
        PDF vinha com uma folha em branco na frente e o pedido empurrado para a seguinte
        (relato dele em 26/09, com o PDF do pedido 20807 aberto no WPS). */
+    /* a ALTURA não é fixada (v268): o html2pdf desenha uma cópia do documento e ela nunca tem
+       exatamente a mesma altura do original — fixando a altura daqui, o que passava dela era
+       cortado, e o Termo de Uso de Imagem saía pela metade (Pedido 20813). A largura e a origem
+       continuam amarradas, que é o que resolveu o deslocamento do celular. */
     html2canvas:{scale:1.4,useCORS:true,backgroundColor:"#ffffff",
       windowWidth:op.largura||820,
       width:(el&&el.offsetWidth)||op.largura||820,
-      height:(el&&el.offsetHeight)||undefined,
       x:0,y:0,scrollX:0,scrollY:0},
     jsPDF:{unit:"mm",format:"a4",orientation:op.orientation||"portrait"},
     pagebreak:pagebreak||{mode:["css"]}
   }).from(el).outputPdf("blob");
   return new File([blob],nome,{type:"application/pdf"});
+}
+/* ---------- cada folha do documento começa em PÁGINA NOVA (v268, 03/10) ----------
+   O html2pdf fatia a imagem do documento em páginas de altura fixa; a quebra pedida por seletor
+   (pagebreak.before) é aplicada na cópia que ele monta, e a altura capturada que passamos em
+   html2canvas (a do elemento original, da v236) cortava o que foi empurrado para baixo — na prática
+   a terceira folha era emendada no fim da segunda e o Termo de Uso de Imagem saía pela metade
+   (defeito que ele pegou no PDF do Pedido 20813, 03/10).
+   Aqui a conta é feita ANTES de capturar, no próprio documento: mede-se onde cada folha começa e
+   um espaçador branco completa o que falta para o começo da página seguinte. A altura útil é a
+   mesma que o html2pdf usa — largura da folha × (altura útil ÷ largura da página em mm). */
+function paginarFolhasPdf(raiz,mmUtil,mmLargura){
+  if(!raiz)return 0;
+  var larg=raiz.offsetWidth||794;
+  var util=larg*(mmUtil||273)/(mmLargura||210);
+  if(!(util>100))return 0;
+  var folhas=Array.prototype.slice.call(raiz.querySelectorAll(".docm")),postos=0;
+  var topoRaiz=raiz.getBoundingClientRect().top;
+  folhas.forEach(function(f,i){
+    if(!i)return;                                    /* a primeira já começa na página 1 */
+    var topo=f.getBoundingClientRect().top-topoRaiz;
+    var falta=util-(topo%util);
+    if(falta<=0.5||falta>=util-0.5)return;           /* já está no começo de uma página */
+    var esp=document.createElement("div");
+    esp.className="folga-pdf";
+    esp.style.cssText="height:"+falta.toFixed(2)+"px;background:#fff";
+    f.parentNode.insertBefore(esp,f);
+    postos++;
+  });
+  return postos;
 }
 /* com letter-spacing o html2canvas cola o marcador da lista no texto ("102 visitas"): na cópia do PDF
    o número (ou o •) vira texto, no mesmo lugar do marcador */
@@ -26086,11 +26151,14 @@ async function gerarPdfVenda(p){
     var junto=document.createElement("div");junto.className="junto-pdf";
     h.parentNode.insertBefore(junto,h);junto.appendChild(h);junto.appendChild(prox);
   });
+  /* a folga que leva cada folha para o começo de uma página (v268); feita aqui, no documento
+     montado, e não por seletor na cópia do html2pdf, que era cortada pela altura capturada */
+  paginarFolhasPdf(folhas,273,210);
   try{
     /* margem de 12 mm em cima e embaixo de TODA folha: o contrato do plano, que corre por várias
        folhas, não encosta na borda (pedido do Wagner, 12/09) */
     return await pdfDoElemento(folhas,nomeArquivoPedido(p),
-      {mode:["css"],before:".docm + .docm",avoid:[".assin",".tbw","li","h5","p",".cab",".junto-pdf"]},[12,0,12,0]);
+      {mode:["css"],avoid:[".assin",".tbw","li","h5","p",".cab",".junto-pdf"]},[12,0,12,0]);
   }finally{
     if(tmp.parentNode)tmp.parentNode.removeChild(tmp);
   }
