@@ -8940,6 +8940,44 @@ window.barrasProdutosMF=function(){
   produtos.forEach(function(p){var d=String(p.barras||"").replace(/\D/g,"");if(d)m[p.id]=d;});
   return m;
 };
+/* ---------- "não achei" que diz a VERDADE (relato dele, 03/10) ----------
+   Ele procurou PMF107 no pedido e leu "Nenhum produto com pmf107 — confira o nome ou o código".
+   O produto existe: o que acontece é que a lista de venda esconde quem está com o cadastro pela
+   metade (sem preço ou no grupo "A classificar", como nasce todo produto importado), quem está
+   inativo e os itens de controle. Agora a busca procura no CADASTRO INTEIRO e diz o motivo. */
+function motivoForaDaVenda(p){
+  if((p.status||"ativo")!=="ativo")return "está inativo";
+  if(p.grupo==="Planos")return "é plano de garantia — entra sozinho pela garantia do item";
+  if(ehProdutoSucata(p))return "é o purificador da troca, controle do estoque";
+  if(p.cod==="OS-CLIENTE")return "é equipamento de cliente em análise";
+  if(produtoIncompleto(p)){
+    var falta=[];
+    if(!(+p.cheia>0))falta.push("o preço da tabela cheia");
+    if(!p.grupo||p.grupo===GRUPO_COMPLETAR)falta.push("o grupo");
+    if(!p.subgrupo)falta.push("o subgrupo");
+    var txt=falta.length>1?falta.slice(0,-1).join(", ")+" e "+falta[falta.length-1]:(falta[0]||"completar o cadastro");
+    return "está com o cadastro pela metade: falta "+txt;
+  }
+  return "";
+}
+window.foraDaVendaMF=function(q){
+  var t=semAcento(String(q||"")).toLowerCase().replace(/\s+/g," ").trim();
+  if(t.length<2)return [];
+  var termos=t.split(" ");
+  return produtos.filter(function(p){
+    if(!motivoForaDaVenda(p))return false;
+    var txt=semAcento([p.nome,p.cod,p.pop,p.barras].filter(Boolean).join(" ")).toLowerCase();
+    return termos.every(function(x){return txt.indexOf(x)>=0;});
+  }).slice(0,3).map(function(p){
+    return {id:p.id,cod:p.cod||"",nome:p.nome||"",motivo:motivoForaDaVenda(p)};
+  });
+};
+/* o atalho do aviso abre o cadastro daquele produto */
+window.abrirProdutoMF=function(id){
+  var p=produtos.filter(function(x){return x.id===id;})[0];
+  if(!p)return;
+  ir("produtos");try{abrirProduto(p);}catch(e){console.warn(e);}
+};
 /* inclusão de produto (regra do Wagner, 12/09): produto e quantidade começam em branco e voltam a
    ficar em branco depois de adicionar; sem quantidade não inclui */
 function qtdInformada(id){
@@ -9189,6 +9227,7 @@ window.__abrirPedidoDaAtivMF=function(a){return abrirPedidoPelaVenda(a,"teste");
 window.__origemVendaMF=function(){return origemDaVenda();};
 /* gancho de TESTE: põe a venda no caminho do atendimento, como se tivesse vindo do "Vendido".
    Não afrouxa a regra no sistema: quem chama é o harness, nunca a tela. */
+window.__opcoesProdutoMF=function(){return opcoesProduto();};
 window.__hojeMF=function(){return hojeISO();};
 window.__negociosMF=function(){return negocios;};
 window.__funilClienteMF=function(cid,m){return atualizarFunilCliente(cid,m);};
@@ -32299,6 +32338,19 @@ function erro(msg){
         lista.sort(function(a,b){return a.nota-b.nota;});
         achados=lista.slice(0,40);
         if(!achados.length){
+          /* o produto pode existir e estar FORA da lista de venda — a caixa diz qual é e por quê,
+             e tocar nele abre o cadastro para completar (relato dele, 03/10) */
+          var fora=[];
+          try{if(window.foraDaVendaMF)fora=window.foraDaVendaMF(bx.value)||[];}catch(e){}
+          if(fora.length){
+            mostrar(bx,fora.map(function(f){
+              return {titulo:(f.cod?f.cod+" · ":"")+f.nome,sub:"está no cadastro, mas fora da lista de venda: "+f.motivo+" — toque para abrir o produto",__pid:f.id};
+            }),function(it){
+              fecharCaixa(bx);
+              try{window.abrirProdutoMF(it.__pid);}catch(e){}
+            });
+            return;
+          }
           mostrar(bx,[digitos.length>=8
             ? {titulo:"Nenhum produto com o código de barras "+digitos,sub:"cadastre o código de barras em Produtos"}
             : {titulo:"Nenhum produto com “"+bx.value.trim()+"”",sub:"confira o nome ou o código"}],function(){});
