@@ -5154,6 +5154,35 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- EDITAR CENTRO DE CUSTO (pedido do Wagner, 03/10): acerta nome, grupo, código e classificação
+     sem mexer no histórico — os lançamentos apontam para o centro pelo id, não pelo nome -->
+<div class="modal" id="ccEdModal" hidden>
+  <div class="box" style="width:min(620px,100%)">
+    <h3 id="cce_titulo">Editar centro de custo</h3>
+    <div class="sub" id="cce_sub"></div>
+    <div class="grid g2" style="margin-top:12px">
+      <div class="fld"><label for="cce_tipo">Classificação *</label>
+        <select id="cce_tipo"><option value="entrada">Entrada</option><option value="saida">Saída</option></select></div>
+      <div class="fld"><label for="cce_codigo">Código</label>
+        <input id="cce_codigo" placeholder="ex.: 2.5.4"></div>
+    </div>
+    <div class="grid g2">
+      <div class="fld"><label for="cce_grupo">Grupo *</label>
+        <input id="cce_grupo" list="dlCcGrupos" placeholder="ex.: Veículos"></div>
+      <div class="fld"><label for="cce_nome">Subgrupo (centro de custo) *</label>
+        <input id="cce_nome" placeholder="ex.: Combustível"></div>
+    </div>
+    <div id="cce_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="cce_ok">Salvar</button>
+      <button class="btn mut" type="button" id="cce_fechar">Cancelar</button>
+    </div>
+    <p class="help">O histórico acompanha: lançamento, título e relatório apontam para este centro pelo registro, não
+      pelo nome — então renomear aqui acerta tudo de uma vez. Trocar a <b>classificação</b> de um centro que já tem
+      lançamento muda o lado dele na DRE e no Fluxo de Caixa; o sistema pergunta antes.</p>
+  </div>
+</div>
+
 <!-- PRODUTOS REPETIDOS (pedido do Wagner, 02/10): acha o mesmo produto cadastrado mais de uma vez,
      deixa escolher qual fica e tira os outros — sem apagar nada que já tenha venda, OS ou estoque -->
 <div class="modal" id="dupModal" hidden>
@@ -13844,14 +13873,71 @@ function renderCentros(){
         "<td>"+(mostraG?"<b>"+esc(g)+"</b>":'<span class="t-sub">'+esc(g)+"</span>")+"</td>"+
         "<td><b>"+esc(c.nome)+"</b></td>"+
         '<td class="num">'+usados.length+'</td><td class="num">'+BRL(vt)+"</td>"+
-        '<td class="num">'+(usados.length?'<span class="pill p-mut">em uso</span>':
-          '<button class="btn mut sm" type="button" data-ccrm="'+i+'">Remover</button>')+"</td></tr>";
+        /* Editar vale sempre: o lançamento aponta para o centro pelo registro, não pelo nome (03/10) */
+        '<td class="num"><button class="btn ghost sm" type="button" data-cced="'+i+'">Editar</button>'+
+        (usados.length?' <span class="pill p-mut">em uso</span>':
+          ' <button class="btn mut sm" type="button" data-ccrm="'+i+'">Remover</button>')+"</td></tr>";
     });
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-ccrm]"),function(bt){
     bt.onclick=async function(){var c=centros[+bt.getAttribute("data-ccrm")];
       centros.splice(+bt.getAttribute("data-ccrm"),1);await apaga("centros",c.id);
       renderCentros();opcoesFinanceiro();};});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-cced]"),function(bt){
+    bt.onclick=function(){abrirCentro(centros[+bt.getAttribute("data-cced")]);};});
+}
+/* ---------- editar o centro de custo (pedido dele, 03/10) ---------- */
+var ccEditando=null;
+function usoDoCentro(id){
+  return titulos.filter(function(t){return t.centroId===id;}).length+
+    movs.filter(function(m){return m.centroId===id;}).length;
+}
+function abrirCentro(c){
+  if(!c)return;
+  ccEditando=c;
+  var cods=codigosCentros(),cod=cods.mapa[c.id]?cods.mapa[c.id].cod:"";
+  var uso=usoDoCentro(c.id);
+  $("cce_sub").innerHTML=esc(caminhoCentro(c))+" · <b>"+uso+"</b> lançamento"+(uso===1?"":"s")+
+    (uso?" — eles continuam neste centro com o nome novo":"");
+  $("cce_tipo").value=c.tipo||"saida";
+  $("cce_grupo").value=c.grupo||"";
+  $("cce_nome").value=c.nome||"";
+  /* o código que aparece pode ser o do sistema antigo (gravado no centro) ou o que o sistema numerou */
+  $("cce_codigo").value=c.codigo||"";
+  $("cce_codigo").placeholder=c.codigo?"":(cod?"hoje numerado como "+cod:"ex.: 2.5.4");
+  $("cce_alerta").innerHTML="";
+  $("ccEdModal").hidden=false;
+  setTimeout(function(){$("cce_nome").focus();},60);
+}
+async function salvarCentro(){
+  var c=ccEditando;if(!c)return;
+  var tipo=$("cce_tipo").value||"saida",grupo=$("cce_grupo").value.trim(),nome=$("cce_nome").value.trim();
+  var cod=$("cce_codigo").value.trim();
+  var al=$("cce_alerta");
+  if(!grupo||!nome){al.innerHTML='<div class="note crit"><b>Grupo e subgrupo são obrigatórios.</b></div>';return;}
+  var igual=centros.some(function(x){
+    return x.id!==c.id&&(x.tipo||"saida")===tipo&&ordAZ(x.grupo||"",grupo)===0&&ordAZ(x.nome||"",nome)===0;});
+  if(igual){al.innerHTML='<div class="note crit"><b>Já existe este centro</b> na mesma classificação.</div>';return;}
+  if(cod&&centros.some(function(x){return x.id!==c.id&&String(x.codigo||"")===cod;})){
+    al.innerHTML='<div class="note crit"><b>O código '+esc(cod)+' já é de outro centro.</b> Dois centros com o mesmo código bagunçam o Fechamento do Mês.</div>';return;}
+  var uso=usoDoCentro(c.id);
+  if(uso&&(c.tipo||"saida")!==tipo&&
+    !confirm("Este centro tem "+uso+" lançamento(s) e vai mudar de "+((c.tipo||"saida")==="entrada"?"Entrada":"Saída")+
+      " para "+(tipo==="entrada"?"Entrada":"Saída")+".\n\nIsso muda o lado deles na DRE e no Fluxo de Caixa. Confirma?"))return;
+  var antes={tipo:c.tipo,grupo:c.grupo,nome:c.nome,codigo:c.codigo};
+  c.tipo=tipo;c.grupo=grupo;c.nome=nome;
+  if(cod)c.codigo=cod;else delete c.codigo;
+  try{await grava("centros",c);}
+  catch(e){
+    c.tipo=antes.tipo;c.grupo=antes.grupo;c.nome=antes.nome;
+    if(antes.codigo)c.codigo=antes.codigo;else delete c.codigo;
+    al.innerHTML='<div class="note crit"><b>O banco não aceitou a alteração.</b> '+esc(e&&e.message||"")+
+      " O centro continua como estava.</div>";return;
+  }
+  ccEditando=null;$("ccEdModal").hidden=true;
+  renderCentros();opcoesFinanceiro();
+  try{renderDRE();}catch(e){}
+  toast("Centro de custo salvo: "+caminhoCentro(c)+(uso?" · "+uso+" lançamento(s) acompanharam":"")+".");
 }
 
 /* ---------- ORIGENS ---------- */
@@ -29711,6 +29797,13 @@ function ligar(){
     $("pdNome").value="";$("pdCentro").value="";$("pdTermos").value="";
     renderPadroes();toast("Padrão "+nome+" adicionado.");};
   $("ccNome").onkeydown=function(e){if(e.key==="Enter")$("ccAdd").click();};
+  /* editar o centro (03/10) */
+  if($("cce_ok")){
+    $("cce_ok").onclick=salvarCentro;
+    $("cce_fechar").onclick=function(){ccEditando=null;$("ccEdModal").hidden=true;};
+    $("cce_nome").onkeydown=function(e){if(e.key==="Enter")salvarCentro();};
+    $("cce_codigo").onkeydown=function(e){if(e.key==="Enter")salvarCentro();};
+  }
 
   /* Configurações › Grupos de Produtos (v180) */
   if($("gpAdd")){
