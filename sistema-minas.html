@@ -958,7 +958,12 @@
   }
 
   /* ---- Funil de Vendas (v137) ---- */
-  .funil{display:flex;gap:12px;overflow-x:auto;padding:14px;align-items:flex-start;scroll-snap-type:x proximity}
+  /* o quadro se arrasta com a mãozinha, como a barra de rolagem (pedido dele, 03/10).
+     O scroll-snap saiu: com ele o quadro "pula" de coluna em coluna ao soltar o arrasto. */
+  .funil{display:flex;gap:12px;overflow-x:auto;padding:14px;align-items:flex-start;cursor:grab}
+  .funil.arrastando{cursor:grabbing;scroll-behavior:auto;user-select:none;-webkit-user-select:none}
+  .funil .fu-cartao{cursor:grab}
+  .funil.arrastando .fu-cartao{cursor:grabbing}
   .fu-col{flex:0 0 272px;background:var(--bg);border-radius:12px;padding:10px;min-height:180px;scroll-snap-align:start}
   .fu-col.alvo{outline:2px dashed var(--accent);outline-offset:2px}
   .fu-cab{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:2px 4px 10px}
@@ -1940,6 +1945,8 @@ img{max-width:100%}
 
       <div class="note" id="v_osBanner" hidden></div>
       <div id="v_edBanner" hidden></div>
+      <!-- venda só nasce de um atendimento ou de uma atividade (regra dele, 03/10) -->
+      <div id="v_semOrigem" hidden></div>
       <div class="steps" id="v_steps">
         <button type="button" data-step="1"><i>1</i><b>Cliente</b></button>
         <button type="button" data-step="2"><i>2</i><b>Itens/Pagamento</b></button>
@@ -4834,7 +4841,7 @@ img{max-width:100%}
 <div class="novo">
   <div class="novo-menu" id="novoMenu" hidden>
     <button type="button" data-novo="orcam"><b>Orçamento</b><span>Proposta para enviar ao cliente</span></button>
-    <button type="button" data-novo="pedido"><b>Pedido</b><span>Venda com produtos, garantia e pagamento</span></button>
+    <button type="button" data-novo="pedido"><b>Pedido</b><span>Começa pelo atendimento — é dele que a venda nasce</span></button>
     <button type="button" data-novo="produto"><b>Produto</b><span>Preços, comissão, estoque e pós-venda</span></button>
     <button type="button" data-novo="lead"><b>Lead</b><span>Cadastro novo de contato para trabalhar</span></button>
     <button type="button" data-novo="atend"><b>Atendimento</b><span>Contato que acabou de acontecer</span></button>
@@ -9177,6 +9184,12 @@ window.__motivosOffMF=function(){return MOTIVOS_OFF;};
 window.__atendimentosMF=function(){return atendimentos;};
 window.__recusaMotivoMF=function(m){return recusaMotivoSistema(m);};
 window.__irMF=function(s,m){return ir(s,m);};
+window.__salvarPedidoMF=function(){return salvarPedido();};
+window.__abrirPedidoDaAtivMF=function(a){return abrirPedidoPelaVenda(a,"teste");};
+window.__origemVendaMF=function(){return origemDaVenda();};
+/* gancho de TESTE: põe a venda no caminho do atendimento, como se tivesse vindo do "Vendido".
+   Não afrouxa a regra no sistema: quem chama é o harness, nunca a tela. */
+window.__comOrigemMF=function(a){pedOrigemAtiv=a||atendimentos[0]||{id:"teste",cliente:"",motivos:[]};return origemDaVenda();};
 window.__telaAtualMF=function(){return telaAtual;};
 window.__renderMotivosMF=function(){return renderMotivos();};
 window.__emoldurarMF=function(raiz){emoldurarTabelas(raiz);numerarListasPdf(raiz);};
@@ -10608,6 +10621,11 @@ function abrirUsados(quem,obrigatorio){
   $("usadoModal").hidden=false;
 }
 async function salvarPedido(){
+  /* segunda barreira da regra de 03/10: nem forçando pela tela a venda fecha sem contato de origem */
+  if(vendaSemOrigem()){
+    toast("Esta venda precisa nascer de um atendimento ou de uma atividade — é onde fica registrado o contato com o cliente.");
+    irEtapa(1);try{renderBloqueioVenda();}catch(e){}return;
+  }
   var cliSel=clientes.filter(function(c){return c.id===$("v_cliente").value;})[0];
   if(!cliSel){toast("Escolha o cliente do pedido.");irEtapa(1);return;}
   if(!avisoCadastroVenda()){toast("Complete o cadastro de "+cliSel.nome+" antes de tirar o pedido.");irEtapa(1);return;}
@@ -10879,6 +10897,45 @@ async function salvarPedido(){
   }
   /* finalizou a venda: janela com "Enviar Pedido Venda para cliente via WhatsApp" */
   abrirVendaOk(ped);
+}
+/* ---------- a venda nasce de um CONTATO, nunca da tela em branco (regra dele, 03/10) ----------
+   "Preciso que o usuário não consiga efetivar o pedido, ou a OS, sem passar pelo atendimento ou por
+   uma atividade, pois somente dessa forma é que se tem o contato com o cliente. A aba de pedido deve
+   ser só para conferência dos pedidos já realizados."
+   Caminhos que valem: atendimento finalizado como Vendido · ação de uma atividade · OS · orçamento
+   efetivado · pedido já salvo sendo editado. É a mesma regra de 12/09 que vale para o lead. */
+function origemDaVenda(){
+  if(pedEditando)return "edicao";
+  if(pedOrigemAtiv)return "atendimento";
+  if(pedOrigemOS)return "os";
+  if(pedOrigemOrc)return "orcamento";
+  return "";
+}
+function vendaSemOrigem(){return !origemDaVenda();}
+/* a etapa 1 some e no lugar fica o caminho a seguir */
+function renderBloqueioVenda(){
+  var el=$("v_semOrigem");if(!el)return;
+  var bloqueia=vendaSemOrigem();
+  el.hidden=!bloqueia;
+  if(bloqueia){
+    el.innerHTML='<div class="note crit"><b>Esta venda precisa nascer de um contato com o cliente.</b> '+
+      "Todo pedido sai de um <b>atendimento</b> ou de uma <b>atividade</b> — é assim que fica registrado "+
+      "quem falou com o cliente, quando e por quê. Comece por lá e o pedido abre já com o cliente e o vendedor preenchidos."+
+      '<div class="actions" style="justify-content:flex-start;margin-top:10px">'+
+        '<button class="btn" type="button" id="vso_atend">Registrar atendimento</button>'+
+        '<button class="btn ghost" type="button" id="vso_ativ">Minhas atividades</button>'+
+        '<button class="btn ghost" type="button" id="vso_ped">Ver os pedidos já feitos</button>'+
+      "</div></div>";
+    $("vso_atend").onclick=function(){ir("atend");try{abrirAtend(null);}catch(e){}};
+    $("vso_ativ").onclick=function(){ir("ativ");};
+    $("vso_ped").onclick=function(){ir("pedidos");};
+  }
+  /* sem origem a tela não deixa montar nada: etapas, cartões e a comissão ao vivo ficam fora */
+  var st=$("v_steps");if(st)st.hidden=bloqueia;
+  Array.prototype.forEach.call(document.querySelectorAll("#s-venda .vstep"),function(c){
+    if(bloqueia)c.hidden=true;});
+  var cm=$("v_comissao");if(cm&&bloqueia)cm.hidden=true;
+  var av=$("v_avancar");if(av&&bloqueia)av.hidden=true;
 }
 function limparPedido(){
   itens=[];formas=formasIniciais();
@@ -20245,10 +20302,10 @@ function pedidoDoRegistro(a){
 /* abre a venda com o cliente e o vendedor já escolhidos; o pedido salvo fecha a origem */
 async function abrirPedidoPelaVenda(a,texto){
   var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
+  pedOrigemAtiv=a;   /* a origem vem ANTES de abrir a tela, senão o bloqueio da v276 pega */
   ir("venda");
   try{if(c.id){escolherClienteVenda(c);atualizarEtapas();}
     if(a.colaborador)$("v_vend").value=a.colaborador;calcular();}catch(e){}
-  pedOrigemAtiv=a;
   await registrarAcaoAtiv(a,"pedido","","",texto);
   toast("Lance o pedido de "+(a.cliente||"o cliente")+". A venda só conta quando o pedido for salvo.");
 }
@@ -20441,10 +20498,10 @@ function abrirAcoes(a){
         if(c.id){try{preencherClienteOS(c);}catch(e){console.warn(e);}}
         toast("OS "+osAc.numero+" aberta para "+(a.cliente||"o cliente")+". Confira o produto e a alegação e, na Atividade do técnico, escolha interno ou externo, o técnico, a data e a hora.");
       } else if(k==="venda"){
+        pedOrigemAtiv=a;   /* origem antes de abrir a tela (v276) */
         ir("venda");
         try{if(c.id){escolherClienteVenda(c);atualizarEtapas();}
           if(a.colaborador)$("v_vend").value=a.colaborador;calcular();}catch(e){}
-        pedOrigemAtiv=a;
         await registrarAcaoAtiv(a,"pedido","","","Pedido iniciado a partir desta atividade");
         toast("Pedido aberto para "+(a.cliente||"o cliente")+".");
       } else if(k==="orcam"){
@@ -21638,13 +21695,16 @@ function hcNovo(k){
   }else if(k==="ativ"){
     abrirNovaAtividade({clienteId:c.id,cliente:c.nome,tel:c.tel,doc:c.doc,cidade:c.cidade,origem:c.origem,
       colaborador:usuarioAtual,dias:1,obs:"",nota:"<b>Nova atividade para "+esc(c.nome||"")+".</b> Agende o próximo contato."});
-  }else if(k==="venda"){
-    ir("venda");
-    try{escolherClienteVenda(c);atualizarEtapas();calcular();}catch(e){}
+  }else if(k==="venda"||k==="os"){
+    /* regra dele (03/10): pedido e OS nascem do contato. O botão da ficha continua existindo (v265),
+       mas abre o ATENDIMENTO já com este cliente — de lá sai a venda ou a OS, com o histórico certo */
+    ir("atend");abrirAtend(null);
+    try{preencherCliente(c);}catch(e){console.warn(e);}
+    toast(k==="venda"
+      ?"O pedido nasce do contato: finalize este atendimento como Vendido e a venda abre preenchida."
+      :"A OS nasce do contato: registre o atendimento e use \"Abrir OS para o cliente\".");
   }else if(k==="orcam"){
     ir("orcam");abrirOrc(null);preencherOrcDoCliente(c);
-  }else if(k==="os"){
-    ir("os");abrirOS(null);preencherClienteOS(c);
   }
 }
 /* histórico dentro do cadastro do cliente */
@@ -23299,6 +23359,15 @@ function renderHistOS(){
 }
 async function salvarOS(){
   var nome=$("os_nome").value.trim(),tel=$("os_tel").value.trim();
+  /* mesma regra do pedido (03/10): a OS nasce do atendimento ou da atividade, nunca da tela em
+     branco — é lá que fica registrado quem falou com o cliente */
+  if(!editandoOS&&!osOrigemAtiv){
+    $("os_alerta").innerHTML='<div class="note crit"><b>Esta OS precisa nascer de um contato com o cliente.</b> '+
+      "Registre o <b>atendimento</b> (ou abra pela <b>atividade</b>) e use <b>Abrir OS para o cliente</b> — "+
+      "a ordem de serviço abre já com o cliente e o histórico.</div>";
+    try{$("os_alerta").scrollIntoView({block:"center"});}catch(e){}
+    return null;
+  }
   if(!validarAberturaOS())return null;
   var o=editandoOS||{id:uid(),loja:lojaAtual,
     numero:(await numeroNovo("os",ordens,3001)),
@@ -26730,7 +26799,47 @@ function atalhoNegocio(k){
   if(k==="zap"){abrirWhatsApp({cliente:c,origem:"funil de vendas"});return;}
   hcCliente=c;hcNovo(k);
 }
+/* ---------- arrastar o quadro do funil com a mãozinha (pedido dele, 03/10) ----------
+   "que a seta se transforme numa mãozinha e que, clicando e arrastando, consiga movimentar a tela
+   da mesma forma que a barra de rolagem, tanto na vertical quanto na horizontal."
+   O arrasto LATERAL rola o próprio quadro; o VERTICAL rola a página, que é quem tem a barra de
+   baixo. Começar o arrasto em cima de um cartão NÃO entra aqui: lá continua valendo o arrastar que
+   muda o negócio de etapa (v137); e quem toca em botão, link ou campo também fica de fora. */
+function ligarArrastoFunil(){
+  var q=$("fuQuadro");
+  if(!q||q.__arrasto)return;
+  q.__arrasto=true;
+  var ativo=false,x0=0,y0=0,sl=0,st=0,andou=0;
+  function podePegar(alvo){
+    return !(alvo.closest&&alvo.closest(".fu-cartao,button,a,input,select,textarea,.pill"));
+  }
+  q.addEventListener("mousedown",function(e){
+    if(e.button!==0||!podePegar(e.target))return;
+    ativo=true;andou=0;
+    x0=e.clientX;y0=e.clientY;sl=q.scrollLeft;st=window.pageYOffset||document.documentElement.scrollTop||0;
+    q.classList.add("arrastando");
+  });
+  document.addEventListener("mousemove",function(e){
+    if(!ativo)return;
+    var dx=e.clientX-x0,dy=e.clientY-y0;
+    andou=Math.max(andou,Math.abs(dx)+Math.abs(dy));
+    q.scrollLeft=sl-dx;
+    window.scrollTo(0,Math.max(0,st-dy));
+    e.preventDefault();
+  });
+  ["mouseup","mouseleave","blur"].forEach(function(ev){
+    document.addEventListener(ev,function(){
+      if(!ativo)return;
+      ativo=false;q.classList.remove("arrastando");
+    });
+  });
+  /* arrastou de verdade: o clique que vem depois não deve abrir o cartão de baixo */
+  q.addEventListener("click",function(e){
+    if(andou>6){e.stopPropagation();e.preventDefault();andou=0;}
+  },true);
+}
 function ligarFunil(){
+  try{ligarArrastoFunil();}catch(e){console.warn("arrasto do funil",e);}
   ["fuBusca"].forEach(function(id){$(id).oninput=renderFunil;});
   ["fuResp","fuOrigem","fuFechados"].forEach(function(id){$(id).onchange=renderFunil;});
   /* Central de Solicitações (22/09) */
@@ -30276,7 +30385,11 @@ function ligar(){
         x.setAttribute("aria-pressed",String(x===b));});};});
 
   $("osBusca").oninput=renderOS;$("osSit").onchange=renderOS;$("osTipo").onchange=renderOS;
-  $("osNova").onclick=function(){abrirOS(null);};
+  /* "Nova OS" leva ao Atendimento: a OS nasce do contato com o cliente (regra dele, 03/10) */
+  $("osNova").onclick=function(){
+    ir("atend");try{abrirAtend(null);}catch(e){}
+    toast("A OS nasce do contato com o cliente: registre o atendimento e use \"Abrir OS para o cliente\".");
+  };
   $("osCancelar").onclick=function(){$("osForm").hidden=true;$("osLista").hidden=false;editandoOS=null;osOrigemAtiv=null;};
   /* janela do recebimento do Serviço de Orçamento */
   $("orc_forma").onchange=ajustarParcelasOrcamento;
@@ -31112,6 +31225,8 @@ function irEtapa(n){
   etapa=Math.min(6,Math.max(1,n));
   Array.prototype.forEach.call(document.querySelectorAll(".vstep"),function(c){
     c.hidden=(c.getAttribute("data-s")!==String(etapa));});
+  /* sem atendimento ou atividade de origem, a tela não deixa montar a venda (03/10) */
+  try{renderBloqueioVenda();}catch(e){}
   Array.prototype.forEach.call(document.querySelectorAll("#v_steps button"),function(b){
     var s=+b.dataset.step;
     b.setAttribute("aria-current",String(s===etapa));
@@ -31133,6 +31248,16 @@ function atualizarEtapas(){
     var s=+b.dataset.step;b.classList.toggle("feito",s!==etapa&&feitaEtapa(s));});
   try{ajustarEquipItem();}catch(e){}
   try{avisoCadastroVenda();}catch(e){}
+  /* a venda só abre com origem (03/10); aqui é o ponto por onde TODOS os caminhos passam */
+  try{renderBloqueioVenda();if(!vendaSemOrigem())irEtapaVisivel();}catch(e){}
+}
+/* devolve a etapa atual à tela depois que o bloqueio a escondeu */
+function irEtapaVisivel(){
+  Array.prototype.forEach.call(document.querySelectorAll("#s-venda .vstep"),function(c){
+    c.hidden=(c.getAttribute("data-s")!==String(etapa));});
+  var st=$("v_steps");if(st)st.hidden=false;
+  var cm=$("v_comissao");if(cm)cm.hidden=(etapa<2);
+  var av=$("v_avancar");if(av)av.hidden=(etapa>=6);
 }
 
 /* A arte oficial vem em azul sobre fundo branco e com muita margem sobrando.
@@ -31306,11 +31431,10 @@ function navegacaoBasica(){
       fecha();
       var q=b.getAttribute("data-novo");
       if(q==="pedido"){
-        /* "+ Novo › Pedido" é venda NOVA: sem isto a tela reaproveitava o que estava montada —
-         inclusive o vendedor do usuário anterior, e o pedido nascia no nome de outra pessoa (v209) */
-        if(itens.length&&!confirm("Há uma venda em andamento com "+itens.length+" item(ns). Começar uma venda nova e descartar essa?")){ir("venda");return;}
-        try{limparPedido();}catch(err){}
-        ir("venda");
+        /* regra dele (03/10): pedido não nasce da tela em branco — nasce do atendimento ou da
+           atividade, que é onde fica registrado o contato. O atalho leva ao Atendimento. */
+        ir("atend");try{abrirAtend(null);}catch(err){}
+        toast("O pedido nasce do contato com o cliente: registre o atendimento e finalize como Vendido — a venda abre já preenchida.");
       }
       else if(q==="produto"){ir("produtos");try{abrirProduto(null);}catch(err){}}
       else if(q==="atend"){ir("atend");try{abrirAtend(null);}catch(err){}}
