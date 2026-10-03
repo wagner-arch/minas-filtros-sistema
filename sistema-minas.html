@@ -9171,6 +9171,7 @@ window.__pdfFichaOSMF=function(o,p){return gerarPdfFichaOS(o,p);};
 window.__motivosSistemaMF=function(){return motivosDoSistema();};
 window.__motivosMF=function(){return motivos;};
 window.__ajusteMotivosMF=function(){return aplicarAjusteMotivos();};
+window.__ajusteCentrosMF=function(){return aplicarAjusteCentros();};
 window.__motivosOffMF=function(){return MOTIVOS_OFF;};
 window.__atendimentosMF=function(){return atendimentos;};
 window.__recusaMotivoMF=function(m){return recusaMotivoSistema(m);};
@@ -9193,6 +9194,7 @@ window.__manutCliMF=function(c){return manutDoCliente(c);};
 window.__ativsMF=function(){return atendimentos.filter(function(a){return a.natureza==="atividade";});};
 window.__tecnicosOSMF=function(){return tecnicosOS();};
 window.__catsTextoMF=function(){return CATEGORIAS_MF;};
+window.__lerCategoriasMF=function(t){return lerCategoriasTexto(t);};
 window.__centrosMF=function(){return centros;};
 window.__equipeMF=function(){return EQUIPE.slice();};
 window.__renderAtivsMF=function(){try{renderAtividades();}catch(e){console.warn(e);}};
@@ -27454,6 +27456,106 @@ async function gravarMotivos(){if(!db)return;try{await db.doc("config/motivos_fi
    faltavam e tira o "Orçamento enviado". Roda UMA vez (marcador em config/importacoes) e só para o
    Administrador, que é quem pode gravar config/*. Motivo retirado que já tenha registro NÃO é
    apagado: fica inativo, senão o histórico perderia o texto. */
+/* ---------- faxina nos centros de custo decidida com ele em 03/10 ----------
+   A lista veio inteira do sistema antigo (180 categorias). A análise mostrou três coisas:
+   (a) doze "centros de entrada" eram FORMA DE PAGAMENTO ou CAIXA (Cofre, Cartão Visa e Master,
+       Venda no Cheque, financeiras…) — no sistema novo isso já é cadastro próprio, e deixar os dois
+       faz a mesma venda ser classificada ora pela natureza, ora pelo meio de recebimento;
+   (b) as duas "Transferências entre caixas" nunca seriam usadas: transferência tem caminho próprio
+       e fica fora da DRE de propósito;
+   (c) faltava o essencial — Veículos sem COMBUSTÍVEL, e nenhuma receita por natureza.
+   O nome importa: `centroFixo` acha o centro pelo NOME dentro da classificação, então renomear o
+   centro que veio do LSoft para o nome que o sistema usa evita nascer um centro paralelo. */
+var CC_EXCLUIR_MF=[
+  ["entrada","Vendas a Vista","Cofre"],
+  ["entrada","Venda Nota Promissória","Venda Nota Promissória"],
+  ["entrada","Cartão Visa e Master","Cartão Visa e Master"],
+  ["entrada","Venda no Cheque","Venda no Cheque"],
+  ["entrada","Cartao/boleto","Cartao/boleto"],
+  ["entrada","Cartao e Cheque","Cartao e Cheque"],
+  ["entrada","Venda Antecipada Boleto","Venda Antecipada Boleto"],
+  ["entrada","Venda Antecipada Cartão","Venda Antecipada Cartão"],
+  ["entrada","Finananceiras","Santander"],
+  ["entrada","Finananceiras","Losango"],
+  ["entrada","Finananceiras","Brasil Card"],
+  ["entrada","Transferencias Valores Entre Caixas","Transferencias Valores Entre Caixas"],
+  ["saida","Transferencias Valores Entre Caixas","Transferencias Valores Entre Caixas"]
+];
+/* [classificação, grupo de hoje, nome de hoje, grupo novo, nome novo] */
+var CC_RENOMEAR_MF=[
+  ["entrada","Venda no Boleto","Locação","Receitas","Locação"],
+  ["saida","Despesas Comerciais","Abastecimento","Veículos","Combustível"],
+  ["saida","Veículos","Manutenção Veículos","Veículos","Manutenção de veículo"],
+  ["saida","Veículos","Multa Transito","Veículos","Multas e infrações"],
+  ["saida","Desp Financeiras","Taxa Administração Cartão","Impostos e taxas","Taxa de cartão"],
+  ["saida","Serviço de Terceiros e Acessoria","Lavajato","Veículos","Lavagem"],
+  ["saida","Despesas Comerciais/publicidade","Plublicidade Mercado Livre","Despesas Comerciais/publicidade","Publicidade Mercado Livre"],
+  ["saida","Desp Financeiras","Aluquel de Maquina Cartao","Desp Financeiras","Aluguel de máquina de cartão"],
+  ["saida","Despesas Comerciais","Frete Mercao Livre","Despesas Comerciais","Frete Mercado Livre"],
+  ["saida","Desp Financeiras","Aplicaçao","Desp Financeiras","Aplicação financeira"],
+  ["saida","Despesas de Pessoal","13 Terceiro","Despesas de Pessoal","13º salário"],
+  ["saida","Despesas de Pessoal","Exames Médicos Amd/dem","Despesas de Pessoal","Exames médicos (admissional e demissional)"]
+];
+var CC_CRIAR_MF=[
+  ["entrada","Receitas","Venda de produto"],
+  ["entrada","Receitas","Serviço e instalação"],
+  ["entrada","Receitas","Manutenção periódica"],
+  ["entrada","Receitas","Plano de garantia"],
+  ["saida","Veículos","Troca de óleo"],
+  ["saida","Veículos","Pneus"],
+  ["saida","Veículos","Manutenção corretiva"],
+  ["saida","Despesas de Pessoal","Adiantamento de salário"]
+];
+function acharCentro(tipo,grupo,nome){
+  return centros.filter(function(c){
+    return (c.tipo||"saida")===tipo&&ordAZ(c.grupo||"",grupo)===0&&ordAZ(c.nome||"",nome)===0;})[0]||null;
+}
+/* o acerto em si, sem banco: é esta parte que o teste exercita */
+async function aplicarAjusteCentros(){
+  var n={fora:0,comUso:0,ren:0,novos:0},mud=false;
+  for(var i=0;i<CC_EXCLUIR_MF.length;i++){
+    var e=CC_EXCLUIR_MF[i],c=acharCentro(e[0],e[1],e[2]);
+    if(!c)continue;
+    if(usoDoCentro(c.id)){n.comUso++;continue;}   /* com lançamento nada é apagado */
+    var k=centros.indexOf(c);if(k>=0)centros.splice(k,1);
+    try{await apaga("centros",c.id);n.fora++;mud=true;}
+    catch(err){centros.push(c);console.warn("centro",e[2],err);}
+  }
+  for(var r=0;r<CC_RENOMEAR_MF.length;r++){
+    var x=CC_RENOMEAR_MF[r],c2=acharCentro(x[0],x[1],x[2]);
+    if(!c2)continue;
+    if(acharCentro(x[0],x[3],x[4]))continue;      /* o destino já existe: não duplica */
+    var antes={g:c2.grupo,nm:c2.nome};
+    c2.grupo=x[3];c2.nome=x[4];
+    try{await grava("centros",c2);n.ren++;mud=true;}
+    catch(err2){c2.grupo=antes.g;c2.nome=antes.nm;console.warn("centro",x[2],err2);}
+  }
+  for(var j=0;j<CC_CRIAR_MF.length;j++){
+    var v=CC_CRIAR_MF[j];
+    /* centroFixo acha pelo nome na classificação: se já existe com outro grupo, não cria de novo */
+    if(centros.some(function(c3){return (c3.tipo||"saida")===v[0]&&ordAZ(c3.nome||"",v[2])===0;}))continue;
+    var novo={id:uid(),grupo:v[1],nome:v[2],tipo:v[0]};
+    centros.push(novo);
+    try{await grava("centros",novo);n.novos++;mud=true;}
+    catch(err3){centros.pop();console.warn("centro novo",v[2],err3);}
+  }
+  return {n:n,mud:mud};
+}
+async function ajustarCentrosDaLista(){
+  if(!db||!ehAdministrador())return 0;
+  var doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.centrosOutubro)return 0;}
+  var r=await aplicarAjusteCentros(),n=r.n;
+  antes.centrosOutubro={quando:hojeISO(),por:usuarioAtual,retirados:n.fora,renomeados:n.ren,novos:n.novos,comUso:n.comUso};
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador dos centros",e);}
+  if(r.mud){
+    try{renderCentros();opcoesFinanceiro();}catch(e){}
+    toast("Centros de custo acertados: "+n.fora+" retirado(s), "+n.ren+" renomeado(s) e "+n.novos+" criado(s)"+
+      (n.comUso?" · "+n.comUso+" ficaram porque já têm lançamento":"")+".");
+  }
+  return n.fora+n.ren+n.novos;
+}
 async function ajustarMotivosDaLista(){
   if(!db||!ehAdministrador())return 0;
   var doc=null,antes={};
@@ -31241,6 +31343,7 @@ async function continuarBoot(){
   try{await normalizarOrigens();}catch(e){console.warn("situação das origens",e);}
   try{await garantirCategoriasLSoft();}catch(e){console.warn("categorias do sistema antigo",e);}
   try{await ajustarMotivosDaLista();}catch(e){console.warn("acerto dos motivos",e);}
+  try{await ajustarCentrosDaLista();}catch(e){console.warn("acerto dos centros",e);}
   try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
   try{await normalizarLancamentos();}catch(e){console.warn("centro de custo dos lançamentos",e);}
   try{await lancarVagasDoMes();}catch(e){console.warn("vaga de estacionamento",e);}
