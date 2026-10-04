@@ -5407,6 +5407,21 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- pedido sem assinatura: o sistema pergunta em vez de travar (regra dele, 03/10) -->
+<div class="modal" id="assModal" hidden>
+  <div class="box" style="width:min(560px,100%)">
+    <h3>Pedido não assinado</h3>
+    <div class="sub" id="as_sub"></div>
+    <p class="help">Você vai querer enviar o link para o cliente assinar? Ele abre o pedido no celular,
+      assina com o dedo e a assinatura volta para cá sozinha.</p>
+    <div class="actions" style="flex-wrap:wrap">
+      <button class="btn zap" type="button" id="as_link">Sim — enviar o link pelo WhatsApp</button>
+      <button class="btn ghost" type="button" id="as_agora">Coletar a assinatura agora</button>
+      <button class="btn mut" type="button" id="as_sem">Salvar sem assinatura</button>
+    </div>
+  </div>
+</div>
+
 <!-- link de assinatura: a venda fechada por telefone vai para o cliente assinar (pedido dele, 03/10) -->
 <div class="modal" id="lkModal" hidden>
   <div class="box" style="width:min(680px,100%)">
@@ -11043,7 +11058,9 @@ async function salvarPedido(){
   if(!temInstalacaoVenda()){toast("Responda se a venda precisa de instalação.");irEtapa(5);return;}
   if(temInstalacaoVenda()==="sim"&&(!$("v_idata").value||!$("v_ihora").value||!($("v_iresp").value||$("v_inst").value))){
     toast("Para instalar, informe data, horário e o técnico.");irEtapa(5);return;}
-  if(!assinaturaFeita){toast("Falta a assinatura do cliente.");irEtapa(6);return;}
+  /* Sem assinatura o sistema PERGUNTA, não trava (regra dele, 03/10): "pedido não assinado,
+     você vai querer enviar link para o cliente assinar?" — é o caso da venda por telefone. */
+  if(!assinaturaFeita&&!respAssinatura){return abrirPerguntaAssinatura(salvarPedido);}
   /* crédito do plano: só existe com plano vigente e dentro do direito não usado */
   var credV=formas.filter(function(f){return f.tipo===FORMA_CREDITO;})
     .reduce(function(a,f){return a+(+f.valor||0);},0);
@@ -27727,6 +27744,8 @@ function enviarOSWhatsApp(o,botao){
 /* venda salva: janela com o envio pelo WhatsApp e o PDF */
 function abrirVendaOk(p){
   vendaOkPedido=p;pdfPronto=null;
+  /* respondeu "sim, enviar o link" na pergunta da assinatura: o link sai na hora (03/10) */
+  if(lkEnviarZap){lkEnviarZap=false;$("vendaOkModal").hidden=true;abrirLinkAssinatura(p,true);return;}
   var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
   var osV=osDoPedido(p);
   $("vok_titulo").textContent=osV?("OS "+osV.numero+" finalizada · pedido "+p.numero):("Pedido "+p.numero+" registrado");
@@ -27776,6 +27795,24 @@ function abrirDocVenda(p){
    O cliente NÃO entra no sistema: ele só enxerga o pedido daquele link. */
 var LINK_DIAS=7;                      /* o link vale uma semana; depois é só gerar outro */
 var lkPedido=null,lkUrl="";
+/* resposta do vendedor à pergunta "pedido não assinado — quer enviar o link?" */
+var respAssinatura="",lkEnviarZap=false;
+function abrirPerguntaAssinatura(seguir){
+  var cli=clienteDaVenda&&clienteDaVenda(),tel="";
+  try{tel=(cli&&(cli.tel||cli.tel2))||"";}catch(e){}
+  $("as_sub").textContent="O cliente ainda não assinou esta venda"+(tel?" · WhatsApp "+tel:" · sem telefone no cadastro")+".";
+  $("as_link").hidden=!tel;          /* sem telefone não há para onde mandar */
+  $("assModal").hidden=false;
+  var fim=function(resp){
+    $("assModal").hidden=true;respAssinatura=resp;
+    if(resp==="agora"){respAssinatura="";irEtapa(6);try{$("v_sig").scrollIntoView({behavior:"smooth",block:"center"});}catch(e){}return;}
+    lkEnviarZap=(resp==="link");
+    Promise.resolve(seguir()).then(function(){respAssinatura="";},function(){respAssinatura="";});
+  };
+  $("as_link").onclick=function(){fim("link");};
+  $("as_agora").onclick=function(){fim("agora");};
+  $("as_sem").onclick=function(){fim("sem");};
+}
 /* o documento vai para fora do sistema: leva junto o CSS que ele usa */
 function cssDocumentoVenda(){
   var alvo=/\.(docm|docp|doc-|os-|fp-|tbw|assin|folha|marca-li|nb|branco)/;
@@ -27813,7 +27850,7 @@ function htmlLinksAnteriores(lista,pid){
         "</td><td>"+sit+"</td><td>"+(x.status==="pendente"?'<button class="btn mut sm" type="button" data-lkcanc="'+esc(x.token)+'">Cancelar</button>':"")+"</td></tr>";
     }).join("")+"</tbody></table></div></div>";
 }
-async function abrirLinkAssinatura(p){
+async function abrirLinkAssinatura(p,jaEnviar){
   if(!p)return;
   lkPedido=p;lkUrl="";
   $("lk_titulo").textContent="Link para o cliente assinar";
@@ -27842,6 +27879,8 @@ async function abrirLinkAssinatura(p){
       "e vale até <b>"+esc(dataBR(String(novo.expira_em).slice(0,16).replace("T"," ")))+"</b>. "+
       "Assim que o cliente assinar, a assinatura entra no pedido sozinha.</div>";
     try{$("lk_lista").innerHTML=htmlLinksAnteriores(await db.linksAssinatura(p.id),p.id);}catch(e2){}
+    /* veio do "sim, enviar pelo WhatsApp": a conversa do cliente abre já com o link na mensagem */
+    if(jaEnviar)$("lk_zap").click();
   }catch(e){
     $("lk_alerta").innerHTML='<div class="note crit">Não consegui gerar o link: '+esc(e.message||e)+
       "<br>Se a mensagem fala em tabela ou função que não existe, falta rodar no Supabase o arquivo "+
