@@ -928,6 +928,55 @@
       return n;
     };
 
+    /* -------------------- link de assinatura do cliente -------------------
+       A venda fechada por telefone vira um link que o cliente abre, lê e
+       assina (assinar.html). A tabela e as duas funções públicas estão em
+       supabase/assinatura-link.sql — sem elas, estes métodos avisam. */
+    adapter.criarLinkAssinatura = async function (dados) {
+      var r = conferir(
+        await sb.from("assinaturas_link").insert(dados).select("token,expira_em").single(),
+        "criar o link de assinatura",
+        true
+      );
+      return r.data;
+    };
+    /* links de um pedido (ou de todos), mais recentes primeiro */
+    adapter.linksAssinatura = async function (pedidoId) {
+      var q = sb.from("assinaturas_link")
+        .select("token,pedido_id,pedido_numero,cliente,status,criado_em,criado_por,expira_em,assinatura,assinante_nome,assinante_doc,assinado_em,aplicado_em")
+        .order("criado_em", { ascending: false }).limit(300);
+      if (ehTexto(pedidoId)) q = q.eq("pedido_id", pedidoId);
+      var r = conferir(await q, "ler os links de assinatura", false);
+      return r.data || [];
+    };
+    /* assinaturas que o cliente já fez e que ainda não entraram no pedido */
+    adapter.assinaturasNovas = async function () {
+      var r = conferir(
+        await sb.from("assinaturas_link")
+          .select("token,pedido_id,pedido_numero,assinatura,assinante_nome,assinante_doc,assinado_em")
+          .eq("status", "assinado").is("aplicado_em", null).limit(200),
+        "ler as assinaturas recebidas",
+        false
+      );
+      return r.data || [];
+    };
+    adapter.marcarAssinaturaAplicada = async function (token) {
+      conferir(
+        await sb.from("assinaturas_link").update({ aplicado_em: new Date().toISOString() }).eq("token", token),
+        "marcar a assinatura como recebida",
+        true
+      );
+      return true;
+    };
+    adapter.cancelarLinkAssinatura = async function (token) {
+      conferir(
+        await sb.from("assinaturas_link").update({ status: "cancelado" }).eq("token", token).eq("status", "pendente"),
+        "cancelar o link de assinatura",
+        true
+      );
+      return true;
+    };
+
     /* -------------------- extensões úteis --------------------------------- */
 
     /* total real no banco — para a tela dizer "mostrando 500 de 3.212" */
