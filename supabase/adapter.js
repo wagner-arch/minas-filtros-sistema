@@ -936,7 +936,7 @@
       var r = conferir(
         await sb.from("assinaturas_link").insert(dados).select("token,expira_em").single(),
         "criar o link de assinatura",
-        true
+        false   /* a janela do link já explica a falha: não acende o banner de "não foi gravado" */
       );
       return r.data;
     };
