@@ -787,6 +787,11 @@
 
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:16px;margin-bottom:20px}
   .kpi{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:20px 22px}
+  /* KPI que leva a algum lugar — hoje o das atividades atrasadas (05/10) */
+  .kpi-bt{cursor:pointer;border:1px solid transparent;transition:border-color .12s,transform .12s}
+  .kpi-bt:hover,.kpi-bt:focus-visible{border-color:var(--accent);transform:translateY(-1px)}
+  .kpi-bt.crit{border-color:var(--crit)}
+  .kpi-bt.crit:hover,.kpi-bt.crit:focus-visible{border-color:var(--crit);box-shadow:0 6px 18px rgba(196,70,62,.22)}
   .kpi .l{font-size:13.5px;color:var(--ink-3)}
   /* o valor do KPI não quebra em duas linhas ("R$" numa, o número na outra) — v172, 04/10 */
   .kpi .v{font-size:26px;font-weight:600;letter-spacing:-.02em;margin-top:6px;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -1620,6 +1625,8 @@ img{max-width:100%}
             <button type="button" data-v="mes" aria-current="true">Mês</button>
             <button type="button" data-v="semana">Semana</button>
             <button type="button" data-v="dia">Dia</button>
+            <!-- todas as atividades vencidas, sem limite de período (pedido dele, 05/10) -->
+            <button type="button" data-v="atrasadas" id="cal_vAtras">Atrasadas</button>
           </div>
         </div>
 
@@ -8419,6 +8426,7 @@ window.__followupMF=function(){return followupsPendentes();};
 window.__atendsMF=function(){return atendimentos;};
 window.__avisarAgMF=function(){return checarAgenda();};
 window.__alertaAgMF=function(a,min){return abrirAlerta(a,min||6);};
+window.__atrasadasMF=function(quem){return atividadesAtrasadas(quem);};
 window.__pendMF=function(){return pendenciasMF();};
 window.__progZapMF=function(){return programarMensagemZap();};
 window.__multiMF=function(id,vals){if(vals){multiSel[id]=vals.slice();pintarMulti(id);dispararMulti(id);}return multiValores(id);};
@@ -21083,10 +21091,32 @@ function renderDash(){
     '<div class="kpi"><div class="l">Atendimentos realizados</div><div class="v">'+d.ats.length+"</div></div>"+
     '<div class="kpi"><div class="l">Atividades criadas</div><div class="v">'+d.criadas.length+"</div></div>"+
     '<div class="kpi"><div class="l">Atividades realizadas</div><div class="v">'+d.feitas.length+"</div></div>"+
+    /* atrasadas: conta TODAS as vencidas, de qualquer data — não segue o período da tela,
+       senão o atraso do mês passado sumiria justamente de quem precisa vê-lo (05/10) */
+    (function(){
+      var at=atividadesAtrasadas(quem);
+      return '<div class="kpi kpi-bt'+(at.length?" crit":"")+'" id="dashAtrasadas" role="button" tabindex="0" '+
+        'title="Ver todas na agenda"><div class="l">Atividades atrasadas</div>'+
+        '<div class="v" style="color:'+(at.length?"var(--crit)":"inherit")+'">'+at.length+"</div>"+
+        '<div class="l" style="margin-top:4px">'+(at.length
+          ? "a mais antiga de "+dataCurta(at[0].data)+" · toque para ver todas"
+          : "nenhuma vencida")+"</div></div>";
+    })()+
     '<div class="kpi"><div class="l">Vendas realizadas</div><div class="v">'+d.vds.length+"</div></div>"+
     '<div class="kpi"><div class="l">Faturamento</div><div class="v">'+BRL(d.fat)+"</div></div>"+
     '<div class="kpi"><div class="l">Conversão</div><div class="v">'+conv+"%</div>"+
       '<div class="l" style="margin-top:4px">'+d.vds.length+" venda"+(d.vds.length===1?"":"s")+" em "+totalContatos+" contato"+(totalContatos===1?"":"s")+"</div></div>";
+  /* o card das atrasadas leva para a agenda já na visão "Atrasadas" (05/10) */
+  (function(){
+    var bt=$("dashAtrasadas");if(!bt)return;
+    function vai(){
+      ir("agenda");
+      if(quem&&$("agendaPessoa"))try{$("agendaPessoa").value=quem;}catch(e){}
+      abrirAgendaAtrasadas();
+    }
+    bt.onclick=vai;
+    bt.onkeydown=function(ev){if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();vai();}};
+  })();
   var bm=blocoMetas(quem,d.j.de,d.j.ate);
   var corM=bm.media>=100?"var(--ok)":bm.media>=70?"var(--acc)":bm.media>=40?"var(--warn)":"var(--crit)";
   $("dashMetaRel").innerHTML=bm.comMeta
@@ -30652,8 +30682,56 @@ function eventos(){
   return out.filter(function(e){return !pessoa||e.quem===pessoa;});
 }
 
+/* TODAS as atividades vencidas, sem limite de período (pedido dele, 05/10) — serve ao card
+   do Dashboard e à visão "Atrasadas" da agenda. `quem` vazio = o que a pessoa enxerga hoje
+   (a regra de "só os meus" da v200 continua valendo, pelo `visiveis`). */
+function atividadesAtrasadas(quem){
+  var agora=new Date();
+  return visiveis(atendimentos.filter(function(a){return a.loja===lojaAtual;}))
+    .filter(function(a){
+      if(a.natureza!=="atividade")return false;
+      if(a.status==="finalizado"||a.status==="cancelada"||a.finalizado)return false;
+      if(quem&&(a.colaborador||"")!==quem)return false;
+      var d=quando(a);
+      return d&&d<agora;
+    })
+    .sort(function(x,y){return quando(x)-quando(y);});
+}
+function abrirAgendaAtrasadas(){
+  calVista="atrasadas";
+  try{
+    Array.prototype.forEach.call(document.querySelectorAll("#s-agenda .cal-views button"),function(x){
+      x.setAttribute("aria-current",String(x.dataset.v==="atrasadas"));});
+  }catch(e){}
+  renderCalendario();
+}
+function diasAtraso(a){
+  var d=quando(a);if(!d)return 0;
+  return Math.max(0,Math.floor((new Date()-d)/86400000));
+}
 function renderCalendario(){
   var area=$("cal_area"),evs=eventos(),hoje=new Date();
+  if(calVista==="atrasadas"){
+    var pes=$("agendaPessoa").value;
+    var at=atividadesAtrasadas(pes);
+    $("cal_titulo").textContent="Atividades atrasadas"+(at.length?" · "+at.length:"");
+    if(!at.length){
+      area.innerHTML='<div class="empty"><div class="big">Nenhuma atividade atrasada</div>'+
+        "Tudo que foi agendado já foi atendido ou ainda está no prazo.</div>";
+    }else{
+      var ha='<div class="dia-lista">'+at.map(function(a){
+        var dd=diasAtraso(a);
+        return '<div class="hora"><div class="h">'+esc(dataCurta(a.data))+(a.inicio?"<br>"+esc(a.inicio):"")+'</div><div class="evs">'+
+          '<div class="ev ativ atrasada clicavel" data-ev="'+esc(a.id)+'"><b>'+esc(a.cliente||"—")+"</b><span>"+
+          esc(a.tipo||"Atividade")+" · "+esc(a.colaborador||"—")+" · atrasada há "+dd+(dd===1?" dia":" dias")+
+          (a.obs?" — "+esc(String(a.obs).slice(0,80)):"")+"</span></div>"+
+          (htmlLixeira("atividade",a.id))+"</div></div>";
+      }).join("")+"</div>";
+      area.innerHTML=ha;
+    }
+    ligarEventosCal();
+    return;
+  }
   if(calVista==="mes"){
     $("cal_titulo").textContent=MESES[calRef.getMonth()]+" de "+calRef.getFullYear();
     var ini=new Date(calRef.getFullYear(),calRef.getMonth(),1);
@@ -30731,6 +30809,7 @@ function ligarEventosCal(){
   });
 }
 function moverCal(dir){
+  if(calVista==="atrasadas")return;   /* a lista de atrasadas não tem período para avançar (05/10) */
   if(calVista==="mes")calRef.setMonth(calRef.getMonth()+dir);
   else if(calVista==="semana")calRef.setDate(calRef.getDate()+7*dir);
   else calRef.setDate(calRef.getDate()+dir);
