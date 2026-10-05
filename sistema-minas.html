@@ -8210,6 +8210,58 @@ function produtoDeSistema(p){
   if(CODS_SISTEMA_MF.indexOf(String(p.cod||"").toUpperCase())>=0)return true;
   return p.grupo==="Planos";
 }
+/* ---------- manutenção periódica POR MARCA (regra dele, 04/10) ----------
+   "todos os produtos da marca Top Life com 360 dias, os da Everest com 180, e as centrais
+   de filtragem com 365". A central ganha das marcas: é o item mais específico.
+   Isso vale para a PRÓXIMA troca calculada pelo produto; aparelho que já tem intervalo
+   próprio (`e.manutDias`, o que veio da importação) continua com o dele. */
+var MANUT_REGRAS=[
+  {k:"central",dias:365,nome:"Centrais de filtragem",
+   casa:function(t){return /central/.test(t)&&/filtr/.test(t);}},
+  {k:"toplife",dias:360,nome:"Top Life",
+   casa:function(t){return /top\s*life/.test(t);}},
+  {k:"everest",dias:180,nome:"Everest",
+   casa:function(t){return /everes/.test(t);}}
+];
+function textoProdutoManut(p){
+  return normNomeImp([p.marca||"",p.nome||"",p.pop||""].join(" ")).toLowerCase();
+}
+function regraManutDoProduto(p){
+  if(!p||produtoDeSistema(p))return null;
+  var t=textoProdutoManut(p);
+  for(var i=0;i<MANUT_REGRAS.length;i++)if(MANUT_REGRAS[i].casa(t))return MANUT_REGRAS[i];
+  return null;
+}
+async function aplicarManutMarcas(){
+  var n={central:0,toplife:0,everest:0,jaIguais:0,erros:0},mud=false;
+  for(var i=0;i<produtos.length;i++){
+    var p=produtos[i],r=regraManutDoProduto(p);
+    if(!r)continue;
+    if(+p.manut===r.dias){n.jaIguais++;continue;}
+    var antes=p.manut;
+    p.manutAnterior=antes||0;p.manut=r.dias;p.manutPorMarca=r.k;
+    try{await grava("produtos",p);n[r.k]++;mud=true;}
+    catch(e){p.manut=antes;delete p.manutPorMarca;n.erros++;}
+  }
+  return {n:n,mud:mud};
+}
+async function ajustarManutencaoMarcas(){
+  if(!db||!ehAdministrador())return 0;
+  var doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.manutMarcas)return 0;}
+  var r=await aplicarManutMarcas(),n=r.n;
+  antes.manutMarcas={quando:hojeISO(),por:usuarioAtual,central:n.central,toplife:n.toplife,everest:n.everest};
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador da manutenção por marca",e);}
+  if(r.mud){
+    try{renderProdutos();}catch(e){}
+    toast("Manutenção periódica ajustada pela marca: "+n.toplife+" Top Life (360 dias) · "+
+      n.everest+" Everest (180) · "+n.central+" central de filtragem (365)"+
+      (n.jaIguais?" · "+n.jaIguais+" já estavam certos":"")+".");
+  }
+  return n.central+n.toplife+n.everest;
+}
+
 /* ---------- os cadastros "-TROCA" saem, e o preço deles vira o Desconto de troca (03/10) ----------
    "pode excluir todos os produtos que tiver a palavra troca". O valor não se perde: a diferença
    entre o preço do principal e o da versão de troca vai para o campo novo do produto principal —
@@ -9549,6 +9601,8 @@ window.__htmlFichaOSMF=function(o,p){return htmlFichaOS(o,p);};
 window.__cabDocMF=function(){return cabecalhoEmpresaDoc();};
 window.__linkAssinaturaMF=function(p){return abrirLinkAssinatura(p);};
 window.__cssDocMF=function(){return cssDocumentoVenda();};
+window.__manutMarcasMF=function(){return aplicarManutMarcas();};
+window.__regraManutMF=function(p){return regraManutDoProduto(p);};
 window.__lojaMF=function(){return lojaAtual;};
 window.__formasMF=function(){return formasPgto;};
 window.__caixasMF=function(){return caixas.filter(function(c){return c.loja===lojaAtual;});};
@@ -31504,6 +31558,18 @@ function ligar(){
   $("prodSub").onchange=renderProdutos;
   $("p_grupo").oninput=atualizarListasGrupoProd;
   $("p_campativa").onchange=notaCampanha;
+  /* marca Top Life / Everest / central de filtragem já sugere a manutenção periódica (04/10):
+     só preenche o campo VAZIO — quem digitou um prazo fica com o dele */
+  ["p_marca","p_nome"].forEach(function(id){
+    var e=$(id);if(!e)return;
+    e.addEventListener("blur",function(){
+      var mt=$("p_manut");if(!mt||String(mt.value||"").trim()!=="")return;
+      var r=regraManutDoProduto({marca:$("p_marca").value,nome:$("p_nome").value,pop:($("p_pop")||{}).value||""});
+      if(!r)return;
+      mt.value=r.dias;
+      toast(r.nome+": manutenção periódica de "+r.dias+" dias preenchida — dá para alterar.");
+    });
+  });
   ["p_minimo","p_campanha","p_cheia"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaCampanha);});
   ["p_troca","p_cheia"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaTrocaProduto);});
   ["p_custo","p_frete","p_ipi","p_st","p_federais","p_icms","p_cheia","p_campanha","p_minimo"].forEach(function(id){$(id).oninput=notaCusto;});
@@ -32458,6 +32524,7 @@ async function continuarBoot(){
   try{await ajustarCentrosDaLista();}catch(e){console.warn("acerto dos centros",e);}
   try{await ajustarDuplicadosCentros();}catch(e){console.warn("centros repetidos",e);}
   try{await limparVersoesTroca();}catch(e){console.warn("versões de troca",e);}
+  try{await ajustarManutencaoMarcas();}catch(e){console.warn("manutenção por marca",e);}
   /* o cliente assinou pelo link enquanto ninguém olhava: a assinatura entra no pedido (03/10) */
   try{await aplicarAssinaturasRecebidas();}catch(e){console.warn("assinaturas do link",e);}
   try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
