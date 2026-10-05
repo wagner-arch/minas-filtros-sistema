@@ -1876,6 +1876,8 @@ img{max-width:100%}
           <span class="sp"></span>
           <button class="btn ghost" type="button" id="prodImportar">Importar lista</button>
           <button class="btn ghost" type="button" id="prodRepetidos">Produtos repetidos</button>
+          <!-- conferência do catálogo nas 3 lojas (pedido dele, 04/10) -->
+          <button class="btn ghost" type="button" id="prodLojas" hidden>Conferir as 3 lojas</button>
           <!-- limpeza do que entrou errado na importação (pedido do Wagner, 03/10) -->
           <button class="btn mut" type="button" id="prodApagarBusca" hidden>Apagar os da busca</button>
         </div>
@@ -5357,6 +5359,24 @@ img{max-width:100%}
     </div>
   </div>
 </div>
+<!-- CATÁLOGO NAS 3 LOJAS (pedido dele, 04/10: "copiar todos os produtos da Minas Filtros para as outras
+     lojas WF e Divinopolis Filtros, e o que tiver passando de diferentes dessas lojas em relação a da
+     Minas Filtros favor apagar"). O catálogo já é UM só; esta janela mostra isso com números e solta
+     o produto que ficou preso a uma loja no banco. -->
+<div class="modal" id="lojasModal" hidden>
+  <div class="box" style="width:min(820px,100%)">
+    <h3>O catálogo nas três lojas</h3>
+    <div class="sub">Produto, preço, custo, código MF e nome são <b>um cadastro só</b>, usado pelas três lojas: o que você cria ou altera na Minas Filtros já vale na WF e na Divinópolis, e vice-versa. <b>O estoque é de cada loja</b> — e continua assim. Esta janela confere se sobrou algum produto <b>preso a uma loja</b> no banco (não aparece nas outras) e solta de uma vez.</div>
+    <div id="lj_resumo" style="margin-top:14px"></div>
+    <div id="lj_lista" style="max-height:44vh;overflow:auto;margin-top:10px"></div>
+    <div id="lj_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="lj_soltar" hidden>Liberar para as três lojas</button>
+      <button class="btn ghost" type="button" id="lj_conferir">Conferir de novo</button>
+      <button class="btn mut" type="button" id="lj_fechar">Fechar</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="impModal" hidden>
   <div class="box" style="width:min(720px,100%)">
     <h3>Importar lista de produtos</h3>
@@ -7556,6 +7576,7 @@ function mostrarFaltantes(){
 
 /* produtos */
 function renderProdutos(){
+  try{ajustarBotaoLojas();}catch(e){}
   var q=($("prodBusca").value||"").toLowerCase();
   /* filtros de grupo e subgrupo (regra do Wagner, 15/09: todo produto tem os dois) */
   var sg=$("prodGrupo"),ss=$("prodSub");
@@ -8215,9 +8236,15 @@ function produtoDeSistema(p){
    de filtragem com 365". A central ganha das marcas: é o item mais específico.
    Isso vale para a PRÓXIMA troca calculada pelo produto; aparelho que já tem intervalo
    próprio (`e.manutDias`, o que veio da importação) continua com o dele. */
+/* As marcas das centrais de filtragem, ditas por ele em 04/10: "central de filtragem
+   não é top life, é filtrali e da NYC e da Fusati". O nome "central de filtragem"
+   também vale, para o cadastro que não trouxe a marca. */
+var MARCAS_CENTRAL=/filtrali|nyc|fusati/;
 var MANUT_REGRAS=[
-  {k:"central",dias:365,nome:"Centrais de filtragem",
-   casa:function(t){return /central/.test(t)&&/filtr/.test(t);}},
+  {k:"central",dias:365,nome:"Centrais de filtragem (Filtrali, NYC, Fusati)",
+   casa:function(t){return MARCAS_CENTRAL.test(t)||(/central/.test(t)&&/filtr/.test(t));}},
+  {k:"waterflex",dias:365,nome:"Refil Water Flex",
+   casa:function(t){return /water\s*flex/.test(t)&&/refil|refill|elemento\s*filtrante/.test(t);}},
   {k:"toplife",dias:360,nome:"Top Life",
    casa:function(t){return /top\s*life/.test(t);}},
   {k:"everest",dias:180,nome:"Everest",
@@ -8233,7 +8260,8 @@ function regraManutDoProduto(p){
   return null;
 }
 async function aplicarManutMarcas(){
-  var n={central:0,toplife:0,everest:0,jaIguais:0,erros:0},mud=false;
+  var n={jaIguais:0,erros:0},mud=false;
+  MANUT_REGRAS.forEach(function(r){n[r.k]=0;});
   for(var i=0;i<produtos.length;i++){
     var p=produtos[i],r=regraManutDoProduto(p);
     if(!r)continue;
@@ -8245,21 +8273,25 @@ async function aplicarManutMarcas(){
   }
   return {n:n,mud:mud};
 }
+/* MARCADOR: muda de nome a cada acerto de regra, senão quem já abriu o sistema
+   com a regra anterior não recebe a correção (ele corrigiu as marcas em 04/10). */
+var MARCADOR_MANUT="manutMarcas2";
 async function ajustarManutencaoMarcas(){
   if(!db||!ehAdministrador())return 0;
   var doc=null,antes={};
   try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
-  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.manutMarcas)return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes[MARCADOR_MANUT])return 0;}
   var r=await aplicarManutMarcas(),n=r.n;
-  antes.manutMarcas={quando:hojeISO(),por:usuarioAtual,central:n.central,toplife:n.toplife,everest:n.everest};
+  antes[MARCADOR_MANUT]={quando:hojeISO(),por:usuarioAtual,contagem:n};
   try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador da manutenção por marca",e);}
   if(r.mud){
     try{renderProdutos();}catch(e){}
-    toast("Manutenção periódica ajustada pela marca: "+n.toplife+" Top Life (360 dias) · "+
-      n.everest+" Everest (180) · "+n.central+" central de filtragem (365)"+
+    toast("Manutenção periódica ajustada: "+MANUT_REGRAS.filter(function(x){return n[x.k];})
+      .map(function(x){return n[x.k]+" "+x.nome+" ("+x.dias+" dias)";}).join(" · ")+
       (n.jaIguais?" · "+n.jaIguais+" já estavam certos":"")+".");
   }
-  return n.central+n.toplife+n.everest;
+  var t=0;MANUT_REGRAS.forEach(function(x){t+=n[x.k]||0;});
+  return t;
 }
 
 /* ---------- os cadastros "-TROCA" saem, e o preço deles vira o Desconto de troca (03/10) ----------
@@ -8630,6 +8662,124 @@ function ligarApagarBusca(){
   if($("prodBusca"))$("prodBusca").addEventListener("input",ajustarApagarBusca);
   ajustarApagarBusca();
 }
+/* ===== O CATÁLOGO NAS TRÊS LOJAS (pedido dele, 04/10) =========================
+   Produtos, centros de custo, formas de pagamento, tipos, motivos, origens e
+   planos JÁ são um cadastro só: no adapter essas coleções gravam a coluna
+   docs.loja em NULL (CAMPO_LOJA.produtos / centros / config = null) e a leitura
+   é sempre "a loja atual MAIS os globais". Então não há o que copiar de uma
+   loja para a outra — o que pode existir é um produto que ficou PRESO a uma
+   loja no banco (gravado antes dessa regra), e esse não aparece nas demais.
+   Esta janela mede isso e solta de uma vez, regravando o documento. */
+var lojasPresos=null;
+function colecoesComuns(){
+  return [
+    ["Produtos (código MF, nome, custo, preços, marca)",produtos.length],
+    ["Centros de custo",(typeof centros!=="undefined"?centros.length:0)],
+    ["Formas de pagamento",(typeof formasPgto!=="undefined"?formasPgto.length:0)],
+    ["Tipos de atendimento",(typeof tipos!=="undefined"?tipos.length:0)],
+    ["Motivos de finalização",(typeof motivos!=="undefined"?motivos.length:0)],
+    ["Origens",(typeof ORIGENS!=="undefined"?ORIGENS.length:0)],
+    ["Planos de garantia",produtos.filter(function(p){return (p.grupo||"")==="Planos";}).length],
+    ["Fornecedores",(typeof fornecedores!=="undefined"?fornecedores.length:0)]
+  ];
+}
+function colecoesDaLoja(){
+  return ["Estoque de cada produto","Caixas e bancos","Contas a pagar e a receber",
+    "Movimentações de caixa","Clientes e leads","Pedidos, orçamentos e OS",
+    "Atendimentos e atividades","Negócios do funil","Colaboradores e ponto"];
+}
+function htmlQuadroLojas(){
+  var h='<div class="note"><b>Um cadastro só para as três lojas</b> — '+
+    LOJAS.map(function(l){return l.nome;}).join(" · ")+'<br>'+
+    colecoesComuns().map(function(c){return "• "+c[0]+": <b>"+c[1]+"</b> (igual nas três)";}).join("<br>")+
+    '</div>'+
+    '<div class="note"><b>De cada loja, e continua assim</b><br>'+
+    colecoesDaLoja().map(function(t){return "• "+t;}).join("<br>")+'</div>';
+  return h;
+}
+async function conferirCatalogoLojas(){
+  var al=$("lj_alerta"),res=$("lj_resumo"),li=$("lj_lista"),bt=$("lj_soltar");
+  if(al)al.innerHTML="";
+  if(res)res.innerHTML=htmlQuadroLojas();
+  if(li)li.innerHTML="";
+  if(bt)bt.hidden=true;
+  lojasPresos=null;
+  if(!modoBanco()||!db){
+    if(li)li.innerHTML='<div class="note">Sem o banco ligado não há o que conferir — nesta demonstração os dados ficam só neste aparelho.</div>';
+    return;
+  }
+  if(al)al.innerHTML='<div class="note">Conferindo no banco…</div>';
+  var presos=[],erro="";
+  for(var i=0;i<LOJAS.length;i++){
+    try{
+      var r=await db.col("produtos").limit(3000).get({loja:LOJAS[i].id,lojaEstrita:true});
+      (r||[]).forEach(function(p){presos.push({loja:LOJAS[i].id,lojaNome:LOJAS[i].nome,prod:p});});
+    }catch(e){erro=e.message||String(e);}
+  }
+  if(erro){
+    if(al)al.innerHTML='<div class="note crit">Não deu para conferir no banco: '+esc(erro)+'</div>';
+    return;
+  }
+  if(al)al.innerHTML="";
+  if(!presos.length){
+    if(li)li.innerHTML='<div class="note ok"><b>Nenhum produto preso a uma loja.</b> Os '+produtos.length+
+      ' produtos do cadastro valem para as três lojas — não há nada a copiar nem a apagar.</div>';
+    return;
+  }
+  lojasPresos=presos;
+  var porLoja={};
+  presos.forEach(function(x){porLoja[x.lojaNome]=(porLoja[x.lojaNome]||0)+1;});
+  var linhas=presos.slice(0,60).map(function(x){
+    return '<tr><td>'+esc(x.lojaNome)+'</td><td><code>'+esc(x.prod.cod||"—")+'</code></td><td>'+
+      esc(x.prod.nome||"—")+'</td><td class="num">'+brMF(+x.prod.cheia||0)+'</td></tr>';
+  }).join("");
+  if(li)li.innerHTML='<div class="note crit"><b>'+presos.length+
+    ' produto(s) estão presos a uma loja</b> e não aparecem nas outras: '+
+    Object.keys(porLoja).map(function(k){return k+" "+porLoja[k];}).join(" · ")+
+    '. O botão abaixo libera todos para as três lojas, sem mexer em preço, estoque nem histórico.</div>'+
+    '<div class="tw"><table><thead><tr><th>Preso em</th><th>Código</th><th>Produto</th><th class="num">100%</th></tr></thead><tbody>'+
+    linhas+'</tbody></table></div>'+
+    (presos.length>60?'<div class="sub">mostrando os 60 primeiros de '+presos.length+'</div>':"");
+  if(bt)bt.hidden=false;
+}
+async function soltarProdutosPresos(){
+  if(!lojasPresos||!lojasPresos.length)return;
+  if(!confirm("Liberar "+lojasPresos.length+" produto(s) para as três lojas?\n\nNada é apagado: o cadastro passa a valer em "+
+    LOJAS.map(function(l){return l.nome;}).join(", ")+". Preço, custo, estoque e histórico ficam como estão."))return;
+  var al=$("lj_alerta"),ok=0,falhou=0,motivo="";
+  for(var i=0;i<lojasPresos.length;i++){
+    var p=lojasPresos[i].prod;
+    if(al)al.innerHTML='<div class="note">Liberando '+(i+1)+' de '+lojasPresos.length+'…</div>';
+    try{
+      if(p.loja)delete p.loja; /* o campo no documento também sai, senão volta a prender */
+      await grava("produtos",p);
+      if(!produtos.filter(function(x){return x.id===p.id;}).length)produtos.push(p);
+      ok++;
+    }catch(e){falhou++;motivo=e.message||String(e);}
+  }
+  if(al)al.innerHTML="";
+  toast(ok+" produto(s) liberado(s) para as três lojas."+(falhou?" "+falhou+" o banco não aceitou: "+motivo:""));
+  renderProdutos();
+  await conferirCatalogoLojas();
+}
+function abrirCatalogoLojas(){
+  $("lojasModal").hidden=false;
+  conferirCatalogoLojas();
+}
+function ajustarBotaoLojas(){
+  var bt=$("prodLojas");if(!bt)return;
+  bt.hidden=!ehAdministrador();
+}
+function ligarCatalogoLojas(){
+  var bt=$("prodLojas");if(!bt)return;
+  bt.onclick=abrirCatalogoLojas;
+  $("lj_fechar").onclick=function(){$("lojasModal").hidden=true;};
+  $("lj_conferir").onclick=conferirCatalogoLojas;
+  $("lj_soltar").onclick=soltarProdutosPresos;
+  ajustarBotaoLojas();
+}
+window.__lojasQuadroMF=function(){return htmlQuadroLojas();};
+window.__conferirLojasMF=conferirCatalogoLojas;
 function ligarDuplicados(){
   var bt=$("prodRepetidos");if(!bt)return;
   bt.onclick=abrirDuplicados;
@@ -9646,6 +9796,7 @@ window.__formasVendaMF=function(){return formas;};
 window.__opcoesProdutoMF=function(){return opcoesProduto();};
 window.__hojeMF=function(){return hojeISO();};
 window.__negociosMF=function(){return negocios;};
+window.__renderFunilMF=function(){return renderFunil();};
 window.__funilClienteMF=function(cid,m){return atualizarFunilCliente(cid,m);};
 window.__sincFunilMF=function(){return sincronizarFunil();};
 window.__ehLeadMF=function(c){return ehLead(c);};
@@ -27410,7 +27561,9 @@ function renderFunil(){
 var fuHistAberto={},FU_HIST_MAX=12;
 function htmlHistoricoFunil(n){
   var c=clienteDoNeg(n);
-  if(!c)return '<div class="fuh-vazio">Sem cadastro ligado a este negócio.</div>';
+  if(!c)return '<div class="fuh-vazio">'+(clientesCarregando
+    ?"Os cadastros ainda estão carregando — abra de novo em alguns segundos."
+    :"O cadastro deste negócio não está mais no sistema.")+"</div>";
   var ev=[];
   try{ev=hcEventos(c);}catch(e){return '<div class="fuh-vazio">Não consegui montar o histórico.</div>';}
   if(!ev.length)return '<div class="fuh-vazio">Nada no histórico ainda — nenhum atendimento, orçamento, venda ou anotação.</div>';
@@ -27438,9 +27591,8 @@ function ligarQuadroFunil(){
       var bCli=ev.target.closest&&ev.target.closest("[data-fucli]");
       if(bCli){
         ev.stopPropagation();
-        var cli=clientes.filter(function(x){return x.id===bCli.getAttribute("data-fucli");})[0];
-        if(!cli)return toast("Cadastro não encontrado.");
-        ir("clientes");abrirCliente(cli);return;
+        abrirClienteDoFunil(bCli.getAttribute("data-fucli"),n);
+        return;
       }
       /* − / + do histórico, dentro do próprio cartão (04/10) */
       var bH=ev.target.closest&&ev.target.closest("[data-fuhist]");
@@ -27450,7 +27602,16 @@ function ligarQuadroFunil(){
         var abrirAgora=!fuHistAberto[n.id];
         fuHistAberto[n.id]=abrirAgora;
         if(cx){
-          if(abrirAgora&&!cx.innerHTML.trim())cx.innerHTML=htmlHistoricoFunil(n);
+          if(abrirAgora&&!cx.innerHTML.trim()){
+            cx.innerHTML=htmlHistoricoFunil(n);
+            /* cadastro fora da memória: busca no banco e redesenha o histórico (04/10) */
+            if(!clienteDoNeg(n)&&db){
+              cx.innerHTML='<div class="fuh-vazio">Buscando o cadastro…</div>';
+              buscarClientePorId(n.clienteId).then(function(){
+                cx.innerHTML=htmlHistoricoFunil(n);
+              });
+            }
+          }
           cx.hidden=!abrirAgora;
         }
         if(sn)sn.textContent=abrirAgora?"−":"+";
@@ -27487,6 +27648,39 @@ function ligarQuadroFunil(){
   });
 }
 function clienteDoNeg(n){return clientes.filter(function(c){return c.id===n.clienteId;})[0]||null;}
+/* O CARTÃO DO FUNIL ACHA O CADASTRO MESMO QUE ELE NÃO ESTEJA NA MEMÓRIA (relato dele, 04/10:
+   "cliquei no nome do cliente e deu Cadastro não encontrado").
+   O id do negócio está certo — tanto que a próxima atividade daquele cliente aparece no cartão.
+   O que falta é o cadastro na lista carregada: ele tem 21.909 clientes e, desde a v219, essa
+   leitura NÃO segura a abertura do sistema; quem entra no funil antes de ela terminar vê os
+   negócios (poucos) e ainda não os clientes (muitos). Em vez de recusar, o sistema agora
+   BUSCA O CADASTRO NO BANCO pelo id — uma leitura só — e diz o motivo quando não vier. */
+async function buscarClientePorId(id){
+  if(!id)return null;
+  var c=clientes.filter(function(x){return x.id===id;})[0];
+  if(c)return c;
+  if(!db)return null;
+  try{
+    var d=await db.doc("clientes/"+id).get();
+    if(d&&d.exists){var o=d.data()||{};o.id=d.id;clientes.push(o);return o;}
+  }catch(e){console.warn("cliente do funil",e);}
+  return null;
+}
+async function abrirClienteDoFunil(id,n){
+  var c=clientes.filter(function(x){return x.id===id;})[0];
+  if(!c){
+    toast(clientesCarregando?"Procurando o cadastro…":"Buscando o cadastro no banco…");
+    c=await buscarClientePorId(id);
+  }
+  if(!c){
+    if(clientesCarregando)return toast("Os cadastros ainda estão carregando — tente de novo em alguns segundos.");
+    return toast("O cadastro de "+((n&&n.cliente)||"este cliente")+" não está mais no sistema. O negócio continua no funil, com o histórico que já tem.");
+  }
+  if(c.loja&&c.loja!==lojaAtual)
+    toast("Atenção: este cadastro é da loja "+nomeLojaId(c.loja)+".");
+  ir("clientes");abrirCliente(c);
+  try{if(!$("s-funil").hidden)renderFunil();}catch(e){}
+}
 function abrirNegocio(n,etapaSugerida){
   negAberto=n||null;
   var novo=!n;
@@ -32397,6 +32591,7 @@ function navegacaoBasica(){
   try{ligarTrocaFeita();}catch(e){console.warn("troca feita",e);}
   try{ligarTipoPessoaAt();}catch(e){console.warn("tipo de pessoa",e);}
   try{ligarDuplicados();}catch(e){console.warn("produtos repetidos",e);}
+  try{ligarCatalogoLojas();}catch(e){console.warn("catalogo das lojas",e);}
   try{ligarSino();}catch(e){console.warn("sino",e);}
   try{ligarGruposMenu();}catch(e){console.warn("grupos do menu",e);}
   try{ligarApagarBusca();}catch(e){console.warn("apagar da busca",e);}
