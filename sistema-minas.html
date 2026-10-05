@@ -11302,6 +11302,24 @@ function renderGarantiaEtapa(){
    comissão, os títulos, a conciliação e a antecipação seguem com a regra de sempre. */
 function valorBaseItem(i){return +i.valorBase||0;}
 function baseDoItem(i){return i.planoCobre?0:centavos(valorBaseItem(i)*(i.qtd||1));}
+/* O VALOR FINAL DIGITADO CONTINUA O MESMO (v282), mas a DEPRECIAÇÃO acompanha o parcelamento
+   (regra dele, 05/10: "quando for alterado o número de parcelas o cálculo da depreciação seja
+   alterado conforme o coeficiente respectivo da parcela que o usuário alterou").
+   O campo guarda o valor FINAL e o sistema converte uma vez para o valor comercial (`valorBase`),
+   que é quem decide a tabela do item e forma a comissão. Essa conversão ficava CONGELADA no
+   coeficiente da hora em que o valor foi digitado: trocando de 10× para 24×, o depreciado das
+   formas mudava e o comercial não, e a tela mostrava dois números para a mesma venda —
+   R$ 119,53 de depreciado contra R$ 115,87 de valor comercial (print dele).
+   Agora o comercial é refeito do valor final a cada cálculo, com o coeficiente da parcela atual.
+   É idempotente: parte sempre do `valorFinal`, que não muda — sem deriva de centavo. */
+function redepreciarItensDigitados(lista){
+  if(!lista||!lista.length)return;
+  var T=tabelaTotalVenda(false);
+  lista.forEach(function(i){
+    if(i.planoCobre||!(+i.valorFinal>0))return;
+    i.valorBase=baseDoFinal(+i.valorFinal,i.qtd||1,T);
+  });
+}
 /* item de rascunho antigo (OS, orçamento convertido, pedido reaberto) não tem valorBase */
 function normalizarValoresItens(lista){
   (lista||[]).forEach(function(i){
@@ -11391,6 +11409,7 @@ function extrasVenda(){
 function calcular(){
   normalizarValoresItens(itens);
   normalizarFormasVenda(formas);
+  redepreciarItensDigitados(itens);
   /* ETAPA A: o valor comercial da venda */
   var xv=extrasVenda();
   var comp=composicaoVenda(itens,xv);
