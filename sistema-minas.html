@@ -1609,6 +1609,7 @@ img{max-width:100%}
     <button data-s="pagar">Contas a Pagar</button>
     <button data-s="concil">Conciliação</button>
     <button data-s="fatur">Remunerações Colaboradores</button>
+    <button data-s="prest">Prestadores de Serviço</button>
     <button data-s="fluxo">Fluxo de Caixa</button>
     <button data-s="relat">Relatórios</button>
     <button data-s="veiculos">Veículos</button>
@@ -3418,7 +3419,7 @@ img{max-width:100%}
         </div>
         <div class="sect">
           <p class="sect-t">Acesso ao sistema</p>
-          <p class="help">Preencha o nome de usuário para o prestador entrar no sistema e marque <b>só</b> as telas que ele pode usar — <b>nada é liberado sozinho</b>. Deixando o nome em branco, ele não entra: fica só como cadastro para a remuneração. Mesmo entrando, ele <b>não altera nada</b> na tela de Prestadores (vê só os lançamentos dele) e <b>só enxerga o cadastro dos clientes em que ele é o responsável pela instalação</b>. Liberando Pedidos, ele também pode vender.</p>
+          <p class="help">Preencha o nome de usuário para o prestador entrar no sistema e marque <b>só</b> as telas que ele pode usar — <b>nada é liberado sozinho</b>. Deixando o nome em branco, ele não entra: fica só como cadastro para a remuneração. Mesmo entrando, ele <b>não altera nada</b> na tela de Prestadores (vê só os lançamentos dele) e <b>só enxerga o cadastro dos clientes em que ele é o responsável pela instalação</b>. Liberando <b>Pedidos</b> ele também vende, e liberando <b>Estoque Colaborador</b> ele pega produto no almoxarifado e devolve, <b>igual aos colaboradores</b>.</p>
           <div class="grid g2" style="margin-top:8px">
             <div class="fld"><label for="pr_usuario">Nome de usuário no sistema</label><input id="pr_usuario" placeholder="ex.: Renan Instalações"></div>
             <div class="fld" style="align-self:end"><span class="count" id="pr_acessoNota"></span></div>
@@ -12134,6 +12135,9 @@ var editandoPrest=null,prAba="lista",rpSel={},recAberto=null;
    excluir algum serviço, alterar valor até na aba de remuneração" — inclusive o que já
    foi pago. Quem não é gestão só mexe no que ainda não entrou em recibo. */
 function podePrestEditar(){return ehGestor();}
+/* o estoque do prestador fica no NOME dele (como "colab:Renan Instalações"), mas o login pode
+   ser outro ("Renan") — esta é a identidade que vale nas telas de estoque e nas requisições */
+function euNoEstoque(){var z=prestadorLogado();return z?z.nome:usuarioAtual;}
 /* O PRESTADOR só enxerga o cliente de quem ele instalou ou vai instalar (regra dele, 05/10):
    "não consegue ver cadastro de clientes que ele não tiver responsável em alguma instalação
    futura". Para todos os outros, nada muda — cliente é da loja (v204). */
@@ -12703,6 +12707,8 @@ function ligarPrestadores(){
 window.__prestMF=function(){return prestadores;};
 window.__prestLogadoMF=function(q){return prestadorLogado(q);};
 window.__achaCliMF=function(q){return achaCliente(q);};
+window.__euEstoqueMF=function(){return euNoEstoque();};
+window.__funcoesMF=function(){return funcoes;};
 window.__veTelaMF=function(s,q){return veTela(s,q);};
 window.__abrirInstMF=function(p){return abrirInstalacao(p);};
 window.__sincEquipeMF=function(){return sincronizarEquipe();};
@@ -13335,6 +13341,8 @@ function colabsComEstoque(todos){
   EQUIPE.forEach(function(n){
     if(m[n]!==undefined)return;
     if(todos||["Vendedor","Instalador","Prospector","Administrador"].indexOf(perfilDe(n))>=0)m[n]=1;});
+  /* prestador de serviço tem estoque igual aos colaboradores (regra dele, 05/10) */
+  try{prestAtivos().forEach(function(x){if(x.nome)m[x.nome]=1;});}catch(ePe){}
   /* quem está com purificador usado da troca responde por ele mesmo sem ter estoque */
   usados.forEach(function(u){if(u.loja===lojaAtual&&u.vendedor&&u.status!=="no_almoxarifado")m[u.vendedor]=1;});
   /* quem vendeu com Desconto de Troca precisa confirmar o usado mesmo sem ter estoque ainda */
@@ -13391,8 +13399,8 @@ async function migrarEstoqueInicial(){
    instalador da comissão; sem instalador, o vendedor */
 function respInstalacao(p){return p.respInstalacao||p.instalador||p.vendedor||"";}
 function responsavelVenda(p){
-  /* prestador terceirizado não tem estoque: a reserva e a baixa seguem com o vendedor (05/10) */
-  if(p&&p.prestadorId)return p.vendedor||p.instalador||"";
+  /* o PRESTADOR tem estoque como qualquer colaborador (regra dele, 05/10): ele pega o produto
+     no almoxarifado para fazer o serviço, então a reserva, a baixa e a reposição são dele. */
   return p.instalacao?respInstalacao(p):(p.vendedor||p.instalador||"");
 }
 /* o que sai do estoque na venda: os itens vendidos e os produtos usados na instalação */
@@ -14420,9 +14428,10 @@ function renderEstColab(){
   sq.innerHTML="";
   lista.forEach(function(n){var o=document.createElement("option");o.textContent=n;sq.appendChild(o);});
   if(!lista.length){var o=document.createElement("option");o.textContent="— ninguém com estoque —";sq.appendChild(o);}
-  if(!ehGestor()){sq.value=usuarioAtual;sq.disabled=true;}
+  var euEst=euNoEstoque();
+  if(!ehGestor()){sq.value=euEst;sq.disabled=true;}
   else{sq.disabled=false;if(atual&&lista.indexOf(atual)>=0)sq.value=atual;
-    else if(lista.indexOf(usuarioAtual)>=0)sq.value=usuarioAtual;}
+    else if(lista.indexOf(euEst)>=0)sq.value=euEst;}
   var quem=sq.value,loc=locColab(quem);
   var q=($("ecBusca").value||"").toLowerCase();
 
@@ -31089,7 +31098,7 @@ var SEED_FUNCOES=[
   {nome:"Administrador",desc:"Enxerga e aprova tudo",telas:TODAS_TELAS.slice(),
     acoes:ACOES.map(function(a){return a[0];})},
   {nome:"Financeiro",desc:"Caixa, títulos, conciliação e aprovação",
-    telas:TELAS_OPERACAO.concat(["caixas","faturamento","fornec","notas","receber","pagar","concil","fatur","fluxo","relat","veiculos","fin","estEmpresa","estConsumo"]),
+    telas:TELAS_OPERACAO.concat(["caixas","faturamento","fornec","notas","receber","pagar","concil","fatur","prest","fluxo","relat","veiculos","fin","estEmpresa","estConsumo"]),
     acoes:["verTudo","verCustos","aprovarFinanceiro","reabrirVenda","baixarTitulos","exportar"]},
   {nome:"Gerente",desc:"Acompanha a equipe e aprova desconto",
     telas:TELAS_OPERACAO.concat(["estEmpresa","faturamento","fatur","metasop"]),
@@ -31154,6 +31163,10 @@ function veTela(s,quem){
   var f=funcaoDe(quem||usuarioAtual);
   /* Relatórios herdou a permissão da antiga tela DRE */
   if(s==="relat"&&(f.telas||[]).indexOf("dre")>=0)return true;
+  /* TELA NOVA: as funções já gravadas no banco não a têm, então ninguém a veria — nem o
+     Administrador (foi o que aconteceu com "os" na v245). Prestadores de Serviço entra para
+     quem já tem Remunerações ou a Aprovação Financeira, que é a mesma gente que paga. */
+  if(s==="prest"&&((f.telas||[]).indexOf("fatur")>=0||(f.telas||[]).indexOf("fin")>=0))return true;
   return (f.telas||[]).indexOf(s)>=0;
 }
 var PERFIS_GESTAO=["Administrador","Financeiro","Gerente"];
