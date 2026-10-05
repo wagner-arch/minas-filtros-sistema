@@ -5677,10 +5677,25 @@ img{max-width:100%}
       <textarea id="zp_msg" rows="5"></textarea></div>
     <label class="fld" id="zp_regWrap" style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-direction:row">
       <input type="checkbox" id="zp_reg" checked style="width:auto"> <span>Anotar no histórico do cliente que o WhatsApp foi aberto</span></label>
+    <!-- follow-up programado (pedido dele, 04/10): deixa a mensagem pronta para um dia e uma
+         hora. O envio sozinho, sem ninguém clicar, não existe pelo navegador — na hora marcada
+         o sistema avisa no sino e o botão abre o WhatsApp com a mensagem já escrita. -->
+    <div class="fld" id="zp_progWrap" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <label class="chk" style="margin-bottom:8px"><input type="checkbox" id="zp_prog">
+        <span>Programar para enviar depois (follow-up)</span>
+        <span class="ajuda">Guarda a mensagem e lembra você no dia e na hora combinados</span></label>
+      <div class="grid g3" id="zp_progCampos" hidden>
+        <div class="fld"><label for="zp_progData">Dia</label><input id="zp_progData" type="date"></div>
+        <div class="fld"><label for="zp_progHora">Hora</label><input id="zp_progHora" type="time" value="09:00"></div>
+        <div class="fld"><label for="zp_progQuem">Quem envia</label><select id="zp_progQuem"></select></div>
+      </div>
+      <p class="help" id="zp_progNota" hidden></p>
+    </div>
     <p class="help" id="zp_nota"></p>
     <div class="actions">
       <button class="btn mut" type="button" id="zp_fechar">Fechar</button>
       <button class="btn ghost" type="button" id="zp_aba">Abrir em nova aba</button>
+      <button class="btn" type="button" id="zp_programar" hidden>Programar a mensagem</button>
       <button class="btn zap" type="button" id="zp_lado">Abrir o WhatsApp ao lado do sistema</button>
       <button class="btn zap" type="button" id="zp_app" hidden>Abrir o WhatsApp</button>
     </div>
@@ -8398,6 +8413,10 @@ function pedeManutProduto(p){
   return ITEM_COM_TROCA.test(t);
 }
 window.__pedeManutMF=pedeManutProduto;
+window.__followupMF=function(){return followupsPendentes();};
+window.__atendsMF=function(){return atendimentos;};
+window.__pendMF=function(){return pendenciasMF();};
+window.__progZapMF=function(){return programarMensagemZap();};
 window.__multiMF=function(id,vals){if(vals){multiSel[id]=vals.slice();pintarMulti(id);dispararMulti(id);}return multiValores(id);};
 function textoProdutoManut(p){
   return normNomeImp([p.marca||"",p.nome||"",p.pop||""].join(" ")).toLowerCase();
@@ -21152,6 +21171,7 @@ function abrirDetalhes(a){
     (osDaAtiv?'<button class="btn ghost" type="button" id="dt_os">Abrir a OS '+osDaAtiv.numero+"</button>":"")+
     (osDaAtiv&&a.osEtapa==="contato"&&a.status!=="finalizado"&&!osDaAtiv.pedidoId
       ?'<button class="btn" type="button" id="dt_osPag">Peças, serviços e forma de pagamento</button>':"")+
+    (a.zapProgramado&&!a.zapEnviadoEm?'<button class="btn zap" type="button" id="dt_fup">Enviar a mensagem programada</button>':"")+
     (pedInst?'<button class="btn ghost" type="button" id="dt_inst">'+(pedInst.instaladoEm?"Ver a venda completa":"Abrir a instalação · incluir produtos")+"</button>":"")+
     (String(((clientes.filter(function(z){return z.id===a.clienteId;})[0]||{}).tel)||a.tel||"").replace(/\D/g,"")
       ?'<button class="btn zap" type="button" data-zapativ="'+esc(a.id)+'">💬 WhatsApp</button>':"")+
@@ -21170,6 +21190,7 @@ function abrirDetalhes(a){
   on("dt_fechar",function(){$("detModal").hidden=true;detReg=null;});
   on("dt_os",function(){$("detModal").hidden=true;ir("os");abrirOS(osDaAtiv);});
   on("dt_osPag",function(){$("detModal").hidden=true;abrirPedidoDaOS(osDaAtiv,"atendente",a);});
+  on("dt_fup",function(){$("detModal").hidden=true;abrirFollowup(a);});
   on("dt_inst",function(){$("detModal").hidden=true;abrirInstalacao(pedInst,pedInst.instaladoEm?"venda":undefined);});
   on("dt_editar",function(){$("detModal").hidden=true;ir("atend");abrirAtend(a);});
   on("dt_acoes2",function(){$("detModal").hidden=true;abrirAcoes(a);});
@@ -28053,6 +28074,84 @@ function modelosZap(ctx){
   return m;
 }
 /* ctx: {tel, cliente (obj ou id), nome, mensagem, titulo, equip, ativ, origem} */
+/* ===== FOLLOW-UP PROGRAMADO (pedido dele, 04/10) =============================
+   "deixar uma mensagem programada para uma determinada data… e depois de configurado
+   ir automático via whatsapp". **O envio sozinho não existe pelo navegador**: o sistema
+   é uma página — se ninguém estiver com ela aberta na hora, nada roda — e, mesmo aberta,
+   o navegador só deixa abrir o WhatsApp a partir de um clique da pessoa (foi o limite
+   achado nas v289/v290). Envio 100% automático exige a API oficial do WhatsApp Business
+   com servidor ligado 24 h e modelos aprovados pela Meta (custo por conversa), ou um robô
+   não oficial, que arrisca o banimento do número — desaconselhado desde 17/09.
+   O que o sistema faz: guarda a mensagem com dia e hora, lembra no sino e na agenda e,
+   com UM clique, abre o WhatsApp com o texto já escrito, no aplicativo que estiver aberto. */
+var TIPO_FOLLOWUP="Follow-up (mensagem programada)";
+function ajustarProgZap(){
+  var on=$("zp_prog").checked;
+  $("zp_progCampos").hidden=!on;
+  $("zp_programar").hidden=!on;
+  $("zp_lado").hidden=on;$("zp_aba").hidden=on;
+  if($("zp_app"))$("zp_app").hidden=on;
+  var nota=$("zp_progNota");
+  nota.hidden=!on;
+  if(on){
+    nota.innerHTML="A mensagem fica guardada e vira uma <b>atividade</b> na agenda de quem for enviar. "+
+      "No dia e na hora ela aparece no <b>sino</b> e nas Atividades, e um clique abre o WhatsApp com o texto pronto. "+
+      "<b>O sistema não envia sozinho:</b> o WhatsApp só abre a partir de um clique seu — envio automático de verdade "+
+      "exige a API oficial do WhatsApp Business, com servidor e custo por mensagem.";
+    if(!$("zp_progData").value)$("zp_progData").value=somaDias(hojeISO(),1);
+    try{
+      var s=$("zp_progQuem");
+      if(!s.options.length)s.innerHTML=EQUIPE.map(function(n){return '<option>'+esc(n)+"</option>";}).join("");
+      if(EQUIPE.indexOf(usuarioAtual)>=0)s.value=usuarioAtual;
+    }catch(e){}
+  }
+}
+async function programarMensagemZap(){
+  var ctx=zapCtx||{},c=ctx.cliente||{};
+  var msg=($("zp_msg").value||"").trim();
+  var d=$("zp_progData").value,h=$("zp_progHora").value||"09:00",quem=$("zp_progQuem").value||usuarioAtual;
+  if(!msg)return toast("Escreva a mensagem que será enviada.");
+  if(!d)return toast("Escolha o dia do follow-up.");
+  if(d<hojeISO())return toast("A data do follow-up não pode ser no passado.");
+  if(!c.id)return toast("O follow-up precisa de um cadastro — este telefone não está em nenhum cliente ou lead.");
+  var a={id:uid(),loja:lojaAtual,clienteId:c.id,cliente:c.nome||"",tel:ctx.telUsado||c.tel||"",
+    natureza:"atividade",tipo:TIPO_FOLLOWUP,data:d,inicio:h,colaborador:quem,
+    obs:"Mensagem programada para o WhatsApp:\n"+msg,
+    zapMsg:msg,zapProgramado:true,
+    criadoEm:agoraCarimbo(),criadoPor:usuarioAtual,status:"",historico:[]};
+  atendimentos.push(a);
+  try{await grava("atendimentos",a);}
+  catch(e){
+    atendimentos=atendimentos.filter(function(x){return x.id!==a.id;});
+    return toast("O banco não aceitou guardar o follow-up: "+(e&&e.message||e));
+  }
+  $("zapModal").hidden=true;
+  $("zp_prog").checked=false;
+  try{render();}catch(e){}
+  toast("Follow-up programado para "+dataCurta(d)+" às "+h+" · "+quem+
+    ". No dia a mensagem aparece no sino, pronta para enviar.");
+}
+function followupsPendentes(){
+  var agora=hojeISO()+" "+agoraHM();
+  return atendimentos.filter(function(a){
+    if(!a.zapProgramado||a.loja!==lojaAtual)return false;
+    if(a.finalizado||a.status==="concluida"||a.status==="cancelada"||a.zapEnviadoEm)return false;
+    if(soMeus()&&a.colaborador!==usuarioAtual)return false;
+    return (String(a.data||"")+" "+String(a.inicio||"00:00"))<=agora;
+  });
+}
+function abrirFollowup(a){
+  var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||null;
+  abrirWhatsApp({cliente:c,tel:a.tel,nome:a.cliente,mensagem:a.zapMsg,
+    titulo:"Follow-up de "+dataCurta(a.data),origem:"follow-up programado",followup:a.id});
+}
+async function marcarFollowupEnviado(id){
+  var a=atendimentos.filter(function(x){return x.id===id;})[0];if(!a)return;
+  a.zapEnviadoEm=agoraCarimbo();a.zapEnviadoPor=usuarioAtual;a.finalizado=true;a.status="concluida";
+  (a.historico=a.historico||[]).push({quando:a.zapEnviadoEm,por:usuarioAtual,texto:"Mensagem programada enviada pelo WhatsApp"});
+  try{await grava("atendimentos",a);}catch(e){console.warn("follow-up",e);}
+  try{render();}catch(e){}
+}
 function abrirWhatsApp(ctx){
   ctx=ctx||{};
   if(typeof ctx.cliente==="string")ctx.cliente=clientes.filter(function(c){return c.id===ctx.cliente;})[0]||null;
@@ -28078,6 +28177,10 @@ function abrirWhatsApp(ctx){
     :"<b>Aplicativo do WhatsApp</b>: usa o programa que já está aberto no computador, sem abrir aba no navegador "+
      "(precisa do WhatsApp instalado). <b>WhatsApp Web</b>: abre no navegador — a janela é sempre a mesma, "+
      "as próximas conversas trocam dentro dela. A escolha fica guardada neste aparelho.";
+  /* follow-up programado: só faz sentido com cadastro (é dele a agenda e o histórico) */
+  $("zp_prog").checked=false;
+  $("zp_progWrap").hidden=!c.id;
+  ajustarProgZap();
   $("zapModal").hidden=false;
   setTimeout(function(){try{$("zp_msg").focus();}catch(e){}},50);
 }
@@ -28094,6 +28197,8 @@ async function confirmarWhatsApp(modo){
     await grava("clientes",c);
     try{if(editandoCli&&editandoCli.id===c.id)renderHistoricoCli(c);}catch(e){}
   }
+  /* veio de um follow-up programado: a atividade se encerra ao enviar (04/10) */
+  if(ctx.followup){try{await marcarFollowupEnviado(ctx.followup);}catch(e){console.warn("follow-up",e);}}
   zapCtx=null;
 }
 function ligarWhatsApp(){
@@ -28101,6 +28206,9 @@ function ligarWhatsApp(){
   $("zp_lado").onclick=function(){confirmarWhatsApp("lado");};
   $("zp_aba").onclick=function(){confirmarWhatsApp("aba");};
   $("zp_app").onclick=function(){confirmarWhatsApp("app");};
+  /* follow-up programado (04/10) */
+  $("zp_prog").onchange=function(){ajustarProgZap();};
+  $("zp_programar").onclick=programarMensagemZap;
   $("zp_modelos").onclick=function(ev){
     var b=ev.target.closest("[data-zpm]");if(!b||!zapCtx)return;
     var m=zapCtx.modelos[+b.getAttribute("data-zpm")];if(!m)return;
@@ -30063,6 +30171,16 @@ function itensReqTexto(r){
 function pendenciasMF(){
   var L=[];
   function põe(o){L.push(o);}
+  /* 0. follow-up programado que chegou a hora (04/10) — um clique abre o WhatsApp pronto */
+  try{
+    followupsPendentes().forEach(function(a){
+      põe({chave:"fup:"+a.id,icone:"💬",titulo:"Mensagem programada para enviar",
+        texto:(a.cliente||"")+" · "+dataCurta(a.data)+" "+(a.inicio||"")+
+          (a.zapMsg?" · "+(a.zapMsg.length>60?a.zapMsg.slice(0,57)+"…":a.zapMsg):""),
+        quando:String(a.data||"")+" "+String(a.inicio||""),
+        ir:function(){abrirFollowup(a);}});
+    });
+  }catch(e){console.warn("pend follow-up",e);}
   /* 1. retirada de estoque esperando quem responde pelo estoque */
   try{
     if(podeAprovarRetirada()){
@@ -30571,6 +30689,8 @@ function garantirAniversarioCfg(){
   if(tipos.indexOf("Atendimento técnico")<0){tipos.push("Atendimento técnico");mud.t=true;}
   /* atividade do atendente depois que o técnico marca "Atividade realizada" na OS interna */
   if(tipos.indexOf(TIPO_CONTATO_OS)<0){tipos.push(TIPO_CONTATO_OS);mud.t=true;}
+  /* follow-up programado pelo WhatsApp (04/10) */
+  if(tipos.indexOf(TIPO_FOLLOWUP)<0){tipos.push(TIPO_FOLLOWUP);mud.t=true;}
   [MOT_ANIV_OK,MOT_ANIV_NAO].forEach(function(m){if(motivos.indexOf(m)<0){motivos.push(m);mud.m=true;}});
   /* OS interna: cliente vai pensar ou passar na loja (regra do Wagner, 14/09) */
   if(motivos.indexOf("Aguardando Retorno Cliente")<0){motivos.push("Aguardando Retorno Cliente");mud.m=true;}
