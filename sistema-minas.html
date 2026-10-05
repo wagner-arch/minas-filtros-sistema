@@ -4992,6 +4992,8 @@ img{max-width:100%}
     <div class="actions" id="ag_botoes">
       <button class="btn" type="button" id="ag_sim">Sim, vou conseguir</button>
       <button class="btn mut" type="button" id="ag_nao">Não</button>
+      <!-- ver o agendamento inteiro antes de responder (pedido dele, 04/10) -->
+      <button class="btn ghost" type="button" id="ag_ver">Ver esse agendamento</button>
     </div>
     <div id="ag_negociar" hidden>
       <div class="sect" style="margin-top:2px">
@@ -8415,6 +8417,8 @@ function pedeManutProduto(p){
 window.__pedeManutMF=pedeManutProduto;
 window.__followupMF=function(){return followupsPendentes();};
 window.__atendsMF=function(){return atendimentos;};
+window.__avisarAgMF=function(){return checarAgenda();};
+window.__alertaAgMF=function(a,min){return abrirAlerta(a,min||6);};
 window.__pendMF=function(){return pendenciasMF();};
 window.__progZapMF=function(){return programarMensagemZap();};
 window.__multiMF=function(id,vals){if(vals){multiSel[id]=vals.slice();pintarMulti(id);dispararMulti(id);}return multiValores(id);};
@@ -8515,6 +8519,83 @@ async function aplicarLimpezaTroca(){
   }
   return {n:n,mud:mud,alvos:alvos.length};
 }
+/* ===== AS VARIAÇÕES -INST, -SITE E -PLANO PREMIUM SAEM DO CADASTRO ============
+   Decisão dele em 04/10, depois do levantamento da v264 ("todos que tiver inst, site,
+   plano premium pode apagar"). Eram 99 com instalação, 26 plano premium e 22 site.
+   **O que isso custa, e ele foi avisado:** o produto "-INST" custava em média R$ 100,00
+   a mais que o principal; apagando, o pedido com instalação passa a usar o preço do
+   produto puro, e a instalação é cobrada como serviço (ou no valor negociado).
+   Mesmas travas da limpeza dos "-TROCA" (v280): produto de sistema NUNCA entra, o que
+   já foi vendido é desativado em vez de apagado, e o movimento da importação sai junto. */
+var VARIACOES_FORA=[
+  {k:"inst",cod:/-INST(-\d+)?$/,nome:/(^|[ -])(INST|INSTALACAO|COM INSTALACAO)$/,rot:"com instalação"},
+  {k:"site",cod:/-SITE(-\d+)?$/,nome:/(^|[ -])SITE$/,rot:"site"},
+  {k:"premium",cod:/-PREMIUM(-\d+)?$/,nome:/(^|[ -])(PLANO PREMIUM|PREMIUM)$/,rot:"plano premium"}
+];
+function variacaoFora(p){
+  if(!p||produtoDeSistema(p))return null;
+  if((p.grupo||"")==="Planos")return null;   /* o plano de garantia é produto de verdade */
+  var cod=String(p.cod||"").toUpperCase(),nm=normProdImp(p.nome);
+  for(var i=0;i<VARIACOES_FORA.length;i++){
+    var v=VARIACOES_FORA[i];
+    if(v.cod.test(cod)||v.nome.test(nm))return v;
+  }
+  return null;
+}
+function principalDaVariacao(p){
+  var base=codigoBaseProd(p),nb=nomeBaseProd(p);
+  return produtos.filter(function(x){
+    if(x.id===p.id||produtoDeSistema(x)||variacaoFora(x))return false;
+    if(base&&String(x.cod||"").toUpperCase()===base)return true;
+    return nb&&nomeBaseProd(x)===nb;
+  })[0]||null;
+}
+async function aplicarLimpezaVariacoes(){
+  var n={apagados:0,desativados:0,semPrincipal:0,inst:0,site:0,premium:0},mud=false;
+  var alvos=produtos.filter(function(p){return !!variacaoFora(p);});
+  for(var i=0;i<alvos.length;i++){
+    var p=alvos[i],v=variacaoFora(p);
+    if(!principalDaVariacao(p))n.semPrincipal++;
+    n[v.k]++;
+    if(usoTotalProduto(p)){
+      if((p.status||"ativo")!=="inativo"){
+        p.status="inativo";
+        p.inativadoMotivo="versão "+v.rot+" retirada do cadastro em "+dataCurta(hojeISO());
+        try{await grava("produtos",p);n.desativados++;mud=true;}catch(e){p.status="ativo";console.warn(e);}
+      }
+      continue;
+    }
+    var k=produtos.indexOf(p);if(k>=0)produtos.splice(k,1);
+    try{
+      await apaga("produtos",p.id);n.apagados++;mud=true;
+      var mv=movEst.filter(function(m){return m.produtoId===p.id&&m.doc===DOC_IMPORT;});
+      for(var j=0;j<mv.length;j++){
+        var im=movEst.indexOf(mv[j]);if(im>=0)movEst.splice(im,1);
+        try{await apaga("movest",mv[j].id);}catch(e3){}
+      }
+    }catch(e4){produtos.push(p);console.warn("apagar variação",p.nome,e4);}
+  }
+  return {n:n,mud:mud,alvos:alvos.length};
+}
+async function limparVariacoesProduto(){
+  if(!db||!ehAdministrador())return 0;
+  var doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.variacoesOutubro)return 0;}
+  var r=await aplicarLimpezaVariacoes(),n=r.n;
+  antes.variacoesOutubro={quando:hojeISO(),por:usuarioAtual,apagados:n.apagados,desativados:n.desativados,
+    inst:n.inst,site:n.site,premium:n.premium};
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador das variações",e);}
+  if(r.mud){
+    try{renderProdutos();}catch(e){}
+    toast("Variações retiradas do cadastro: "+n.apagados+" apagada(s) e "+n.desativados+
+      " desativada(s) por já terem venda · "+n.inst+" com instalação · "+n.site+" site · "+n.premium+" plano premium. "+
+      "O pedido com instalação passa a usar o preço do produto principal.");
+  }
+  return n.apagados+n.desativados;
+}
+window.__limparVariacoesMF=aplicarLimpezaVariacoes;
+window.__variacaoForaMF=variacaoFora;
 async function limparVersoesTroca(){
   if(!db||!ehAdministrador())return 0;
   var doc=null,antes={};
@@ -32499,6 +32580,15 @@ function ligar(){
 
   $("ag_sim").onclick=function(){$("alertaAg").hidden=true;agPend=null;};
   $("ag_nao").onclick=function(){$("ag_botoes").hidden=true;$("ag_negociar").hidden=false;};
+  /* "Ver esse agendamento" (04/10): abre os Detalhes da atividade, de onde dá para
+     reagendar, finalizar, abrir a OS, o cliente e o WhatsApp. O aviso fecha e NÃO volta
+     a tocar para o mesmo compromisso (o `alertados` já guarda quem foi avisado). */
+  $("ag_ver").onclick=function(){
+    var a=agPend;$("alertaAg").hidden=true;agPend=null;
+    if(!a)return;
+    ir("ativ");
+    try{abrirDetalhes(a);}catch(e){console.warn("ver agendamento",e);toast("Não consegui abrir os detalhes desta atividade.");}
+  };
   $("ag_remarcar").onclick=remarcar;
   $("ag_fechar").onclick=function(){$("alertaAg").hidden=true;agPend=null;};
   $("bq_fechar").onclick=function(){$("bloqAg").hidden=true;bloqPend=null;};
@@ -33035,6 +33125,7 @@ async function continuarBoot(){
   try{await ajustarCentrosDaLista();}catch(e){console.warn("acerto dos centros",e);}
   try{await ajustarDuplicadosCentros();}catch(e){console.warn("centros repetidos",e);}
   try{await limparVersoesTroca();}catch(e){console.warn("versões de troca",e);}
+  try{await limparVariacoesProduto();}catch(e){console.warn("variações do produto",e);}
   try{await ajustarManutencaoMarcas();}catch(e){console.warn("manutenção por marca",e);}
   /* o cliente assinou pelo link enquanto ninguém olhava: a assinatura entra no pedido (03/10) */
   try{await aplicarAssinaturasRecebidas();}catch(e){console.warn("assinaturas do link",e);}
