@@ -1132,6 +1132,9 @@
   .bb i{display:block;height:100%;background:var(--accent);border-radius:6px;transition:width .25s}
   .bv{width:78px;text-align:right;font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;flex-shrink:0}
   .bv em{font-style:normal;font-size:12px;font-weight:400;color:var(--ink-3);margin-left:6px}
+  /* gráfico com valor em reais: a coluna do número precisa de mais espaço (05/10) */
+  .barras.vlarga .bv{width:118px;white-space:nowrap;font-size:15px}
+  .barras.vlarga .bv em{display:block;margin:2px 0 0}
 
   .abas{display:flex;gap:4px;border-bottom:1px solid var(--linha);margin:34px 0 0}
   .abas button{background:none;border:0;font:inherit;font-size:13.5px;color:var(--ink-3);
@@ -4415,10 +4418,21 @@ img{max-width:100%}
         <div class="toolbar">
           <input id="ogNome" placeholder="Ex.: Instagram, Indicação, Passagem em frente" style="max-width:300px">
           <button class="btn" type="button" id="ogAdd">Adicionar</button>
+          <!-- período, origens escolhidas e gráficos (pedido dele, 05/10) -->
+          <select id="ogPeriodo" style="max-width:150px">
+            <option value="tudo">Desde sempre</option>
+            <option value="mes">Este mês</option>
+            <option value="ano">Este ano</option>
+            <option value="livre">Período</option>
+          </select>
+          <input id="ogDe" type="date" title="Cadastros a partir de" style="max-width:160px" hidden>
+          <input id="ogAte" type="date" title="Cadastros até" style="max-width:160px" hidden>
+          <select id="ogQuais" style="max-width:190px"></select>
           <!-- filtro por situação (pedido dele, 20/09) -->
           <select id="ogFiltro" style="max-width:170px"><option value="">Todas</option><option value="ativas">Só ativas</option><option value="inativas">Só inativas</option></select>
           <span class="sp"></span><span class="count" id="ogCount"></span>
         </div>
+        <div id="ogGraficos"></div>
         <div class="tw"><table>
           <thead><tr><th>Origem</th><th class="num">Cadastros</th><th class="num">Viraram venda</th><th class="num">Conversão</th><th>Situação</th><th></th></tr></thead>
           <tbody id="ogBody"></tbody>
@@ -15157,20 +15171,68 @@ async function normalizarOrigens(){
     return o;});
   if(mudou)await gravarOrigens();
 }
+/* valor curto para caber na coluna do gráfico: R$ 23,7 mil · R$ 1,2 mi (05/10) */
+function valorCurto(v){
+  v=+v||0;
+  if(v>=1000000)return "R$ "+brMF(v/1000000,1)+" mi";
+  if(v>=1000)return "R$ "+brMF(v/1000,1)+" mil";
+  return BRL(v);
+}
+/* gráfico de barras genérico: [{n:nome, v:valor, sub:"texto"}] (05/10) */
+function barrasLista(itens,cor,larga){
+  if(!itens.length)return '<div class="empty"><div class="big">Nada no período</div>Nenhum cadastro com essas origens.</div>';
+  var max=Math.max.apply(null,itens.map(function(x){return +x.v||0;}).concat([1]));
+  var tot=itens.reduce(function(s,x){return s+(+x.v||0);},0);
+  return '<div class="barras'+(larga?" vlarga":"")+'">'+itens.map(function(x){
+    var pct=tot?Math.round((+x.v||0)/tot*100):0;
+    return '<div class="bl"><span class="bn" title="'+esc(x.n)+'">'+esc(x.n)+'</span>'+
+      '<span class="bb"><i style="width:'+(((+x.v||0)/max)*100).toFixed(1)+'%'+
+        (cor?";background:"+cor:"")+'"></i></span>'+
+      '<span class="bv">'+(x.txt!=null?esc(x.txt):(+x.v||0))+"<em>"+(x.sub!=null?esc(x.sub):pct+"%")+"</em></span></div>";
+  }).join("")+"</div>";
+}
+/* período da tela de Origens (05/10) */
+function janelaOrigens(){
+  var p=$("ogPeriodo")?$("ogPeriodo").value:"tudo",h=hojeISO();
+  if(p==="mes")return {de:h.slice(0,7)+"-01",ate:fimDoMes(h.slice(0,7)),rot:"este mês"};
+  if(p==="ano")return {de:h.slice(0,4)+"-01-01",ate:h.slice(0,4)+"-12-31",rot:"este ano"};
+  if(p==="livre"){
+    var d=$("ogDe").value,a=$("ogAte").value;
+    return {de:d||"",ate:a||"",rot:(d?dataCurta(d):"início")+" a "+(a?dataCurta(a):"hoje")};
+  }
+  return {de:"",ate:"",rot:"desde sempre"};
+}
 function renderOrigens(){
   var f=$("ogFiltro")?$("ogFiltro").value:"";
   var ativas=ORIGENS.filter(origemAtiva).length;
+  /* o filtro de origens aceita marcar várias (componente da v299) */
+  if($("ogQuais"))encherMulti("ogQuais",origensNomes().sort(ordAZ),"Todas as origens","origens");
+  var J=janelaOrigens();
+  if($("ogDe")){$("ogDe").hidden=$("ogPeriodo").value!=="livre";$("ogAte").hidden=$("ogDe").hidden;}
+  function noPeriodo(c){
+    var d=String(c.criadoEm||"").slice(0,10);
+    if(J.de&&(!d||d<J.de))return false;
+    if(J.ate&&(!d||d>J.ate))return false;
+    return true;
+  }
+  var baseCli=clientes.filter(function(c){return c.loja===lojaAtual&&noPeriodo(c);});
   $("ogCount").textContent=ORIGENS.length+(ORIGENS.length===1?" origem":" origens")+
-    " · "+ativas+" ativa"+(ativas===1?"":"s");
+    " · "+ativas+" ativa"+(ativas===1?"":"s")+" · "+J.rot;
   var b=$("ogBody");b.innerHTML="";
+  var paraGrafico=[];
   ORIGENS.map(function(v,i){return {v:v,i:i};})
     .filter(function(x){return !f||(f==="ativas"?origemAtiva(x.v):!origemAtiva(x.v));})
+    .filter(function(x){return multiCasa("ogQuais",nomeOrigem(x.v));})
     .sort(function(a,b2){return ordAZ(nomeOrigem(a.v),nomeOrigem(b2.v));})
     .forEach(function(x){
     var o=x.v,i=x.i,nm=nomeOrigem(o),at=origemAtiva(o);
-    var cads=clientes.filter(function(c){return c.origem===nm;});
+    var cads=baseCli.filter(function(c){return c.origem===nm;});
     var venderam=cads.filter(function(c){return vendasDe(c.id).length>0;});
     var pct=cads.length?Math.round(venderam.length/cads.length*100):0;
+    paraGrafico.push({n:nm,cads:cads.length,vend:venderam.length,pct:pct,
+      fat:venderam.reduce(function(s,c){
+        return s+vendasDe(c.id).filter(function(p){return p.status!=="Cancelada";})
+          .reduce(function(t,p){return t+(+p.total||0);},0);},0)});
     b.innerHTML+='<tr'+(at?"":' style="opacity:.6"')+"><td><b>"+esc(nm)+"</b></td>"+
       '<td class="num">'+cads.length+'</td><td class="num">'+venderam.length+"</td>"+
       '<td class="num"><span class="pill '+(pct>=30?"p-ok":pct>=15?"p-acc":pct>0?"p-warn":"p-mut")+'">'+pct+"%</span></td>"+
@@ -15181,6 +15243,34 @@ function renderOrigens(){
         ' <button class="btn mut sm" type="button" data-ogrm="'+i+'">Remover</button>')+"</td></tr>";
   });
   if(!b.innerHTML)b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma origem nesta visão</div>Troque o filtro acima.</div></td></tr>';
+  /* ===== gráficos do que está filtrado (pedido dele, 05/10) ===== */
+  if($("ogGraficos")){
+    var comCad=paraGrafico.filter(function(x){return x.cads>0;});
+    var totC=comCad.reduce(function(s,x){return s+x.cads;},0);
+    var totV=comCad.reduce(function(s,x){return s+x.vend;},0);
+    var totF=comCad.reduce(function(s,x){return s+x.fat;},0);
+    var convG=totC?Math.round(totV/totC*100):0;
+    var porCad=comCad.slice().sort(function(a,b2){return b2.cads-a.cads;})
+      .map(function(x){return {n:x.n,v:x.cads};});
+    var porVen=comCad.slice().sort(function(a,b2){return b2.vend-a.vend;})
+      .map(function(x){return {n:x.n,v:x.vend,sub:x.pct+"%"};});
+    var porFat=comCad.filter(function(x){return x.fat>0;}).sort(function(a,b2){return b2.fat-a.fat;})
+      .map(function(x){return {n:x.n,v:Math.round(x.fat),txt:valorCurto(x.fat),sub:(totF?Math.round(x.fat/totF*100)+"%":"0%")};});
+    $("ogGraficos").innerHTML=
+      '<div class="kpis" style="margin:14px 0 4px">'+
+        '<div class="kpi"><div class="l">Cadastros no período</div><div class="v">'+totC+"</div>"+
+          '<div class="l" style="margin-top:4px">'+esc(J.rot)+"</div></div>"+
+        '<div class="kpi"><div class="l">Viraram venda</div><div class="v">'+totV+"</div></div>"+
+        '<div class="kpi"><div class="l">Conversão</div><div class="v">'+convG+"%</div></div>"+
+        '<div class="kpi"><div class="l">Faturamento desses cadastros</div><div class="v">'+BRL(totF)+"</div></div>"+
+      "</div>"+
+      '<div class="grid g3" style="margin:16px 0 8px">'+
+        '<div class="sect"><p class="sect-t">Cadastros por origem</p>'+barrasLista(porCad)+"</div>"+
+        '<div class="sect"><p class="sect-t">Vendas por origem <span class="count">(e a conversão)</span></p>'+
+          barrasLista(porVen,"var(--ok)")+"</div>"+
+        '<div class="sect"><p class="sect-t">Faturamento por origem</p>'+barrasLista(porFat,"var(--acc)",true)+"</div>"+
+      "</div>";
+  }
   /* renomear a origem (pedido dele, 20/09). A origem fica gravada como texto em cada cadastro,
      então mudar o nome aqui muda em todos os clientes que vieram por ela — senão o histórico e
      o Relatório de Origens ficariam apontando para um nome que não existe mais. */
@@ -31725,6 +31815,8 @@ function ligar(){
     renderOrigens();montarSelects();toast("Origem adicionada.");};
   $("ogNome").onkeydown=function(e){if(e.key==="Enter")$("ogAdd").click();};
   if($("ogFiltro"))$("ogFiltro").onchange=renderOrigens;
+  /* período, origens escolhidas e gráficos (05/10) */
+  ["ogPeriodo","ogDe","ogAte","ogQuais"].forEach(function(id){var e=$(id);if(e)e.onchange=renderOrigens;});
   if($("tipoFiltro"))$("tipoFiltro").onchange=renderTipos;
   if($("motFiltro"))$("motFiltro").onchange=renderMotivos;
 
