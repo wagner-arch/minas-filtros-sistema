@@ -92,6 +92,7 @@
     servprest: null,
     remunprest: "loja",
     recibosprest: "loja",
+    custodia: "loja",
     config: null,
     rh: null,
     facial: null,

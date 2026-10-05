@@ -2624,6 +2624,7 @@ img{max-width:100%}
             </select>
             <select id="osTipo" style="max-width:200px"><option value="">Todos os tipos</option></select>
             <span class="count" id="osCount"></span><span class="sp"></span>
+            <button class="btn ghost" type="button" id="osLimpar" hidden>Apagar as OS de teste</button>
             <button class="btn" type="button" id="osNova">Nova OS</button>
           </div>
           <div class="tw"><table>
@@ -4851,6 +4852,22 @@ img{max-width:100%}
           </div>
           <p class="help">O botão "Enviar para a contabilidade por e-mail" da Folha de Pagamento (Remunerações Colaboradores) usa este e-mail.</p>
         </div>
+        <!-- Ordens de Serviço: o que o módulo usa para prazos, garantia e cobranças (05/10) -->
+        <div class="sect">
+          <p class="sect-t">Ordens de Serviço</p>
+          <div class="grid g4">
+            <div class="fld"><label for="em_osHoraIni">Horário útil — início</label><input id="em_osHoraIni" type="time" value="08:00"></div>
+            <div class="fld"><label for="em_osHoraFim">Horário útil — fim</label><input id="em_osHoraFim" type="time" value="18:00"></div>
+            <div class="fld"><label for="em_osGarantia">Garantia mínima da mão de obra (dias)</label><input id="em_osGarantia" type="number" min="1" step="1" value="90"></div>
+            <div class="fld"><label for="em_osTaxa">Taxa de orçamento na recusa (R$)</label><input id="em_osTaxa" type="text" inputmode="decimal" value="50,00"></div>
+          </div>
+          <div class="grid g2" style="margin-top:12px">
+            <div class="fld"><label for="em_osAbandono">Aviso de abandono depois de (dias em custódia)</label><input id="em_osAbandono" type="number" min="1" step="1" value="90"></div>
+            <div class="fld"><label class="chk"><input type="checkbox" id="em_osSabado"><span>Sábado conta como dia útil</span>
+              <span class="ajuda">Define para quando cai a pendência gerada fora do expediente</span></label></div>
+          </div>
+          <p class="help">A pendência criada fora do horário útil cai para o começo do próximo dia útil — nunca "daqui a 10 minutos" às 18h50 de uma sexta.</p>
+        </div>
         <div class="sect">
           <p class="sect-t">Mapa — geolocalização exata pelo número da casa</p>
           <div class="grid g2">
@@ -6448,6 +6465,19 @@ img{max-width:100%}
 
 <!-- TROCA FEITA (pedido do Wagner, 02/10): acerta o aparelho que o sistema antigo não baixou —
      informa a data da última troca e o sistema reagenda a próxima pelo intervalo do produto -->
+<!-- limpeza das OS de teste antes do módulo novo (decisão dele, 05/10): mostra tudo antes de apagar -->
+<div class="modal" id="osLimpModal" hidden>
+  <div class="box" style="width:min(820px,100%)">
+    <h3>Apagar as OS de teste</h3>
+    <div class="sub" id="oslp_sub">Confira o que vai sair. Nada é apagado antes de você confirmar.</div>
+    <div id="oslp_corpo" style="margin-top:14px;max-height:50vh;overflow:auto"></div>
+    <div id="oslp_alerta"></div>
+    <div class="actions">
+      <button class="btn mut" type="button" id="oslp_cancelar">Cancelar</button>
+      <button class="btn crit" type="button" id="oslp_ok">Apagar as OS listadas</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="trocaFeitaModal" hidden>
   <div class="box" style="width:min(520px,100%)">
     <h3>Troca feita</h3>
@@ -6994,7 +7024,8 @@ var LEITURAS_BOOT=[
   ["movs",1000],["movest",6000],["requisicoes",500],["ordens",500],["notas",300],
   ["equipamentos",1000],["usados",500],["veiculos",100],["abastecimentos",2000],["manutveic",1000],
   ["posses",500],["vistorias",500],["multas",500],["rascunhos",300],
-  ["prestadores",300],["servprest",200],["remunprest",3000],["recibosprest",1000]
+  ["prestadores",300],["servprest",200],["remunprest",3000],["recibosprest",1000],
+  ["custodia",1000]
 ];
 var CONFIGS_BOOT=["formas_pagamento","usuarios","funcoes","empresa","origens","tipos_atendimento",
   "motivos_finalizacao","tipos_off","motivos_off","canais_tipo","metas","faixas_comissao",
@@ -7212,6 +7243,8 @@ async function carregar(){
       remunPrest=rz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
       var cz=await jaPedido("col:recibosprest",function(){return col("recibosprest").limit(1000).get();});
       recibosPrest=cz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+      var kz=await jaPedido("col:custodia",function(){return col("custodia").limit(1000).get();});
+      custodia=kz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     }catch(ePz){console.warn("prestadores",ePz);}
     var ng=await jaPedido("col:negocios",function(){return col("negocios").limit(1000).get();});
     negocios=ng.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
@@ -10338,6 +10371,23 @@ window.__produtosMF=function(){return produtos;};
 window.__tiposMF=function(){return tipos;};
 window.__requisicoesMF=function(){return requisicoes;};
 window.__renderMF=function(){render();};
+/* ganchos do módulo novo de OS (etapa 1, 05/10) */
+window.__custodiaMF=function(){return custodia;};
+window.__ordensMF=function(){return ordens;};
+window.__cfgOSMF=function(){return cfgOS();};
+window.__horarioUtilMF=function(m){return proximoHorarioUtil(m);};
+window.__sitOSMF=function(o,k,t){return mudarSitOS(o,k,t);};
+window.__orcOSMF={novo:function(o){return novaVersaoOrc(o);},
+  totais:function(v){return totaisVersaoOrc(v);},
+  concluir:function(o,v){return concluirVersaoOrc(o,v);},
+  atual:function(o){return versaoAtualOrc(o);}};
+window.__custOSMF={entrar:function(o,l,p){return entrarCustodia(o,l,p);},
+  transferir:function(k,p,q){return transferirCustodia(k,p,q);},
+  sair:function(k,p){return sairCustodia(k,p);},
+  da:function(id){return custodiaDaOS(id);},dias:function(k){return diasEmCustodia(k);}};
+window.__aparelhoOSMF={criar:function(c,d){return criarAparelhoDaOS(c,d);},
+  acompanhar:function(e,l,d){return acompanharAparelho(e,l,d);}};
+window.__limpaOSMF={levantar:function(){return levantarOSTeste();},apagar:function(){return apagarOSTeste();}};
 /* ganchos dos testes da v258 (manutenção no cadastro do cliente) */
 window.__idxManutCliMF=function(refazer){if(refazer)esquecerManutCli();return indiceManutCli();};
 window.__manutCliMF=function(c){return manutDoCliente(c);};
@@ -13139,6 +13189,16 @@ async function gravarEmpresa(){if(!db)return;try{await db.doc("config/empresa").
 function renderEmpresa(){
   ["razao","cnpj","cidade","endereco","geo","fone","site","instagram","youtube","gmapsChave","contEscritorio","contNome","contEmail","contFone"].forEach(function(k){
     var el=$("em_"+k);if(el)el.value=EMPRESA[k]||"";});
+  /* configuração do módulo de OS (05/10) */
+  try{
+    var co=cfgOS();
+    if($("em_osHoraIni"))$("em_osHoraIni").value=co.horaIni;
+    if($("em_osHoraFim"))$("em_osHoraFim").value=co.horaFim;
+    if($("em_osSabado"))$("em_osSabado").checked=!!co.sabado;
+    if($("em_osGarantia"))$("em_osGarantia").value=co.garantiaMao;
+    if($("em_osTaxa"))$("em_osTaxa").value=brMF(co.taxaOrc);
+    if($("em_osAbandono"))$("em_osAbandono").value=co.diasAbandono;
+  }catch(eo){console.warn("config da OS",eo);}
   /* o cabeçalho do pedido e da OS mostra endereço, CEP e telefones: dizer aqui o que falta,
      senão o documento sai com meia linha e ninguém sabe por quê (pedido dele, 03/10) */
   var av=$("em_avisoDoc");
@@ -24658,7 +24718,10 @@ function renderManutCli(c,rotAba){
       if(e)abrirTrocaFeita(e);};});
 }
 function renderManut(){
-  var base=equipamentos.filter(function(e){return e.loja===lojaAtual;});
+  /* aparelho de outra marca, criado por uma OS, só entra nesta lista depois que alguém clicar em
+     "Acompanhar este aparelho" na ficha dele (decisão dele, 05/10) — senão o sistema passaria a
+     cobrar troca de refil de aparelho que não é nosso, no meio dos 16 mil que ele já tem aqui. */
+  var base=equipamentos.filter(function(e){return e.loja===lojaAtual&&aparelhoAcompanhado(e);});
   /* endereço vem do cadastro do cliente, para os filtros encadearem */
   base.forEach(function(e){
     var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
@@ -25215,6 +25278,381 @@ async function registrarManut(){
 }
 
 /* ================= ORDENS DE SERVIÇO ================= */
+/* ================= ORDEM DE SERVICO - FLUXO UNICO · ETAPA 1 (05/10) =================
+   Fundacao do modulo novo, aprovada por ele em 05/10. Aqui NAO ha tela de uso: sao a
+   estrutura de dados, as regras e a limpeza. A OS antiga continua funcionando igual ate
+   a etapa 6, quando o fluxo velho sai do arquivo. */
+
+/* equipamentos de clientes guardados na loja ou com o tecnico - FORA do estoque de produtos:
+   nao e produto, nao tem valor, nao entra em inventario nem na DRE (regra dele, 05/10) */
+var custodia=[];
+
+/* ---------- configuracao (Dados da Empresa > Ordens de Servico) ---------- */
+var OS_CFG_PADRAO={horaIni:"08:00",horaFim:"18:00",sabado:false,garantiaMao:90,taxaOrc:50,diasAbandono:90};
+function cfgOS(){
+  var c=(typeof EMPRESA!=="undefined"&&EMPRESA.os)||{},r={};
+  Object.keys(OS_CFG_PADRAO).forEach(function(k){
+    r[k]=(c[k]===undefined||c[k]===""||c[k]===null)?OS_CFG_PADRAO[k]:c[k];});
+  r.garantiaMao=Math.max(1,+r.garantiaMao||90);
+  r.taxaOrc=Math.max(0,+r.taxaOrc||0);
+  r.diasAbandono=Math.max(1,+r.diasAbandono||90);
+  return r;
+}
+
+/* ---------- horario util (decisao 11: 08:00 as 18:00, segunda a sexta) ----------
+   Substitui o horaDaqui(10) do fluxo antigo, que criava a pendencia "daqui a 10 minutos"
+   mesmo as 18h50 de uma sexta - e na segunda ela ja nascia vermelha de atrasada. */
+function minutosHM(h){var p=String(h||"").split(":");return (+p[0]||0)*60+(+p[1]||0);}
+function hmDeMinutos(m){
+  m=Math.max(0,Math.min(23*60+59,Math.round(m)));
+  return String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
+}
+function diaUtilOS(d,cfg){
+  var s=d.getDay();
+  if(s===0)return false;
+  if(s===6)return !!(cfg||cfgOS()).sabado;
+  return true;
+}
+/* devolve {data,hora} daqui a N minutos, sempre dentro do horario util */
+function proximoHorarioUtil(minutos){
+  var cfg=cfgOS(),d=new Date(),alvo=d.getHours()*60+d.getMinutes()+(+minutos||0);
+  var ini=minutosHM(cfg.horaIni),fim=minutosHM(cfg.horaFim);
+  if(alvo>fim||!diaUtilOS(d,cfg)){
+    if(alvo>fim||diaUtilOS(d,cfg))d.setDate(d.getDate()+1);
+    while(!diaUtilOS(d,cfg))d.setDate(d.getDate()+1);
+    alvo=ini;
+  } else if(alvo<ini) alvo=ini;
+  return {data:iso(d),hora:hmDeMinutos(Math.ceil(alvo/5)*5)};
+}
+
+/* ---------- os status, so por botao (item 5 da spec) ----------
+   mudarSitOS e o UNICO ponto que muda status no modulo novo: grava data, hora, quem e o
+   motivo no historico. Nenhuma outra funcao mexe em o.sit. */
+var OS_SIT=[
+  {k:"aberta",      n:"Aberta",                           cls:"p-acc"},
+  {k:"agEquip",     n:"Aguardando equipamento",           cls:"p-warn"},
+  {k:"avaliacao",   n:"Em avaliacao",                     cls:"p-acc"},
+  {k:"orcDisp",     n:"Orcamento disponivel",             cls:"p-warn"},
+  {k:"agAssin",     n:"Aguardando assinatura do cliente", cls:"p-warn"},
+  {k:"liberada",    n:"Liberada para execucao",           cls:"p-ok"},
+  {k:"novoOrc",     n:"Novo orcamento",                   cls:"p-warn"},
+  {k:"prontaEnt",   n:"Pronta para entrega",              cls:"p-ok"},
+  {k:"entregue",    n:"Entregue (finalizada)",            cls:"p-ok"},
+  {k:"recDevol",    n:"Recusada - aguardando devolucao",  cls:"p-crit"},
+  {k:"encRecusada", n:"Encerrada recusada",               cls:"p-crit"},
+  {k:"cancelada",   n:"Cancelada",                        cls:"p-mut"}
+];
+var OS_SIT_FIM=["entregue","encRecusada","cancelada"];
+function sitOS(k){return OS_SIT.filter(function(x){return x.k===k;})[0]||OS_SIT[0];}
+function osFechada(o){return !!o&&OS_SIT_FIM.indexOf(o.sit)>=0;}
+async function mudarSitOS(o,novo,texto){
+  if(!o||!novo)return null;
+  var de=o.sit||"aberta";
+  if(de===novo&&!texto)return o;
+  o.sit=novo;
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),hora:agoraHM(),por:usuarioAtual,
+    texto:(de!==novo?("Situacao: "+sitOS(de).n+" para "+sitOS(novo).n):sitOS(novo).n)+(texto?" · "+texto:"")});
+  await grava("ordens",o);
+  return o;
+}
+/* marcador, que nao e status: anda junto dele */
+function osEmAtraso(o){
+  return !!(o&&o.prazoExecAte&&!osFechada(o)&&o.prazoExecAte<hojeISO()&&["liberada","novoOrc"].indexOf(o.sit)>=0);
+}
+
+/* ---------- papeis (item 1 da spec) ----------
+   AGENDADOR = quem abriu a OS. Fica gravado no campo atendente, que ja existe desde a v99,
+   para nao haver dois campos com a mesma coisa; na tela ele se chama "Agendador responsavel".
+   A gestao transfere, e a troca fica no historico. */
+function agendadorOS(o){return (o&&(o.atendente||o.criadoPor))||"";}
+function ehAgendadorOS(o){return !!o&&agendadorOS(o)===usuarioAtual;}
+function podeAgendadorOS(o){return ehAgendadorOS(o)||ehGestor();}
+async function transferirAgendadorOS(o,novo,motivo){
+  if(!o||!novo||novo===agendadorOS(o))return null;
+  if(!ehGestor()){toast("So a gestao transfere o agendador da OS.");return null;}
+  var de=agendadorOS(o);
+  o.transferencias=o.transferencias||[];
+  o.transferencias.push({quando:hojeISO(),hora:agoraHM(),de:de,para:novo,por:usuarioAtual,motivo:motivo||""});
+  o.atendente=novo;
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),hora:agoraHM(),por:usuarioAtual,
+    texto:"Agendador responsavel: "+(de||"-")+" para "+novo+(motivo?" · "+motivo:"")});
+  await grava("ordens",o);
+  return o;
+}
+
+/* ---------- versoes de orcamento (item 4.1 da spec) ----------
+   Versao concluida NUNCA mais muda: o complementar e a versao seguinte, so com os itens novos,
+   e e isso que permite o termo de entrega dizer "o cliente recusou o complementar no 2". */
+function versoesOrc(o){return (o&&o.orcamentos)||[];}
+function versaoRascunhoOrc(o){
+  return versoesOrc(o).filter(function(v){return v.status==="rascunho";})[0]||null;
+}
+function versaoAtualOrc(o){
+  var l=versoesOrc(o);return l.length?l[l.length-1]:null;
+}
+function versaoAceitaOrc(o){
+  return versoesOrc(o).filter(function(v){return v.status==="aceita";}).pop()||null;
+}
+function novaVersaoOrc(o){
+  o.orcamentos=o.orcamentos||[];
+  var v={id:uid(),versao:o.orcamentos.length+1,itens:[],desconto:0,
+    prazoDias:0,garantiaMaoDias:cfgOS().garantiaMao,
+    status:"rascunho",criadaEm:hojeISO(),criadaPor:usuarioAtual};
+  o.orcamentos.push(v);
+  return v;
+}
+/* Pecas R$ X · Servicos R$ Y · Coberto pelo plano R$ W · Desconto R$ Z · Total (item 9) */
+function totaisVersaoOrc(v){
+  var t={pecas:0,servicos:0,coberto:0,desconto:0,total:0};
+  if(!v)return t;
+  (v.itens||[]).forEach(function(i){
+    var q=(i.qtd||1);
+    if(i.planoCobre){t.coberto+=(+i.valorCheio||0)*q;return;}
+    var bruto=(+i.valor||0)*q;
+    if(i.tipo==="servico")t.servicos+=bruto;else t.pecas+=bruto;
+  });
+  t.pecas=centavos(t.pecas);t.servicos=centavos(t.servicos);t.coberto=centavos(t.coberto);
+  t.desconto=Math.min(Math.max(0,+v.desconto||0),t.pecas+t.servicos);
+  t.total=centavos(t.pecas+t.servicos-t.desconto);
+  return t;
+}
+async function concluirVersaoOrc(o,v){
+  if(!o||!v||v.status!=="rascunho")return null;
+  var t=totaisVersaoOrc(v);
+  v.status="concluida";v.concluidaEm=hojeISO();v.concluidaHora=agoraHM();v.concluidaPor=usuarioAtual;
+  v.totalPecas=t.pecas;v.totalServicos=t.servicos;v.totalCoberto=t.coberto;
+  v.descontoAplicado=t.desconto;v.total=t.total;
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),hora:agoraHM(),por:usuarioAtual,
+    texto:"Orcamento no "+v.versao+" concluido · pecas "+BRL(t.pecas)+" · servicos "+BRL(t.servicos)+
+      (t.coberto>0?" · coberto pelo plano "+BRL(t.coberto):"")+(t.desconto>0?" · desconto "+BRL(t.desconto):"")+
+      " · total "+BRL(t.total)});
+  await grava("ordens",o);
+  return v;
+}
+
+/* ---------- custodia de equipamentos (item 6 da spec) ---------- */
+function custodiaDaOS(osId){
+  return custodia.filter(function(k){return k.osId===osId&&k.loja===lojaAtual;})[0]||null;
+}
+function custodiaAbertas(){
+  return custodia.filter(function(k){return k.loja===lojaAtual&&k.localAtual!=="devolvido";});
+}
+function diasEmCustodia(k){
+  if(!k||!k.entradaEm)return 0;
+  var a=new Date(k.entradaEm+"T00:00:00"),b=new Date(hojeISO()+"T00:00:00");
+  return Math.max(0,Math.round((b-a)/86400000));
+}
+function custodiaAbandonada(k){return !!k&&k.localAtual!=="devolvido"&&diasEmCustodia(k)>=cfgOS().diasAbandono;}
+async function entrarCustodia(o,local,por){
+  if(!o)return null;
+  var k=custodiaDaOS(o.id);
+  if(k&&k.localAtual!=="devolvido")return k;
+  k={id:uid(),loja:lojaAtual,osId:o.id,osNumero:o.numero,clienteId:o.clienteId||"",cliente:o.cliente||"",
+    equipId:o.equipId||"",equipamento:o.equipamento||"",serie:o.serie||"",
+    acessorios:o.acessorios||"",avarias:o.avarias||"",fotos:(o.fotosAvarias||[]).slice(),
+    localAtual:local||"loja",entradaEm:hojeISO(),entradaHora:agoraHM(),entradaPor:por||usuarioAtual,
+    movimentos:[{quando:hojeISO(),hora:agoraHM(),tipo:"entrada",de:"cliente",para:local||"loja",por:por||usuarioAtual}]};
+  custodia.push(k);await grava("custodia",k);
+  o.custodiaId=k.id;
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),hora:agoraHM(),por:por||usuarioAtual,
+    texto:"Equipamento recebido em custodia ("+(local||"loja")+") · termo de recebimento"});
+  await grava("ordens",o);
+  return k;
+}
+async function transferirCustodia(k,para,por){
+  if(!k||k.localAtual==="devolvido"||k.localAtual===para)return null;
+  k.movimentos=k.movimentos||[];
+  k.movimentos.push({quando:hojeISO(),hora:agoraHM(),tipo:"transferencia",de:k.localAtual,para:para,por:por||usuarioAtual});
+  k.localAtual=para;
+  await grava("custodia",k);
+  return k;
+}
+async function sairCustodia(k,por){
+  if(!k||k.localAtual==="devolvido")return null;
+  k.movimentos=k.movimentos||[];
+  k.movimentos.push({quando:hojeISO(),hora:agoraHM(),tipo:"saida",de:k.localAtual,para:"cliente",por:por||usuarioAtual});
+  k.localAtual="devolvido";k.saidaEm=hojeISO();k.saidaHora=agoraHM();k.saidaPor=por||usuarioAtual;
+  await grava("custodia",k);
+  return k;
+}
+
+/* ---------- o aparelho (decisao 6: nasce FORA da Manutencao Periodica) ----------
+   O cadastro de aparelhos e o mesmo da Manutencao Periodica, onde ele tem 16 mil aparelhos.
+   O que vem de outra marca entra marcado e desligado: so aparece la depois que alguem clicar
+   em "Acompanhar este aparelho" na ficha. */
+function aparelhoAcompanhado(e){return !e||!e.naoNosso||!!e.acompanhar;}
+async function criarAparelhoDaOS(c,dados){
+  if(!c||!c.id)return null;
+  var d=dados||{};
+  var e={id:uid(),loja:lojaAtual,clienteId:c.id,cliente:c.nome||"",
+    produtoId:d.pid||"",equipamento:d.nome||[d.marca,d.modelo].filter(Boolean).join(" ")||"Equipamento",
+    marca:d.marca||"",modelo:d.modelo||"",serie:d.serie||"",
+    naoNosso:true,acompanhar:false,manutDias:0,ativo:true,
+    criadoEm:hojeISO(),criadoPor:usuarioAtual,criadoPorOS:d.osNumero||"",
+    historico:[{data:hojeISO(),por:usuarioAtual,
+      texto:"Aparelho cadastrado pela OS"+(d.osNumero?" "+d.osNumero:"")+" - nao vendido pela Minas Filtros"}]};
+  equipamentos.push(e);await grava("equipamentos",e);
+  try{esquecerManutCli();}catch(er){}
+  return e;
+}
+/* Acompanhar exige o INTERVALO: sem "a cada N dias" o aparelho entraria na Manutencao Periodica
+   sem data de proxima troca, e ficaria la sem servir para nada (medido no teste da etapa 1). */
+async function acompanharAparelho(e,ligar,dias){
+  if(!e)return null;
+  e.acompanhar=!!ligar;
+  if(ligar){
+    var d=Math.max(1,parseInt(dias,10)||+e.manutDias||0);
+    if(!d)return null;                  /* quem chama precisa informar de quantos em quantos dias */
+    e.manutDias=d;
+    if(!e.ultimaManut)e.ultimaManut=hojeISO();
+  }
+  e.historico=e.historico||[];
+  e.historico.push({data:hojeISO(),por:usuarioAtual,
+    texto:ligar?("Aparelho passou a ser acompanhado na Manutencao Periodica · troca a cada "+e.manutDias+" dias")
+      :"Aparelho saiu do acompanhamento"});
+  await grava("equipamentos",e);
+  try{esquecerManutCli();}catch(er){}
+  return e;
+}
+
+/* ---------- avisos da abertura (item 2 da spec) ---------- */
+function osAbertaDoAparelho(equipId,exceto){
+  if(!equipId)return null;
+  return ordens.filter(function(o){
+    return o.loja===lojaAtual&&o.equipId===equipId&&o.id!==exceto&&o.sit&&!osFechada(o);})[0]||null;
+}
+/* garantia do servico ainda vigente de uma OS anterior do mesmo aparelho */
+function garantiaServicoVigente(equipId,exceto){
+  if(!equipId)return null;
+  var hj=hojeISO(),achou=null;
+  ordens.forEach(function(o){
+    if(o.loja!==lojaAtual||o.equipId!==equipId||o.id===exceto)return;
+    if(!o.garantiaMaoAte||o.garantiaMaoAte<hj)return;
+    if(!achou||o.garantiaMaoAte>achou.garantiaMaoAte)achou=o;
+  });
+  return achou;
+}
+
+/* ---------- liberacao da aba OS (decisao 7) ----------
+   As funcoes ja estao gravadas no banco dele, entao acrescentar a tela no codigo nao muda nada
+   la - e preciso regravar, uma vez, como foi feito com as categorias e os centros de custo. */
+var PERFIS_TELA_OS=["Vendedor","Prospector","Estoquista"];
+async function liberarTelaOS(){
+  if(!db||!ehAdministrador())return 0;
+  var doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.telaOsOutubro)return 0;}
+  var n=0;
+  PERFIS_TELA_OS.forEach(function(nome){
+    var f=funcoes.filter(function(x){return x.nome===nome;})[0];
+    if(!f)return;
+    f.telas=f.telas||[];
+    if(f.telas.indexOf("os")<0){f.telas.push("os");n++;}
+  });
+  if(n){try{await gravarFuncoes();}catch(e){console.warn("liberar tela os",e);return 0;}}
+  antes.telaOsOutubro={quando:hojeISO(),por:usuarioAtual,perfis:n};
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador da tela os",e);}
+  if(n){
+    try{render();}catch(e){}
+    toast("Ordens de Servico liberada para "+n+" perfil(is): "+PERFIS_TELA_OS.join(", ")+".");
+  }
+  return n;
+}
+
+/* ---------- limpeza das OS de teste (decisao 13) ----------
+   Levanta antes de apagar e SEPARA a OS cujo pedido ja foi aprovado no financeiro: aquele
+   pedido ja baixou estoque, gerou titulo e comissao, e apagar a OS nao desfaz nada disso. */
+function levantarOSTeste(){
+  var r={apagar:[],segurar:[]};
+  ordens.filter(function(o){return o.loja===lojaAtual;}).forEach(function(o){
+    var ped=o.pedidoId?(pedidos.filter(function(p){return p.id===o.pedidoId;})[0]||null):null;
+    var aprovado=!!(ped&&pedidoAprovado(ped));
+    var taxa=o.orcamentoAdiantado||null;
+    var taxaAprovada=!!(taxa&&taxa.status==="aprovado");
+    var linha={os:o,numero:o.numero,cliente:o.cliente||"",
+      situacao:(o.sit?sitOS(o.sit).n:(typeof osStatusO==="function"?osStatusO(o.status).n:(o.status||""))),
+      pedido:ped?ped.numero:"",pedidoAprovado:aprovado,
+      taxa:taxa?(+taxa.valor||0):0,taxaAprovada:taxaAprovada,
+      ativs:atendimentos.filter(function(a){return a.osId===o.id;}).length,
+      aparelhos:equipamentos.filter(function(e){return e.criadoPorOS&&String(e.criadoPorOS)===String(o.numero);}).length,
+      custodia:!!custodiaDaOS(o.id)};
+    if(aprovado||taxaAprovada)r.segurar.push(linha);else r.apagar.push(linha);
+  });
+  return r;
+}
+async function apagarOSTeste(){
+  if(!ehAdministrador()){toast("So o Administrador apaga as OS de teste.");return null;}
+  var lev=levantarOSTeste(),n={os:0,ativs:0,aparelhos:0,custodia:0,movs:0,erros:0};
+  for(var i=0;i<lev.apagar.length;i++){
+    var o=lev.apagar[i].os;
+    try{
+      var ats=atendimentos.filter(function(a){return a.osId===o.id;});
+      for(var j=0;j<ats.length;j++){
+        atendimentos.splice(atendimentos.indexOf(ats[j]),1);
+        try{await apaga("atendimentos",ats[j].id);n.ativs++;}catch(e1){}
+      }
+      var k=custodiaDaOS(o.id);
+      if(k){custodia.splice(custodia.indexOf(k),1);try{await apaga("custodia",k.id);n.custodia++;}catch(e2){}}
+      var eqs=equipamentos.filter(function(e){return e.criadoPorOS&&String(e.criadoPorOS)===String(o.numero);});
+      for(var q=0;q<eqs.length;q++){
+        equipamentos.splice(equipamentos.indexOf(eqs[q]),1);
+        try{await apaga("equipamentos",eqs[q].id);n.aparelhos++;}catch(e3){}
+      }
+      /* equipamento de cliente que ficou no estoque de algum tecnico: o movimento sai junto,
+         senao fica saldo de produto sem dono (licao da v263 e da v280) */
+      var mvs=movEst.filter(function(m){return m.osId===o.id;});
+      for(var w=0;w<mvs.length;w++){
+        movEst.splice(movEst.indexOf(mvs[w]),1);
+        try{await apaga("movest",mvs[w].id);n.movs++;}catch(e4){}
+      }
+      ordens.splice(ordens.indexOf(o),1);
+      await apaga("ordens",o.id);n.os++;
+    }catch(e5){n.erros++;console.warn("apagar OS de teste",o.numero,e5);}
+  }
+  try{esquecerManutCli();}catch(e6){}
+  return {n:n,segurou:lev.segurar};
+}
+/* a janela: mostra TUDO que vai sair antes de qualquer coisa ser apagada */
+function abrirLimpezaOS(){
+  if(!ehAdministrador()){toast("So o Administrador apaga as OS de teste.");return;}
+  var lev=levantarOSTeste();
+  $("oslp_alerta").innerHTML="";
+  if(!lev.apagar.length&&!lev.segurar.length){
+    $("oslp_corpo").innerHTML='<div class="empty"><div class="big">Nenhuma OS nesta loja</div>Nada para apagar.</div>';
+    $("oslp_ok").disabled=true;
+  }else{
+    function tab(l,cab){
+      return '<p class="sect-t" style="margin-top:12px">'+cab+" ("+l.length+")</p>"+
+        (l.length?'<div class="tw"><table><thead><tr><th>OS</th><th>Cliente</th><th>Situacao</th><th>Pedido</th><th>Junto</th></tr></thead><tbody>'+
+          l.map(function(x){
+            var junto=[];
+            if(x.ativs)junto.push(x.ativs+" atividade(s)");
+            if(x.custodia)junto.push("custodia");
+            if(x.aparelhos)junto.push(x.aparelhos+" aparelho(s)");
+            if(x.taxa>0)junto.push("taxa "+BRL(x.taxa)+(x.taxaAprovada?" ja aprovada":" lancada"));
+            return "<tr><td><b>"+x.numero+"</b></td><td>"+esc(x.cliente||"—")+"</td><td>"+esc(x.situacao||"—")+"</td>"+
+              "<td>"+(x.pedido?esc(String(x.pedido))+(x.pedidoAprovado?' <span class="pill p-crit">aprovado</span>':""):"—")+"</td>"+
+              "<td>"+(junto.join(" · ")||"—")+"</td></tr>";}).join("")+
+          "</tbody></table></div>":'<p class="help">nenhuma</p>');
+    }
+    $("oslp_corpo").innerHTML=
+      tab(lev.apagar,"Vao ser apagadas")+
+      (lev.segurar.length
+        ? tab(lev.segurar,"NAO vao ser apagadas — ja mexeram no financeiro")+
+          '<div class="note warn">Estas tem pedido aprovado no financeiro ou taxa ja aprovada: o estoque baixou, '+
+          "o titulo e a comissao foram lancados, e apagar a OS nao desfaz nada disso. Elas ficam, e voce decide o que fazer com cada uma.</div>"
+        : "");
+    $("oslp_ok").disabled=!lev.apagar.length;
+  }
+  $("oslp_sub").textContent=lev.apagar.length
+    ? lev.apagar.length+" OS vao ser apagadas, com o que nasceu delas. Nada e apagado antes de voce confirmar."
+    : "Confira o que vai sair. Nada e apagado antes de voce confirmar.";
+  $("osLimpModal").hidden=false;
+}
 var ordens=[],editandoOS=null,osPecas=[],osCli=null,osOrigemAtiv=null;
 var OS_TIPOS=[
   {k:"garantia",n:"Garantia de fábrica",cobra:false},
@@ -25282,6 +25720,8 @@ function renderOS(){
     '<div class="kpi"><div class="l">A cobrar do fabricante</div><div class="v">'+fab.length+"</div></div>"+
     '<div class="kpi"><div class="l">Valor em aberto</div><div class="v">'+BRL(abertas.reduce(function(a,o){return a+totalOS(o);},0))+"</div></div>";
   $("osCount").textContent=lista.length+(lista.length===1?" OS":" OS");
+  /* limpeza das OS de teste: só o Administrador, e só quando há OS nesta loja (05/10) */
+  if($("osLimpar"))$("osLimpar").hidden=!(ehAdministrador()&&base.length>0);
   var b=$("osBody");b.innerHTML="";
   if(!lista.length){b.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Nenhuma OS nesta visão</div>Abra pela atividade do cliente ou pelo botão <b>Nova OS</b>.</div></td></tr>';return;}
   lista.forEach(function(o){
@@ -33248,6 +33688,20 @@ function ligar(){
 
   $("osBusca").oninput=renderOS;$("osSit").onchange=renderOS;$("osTipo").onchange=renderOS;
   /* "Nova OS" leva ao Atendimento: a OS nasce do contato com o cliente (regra dele, 03/10) */
+  /* limpeza das OS de teste, antes do módulo novo (decisão dele, 05/10) */
+  if($("osLimpar"))$("osLimpar").onclick=abrirLimpezaOS;
+  if($("oslp_cancelar"))$("oslp_cancelar").onclick=function(){$("osLimpModal").hidden=true;};
+  if($("oslp_ok"))$("oslp_ok").onclick=async function(){
+    this.disabled=true;
+    var r=await apagarOSTeste();
+    this.disabled=false;
+    if(!r)return;
+    $("osLimpModal").hidden=true;
+    renderOS();render();
+    toast(r.n.os+" OS de teste apagada(s) · "+r.n.ativs+" atividade(s) · "+r.n.aparelhos+" aparelho(s) · "+
+      r.n.custodia+" custódia(s)"+(r.segurou.length?" · "+r.segurou.length+" ficaram (já mexeram no financeiro)":"")+
+      (r.n.erros?" · "+r.n.erros+" com erro":"")+".");
+  };
   $("osNova").onclick=function(){
     ir("atend");try{abrirAtend(null);}catch(e){}
     toast("A OS nasce do contato com o cliente: registre o atendimento e use \"Abrir OS para o cliente\".");
@@ -33672,6 +34126,12 @@ function ligar(){
     ["razao","cnpj","cidade","endereco","geo","fone","site","instagram","youtube","gmapsChave","contEscritorio","contNome","contEmail","contFone"].forEach(function(k){
       var el=$("em_"+k);if(el)EMPRESA[k]=el.value.trim();});
     if(EMPRESA.contEmail&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(EMPRESA.contEmail))toast("Confira o e-mail da contabilidade: "+EMPRESA.contEmail);
+    /* configuração do módulo de OS (05/10): horário útil, garantia mínima, taxa e abandono */
+    EMPRESA.os={horaIni:$("em_osHoraIni").value||"08:00",horaFim:$("em_osHoraFim").value||"18:00",
+      sabado:$("em_osSabado").checked,
+      garantiaMao:Math.max(1,parseInt($("em_osGarantia").value,10)||90),
+      taxaOrc:Math.max(0,numMF($("em_osTaxa").value)||0),
+      diasAbandono:Math.max(1,parseInt($("em_osAbandono").value,10)||90)};
     sincChaveGoogle();
     await gravarEmpresa();renderEmpresa();toast("Dados da empresa salvos.");};
   /* ponto pelo endereço para a loja e a casa do colaborador — MESMA ordem do cadastro do cliente:
@@ -34443,6 +34903,9 @@ async function continuarBoot(){
   try{await limparVersoesTroca();}catch(e){console.warn("versões de troca",e);}
   try{await limparVariacoesProduto();}catch(e){console.warn("variações do produto",e);}
   try{await ajustarManutencaoMarcas();}catch(e){console.warn("manutenção por marca",e);}
+  /* a aba Ordens de Serviço liberada para Vendedor, Prospector e Estoquista (decisão dele, 05/10):
+     as funções já estão gravadas no banco, então o código novo só vale depois de regravar uma vez */
+  try{await liberarTelaOS();}catch(e){console.warn("liberar a tela de OS",e);}
   /* o cliente assinou pelo link enquanto ninguém olhava: a assinatura entra no pedido (03/10) */
   try{await aplicarAssinaturasRecebidas();}catch(e){console.warn("assinaturas do link",e);}
   try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
