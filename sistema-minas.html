@@ -1020,8 +1020,16 @@
   .fuh-bt:hover{color:var(--accent)}
   .fuh-bt .fu-sinal{width:18px;height:18px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
     border:1px solid var(--line);border-radius:5px;font-weight:700;line-height:1}
-  .fuh-box{margin-top:4px;border-top:1px solid var(--line);padding-top:7px;max-height:280px;overflow:auto;
-    cursor:default;user-select:text}
+  .fuh-box{margin-top:4px;border-top:1px solid var(--line);padding-top:7px;cursor:default;user-select:text}
+  /* a lista rola e o botão "Abrir o cadastro completo" fica fixo embaixo (pedido dele, 04/10).
+     overflow-y:scroll (e não auto) deixa a barra SEMPRE à vista, senão o Chrome a esconde. */
+  .fuh-rol{max-height:260px;overflow-y:scroll;overflow-x:hidden;padding-right:6px;scrollbar-width:thin;
+    scrollbar-color:var(--ink-3) transparent}
+  .fuh-rol::-webkit-scrollbar{width:9px}
+  .fuh-rol::-webkit-scrollbar-track{background:var(--line);border-radius:6px}
+  .fuh-rol::-webkit-scrollbar-thumb{background:var(--ink-3);border-radius:6px;border:2px solid transparent;
+    background-clip:content-box}
+  .fuh-rol::-webkit-scrollbar-thumb:hover{background:var(--ink-2);background-clip:content-box}
   .fuh-item{border-left:3px solid var(--line);padding:4px 0 6px 8px;margin-bottom:6px}
   .fuh-cab{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:var(--ink-3)}
   .fuh-cab b{color:var(--ink-2)}
@@ -8243,13 +8251,36 @@ var MARCAS_CENTRAL=/filtrali|nyc|fusati/;
 var MANUT_REGRAS=[
   {k:"central",dias:365,nome:"Centrais de filtragem (Filtrali, NYC, Fusati)",
    casa:function(t){return MARCAS_CENTRAL.test(t)||(/central/.test(t)&&/filtr/.test(t));}},
-  {k:"waterflex",dias:365,nome:"Refil Water Flex",
-   casa:function(t){return /water\s*flex/.test(t)&&/refil|refill|elemento\s*filtrante/.test(t);}},
+  {k:"waterflex",dias:365,nome:"Water Flex",
+   casa:function(t){return /water\s*flex/.test(t);}},
   {k:"toplife",dias:360,nome:"Top Life",
    casa:function(t){return /top\s*life/.test(t);}},
   {k:"everest",dias:180,nome:"Everest",
-   casa:function(t){return /everes/.test(t);}}
+   casa:function(t){return /everes/.test(t);}},
+  /* "todos os demais filtros, refis que não são das marcas ou nome que sugeri
+     favor colocar com 180 dias" (04/10). Vale para o que o cliente TROCA —
+     refil, elemento filtrante, vela, cartucho e filtro —, nunca para o acessório
+     que leva a palavra filtro no nome (chave, carcaça, suporte, porta-filtro):
+     esse viraria manutenção periódica de um produto que não se troca. */
+  {k:"filtros",dias:180,nome:"Demais filtros e refis",
+   casa:function(t){
+     if(ACESSORIO_FILTRO.test(t))return false;
+     return /refil|refill|elemento\s*filtrante|vela\s*filtrante|cartucho|\bfiltro\b|\bfiltros\b/.test(t);
+   }}
 ];
+var ACESSORIO_FILTRO=/chave|carcaca|suporte|porta\s*filtro|cavalete|invólucro|invucro|copo\s*do\s*filtro/;
+/* Quem PRECISA de intervalo de manutenção no cadastro (regra dele, 04/10): refil, filtro,
+   vela e purificador — o que o cliente troca. Acessório com a palavra filtro no nome fica
+   de fora, e produto de sistema (sucata, serviços, planos, equipamento de OS) nunca entra. */
+var ITEM_COM_TROCA=/refil|refill|elemento\s*filtrante|vela\s*filtrante|\bvela\b|cartucho|\bfiltro\b|\bfiltros\b|purificad/;
+function pedeManutProduto(p){
+  if(!p||produtoDeSistema(p))return false;
+  if((p.grupo||"")==="Planos")return false;
+  var t=normNomeImp([p.marca||"",p.nome||"",p.pop||"",p.grupo||""].join(" ")).toLowerCase();
+  if(ACESSORIO_FILTRO.test(t))return false;
+  return ITEM_COM_TROCA.test(t);
+}
+window.__pedeManutMF=pedeManutProduto;
 function textoProdutoManut(p){
   return normNomeImp([p.marca||"",p.nome||"",p.pop||""].join(" ")).toLowerCase();
 }
@@ -8275,7 +8306,7 @@ async function aplicarManutMarcas(){
 }
 /* MARCADOR: muda de nome a cada acerto de regra, senão quem já abriu o sistema
    com a regra anterior não recebe a correção (ele corrigiu as marcas em 04/10). */
-var MARCADOR_MANUT="manutMarcas2";
+var MARCADOR_MANUT="manutMarcas3";
 async function ajustarManutencaoMarcas(){
   if(!db||!ehAdministrador())return 0;
   var doc=null,antes={};
@@ -27558,7 +27589,7 @@ function renderFunil(){
 }
 /* histórico do cliente desenhado DENTRO do cartão do funil (pedido dele, 04/10):
    os mesmos eventos da ficha (`hcEventos`), do mais novo para o mais antigo, em lista curta */
-var fuHistAberto={},FU_HIST_MAX=12;
+var fuHistAberto={},FU_HIST_MAX=200;
 function htmlHistoricoFunil(n){
   var c=clienteDoNeg(n);
   if(!c)return '<div class="fuh-vazio">'+(clientesCarregando
@@ -27567,8 +27598,13 @@ function htmlHistoricoFunil(n){
   var ev=[];
   try{ev=hcEventos(c);}catch(e){return '<div class="fuh-vazio">Não consegui montar o histórico.</div>';}
   if(!ev.length)return '<div class="fuh-vazio">Nada no histórico ainda — nenhum atendimento, orçamento, venda ou anotação.</div>';
+  /* mostra o histórico INTEIRO — a caixa rola (pedido dele, 04/10: "precisa ter uma
+     barra de rolagem na vertical para conseguir ver todos os lançamentos"). O teto
+     alto é só uma trava contra cadastro com milhares de eventos. */
   var ult=ev.slice(-FU_HIST_MAX).reverse();
-  return (ev.length>ult.length?'<div class="fuh-mais">mostrando os '+ult.length+" mais recentes de "+ev.length+"</div>":"")+
+  return '<div class="fuh-rol">'+
+    (ev.length>ult.length?'<div class="fuh-mais">mostrando os '+ult.length+" mais recentes de "+ev.length+"</div>":
+      '<div class="fuh-mais">'+ev.length+(ev.length===1?" lançamento":" lançamentos")+" — role para ver todos</div>")+
     ult.map(function(e){
       var q=String(e.quando||"").trim().split(" ");
       return '<div class="fuh-item">'+
@@ -27579,6 +27615,7 @@ function htmlHistoricoFunil(n){
         (e.motivo?'<div class="fuh-txt"><b>Motivo:</b> '+esc(e.motivo)+"</div>":"")+
       "</div>";
     }).join("")+
+    "</div>"+ /* fecha a área que rola; o botão fica fixo embaixo, fora dela */
     '<button type="button" class="fuh-ficha" data-fucli="'+esc(c.id)+'">Abrir o cadastro completo</button>';
 }
 function ligarQuadroFunil(){
@@ -31797,6 +31834,22 @@ function ligar(){
         " — preencha lá em cima e clique em Salvar produto de novo."+
         (prodComposto.length?" O que você montou em <b>Produtos que vão junto</b> continua na tela e será salvo junto.":""));
       try{(grupo?$("p_subgrupo"):$("p_grupo")).focus();}catch(e){}
+      return;}
+    /* REGRA DELE (04/10): "toda vez que realizar qualquer outro cadastro de refil, filtro,
+       vela ou de qualquer outro purificador o sistema deve solicitar para marcar uma data
+       para manutenção periódica". É o intervalo que faz o aparelho entrar na Manutenção
+       Periódica — sem ele a troca do cliente nunca é cobrada. */
+    if(pedeManutProduto({cod:cod,nome:nome,marca:$("p_marca").value,pop:$("p_pop").value,grupo:grupo})
+       &&!(numMF($("p_manut").value)>0)){
+      var sug=regraManutDoProduto({cod:cod,nome:nome,marca:$("p_marca").value,pop:$("p_pop").value});
+      avisoProduto("<b>Falta a manutenção periódica deste produto.</b> Refil, filtro, vela e purificador "+
+        "precisam do intervalo de troca em <b>Manutenção (dias)</b> — é ele que põe o aparelho na "+
+        "Manutenção Periódica e avisa o cliente na hora certa."+
+        (sug?" Pela marca, o sistema sugere <b>"+sug.dias+" dias</b> ("+esc(sug.nome)+").":
+             " Use 365 dias para troca anual e 180 para semestral.")+
+        " Preencha e clique em Salvar produto de novo."+
+        (prodComposto.length?" O que você montou em <b>Produtos que vão junto</b> continua na tela.":""));
+      try{if(sug&&!$("p_manut").value)$("p_manut").value=brMF(sug.dias,0);$("p_manut").focus();}catch(e){}
       return;}
     p.cod=cod;p.nome=nome;p.pop=$("p_pop").value.trim();p.marca=$("p_marca").value.trim();p.grupo=grupo;p.subgrupo=subgrupo;
     /* grupo ou subgrupo escrito na ficha entra no cadastro de Grupos, para os dois lados ficarem
