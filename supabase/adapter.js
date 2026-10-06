@@ -63,6 +63,9 @@
   var VERSAO_ADAPTER = "1.0.0";
   var TABELA = "docs";
   var PAGINA = 1000; /* teto padrão de linhas por resposta do PostgREST */
+  /* quantas páginas de uma mesma coleção viajam juntas (06/10). 6 é o que o navegador abre
+     por host em HTTP/1.1; acima disso elas só fariam fila do outro lado. */
+  var PARALELO = 6;
 
   /* ------------------------------------------------------------------------
      MAPAS DO INVENTÁRIO
@@ -506,19 +509,55 @@
       var crescente = !isFinite(alvo);  /* sem limite: crescente e completo */
       var linhas = [], total = null, offset = 0, guarda = 0;
 
-      while (linhas.length < alvo) {
-        var tam = Math.min(PAGINA, alvo - linhas.length);
-        var q = montarConsulta(colecao, filtros, offset === 0, crescente).range(offset, offset + tam - 1);
-        var r = conferir(await q, "ler " + colecao);
-        var lote = r.data || [];
-        if (offset === 0 && typeof r.count === "number") total = r.count;
+      /* A PRIMEIRA PÁGINA JÁ DIZ QUANTOS SÃO (count exact), E AÍ O RESTO VAI EM PARALELO
+         (06/10). Antes as páginas saíam uma esperando a outra: os 22.331 cadastros dele são
+         23 idas ao banco, e a lista levava perto de um minuto para aparecer — ele abria
+         Clientes, via a tela vazia e achava que tinha perdido a base. Como a ordem é fixa
+         por id, cada .range() é determinístico e pode ser pedido junto. Em lotes, para não
+         abrir 23 conexões de uma vez. */
+      var tam0 = Math.min(PAGINA, alvo);
+      var r0 = conferir(
+        await montarConsulta(colecao, filtros, true, crescente).range(0, tam0 - 1),
+        "ler " + colecao
+      );
+      var lote0 = r0.data || [];
+      if (typeof r0.count === "number") total = r0.count;
+      linhas = lote0.slice();
+      offset = lote0.length;
 
-        linhas = linhas.concat(lote);
-        if (!lote.length) break;                                  /* acabou */
-        offset += lote.length;
-        if (total !== null && linhas.length >= total) break;       /* pegou tudo */
-        if (total === null && lote.length < tam) break;            /* sem count: heurística */
-        if (++guarda > 200) break;                                 /* trava anti-laço infinito */
+      var fim = (total !== null) ? Math.min(total, alvo) : alvo;
+      if (lote0.length >= tam0 && linhas.length < fim && total !== null) {
+        var faixas = [];
+        for (var off = offset; off < fim && faixas.length <= 200; off += PAGINA) {
+          faixas.push([off, Math.min(PAGINA, fim - off)]);
+        }
+        var partes = new Array(faixas.length);
+        for (var b = 0; b < faixas.length; b += PARALELO) {
+          var bloco = faixas.slice(b, b + PARALELO);
+          /* o await é do bloco inteiro: as páginas dele viajam juntas */
+          var lotes = await Promise.all(bloco.map(function (f) {
+            return montarConsulta(colecao, filtros, false, crescente)
+              .range(f[0], f[0] + f[1] - 1)
+              .then(function (rr) { return conferir(rr, "ler " + colecao).data || []; });
+          }));
+          for (var k = 0; k < lotes.length; k++) partes[b + k] = lotes[k];
+        }
+        for (var z = 0; z < partes.length; z++) linhas = linhas.concat(partes[z] || []);
+      } else if (lote0.length >= tam0 && linhas.length < alvo && total === null) {
+        /* sem count (não deveria acontecer): volta ao sequencial de antes, que descobre
+           o fim pela página incompleta */
+        while (linhas.length < alvo) {
+          var tam = Math.min(PAGINA, alvo - linhas.length);
+          var r = conferir(
+            await montarConsulta(colecao, filtros, false, crescente).range(offset, offset + tam - 1),
+            "ler " + colecao
+          );
+          var lote = r.data || [];
+          linhas = linhas.concat(lote);
+          if (!lote.length || lote.length < tam) break;
+          offset += lote.length;
+          if (++guarda > 200) break;                               /* trava anti-laço infinito */
+        }
       }
 
       /* veio do mais novo para o mais antigo: devolve na ordem de sempre */
