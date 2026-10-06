@@ -6870,6 +6870,10 @@ function usuarioPor(n){return USUARIOS.filter(function(u){return u.nome===n;})[0
 function colabAtivo(n){var u=usuarioPor(n);return !!(u&&u.ativo);}
 
 var clientesCarregando=false;
+/* motivo da ÚLTIMA falha ao ler os cadastros. Sem ele, a leitura recusada pelo banco caía num
+   console.warn e a tela dizia "Nenhum cliente ainda" — uma mentira, e foi o susto de 06/10:
+   21.909 cadastros no banco e a tela em branco, sem nada explicando. */
+var clientesErro="";
 var db=null,lojaAtual="mf",clientes=[],produtos=[],pedidos=[],itens=[],editandoCli=null,editandoProd=null;
 
 /* Contratos dos planos de garantia — modelos dos Pedidos 20882 (Premium I) e 20835 (Premium II).
@@ -7050,6 +7054,31 @@ function aquecerBoot(){
     pedirJa("cfg:"+c,function(){return db.doc("config/"+c).get();});
   });
 }
+/* OS CADASTROS CHEGAM DEPOIS, SEM SEGURAR A ABERTURA (regra de 24/09: "demora um pouco").
+   São 21.909 clientes — de longe a maior resposta do banco, e o adapter a traz de mil em mil.
+   Esperar por ela era ficar olhando a tela parada. Agora o pedido sai junto com os outros, o
+   sistema abre e os cadastros entram quando chegam; aí a tela se redesenha sozinha e o funil é
+   recalculado. Quem abrir Clientes antes disso vê "carregando os cadastros", não uma lista
+   vazia — que foi o susto do teste com o Renan (v204).
+   DANDO ERRADO, A TELA DIZ O MOTIVO (06/10): antes a recusa do banco ia para um console.warn
+   que ninguém vê e a lista dizia "Nenhum cliente ainda", com 21.909 cadastros gravados. */
+function lerClientesDoBanco(){
+  if(!db)return;
+  clientesCarregando=true;clientesErro="";
+  try{render();}catch(e){}
+  return jaPedido("col:clientes",function(){return col("clientes").limit(30000).get();})
+    .then(function(cs){
+      clientes=cs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+      clientesCarregando=false;clientesErro="";
+      try{render();}catch(e){console.warn(e);}
+      try{sincronizarFunil();}catch(e){console.warn("funil",e);}
+    },function(e){
+      clientesCarregando=false;
+      clientesErro=(e&&(e.message||e.msg||e.error_description||e.hint))||String(e||"motivo não informado pelo banco");
+      console.warn("clientes",e);
+      try{render();}catch(e2){}
+    });
+}
 async function carregar(){
   /* dicionário de nomes padrão dos lançamentos: vale mesmo sem banco */
   PADROES_LANC=JSON.parse(JSON.stringify(SEED_PADROES));
@@ -7116,18 +7145,7 @@ async function carregar(){
        abre e os cadastros entram quando chegam; aí a tela se redesenha sozinha e o funil é
        recalculado. Quem abrir Clientes antes disso vê "carregando os cadastros", não uma lista
        vazia — que foi o susto do teste com o Renan (v204). */
-    clientesCarregando=true;
-    jaPedido("col:clientes",function(){return col("clientes").limit(30000).get();})
-      .then(function(cs){
-        clientes=cs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-        clientesCarregando=false;
-        try{render();}catch(e){console.warn(e);}
-        try{sincronizarFunil();}catch(e){console.warn("funil",e);}
-      },function(e){
-        clientesCarregando=false;
-        console.warn("clientes",e);
-        try{render();}catch(e2){}
-      });
+    lerClientesDoBanco();
     var ps=await jaPedido("col:produtos",function(){return col("produtos").limit(3000).get();});
     produtos=ps.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     if(!produtos.length){
@@ -7490,6 +7508,30 @@ function unicos(lista,campo){
 }
 var cliPag=1;
 var mpPag=1;   /* página da lista de Manutenção Periódica (v257) */
+/* LISTA VAZIA: dizer QUAL dos quatro casos é (06/10). Antes era sempre "Nenhum cliente ainda",
+   mesmo com a leitura recusada pelo banco ou com os cadastros todos em outra loja — e aí a tela
+   mandava cadastrar o primeiro cliente de quem já tem 21.909. */
+function htmlListaClienteVazia(naLoja){
+  if(clientesCarregando)
+    return '<div class="empty"><div class="big">Carregando os cadastros…</div>'+
+      "São 20 mil e poucos: leva alguns segundos. A tela se preenche sozinha.</div>";
+  if(clientesErro)
+    return '<div class="empty"><div class="big">Não consegui carregar os cadastros</div>'+
+      "O banco recusou a leitura, então esta lista está vazia por falha — <b>nenhum cadastro foi perdido</b>.<br>"+
+      '<span class="t-sub">Motivo: '+esc(clientesErro)+"</span><br><br>"+
+      '<button class="btn" type="button" id="cliRecarregar">Tentar de novo</button></div>';
+  if(clientes.length&&!naLoja)
+    return '<div class="empty"><div class="big">Nenhum cadastro nesta loja</div>'+
+      "O sistema leu <b>"+clientes.length+" cadastro"+(clientes.length===1?"":"s")+"</b>, mas "+
+      "nenhum é da loja <b>"+esc(nomeLoja())+"</b>. O cadastro de cliente é de cada loja: "+
+      "troque a loja no alto da tela para ver os outros.</div>";
+  if(clientes.length)
+    return '<div class="empty"><div class="big">Nenhum cadastro com estes filtros</div>'+
+      "São "+naLoja+" cadastro"+(naLoja===1?"":"s")+" nesta loja. Limpe a busca e os filtros de "+
+      "estado, cidade, bairro, rua e situação para ver todos.</div>";
+  return '<div class="empty"><div class="big">Nenhum cliente ainda</div>'+
+    "Use o botão <b>+ Novo</b> no topo para cadastrar o primeiro.</div>";
+}
 function renderClientes(){
   /* o cadastro de cliente é da LOJA e aparece para todos dela (regra dele, 22/09: "os clientes
      devem aparecer para todos; a única coisa que tem que separar é a loja"). O que continua
@@ -7545,9 +7587,10 @@ function renderClientes(){
     $("cliProx").disabled=$("cliUltima").disabled=(cliPag>=paginas);
   }
   var b=$("cliBody");b.innerHTML="";
-  if(!total){b.innerHTML=clientesCarregando
-    ? '<tr><td colspan="6"><div class="empty"><div class="big">Carregando os cadastros…</div>São 20 mil e poucos: leva alguns segundos. A tela se preenche sozinha.</div></td></tr>'
-    : '<tr><td colspan="6"><div class="empty"><div class="big">Nenhum cliente ainda</div>Use o botão <b>+ Novo</b> no topo para cadastrar o primeiro.</div></td></tr>';return;}
+  if(!total){
+    b.innerHTML='<tr><td colspan="6">'+htmlListaClienteVazia(base.length)+"</td></tr>";
+    var bt=$("cliRecarregar");if(bt)bt.onclick=function(){lerClientesDoBanco();};
+    return;}
   lista.forEach(function(c){
     var f=faltantes(c),ind=estrelasDe(c.id),indTot=indicadosPor(c.id).length;
     var tr=document.createElement("tr");tr.className="clickable";
@@ -10366,6 +10409,12 @@ window.__pedAbertoMF=function(){return pedAberto;};
 window.__pedidosMF=function(){return pedidos;};
 /* ganchos de teste da importação de manutenções (v256) */
 window.__clientesMF=function(){return clientes;};
+/* estado da leitura dos cadastros, para o teste da lista vazia (06/10) */
+window.__estadoCliMF=function(carregando,erro){
+  if(typeof carregando!=="undefined")clientesCarregando=!!carregando;
+  if(typeof erro!=="undefined")clientesErro=erro||"";
+  return {carregando:clientesCarregando,erro:clientesErro,n:clientes.length};
+};
 window.__equipamentosMF=function(){return equipamentos;};
 window.__produtosMF=function(){return produtos;};
 window.__tiposMF=function(){return tipos;};
