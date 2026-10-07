@@ -197,6 +197,9 @@
   .steps button.feito i{background:var(--ok);color:#fff}
   .steps button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .vstep[hidden]{display:none}
+  /* OS de atendimento externo não pergunta sobre instalação (07/10) — a classe vence o `hidden`
+     que `irEtapa` reescreve a cada troca de etapa */
+  #v_cardInst.sem-inst{display:none}
   .step-nav{display:flex;gap:10px;justify-content:space-between;margin-top:4px}
 
   /* chips de múltipla escolha */
@@ -2281,7 +2284,7 @@ img{max-width:100%}
             <p class="help" id="v_instAjuda">Instalador em branco: o vendedor acumula os 20%.</p>
           </div>
 
-          <div class="card vstep" data-s="5">
+          <div class="card vstep" data-s="5" id="v_cardInst">
             <h2>Precisa de instalação?</h2>
             <div class="chips" id="v_temInst" style="margin-bottom:6px">
               <button type="button" data-ti="nao">Não — o cliente leva</button>
@@ -11676,9 +11679,32 @@ function htmlFaixasComissao(linhas,total,dep){
    e o pedido só fecha depois de respondida. Data preenchida conta como "sim" — pedido antigo e
    rascunho de OS continuam funcionando. */
 var instRespVenda="";
+/* Regra dele (07/10): quando a venda nasce de uma OS de ATENDIMENTO EXTERNO, a pergunta não faz
+   sentido e sai da tela — o técnico já executou o serviço na casa do cliente, não há instalação a
+   agendar nem produto para o cliente levar. A venda segue direto para a Aprovação Financeira. */
+function vendaDeOSExterna(){
+  return !!(pedOrigemOS&&pedOrigemOS.local==="externo");
+}
 function temInstalacaoVenda(){
+  if(vendaDeOSExterna())return "feito";   /* serviço realizado no cliente, sem agendamento */
   if(instRespVenda)return instRespVenda;
   return ($("v_idata")&&$("v_idata").value)?"sim":"";
+}
+/* respostas SEM agendamento em que alguém executou o serviço: a instalação feita na entrega (v210)
+   e o serviço realizado na casa do cliente, que vem da OS externa. Nos dois, quem está no campo
+   Instalador é quem fica com os 20% — sem isso o pedido gravava o vendedor, contrariando o que a
+   própria tela promete ("o técnico da OS é o instalador e fica com os 20%"). */
+function execSemAgenda(){var v=temInstalacaoVenda();return v==="agora"||v==="feito";}
+/* esconde a pergunta na venda que vem de OS externa e garante que nada de agendamento sobrou */
+function ajustarPerguntaInstalacao(){
+  var c=$("v_cardInst");if(!c)return;
+  var fora=vendaDeOSExterna();
+  c.classList.toggle("sem-inst",fora);
+  if(fora){
+    if($("v_idata"))$("v_idata").value="";
+    if($("v_ihora"))$("v_ihora").value="";
+    var w=$("v_instFut");if(w)w.hidden=true;
+  }
 }
 function marcarInstalacao(v){
   instRespVenda=v;
@@ -11694,6 +11720,7 @@ function marcarInstalacao(v){
     ? "O agendamento entra na agenda do técnico, e a baixa de estoque passa a sair dele depois da instalação."
     : (v==="agora"?"A instalação é feita agora, na entrega: não entra na agenda e a venda segue direto para a Aprovação Financeira. Escolha o instalador em <b>Quem vendeu</b> — é ele que fica com os 20%."
       : v==="nao"?"Sem instalação: o produto sai do estoque de quem vendeu e o cliente leva na hora."
+      : v==="feito"?"Serviço realizado na casa do cliente: não entra na agenda e a venda segue direto para a Aprovação Financeira."
       :"Responda para seguir — é o que decide se a venda gera agendamento.");
   try{ajustarInstalador();conferirAgendaTecnico();calcular();}catch(e){}
 }
@@ -12395,7 +12422,7 @@ async function salvarPedido(){
     /* v210: três respostas para a instalação — não / na entrega, sem agendamento / agendada */
     instalador:($("v_idata").value
       ?($("v_inst").value||$("v_iresp").value||$("v_vend").value)
-      :(temInstalacaoVenda()==="agora"?($("v_inst").value||$("v_vend").value):$("v_vend").value)),
+      :(execSemAgenda()?($("v_inst").value||$("v_vend").value):$("v_vend").value)),
     instalacaoAgora:(temInstalacaoVenda()==="agora"&&!$("v_idata").value),
     /* prestador: o responsável vira o NOME dele (texto), e o estoque continua com o vendedor */
     respInstalacao:$("v_idata").value?(ehValorPrest(valorIresp())
@@ -23517,7 +23544,7 @@ async function aplicarEdicaoPedido(cli,r,solDesc){
   p.prospector=$("v_prosp").value;p.vendedor=$("v_vend").value;
   p.instalador=($("v_idata").value
     ?($("v_inst").value||$("v_iresp").value||$("v_vend").value)
-    :(temInstalacaoVenda()==="agora"?($("v_inst").value||$("v_vend").value):$("v_vend").value));
+    :(execSemAgenda()?($("v_inst").value||$("v_vend").value):$("v_vend").value));
   p.respInstalacao=$("v_idata").value?(ehValorPrest(valorIresp())
     ?((prestPorId(idDoValorPrest(valorIresp()))||{}).nome||$("v_vend").value)
     :(valorIresp()||$("v_inst").value||$("v_vend").value)):"";
@@ -35713,6 +35740,7 @@ function irEtapa(n){
   /* comissão ao vivo na mesma etapa do pagamento e dos itens (regra dele, 20/09) */
   var vcom=$("v_comissao");if(vcom)vcom.hidden=etapa<2;
   try{
+    ajustarPerguntaInstalacao();
     ajustarInstalador();
     if(etapa===2||etapa===4)calcular();
     if(etapa===3){renderGarantiaEtapa();calcular();}
@@ -35725,6 +35753,7 @@ function atualizarEtapas(){
   Array.prototype.forEach.call(document.querySelectorAll("#v_steps button"),function(b){
     var s=+b.dataset.step;b.classList.toggle("feito",s!==etapa&&feitaEtapa(s));});
   try{ajustarEquipItem();}catch(e){}
+  try{ajustarPerguntaInstalacao();}catch(e){}
   try{avisoCadastroVenda();}catch(e){}
   /* a venda só abre com origem (03/10); aqui é o ponto por onde TODOS os caminhos passam */
   try{renderBloqueioVenda();if(!vendaSemOrigem())irEtapaVisivel();}catch(e){}
