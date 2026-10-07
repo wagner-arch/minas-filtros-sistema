@@ -1749,6 +1749,7 @@ img{max-width:100%}
           </select>
           <span class="sp"></span>
           <span class="count" id="cliCount"></span>
+          <button class="btn ghost" type="button" id="cliRepetidos">Cadastros repetidos</button>
           <button class="btn ghost" type="button" id="cliImportar">Importar clientes</button>
         </div>
         <div class="tw"><table>
@@ -6524,6 +6525,22 @@ img{max-width:100%}
 <!-- limpeza das OS de teste antes do módulo novo (decisão dele, 05/10): mostra tudo antes de apagar -->
 <!-- ABERTURA DE OS EM ETAPAS (spec dele de 05/10, item 2). A OS só é gravada e numerada no
      último passo: desistir no meio NÃO cria OS. -->
+<!-- CADASTROS REPETIDOS DE CLIENTE (07/10): o mesmo contato em dois cadastros, um como lead e
+     outro como cliente. Junta tudo no que fica. -->
+<div class="modal" id="dupCliModal" hidden>
+  <div class="box" style="width:min(980px,100%)">
+    <h3>Cadastros repetidos</h3>
+    <div class="sub" id="dc_sub"></div>
+    <div class="toolbar" style="padding:10px 0">
+      <input id="dc_busca" placeholder="Buscar por nome, CPF/CNPJ ou código">
+    </div>
+    <div id="dc_corpo" style="max-height:52vh;overflow:auto"></div>
+    <div class="actions">
+      <button class="btn mut" type="button" id="dc_fechar">Fechar</button>
+      <button class="btn" type="button" id="dc_ok">Juntar os marcados</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="osNovoModal" hidden>
   <div class="box" style="width:min(900px,100%)">
     <h3 id="osa_titulo">Abrir nova OS</h3>
@@ -7700,6 +7717,216 @@ function htmlListaClienteVazia(naLoja){
       "estado, cidade, bairro, rua e situação para ver todos.</div>";
   return '<div class="empty"><div class="big">Nenhum cliente ainda</div>'+
     "Use o botão <b>+ Novo</b> no topo para cadastrar o primeiro.</div>";
+}
+
+/* ================= CADASTRO REPETIDO DE CLIENTE (07/10) =================
+   Relato dele com print da busca: "CARROS MAIS" aparecia DUAS vezes — uma como cliente (codigo
+   2746, 1 venda) e outra como lead (codigo MF-01014), com o MESMO CNPJ e o MESMO telefone. Nao
+   era o mesmo cadastro em duas listas: eram DOIS cadastros. O 2746 veio da importacao do sistema
+   antigo e o MF-01014 nasceu depois no Atendimento, porque quem digitou o nome nao escolheu da
+   lista de sugestoes e nada conferia se aquele contato ja existia.
+   Duas correcoes: nao deixar nascer outro, e juntar os que ja existem. */
+
+/* as colecoes que apontam para um cliente, com o nome do campo */
+var LIGACOES_CLI=[
+  ["atendimentos","clienteId"],["pedidos","clienteId"],["orcamentos","clienteId"],
+  ["ordens","clienteId"],["negocios","clienteId"],["equipamentos","clienteId"],
+  ["titulos","clienteId"],["custodia","clienteId"],["rascunhos","clienteId"],
+  ["solicitacoes","clienteId"],["remunPrest","clienteId"]
+];
+function listaDaColecao(n){
+  try{
+    if(n==="atendimentos")return atendimentos;
+    if(n==="pedidos")return pedidos;
+    if(n==="orcamentos")return orcamentos;
+    if(n==="ordens")return ordens;
+    if(n==="negocios")return negocios;
+    if(n==="equipamentos")return equipamentos;
+    if(n==="titulos")return titulos;
+    if(n==="custodia")return custodia;
+    if(n==="rascunhos")return rascunhos;
+    if(n==="solicitacoes")return solicitacoes;
+    if(n==="remunPrest")return remunPrest;
+  }catch(e){}
+  return [];
+}
+/* quantos registros cada cadastro tem — é isso que decide quem fica */
+function usoDoCadastroCli(cid){
+  var u={total:0,vendas:0,por:{}};
+  if(!cid)return u;
+  LIGACOES_CLI.forEach(function(l){
+    var n=listaDaColecao(l[0]).filter(function(x){return x&&x[l[1]]===cid;}).length;
+    if(n){u.por[l[0]]=n;u.total+=n;}
+    if(l[0]==="pedidos")u.vendas=listaDaColecao("pedidos")
+      .filter(function(p){return p.clienteId===cid&&p.status!=="Cancelada";}).length;
+  });
+  return u;
+}
+
+/* ---------- 1) nao deixar nascer outro ---------- */
+/* documento com 11+ digitos é prova: é a mesma pessoa. Telefone sozinho NÃO é — marido e esposa
+   dividem número —, então telefone só conta junto com o nome. */
+function clientesIguaisA(doc,tel,nome,exceto){
+  var d=String(doc||"").replace(/\D/g,""),t8=tel8Imp(tel),n=normNomeImp(nome);
+  var porDoc=[],porTelNome=[];
+  clientes.forEach(function(c){
+    if(c.loja!==lojaAtual||c.id===exceto)return;
+    var cd=String(c.doc||"").replace(/\D/g,"");
+    if(d.length>=11&&cd===d)return porDoc.push(c);
+    if(t8&&n.length>=5){
+      var mesmoTel=[c.tel,c.respTel,c.comprasTel].some(function(x){return tel8Imp(x)===t8;});
+      if(mesmoTel&&normNomeImp(c.nome)===n)porTelNome.push(c);
+    }
+  });
+  return {doc:porDoc,telNome:porTelNome,algum:porDoc.concat(porTelNome)};
+}
+function htmlCadastroAchado(c){
+  var u=usoDoCadastroCli(c.id);
+  return "<b>"+esc(c.nome||"")+"</b>"+(c.codigo?" · "+esc(c.codigo):"")+
+    (c.doc?" · "+esc(c.doc):"")+(c.cidade?" · "+esc(c.cidade):"")+(c.tel?" · "+esc(c.tel):"")+
+    " · "+(ehLead(c)?"lead":"cliente")+
+    (u.vendas?" · "+u.vendas+(u.vendas===1?" venda":" vendas"):"")+
+    (u.total?" · "+u.total+" registro"+(u.total===1?"":"s"):" · sem histórico");
+}
+
+/* ---------- 2) juntar os que ja existem ---------- */
+function gruposClientesRepetidos(){
+  var porDoc={},porTelNome={},grupos=[];
+  clientes.forEach(function(c){
+    if(c.loja!==lojaAtual)return;
+    var d=String(c.doc||"").replace(/\D/g,"");
+    if(d.length>=11){(porDoc[d]=porDoc[d]||[]).push(c);return;}
+    var t8=tel8Imp(c.tel),n=normNomeImp(c.nome);
+    if(t8&&n.length>=5){var k=t8+"|"+n;(porTelNome[k]=porTelNome[k]||[]).push(c);}
+  });
+  function juntar(mapa,motivo){
+    Object.keys(mapa).forEach(function(k){
+      var l=mapa[k];
+      if(l.length<2)return;
+      grupos.push({chave:motivo+":"+k,motivo:motivo,itens:l.map(function(c){
+        return {c:c,uso:usoDoCadastroCli(c.id),lead:ehLead(c)};})});
+    });
+  }
+  juntar(porDoc,"mesmo CPF/CNPJ");
+  juntar(porTelNome,"mesmo telefone e mesmo nome");
+  /* quem fica, sugerido: CLIENTE na frente do lead; depois quem tem mais histórico;
+     depois o de código mais antigo (o importado do sistema antigo) */
+  grupos.forEach(function(g){
+    g.itens.sort(function(a,b){
+      if(a.lead!==b.lead)return a.lead?1:-1;
+      if(b.uso.total!==a.uso.total)return b.uso.total-a.uso.total;
+      return String(a.c.criadoEm||"").localeCompare(String(b.c.criadoEm||""));
+    });
+    g.fica=g.itens[0].c.id;
+  });
+  return grupos.sort(function(a,b){return b.itens.length-a.itens.length;});
+}
+/* move TUDO do cadastro que sai para o que fica, e completa o que faltava nele */
+async function juntarCadastrosCli(ficaId,saiId){
+  var fica=clientes.filter(function(c){return c.id===ficaId;})[0];
+  var sai=clientes.filter(function(c){return c.id===saiId;})[0];
+  if(!fica||!sai||ficaId===saiId)return null;
+  var movidos=0;
+  for(var i=0;i<LIGACOES_CLI.length;i++){
+    var nome=LIGACOES_CLI[i][0],campo=LIGACOES_CLI[i][1];
+    var lista=listaDaColecao(nome).filter(function(x){return x&&x[campo]===saiId;});
+    for(var j=0;j<lista.length;j++){
+      lista[j][campo]=ficaId;
+      if(lista[j].cliente)lista[j].cliente=fica.nome||lista[j].cliente;
+      await grava(nome,lista[j]);
+      movidos++;
+    }
+  }
+  /* o que fica herda o que estava só no outro — nunca sobrescreve o que já tem */
+  var herdou=[];
+  ["doc","rg","nasc","sexo","tel","email","cep","rua","num","compl","bairro","cidade","uf",
+   "geo","ref","origem","apelido","respNome","respTel","comprasTel","obs"].forEach(function(k){
+    if(!String(fica[k]||"").trim()&&String(sai[k]||"").trim()){fica[k]=sai[k];herdou.push(k);}
+  });
+  /* anotações e anexos vão junto */
+  if((sai.notas||[]).length)fica.notas=(fica.notas||[]).concat(sai.notas);
+  if((sai.anexos||[]).length)fica.anexos=(fica.anexos||[]).concat(sai.anexos);
+  fica.juntadoDe=(fica.juntadoDe||[]).concat([{id:saiId,codigo:sai.codigo||"",nome:sai.nome||"",
+    quando:hojeISO(),por:usuarioAtual,registros:movidos}]);
+  await grava("clientes",fica);
+  clientes=clientes.filter(function(c){return c.id!==saiId;});
+  try{await apaga("clientes",saiId);}catch(e){console.warn("apagar cadastro",e);}
+  try{esquecerManutCli();}catch(e){}
+  return {movidos:movidos,herdou:herdou,fica:fica,saiu:sai};
+}
+function abrirDupCli(){
+  dupCliGrupos=gruposClientesRepetidos();
+  renderDupCli();
+  $("dupCliModal").hidden=false;
+}
+var dupCliGrupos=[];
+function renderDupCli(){
+  var q=($("dc_busca").value||"").toLowerCase().trim();
+  var gs=dupCliGrupos.filter(function(g){
+    if(g.pulado)return true;
+    if(!q)return true;
+    return g.itens.some(function(x){return (x.c.nome||"").toLowerCase().indexOf(q)>=0||
+      String(x.c.doc||"").indexOf(q)>=0||String(x.c.codigo||"").toLowerCase().indexOf(q)>=0;});
+  });
+  var aMais=dupCliGrupos.reduce(function(a,g){return a+(g.pulado?0:g.itens.length-1);},0);
+  $("dc_sub").textContent=dupCliGrupos.length
+    ? dupCliGrupos.length+" grupo(s) · "+aMais+" cadastro(s) a mais. Confira quem fica em cada um."
+    : "Nenhum cadastro repetido nesta loja.";
+  $("dc_ok").disabled=!aMais;
+  if(!gs.length){$("dc_corpo").innerHTML='<div class="empty"><div class="big">Nada repetido</div>'+
+    "Nenhum cadastro desta loja tem o mesmo CPF/CNPJ nem o mesmo telefone com o mesmo nome.</div>";return;}
+  $("dc_corpo").innerHTML=gs.map(function(g,gi){
+    return '<div class="card" style="margin-bottom:12px"><div class="toolbar" style="padding:0 0 8px">'+
+      "<b>"+esc(g.motivo)+"</b><span class='sp'></span>"+
+      '<label class="chk"><input type="checkbox" data-dcpula="'+gi+'"'+(g.pulado?" checked":"")+
+      '><span>não mexer neste</span></label></div>'+
+      '<div class="tw"><table><thead><tr><th>Fica</th><th>Cadastro</th><th>Situação</th>'+
+      "<th>Vendas</th><th>Registros</th></tr></thead><tbody>"+
+      g.itens.map(function(x){
+        return "<tr>"+
+          '<td><input type="radio" name="dcg'+gi+'" data-dcfica="'+gi+"|"+esc(x.c.id)+'"'+
+            (g.fica===x.c.id?" checked":"")+(g.pulado?" disabled":"")+"></td>"+
+          '<td><div class="t-main">'+esc(x.c.nome||"—")+'</div><div class="t-sub">'+
+            esc([x.c.codigo,x.c.doc,x.c.cidade,x.c.tel].filter(Boolean).join(" · "))+"</div></td>"+
+          "<td>"+(x.lead?'<span class="pill p-acc">lead</span>':'<span class="pill p-ok">cliente</span>')+"</td>"+
+          "<td>"+(x.uso.vendas||0)+"</td>"+
+          "<td>"+(x.uso.total||0)+"</td></tr>";
+      }).join("")+"</tbody></table></div></div>";
+  }).join("");
+  Array.prototype.forEach.call($("dc_corpo").querySelectorAll("[data-dcfica]"),function(r){
+    r.onchange=function(){
+      var p=r.getAttribute("data-dcfica").split("|");
+      dupCliGrupos[+p[0]].fica=p[1];};
+  });
+  Array.prototype.forEach.call($("dc_corpo").querySelectorAll("[data-dcpula]"),function(ch){
+    ch.onchange=function(){dupCliGrupos[+ch.getAttribute("data-dcpula")].pulado=ch.checked;renderDupCli();};
+  });
+}
+async function juntarTodosDupCli(){
+  var gs=dupCliGrupos.filter(function(g){return !g.pulado&&g.itens.length>1;});
+  if(!gs.length)return;
+  var quantos=gs.reduce(function(a,g){return a+g.itens.length-1;},0);
+  if(!confirm("Juntar "+quantos+" cadastro(s) repetido(s)?\n\nTudo que está neles — atendimentos, "+
+    "pedidos, orçamentos, OS, atividades, aparelhos e títulos — passa para o cadastro marcado "+
+    "como Fica, e o repetido é apagado. Não dá para desfazer."))return;
+  $("dc_ok").disabled=true;
+  var n={juntados:0,movidos:0,erros:0};
+  for(var i=0;i<gs.length;i++){
+    var g=gs[i];
+    for(var j=0;j<g.itens.length;j++){
+      var id=g.itens[j].c.id;
+      if(id===g.fica)continue;
+      try{
+        var r=await juntarCadastrosCli(g.fica,id);
+        if(r){n.juntados++;n.movidos+=r.movidos;}
+      }catch(e){console.warn("juntar",e);n.erros++;}
+    }
+  }
+  $("dupCliModal").hidden=true;
+  try{esquecerMeusClientes&&esquecerMeusClientes();}catch(e){}
+  renderClientes();render();
+  toast(n.juntados+" cadastro(s) repetido(s) juntado(s) · "+n.movidos+" registro(s) movido(s)"+
+    (n.erros?" · "+n.erros+" com erro":"")+".");
 }
 function renderClientes(){
   /* o cadastro de cliente é da LOJA e aparece para todos dela (regra dele, 22/09: "os clientes
@@ -10124,6 +10351,13 @@ function atualizarBotaoApagarCli(){
   bt.hidden=!n;bt.textContent="Apagar os "+n+" cliente(s) importado(s)";
 }
 function ligarImportClientes(){
+  /* cadastros repetidos (07/10) */
+  if($("cliRepetidos")){
+    $("cliRepetidos").onclick=abrirDupCli;
+    $("dc_fechar").onclick=function(){$("dupCliModal").hidden=true;};
+    $("dc_ok").onclick=juntarTodosDupCli;
+    $("dc_busca").oninput=renderDupCli;
+  }
   var bt=$("cliImportar");if(!bt)return;
   bt.onclick=abrirImportClientes;
   $("ic_fechar").onclick=function(){$("impcModal").hidden=true;};
@@ -10570,6 +10804,9 @@ window.__renderFunilMF=function(){return renderFunil();};
 window.__funilClienteMF=function(cid,m){return atualizarFunilCliente(cid,m);};
 window.__sincFunilMF=function(){return sincronizarFunil();};
 window.__ehLeadMF=function(c){return ehLead(c);};
+window.__clienteVincMF=function(){return clienteVinc;};
+window.__dupCliMF=function(){return gruposClientesRepetidos();};
+window.__iguaisMF=function(d,t,n){return clientesIguaisA(d,t,n,null);};
 window.__comOrigemMF=function(a){pedOrigemAtiv=a||atendimentos[0]||{id:"teste",cliente:"",motivos:[]};return origemDaVenda();};
 window.__telaAtualMF=function(){return telaAtual;};
 window.__renderMotivosMF=function(){return renderMotivos();};
@@ -26394,6 +26631,8 @@ var ordens=[],editandoOS=null,osPecas=[],osCli=null,osOrigemAtiv=null;
 var OS_TIPOS=[
   {k:"garantia",n:"Garantia de fábrica",cobra:false},
   {k:"orcamento",n:"Orçamento de conserto",cobra:true},
+  /* pedido dele, 07/10: o conserto do que quebrou, separado do orçamento e da periódica */
+  {k:"corretiva",n:"Manutenção corretiva",cobra:true},
   {k:"manutencao",n:"Manutenção periódica",cobra:true},
   {k:"instalacao",n:"Instalação",cobra:true},
   {k:"revisao",n:"Revisão / limpeza",cobra:true}
@@ -31782,6 +32021,8 @@ function renderMotivos(){
 
 /* ---------- atendimentos e atividades ---------- */
 var atendimentos=[],editandoAt=null,tiposSel=[],motivosSel=[],completoSel="",atendPend=null,clienteVinc=null,iniSel="passivo";
+/* "cadastrar como contato novo" quando o telefone bate mas é outra pessoa (07/10) */
+var atForcarNovo=false;
 function renderChipsTipos(){
   var w=$("at_tipos");w.innerHTML="";
   if(!tipos.length){w.innerHTML='<span class="help">Nenhum tipo cadastrado. Vá em Configurações › Tipos de Atendimento.</span>';return;}
@@ -32104,6 +32345,35 @@ async function salvarAtend(){
         "são o mínimo para alguém conseguir voltar a falar com ele. "+
         'Se quiser registrar tudo agora, use <b>Abrir cadastro completo do lead</b>.</div>';
       return;}
+    /* ESTE CONTATO JÁ TEM CADASTRO? (07/10, relato do CARROS MAIS em dois cadastros)
+       Quem digita o nome inteiro em vez de escolher da lista criava um segundo cadastro do mesmo
+       cliente — e aí o mesmo contato aparecia como lead e como cliente. Documento igual é prova:
+       usa o que existe. Telefone igual com nome igual também. Telefone igual com nome diferente
+       pergunta, porque marido e esposa dividem número. */
+    var iguais=clientesIguaisA($("at_doc").value,tel,nome,null);
+    if(iguais.algum.length&&!atForcarNovo){
+      var ja=iguais.algum[0];
+      if(iguais.algum.length===1&&(iguais.doc.length||iguais.telNome.length)){
+        /* é o mesmo: segue no cadastro que já existe, sem criar outro */
+        clienteVinc=ja;leadNovo=null;
+        try{preencherCliente(ja);}catch(e){console.warn(e);}
+        $("at_alerta").innerHTML='<div class="note ok"><b>Este contato já tem cadastro — '+
+          "o atendimento foi registrado nele, sem criar um segundo.</b><br>"+htmlCadastroAchado(ja)+
+          "</div>";
+      }else{
+        $("at_alerta").innerHTML='<div class="note warn"><b>Já existe cadastro com este telefone:</b><br>'+
+          iguais.algum.map(function(c){return "• "+htmlCadastroAchado(c);}).join("<br>")+
+          "<br><br>Escolha o cadastro na busca do campo <b>Nome</b> para registrar neste atendimento, "+
+          'ou <button class="btn ghost" type="button" id="at_novoMesmo">cadastrar como contato novo</button> '+
+          "se for outra pessoa.</div>";
+        var bn=$("at_novoMesmo");
+        if(bn)bn.onclick=function(){atForcarNovo=true;salvarAtend();};
+        return;
+      }
+    }
+    atForcarNovo=false;
+    }
+  if(!clienteVinc){
     var c={id:uid(),loja:lojaAtual,codigo:(await codigoClienteNovo()),tipo:(tipoPessoaAt||"Pessoa Física"),
       nome:nome,sexo:$("at_sexo").value,tel:tel,
       doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
