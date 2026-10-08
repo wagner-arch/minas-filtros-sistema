@@ -10936,6 +10936,7 @@ window.__rotuloEquipMF=function(e){return rotuloEquip(e);};
 window.__garantiaApMF=function(e){return textoGarantiaAparelho(e);};
 window.__sincEquipMF=function(){return sincronizarEquipamentos();};
 window.__itensSemApMF=function(){return itensSemAparelhoEscolhido();};
+window.__abrirCliMF=function(c){return abrirCliente(c);};
 window.__equipDaVendaMF=function(p,it){return equipDaVenda(p,it);};
 window.__podeGravarCfgMF=function(){return podeGravarConfig();};
 window.__itensVendaMF=function(){return itens;};
@@ -25510,23 +25511,42 @@ async function sincronizarEquipamentos(){
       /* REGRA 9.1 (dele, 08/10): UM APARELHO POR UNIDADE VENDIDA. Quantidade 3 de um purificador
          são três aparelhos, com três planos — antes nascia um só, e os outros dois nunca entravam
          na Manutenção Periódica nem tinham plano próprio. Peça e refil continuam com um registro
-         por item: eles não são aparelho. */
+         por item: eles não são aparelho.
+
+         DEFEITO GRAVE DA v323, CORRIGIDO AQUI (relato dele, 08/10): a conta de "quantos já
+         nasceram" olhava o `itemId`, que só existe nos aparelhos criados DEPOIS da v323. Os
+         aparelhos antigos do mesmo pedido não tinham esse campo, não eram reconhecidos, e a
+         sincronização criava a quantidade inteira DE NOVO. E como ela roda a cada abertura do
+         sistema, o pedido 20808 (quantidade 3) foi de 3 para 6 aparelhos, e dobraria a cada vez.
+         Agora a conta é por PEDIDO + PRODUTO e ignora o itemId: o que já existe conta como
+         unidade já criada, venha de antes ou de depois da v323. Só nasce o que falta. */
       var ehAp=ehAparelhoDeOS(prod.nome||"",prod.grupo||"");
-      var quantos=ehAp?Math.max(1,parseInt(it.qtd,10)||1):1;
-      /* o que já nasceu deste item em outra passagem não é criado de novo */
-      var jaDoItem=equipamentos.filter(function(x){
-        return x.loja===p.loja&&x.pedidoId===p.id&&x.itemId===(it.id||"")&&x.produtoId===prod.id;}).length;
-      for(var u=jaDoItem;u<quantos;u++){
-        var e={id:uid(),loja:p.loja,chave:(quantos>1?ch+"#"+(u+1):ch),clienteId:p.clienteId,cliente:p.cliente,
-          produtoId:prod.id,produto:prod.nome,serie:(u===0?(it.serie||""):""),
+      /* a quantidade de TODOS os itens deste mesmo produto no pedido (o catálogo pode ter o
+         produto em duas linhas) e tudo que já existe deste pedido + produto */
+      var qtdTotalProd=0;
+      (p.itens||[]).forEach(function(i2){
+        if(i2.pid!==prod.id)return;
+        qtdTotalProd+=ehAp?Math.max(1,parseInt(i2.qtd,10)||1):1;
+      });
+      var existentes=equipamentos.filter(function(x){
+        return x.loja===p.loja&&x.pedidoId===p.id&&x.produtoId===prod.id;}).length;
+      /* só o PRIMEIRO item deste produto no pedido cria: os outros já foram contados acima */
+      var primeiroDoProduto=(p.itens||[]).filter(function(i2){return i2.pid===prod.id;})[0];
+      if(primeiroDoProduto&&primeiroDoProduto!==it)continue;
+      var faltam=qtdTotalProd-existentes;
+      if(faltam<=0)continue;                 /* já tem tudo: NÃO cria nada (é a correção) */
+      for(var u=0;u<faltam;u++){
+        var ordem=existentes+u+1;
+        var e={id:uid(),loja:p.loja,chave:(qtdTotalProd>1?ch+"#"+ordem:ch),clienteId:p.clienteId,cliente:p.cliente,
+          produtoId:prod.id,produto:prod.nome,serie:(ordem===1?(it.serie||""):""),
           compradoEm:p.data,compradoHora:p.hora||"",
           valorCompra:(+it.valor||0),formaPgto:resumoPgto(p),
           instaladoEm:(p.instalacao?String(p.instalacao).split(" ")[0]:p.data),
           manutDias:+prod.manut,ultimaManut:"",ultimaManutHora:"",
           ultimoValor:null,ultimaForma:"",plano:it.garantia||"Bronze",
-          tecnico:p.instalador||p.vendedor||"",local:(u===0?(it.local||""):""),obs:"",
+          tecnico:p.instalador||p.vendedor||"",local:(ordem===1?(it.local||""):""),obs:"",
           pedidoId:p.id,pedidoNumero:p.numero,itemId:it.id||"",
-          unidade:(quantos>1?(u+1):0),unidadesDoItem:(quantos>1?quantos:0),
+          unidade:(qtdTotalProd>1?ordem:0),unidadesDoItem:(qtdTotalProd>1?qtdTotalProd:0),
           historico:[],ativo:true,demo:!!p.demo,criadoEm:hojeISO()};
         equipamentos.push(e);await grava("equipamentos",e);criados++;
       }
@@ -25774,8 +25794,18 @@ function renderManutCli(c,rotAba){
     var tr=document.createElement("tr");
     tr.className="clickable";
     tr.setAttribute("data-mcst",x.s.k);
-    tr.innerHTML='<td><div class="t-main">'+esc(e.produto||"—")+"</div>"+
-        '<div class="t-sub">'+(e.serie?"<code>"+esc(e.serie)+"</code> ":"")+esc(e.local||"")+
+    /* ITEM 6 (relato dele, 08/10): nesta aba os seis Everest Fit apareciam IDÊNTICOS, porque a
+       linha mostrava só produto, série e localização. Agora ela segue o formato do 9.8 —
+       localização · produto · série · garantia · plano · unidade —, que é o que diferencia um
+       aparelho do outro quando o cliente tem vários iguais. */
+    tr.innerHTML='<td><div class="t-main">'+
+        (e.local?esc(e.local)+" · ":"")+esc(e.produto||"—")+"</div>"+
+        '<div class="t-sub">'+(e.serie?"<code>"+esc(e.serie)+"</code> ":"")+
+          esc(textoGarantiaAparelho(e))+" · "+esc(textoPlanoAparelho(e))+
+          (e.unidadesDoItem?" · unid "+e.unidade+" de "+e.unidadesDoItem:"")+
+          (!e.serie&&!e.local?' <span class="pill p-mut" title="Sem série e sem localização: preencha para diferenciar dos iguais">sem identificação</span>':"")+
+          (e.compradoEm?" · comprado em "+esc(dataCurta(e.compradoEm)):"")+
+          (e.pedidoNumero?" · pedido "+esc(String(e.pedidoNumero)):"")+
           (planoAtivoEquip(e)?' <span class="pill p-plano">&#128167; Plano '+esc(e.plano)+" · ativo</span>":"")+
           (x.via?' <span class="pill p-mut" title="Este aparelho está em outro cadastro com os mesmos dados">'+esc(x.via)+"</span>":"")+
         "</div></td>"+
