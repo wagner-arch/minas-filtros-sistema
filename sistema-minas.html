@@ -2237,7 +2237,7 @@ img{max-width:100%}
               <div class="fld"><label for="v_valor">Valor unitário</label><input id="v_valor" type="text" inputmode="decimal" step="10"></div>
               <div class="fld"><label for="v_serie">Número de série</label><input id="v_serie" placeholder="—"></div>
               <div class="fld" id="v_localWrap" hidden><label for="v_local">Localização do produto <span class="req">*</span></label>
-                <input id="v_local" placeholder="Cozinha, refeitório, área externa…" autocomplete="off">
+                <input id="v_local" placeholder="Cozinha, área gourmet, escritório…" autocomplete="off" list="dlLocais">
                 <div class="help">Onde o aparelho vai ficar <b>no cliente</b>. Sem número de série, é o que diferencia um aparelho do outro na manutenção periódica.</div></div>
             </div>
             <!-- a nota do preço ocupa a largura toda: dentro do campo ela virava uma coluna de texto (25/09) -->
@@ -4602,6 +4602,7 @@ img{max-width:100%}
             <div class="fld" style="grid-column:span 2"><label for="cx_banco">Banco <span class="req cx-reqb">*</span></label>
               <input id="cx_banco" list="dlBancos" autocomplete="off" placeholder="Digite o nome ou o código: Sicoob, 756, Itaú…">
               <datalist id="dlBancos"></datalist></div>
+              <datalist id="dlLocais"></datalist>
             <div class="fld"><label for="cx_bancoCod">Código do banco</label><input id="cx_bancoCod" inputmode="numeric" maxlength="3" placeholder="756"></div>
             <div class="fld"><label for="cx_tipoConta">Tipo de conta</label>
               <select id="cx_tipoConta"><option value="corrente">Corrente</option><option value="poupanca">Poupança</option><option value="pagamento">Pagamento</option><option value="investimento">Investimento</option></select></div>
@@ -5547,6 +5548,8 @@ img{max-width:100%}
       <input type="search" id="deq_busca" placeholder="Buscar cliente ou aparelho">
     </div>
     <div id="deq_lista"></div>
+    <h3 style="margin:18px 0 6px">Conferir os vínculos feitos desde a v322</h3>
+    <div id="deq_auditoria"></div>
   </div>
 </div>
 <div class="modal" id="impmModal" hidden>
@@ -10457,6 +10460,11 @@ function ligarEquipRepetidos(){
   bt.onclick=abrirEquipRepetidos;
   $("deq_fechar").onclick=function(){$("dupEqModal").hidden=true;};
   $("deq_busca").oninput=renderEquipRepetidos;
+  /* "São aparelhos diferentes": tira o grupo da lista para sempre (regra 9.5) */
+  $("deq_lista").addEventListener("click",function(ev){
+    var b=ev.target.closest&&ev.target.closest("[data-eqdist]");
+    if(b)marcarAparelhosDistintos(b.getAttribute("data-eqdist"));
+  });
 }
 /* o botao so aparece para o Administrador E quando existe repetido de verdade */
 function ajustarBotaoEquipRepetidos(){
@@ -10925,6 +10933,9 @@ window.__custodiaMF=function(){return custodia;};
 window.__ordensMF=function(){return ordens;};
 window.__ehAparelhoMF=function(n,g){return ehAparelhoDeOS(n,g);};
 window.__rotuloEquipMF=function(e){return rotuloEquip(e);};
+window.__garantiaApMF=function(e){return textoGarantiaAparelho(e);};
+window.__sincEquipMF=function(){return sincronizarEquipamentos();};
+window.__itensSemApMF=function(){return itensSemAparelhoEscolhido();};
 window.__equipDaVendaMF=function(p,it){return equipDaVenda(p,it);};
 window.__podeGravarCfgMF=function(){return podeGravarConfig();};
 window.__itensVendaMF=function(){return itens;};
@@ -11117,12 +11128,10 @@ function sincronizarValor(){
    é a troca, listando os que ele tem — pelo número de série ou pela
    localização cadastrada. É essa resposta que diz qual manutenção baixar. */
 /* ---------- APARELHOS REPETIDOS (pedido dele, 08/10) ----------
-   "Verifique se foram criados em duplicidade pelo sistema... me mostre a lista de clientes com
-   aparelhos duplicados — NÃO apague nada sozinho, eu decido."
    Esta parte SÓ MOSTRA. Não apaga, não desativa e não junta nada.
-   A causa que o sistema criava está corrigida no equipDaVenda: a conferência era só pelo
-   `produtoId`, e o catálogo tem o mesmo produto em mais de um cadastro — então cada venda nascia
-   com um aparelho novo. Aqui cada grupo diz qual foi a causa provável. */
+   Desde 08/10 (complemento dele) cada grupo pode ser marcado como **"São aparelhos diferentes"**:
+   o cliente da OS 3016 tem três purificadores iguais de verdade, cada um com o seu Premium I, e
+   não faz sentido o sistema apontá-los para sempre. Marcado, o grupo sai da lista. */
 function chaveEquipRepetido(e){
   return (e.clienteId||"")+"|"+semAcento(String(e.produto||e.equipamento||"").toLowerCase()).replace(/\s+/g," ").trim();
 }
@@ -11138,6 +11147,8 @@ function gruposEquipRepetidos(){
   Object.keys(por).forEach(function(k){
     var g=por[k];
     if(g.length<2)return;
+    /* o Administrador já disse que estes são aparelhos diferentes: não aponta mais (regra 9.5) */
+    if(g.filter(function(e){return e.aparelhosDistintos;}).length===g.length)return;
     /* série diferente = aparelhos diferentes de verdade; só entra o que NÃO dá para distinguir */
     var series=g.map(function(e){return String(e.serie||"").trim().toLowerCase();});
     var comSerie=series.filter(function(s){return !!s;});
@@ -11149,12 +11160,116 @@ function gruposEquipRepetidos(){
       nome:(g[0].produto||g[0].equipamento||"Aparelho"),
       pidsDiferentes:Object.keys(pids).length>1,
       causa:Object.keys(pids).length>1
-        ? "vieram de cadastros de produto DIFERENTES com o mesmo nome — era o defeito do sistema, corrigido nesta versão"
+        ? "vieram de cadastros de produto DIFERENTES com o mesmo nome — era o defeito do sistema, corrigido na v322"
         : (g.filter(function(e){return e.criadoPorOS;}).length>1
           ? "foram cadastrados por OS diferentes em \"Outro equipamento\""
           : "mesmo produto e mesmo cliente, sem série que diferencie — pode ser compra repetida de verdade")});
   });
   return out.sort(function(a,b){return b.itens.length-a.itens.length;});
+}
+/* "São aparelhos diferentes": marca o grupo inteiro e nunca mais o aponta (regra 9.5) */
+async function marcarAparelhosDistintos(chave){
+  if(!ehAdministrador()){toast("Só o Administrador marca um grupo como aparelhos diferentes.");return;}
+  var g=gruposEquipRepetidos().filter(function(x){return x.chave===chave;})[0];
+  if(!g)return;
+  for(var i=0;i<g.itens.length;i++){
+    var e=g.itens[i];
+    e.aparelhosDistintos=true;
+    e.aparelhosDistintosPor=usuarioAtual;
+    e.aparelhosDistintosEm=agoraCarimbo();
+    e.historico=e.historico||[];
+    e.historico.push({data:hojeISO(),por:usuarioAtual,
+      texto:"Marcado como aparelho diferente (não é repetido) por "+usuarioAtual});
+    await grava("equipamentos",e);
+  }
+  try{esquecerManutCli();}catch(x){}
+  toast("Grupo marcado como aparelhos diferentes: "+g.itens.length+" aparelhos de "+
+    ((g.cliente&&g.cliente.nome)||"cliente")+" saíram da lista.");
+  renderEquipRepetidos();renderManut();
+}
+/* ---------- AUDITORIA DA REGRA DO NOME (regra 9.4 dele) ----------
+   A v322 ligava a venda ao aparelho pelo NOME do produto no mesmo cliente. Isso pode ter ligado
+   refil, peça ou OS ao aparelho errado quando o cliente tem iguais. Aqui está tudo que foi gravado
+   DESDE A PUBLICAÇÃO DA V322 e pode ter passado por essa regra — com o aparelho escolhido e os
+   outros iguais do mesmo cliente, para ele decidir. NADA é corrigido por aqui. */
+var DATA_V322="2026-10-08";
+function auditoriaVinculoNome(){
+  var out=[];
+  pedidos.forEach(function(p){
+    if(p.loja!==lojaAtual)return;
+    if(String(p.data||"")<DATA_V322&&String(p.aprovadoEm||"")<DATA_V322)return;
+    (p.itens||[]).forEach(function(it){
+      var prod=produtos.filter(function(x){return x.id===it.pid;})[0];
+      if(!prod||!(+prod.manut))return;
+      /* aparelho novo não era caso da regra do nome */
+      if(ehAparelhoDeOS(it.nome||prod.nome||"",prod.grupo||""))return;
+      var ligado=null;
+      try{
+        ligado=it.equipId
+          ? equipamentos.filter(function(e){return e.id===it.equipId;})[0]
+          : null;
+        if(!ligado){
+          /* como a v322 ligava: pelo produtoId e, não achando, pelo NOME */
+          var porId=equipamentos.filter(function(e){
+            return e.clienteId===p.clienteId&&e.produtoId===it.pid&&e.ativo!==false;});
+          if(!porId.length){
+            var n=semAcento(String(it.nome||"").toLowerCase()).replace(/\s+/g," ").trim();
+            porId=equipamentos.filter(function(e){
+              return e.clienteId===p.clienteId&&e.ativo!==false&&
+                semAcento(String(e.produto||e.equipamento||"").toLowerCase()).replace(/\s+/g," ").trim()===n;});
+          }
+          ligado=porId[0]||null;
+        }
+      }catch(x){}
+      if(!ligado)return;
+      var iguais=aparelhosIguaisDoCliente(p.clienteId,ligado.produtoId,ligado.produto||ligado.equipamento);
+      if(iguais.length<2)return;                /* só há um candidato: não houve escolha a errar */
+      var cli=clientes.filter(function(c){return c.id===p.clienteId;})[0];
+      out.push({cliente:(cli&&cli.nome)||p.cliente||"",codigo:(cli&&cli.codigo)||"",
+        pedido:p.numero,data:p.data,item:it.nome,qtd:it.qtd||1,
+        escolheuPeloCampo:!!it.equipId,
+        aparelho:ligado,outros:iguais.filter(function(e){return e.id!==ligado.id;})});
+    });
+  });
+  /* as OS abertas desde a v322 que apontam para um aparelho tendo iguais */
+  ordens.forEach(function(o){
+    if(o.loja!==lojaAtual)return;
+    if(String(o.abertura||"")<DATA_V322)return;
+    if(!o.equipId)return;
+    var e=equipamentos.filter(function(x){return x.id===o.equipId;})[0];
+    if(!e)return;
+    var ig=aparelhosIguaisDoCliente(o.clienteId,e.produtoId,e.produto||e.equipamento);
+    if(ig.length<2)return;
+    var cli2=clientes.filter(function(c){return c.id===o.clienteId;})[0];
+    out.push({cliente:(cli2&&cli2.nome)||o.cliente||"",codigo:(cli2&&cli2.codigo)||"",
+      pedido:"OS "+o.numero,data:o.abertura,item:o.equipamento||"",qtd:1,
+      escolheuPeloCampo:true,aparelho:e,
+      outros:ig.filter(function(x){return x.id!==e.id;})});
+  });
+  return out;
+}
+function renderAuditoriaVinculo(){
+  var lista=[];
+  try{lista=auditoriaVinculoNome();}catch(e){lista=[];}
+  var box=$("deq_auditoria");if(!box)return;
+  if(!lista.length){
+    box.innerHTML='<div class="note ok"><b>Nenhum registro desde a v322 (08/10/2026) ficou ligado a um '+
+      "aparelho tendo outro igual no mesmo cliente.</b> Não há o que conferir.</div>";
+    return;
+  }
+  box.innerHTML='<div class="note warn"><b>'+lista.length+" registro(s) desde a v322 (08/10/2026) "+
+    "foram ligados a um aparelho que tem outro igual no mesmo cliente.</b> Confira se o aparelho "+
+    "está certo. <b>Nada foi corrigido</b> — a decisão é sua.</div>"+
+    '<div class="tw"><table><thead><tr><th>Cliente</th><th>Pedido / OS</th><th>Data</th>'+
+    "<th>Item</th><th>Aparelho ligado</th><th>Como</th><th>Outros iguais do cliente</th></tr></thead><tbody>"+
+    lista.map(function(r){
+      return "<tr><td>"+esc(r.cliente)+(r.codigo?" <span class=\"pill\">"+esc(r.codigo)+"</span>":"")+"</td>"+
+        "<td>"+esc(String(r.pedido))+"</td><td>"+esc(r.data?dataCurta(r.data):"—")+"</td>"+
+        "<td>"+esc(r.item)+(r.qtd>1?" ("+r.qtd+"×)":"")+"</td>"+
+        "<td>"+esc(rotuloEquip(r.aparelho))+"</td>"+
+        "<td>"+(r.escolheuPeloCampo?"escolhido na venda":"<b>pela regra do nome</b>")+"</td>"+
+        "<td>"+r.outros.map(function(e){return esc(rotuloEquip(e));}).join("<br>")+"</td></tr>";
+    }).join("")+"</tbody></table></div>";
 }
 function renderEquipRepetidos(){
   var lista=gruposEquipRepetidos();
@@ -11167,9 +11282,9 @@ function renderEquipRepetidos(){
     : "Nenhum aparelho repetido nesta loja.";
   $("deq_aviso").innerHTML=lista.length
     ? '<div class="note"><b>Esta janela só mostra — nada é apagado nem juntado por aqui.</b> '+
-      "Veja cada grupo, decida o que fazer e me diga. A causa que o sistema criava "+
-      "(o mesmo produto cadastrado duas vezes no catálogo fazendo nascer um aparelho por venda) "+
-      "está corrigida: de agora em diante não nasce repetido.</div>"
+      "Veja cada grupo, decida o que fazer e me diga. Se forem aparelhos diferentes de verdade "+
+      "(o cliente tem três purificadores iguais, por exemplo), use <b>São aparelhos diferentes</b> "+
+      "e o grupo sai desta lista para sempre.</div>"
     : '<div class="note ok">Nenhum aparelho repetido nesta loja.</div>';
   $("deq_lista").innerHTML=lista.map(function(g){
     return '<div class="card" style="margin:12px 0">'+
@@ -11177,40 +11292,114 @@ function renderEquipRepetidos(){
       ((g.cliente&&g.cliente.codigo)?' <span class="pill">'+esc(g.cliente.codigo)+"</span>":"")+"</h3>"+
       '<p class="sub" style="margin:0 0 10px">'+esc(g.nome)+" · "+g.itens.length+" cadastros</p>"+
       '<div class="note '+(g.pidsDiferentes?"warn":"")+'" style="margin:0 0 10px"><b>Causa provável:</b> '+esc(g.causa)+"</div>"+
-      '<div class="tw"><table><thead><tr><th>Série</th><th>Comprado em</th><th>Pedido</th>'+
+      (ehAdministrador()
+        ? '<div class="actions" style="justify-content:flex-start;margin:0 0 10px">'+
+          '<button class="btn ghost sm" type="button" data-eqdist="'+esc(g.chave)+'">São aparelhos diferentes</button></div>'
+        : "")+
+      '<div class="tw"><table><thead><tr><th>Série</th><th>Localização</th><th>Comprado em</th><th>Pedido</th>'+
       "<th>OS</th><th>Plano</th><th>Próxima troca</th><th>Cadastrado em</th></tr></thead><tbody>"+
       g.itens.map(function(e){
         var px=proximaDe(e);
-        return "<tr><td>"+esc(e.serie||"—")+"</td><td>"+esc(e.compradoEm?dataCurta(e.compradoEm):"—")+"</td>"+
+        return "<tr><td>"+esc(e.serie||"—")+"</td><td>"+esc(e.local||"—")+"</td>"+
+          "<td>"+esc(e.compradoEm?dataCurta(e.compradoEm):"—")+"</td>"+
           "<td>"+esc(e.pedidoNumero||"—")+"</td><td>"+esc(e.criadoPorOS||"—")+"</td>"+
           "<td>"+esc(e.plano||"—")+"</td><td>"+esc(px?dataCurta(px):"—")+"</td>"+
           "<td>"+esc(e.criadoEm?dataCurta(e.criadoEm):"—")+"</td></tr>";
       }).join("")+"</tbody></table></div></div>";
   }).join("")||"";
+  renderAuditoriaVinculo();
 }
 function abrirEquipRepetidos(){
   $("deq_busca").value="";
   renderEquipRepetidos();
   $("dupEqModal").hidden=false;
 }
+/* soma meses a uma data ISO, mantendo o dia (31/01 + 1 mês = 28/02) */
+function somaMeses(d,n){
+  var x=new Date(String(d)+"T00:00:00");
+  var dia=x.getDate();
+  x.setDate(1);x.setMonth(x.getMonth()+(parseInt(n,10)||0));
+  var ult=new Date(x.getFullYear(),x.getMonth()+1,0).getDate();
+  x.setDate(Math.min(dia,ult));
+  return iso(x);
+}
+/* ---------- REGRA 9.8: IDENTIFICAÇÃO DO APARELHO (regra dele, 08/10) ----------
+   "Todo aparelho do cliente tem Número de série e/ou Localização." E, principalmente:
+   **a garantia e o plano são do APARELHO, nunca do cliente** — um cliente pode ter um purificador
+   com Premium I e outro sem nada. Por isso toda lista de escolha mostra, em cada linha:
+   Localização · produto · série · garantia · plano. É essa linha que evita escolher o aparelho
+   errado quando o cliente tem três iguais. */
+var LOCAIS_APARELHO=["Cozinha","Área de lazer","Área gourmet / churrasqueira","Escritório",
+  "Sala","Lavanderia","Consultório","Outro"];
+/* a garantia é contada da compra DAQUELE aparelho */
+function garantiaDoAparelho(e){
+  if(!e)return null;
+  var base=e.compradoEm||e.instaladoEm||"";
+  if(!base)return null;
+  var p=produtos.filter(function(x){return x.id===e.produtoId;})[0];
+  var meses=(p&&(+p.gar)>0)?+p.gar:12;     /* o campo "Garantia (meses)" do produto; 12 quando vazio */
+  var fim=somaMeses(base,meses);
+  return {ini:base,fim:fim,vigente:String(fim)>=hojeISO(),meses:meses};
+}
+function textoGarantiaAparelho(e){
+  var g=garantiaDoAparelho(e);
+  if(!g)return "sem data de compra";
+  return g.vigente?("garantia até "+dataCurta(g.fim)):("garantia vencida em "+dataCurta(g.fim));
+}
+function textoPlanoAparelho(e){
+  if(!e)return "sem plano";
+  if(!e.plano||e.plano==="Bronze")return "sem plano";
+  var pl=null;try{pl=planoDoEquip(e);}catch(x){}
+  return pl?(e.plano+" até "+dataCurta(pl.fim)):(e.plano+" (vigência não calculada)");
+}
+/* a linha do aparelho em TODA lista de escolha: localização primeiro, porque é o que a pessoa
+   reconhece na casa do cliente; depois produto, série, garantia e plano */
 function rotuloEquip(e){
-  var partes=[e.produto||""];
-  /* o aparelho pode ser reconhecido pela série, pela localização, ou pelas duas */
-  if(e.serie)partes.push("série "+e.serie);
+  if(!e)return "";
+  var partes=[];
   if(e.local)partes.push(e.local);
-  /* SEM SÉRIE, o que diferencia dois aparelhos iguais do mesmo cliente é de onde ele veio
-     (regra dele, 08/10: "mostre na lista algo que diferencie — data da compra, pedido de origem") */
-  if(!e.serie&&!e.local){
-    var de=[];
-    if(e.compradoEm)de.push("comprado em "+dataCurta(e.compradoEm));
-    if(e.pedidoNumero)de.push("pedido "+e.pedidoNumero);
-    else if(e.criadoPorOS)de.push("OS "+e.criadoPorOS);
-    if(e.plano&&e.plano!=="Bronze")de.push("plano "+e.plano);
-    partes.push(de.length?de.join(" · "):"sem série e sem localização");
-  }
+  partes.push(e.produto||e.equipamento||"Aparelho");
+  if(e.serie)partes.push("série "+e.serie);
+  if(!e.local&&!e.serie)partes.push("sem série e sem localização");
+  partes.push(textoGarantiaAparelho(e));
+  partes.push(textoPlanoAparelho(e));
   var px=proximaDe(e);
-  if(px)partes.push("vence "+dataCurta(px));
+  if(px)partes.push("troca "+dataCurta(px));
   return partes.join(" · ");
+}
+/* aparelho antigo que ninguém identificou: ao ser escolhido numa OS ou num pedido, o sistema pede
+   a localização ali mesmo. Só a gestão pode pular, e fica avisada. */
+function pedeLocalAparelho(e){
+  return !!(e&&!String(e.serie||"").trim()&&!String(e.local||"").trim());
+}
+async function completarLocalAparelho(e,onde){
+  if(!e)return false;
+  if(!pedeLocalAparelho(e))return true;
+  var sug=LOCAIS_APARELHO.filter(function(x){return x!=="Outro";}).join(", ");
+  var r=prompt("Este aparelho está sem número de série e sem localização, e o cliente pode ter "+
+    "outro igual.\n\nOnde ele fica? ("+sug+")\n\nEscreva a localização para identificar este "+
+    "aparelho de agora em diante:","");
+  if(r===null){
+    if(ehGestor()){
+      toast("Aparelho segue sem identificação. Só a gestão pode pular isso — preencha a localização na próxima visita.");
+      return true;
+    }
+    toast("Informe a localização do aparelho para continuar: é ela que diferencia um aparelho do outro.");
+    return false;
+  }
+  r=String(r||"").trim();
+  if(!r){
+    if(ehGestor()){toast("Aparelho segue sem identificação (pulado pela gestão).");return true;}
+    toast("A localização é obrigatória neste aparelho.");return false;
+  }
+  e.local=r;
+  e.historico=e.historico||[];
+  e.historico.push({data:hojeISO(),por:usuarioAtual,
+    texto:"Localização informada ("+r+")"+(onde?" ao "+onde:"")+" por "+usuarioAtual});
+  await grava("equipamentos",e);
+  try{esquecerManutCli();}catch(x){}
+  toast("Localização gravada: "+r+".");
+  return true;
 }
 function equipsDoCliente(){
   var cid=$("v_cliente").value;
@@ -11267,9 +11456,19 @@ function ajustarEquipItem(){
   if(!p||!(+p.manut>0)||!lista.length){w.hidden=true;sel.innerHTML="";ajustarLocalItem();return;}
   w.hidden=false;
   sel.innerHTML="";
+  /* REGRA 9.2 (dele, 08/10): com MAIS DE UM aparelho igual, o sistema PERGUNTA e não escolhe
+     sozinho. O cliente da OS 3016 tem três purificadores iguais, cada um com o seu Premium I —
+     adivinhar jogaria o refil (e o uso do plano) no aparelho errado. */
+  var vendeAparelho=ehAparelhoDeOS(p.nome||"",p.grupo||"");
+  /* para PEÇA ou REFIL, os candidatos são OS APARELHOS DO CLIENTE (a lista já é essa): com mais de
+     um, o sistema pergunta. Para APARELHO vendido, não há o que escolher — ele é novo (9.1). */
+  var iguais=vendeAparelho?[]:lista;
+  var precisaEscolher=!vendeAparelho&&lista.length>1;
   var oNovo=document.createElement("option");
   oNovo.value="";
-  oNovo.textContent="— é um aparelho novo, não é manutenção —";
+  oNovo.textContent=precisaEscolher
+    ? "— escolha o aparelho —"
+    : "— é um aparelho novo, não é manutenção —";
   sel.appendChild(oNovo);
   /* OS antiga sem o vínculo: o aparelho de nome igual ao da OS vem no topo (regra dele, 08/10) */
   var ordenada=lista.slice();
@@ -11280,20 +11479,22 @@ function ajustarEquipItem(){
     o.value=e.id;o.textContent=rotuloEquip(e);
     sel.appendChild(o);
   });
-  /* o aparelho mais perto de vencer já vem escolhido, para o vendedor confirmar */
   /* pedido aberto pelo atendimento da Manutenção Periódica: o aparelho daquele atendimento já vem escolhido */
   var doAt=pedOrigemAtiv&&(pedOrigemAtiv.manutEquipId||pedOrigemAtiv.equipId);
   var alvoAt=doAt?lista.filter(function(e){return e.id===doAt;})[0]:null;
-  /* purificador vendido é sempre aparelho novo (troca ou compra): não vem marcado como manutenção de outro aparelho */
-  var vendeAparelho=ehPurificador({pid:p.id,nome:p.nome});
   var alvoOS=(daOS&&!daOS.firme)?daOS.e:null;
-  var vencido=alvoAt||alvoOS||(vendeAparelho?null:lista.filter(function(e){var px=proximaDe(e);return px&&px<=hojeISO();})[0]);
+  /* com vários iguais, NADA vem marcado — nem o mais atrasado (era o "escolhe sozinho") */
+  var vencido=alvoAt||alvoOS||(precisaEscolher?null
+    :(vendeAparelho?null:lista.filter(function(e){var px=proximaDe(e);return px&&px<=hojeISO();})[0]));
   sel.value=vencido?vencido.id:"";
+  sel.setAttribute("data-exige",precisaEscolher&&!vencido?"1":"");
   if(ajuda){
-    ajuda.textContent=alvoOS
+    ajuda.textContent=(precisaEscolher&&!alvoAt&&!alvoOS)
+      ? "Este cliente tem "+iguais.length+" aparelhos iguais. Escolha em qual é a manutenção — pela série ou pela localização. O sistema não escolhe por você."
+      : alvoOS
       ? "Esta OS é antiga e não guardou qual aparelho é. O de nome igual ao da OS já veio marcado — confirme."
       : (vendeAparelho&&!alvoAt)
-      ? "Purificador vendido é um aparelho novo. Só escolha um aparelho da lista se for mesmo a manutenção dele."
+      ? "Aparelho vendido é um aparelho novo: cada unidade entra como um aparelho do cliente. Só escolha um da lista se for mesmo a manutenção dele."
       : alvoAt
       ? "Aparelho do atendimento da Manutenção Periódica — já veio marcado."
       : vencido
@@ -11301,6 +11502,23 @@ function ajustarEquipItem(){
         : "Se esta venda for a troca do refil ou uma peça de manutenção, escolha o aparelho.";
   }
   ajustarLocalItem();
+}
+/* o que falta escolher nos itens já lançados: o pedido não fecha com peça de manutenção solta
+   quando o cliente tem mais de um aparelho igual (regra 9.2) */
+function itensSemAparelhoEscolhido(){
+  var cid=$("v_cliente")?$("v_cliente").value:"";
+  if(!cid)return [];
+  /* mais de um aparelho no cliente: peça e refil precisam dizer em QUAL deles é (regra 9.2) */
+  var quantos=0;
+  try{quantos=equipsDoCliente().length;}catch(e){quantos=0;}
+  if(quantos<2)return [];
+  return (itens||[]).filter(function(i){
+    if(i.equipId||i.planoCobre)return false;
+    var p=produtos.filter(function(x){return x.id===i.pid;})[0];
+    if(!p||!(+p.manut>0))return false;
+    if(ehAparelhoDeOS(i.nome||p.nome||"",p.grupo||""))return false;   /* aparelho novo não precisa */
+    return true;
+  });
 }
 function notaGarantia(){
   var g=$("v_gar").value,pl=planoDaGarantia(g),w=$("v_planoWrap");
@@ -11393,9 +11611,14 @@ function addItem(){
   if(plano&&!planoAtende(plano,p)){toast("O Plano "+gar+" não atende produtos do grupo "+(p.grupo||"sem grupo")+". Escolha Bronze ou marque o grupo em Configurações › Planos de Garantia.");return;}
   var vPlano=plano?Math.round((numMF($("v_planoValor").value)||0)*100)/100:0;
   if(plano&&vPlano<=0){toast("Informe o valor do "+plano.nome+".");try{$("v_planoValor").focus();}catch(e){}return;}
-  /* aparelho acompanhado: série OU localização, um dos dois */
+  /* REGRA 9.6 (dele, 08/10): quando o cliente JÁ TEM outro aparelho igual, série OU localização
+     deixa de ser conselho e passa a ser obrigatória — é o único jeito de dizer depois em qual
+     deles é o refil, a visita ou a garantia. */
+  var iguaisAdd=aparelhosIguaisDoCliente($("v_cliente").value,p.id,p.nome);
   if((+p.manut)&&!equipId&&!serie&&!local){
-    toast("Informe o número de série OU a localização do produto — um dos dois identifica o aparelho.");
+    toast(iguaisAdd.length
+      ? "Este cliente já tem "+iguaisAdd.length+" aparelho(s) igual(is). Informe o número de série OU a localização (cozinha, escritório…) para dar para diferenciar depois."
+      : "Informe o número de série OU a localização do produto — um dos dois identifica o aparelho.");
     try{$("v_serie").focus();}catch(e){}
     return;
   }
@@ -12605,6 +12828,22 @@ async function salvarPedido(){
   if(!temInstalacaoVenda()){toast("Responda se a venda precisa de instalação.");irEtapa(5);return;}
   if(temInstalacaoVenda()==="sim"&&(!$("v_idata").value||!$("v_ihora").value||!($("v_iresp").value||$("v_inst").value))){
     toast("Para instalar, informe data, horário e o técnico.");irEtapa(5);return;}
+  /* REGRA 9.2 (dele, 08/10): peça ou refil de manutenção não fecha o pedido sem dizer EM QUAL
+     aparelho é, quando o cliente tem mais de um igual. O sistema não escolhe por ele — o plano e
+     a próxima troca iriam para o aparelho errado. */
+  var semAp=[];
+  try{semAp=itensSemAparelhoEscolhido();}catch(e9){semAp=[];}
+  if(semAp.length){
+    var nomesAp=semAp.map(function(i){return i.nome;}).join(", ");
+    $("v_alerta").innerHTML='<div class="note crit"><b>Falta dizer em qual aparelho é a manutenção.</b> '+
+      "Este cliente tem mais de um aparelho igual, e estes itens ainda não dizem qual é: <b>"+esc(nomesAp)+
+      "</b>. Abra o item na lista, escolha o aparelho pela série ou pela localização e finalize de novo. "+
+      "O sistema não escolhe sozinho para o plano e a próxima troca não caírem no aparelho errado.</div>";
+    try{$("v_alerta").scrollIntoView({block:"center"});}catch(e){}
+    toast("Escolha em qual aparelho é a manutenção de: "+nomesAp);
+    irEtapa(2);
+    return;
+  }
   /* consentimento de imagem tem de ser RESPONDIDO (regra dele, 08/10): o campo nasce sem resposta
      e o pedido nao fecha sem Sim ou Nao — antes vinha "Sim" por padrao, o contrario do que o
      proprio texto da tela diz sobre consentimento livre. */
@@ -14779,6 +15018,15 @@ function semearGruposCadastro(){
 async function gravarGruposProd(){
   if(!db)return;
   try{await db.doc("config/grupos_produtos").set({lista:GRUPOS_PROD});}catch(e){console.warn(e);}
+}
+function encherLocaisAparelho(){
+  var dl=$("dlLocais");if(!dl)return;
+  /* as sugestoes dele (9.8) mais as localizacoes que a loja ja usou */
+  var usados={};
+  equipamentos.forEach(function(e){if(e.local)usados[String(e.local).trim()]=1;});
+  var lista=LOCAIS_APARELHO.filter(function(x){return x!=="Outro";})
+    .concat(Object.keys(usados).filter(function(x){return LOCAIS_APARELHO.indexOf(x)<0;}));
+  dl.innerHTML=lista.map(function(x){return "<option>"+esc(x)+"</option>";}).join("");
 }
 function atualizarListasGrupoProd(){
   var dg=$("dlGrupos"),ds=$("dlSubgrupos");if(!dg||!ds)return;
@@ -25188,23 +25436,40 @@ function equipDaVenda(p,it){
     return meus.filter(function(e){return e.serie===it.serie;})[0]||
            meus.filter(function(e){return e.chave==="s:"+String(it.serie).trim().toLowerCase();})[0]||null;
   }
+  /* REGRA 9.3 (dele, 08/10): a busca pelo NOME serve SÓ para não duplicar o MESMO aparelho dentro
+     do MESMO pedido — é o caso do catálogo com o produto cadastrado duas vezes (v263), em que duas
+     linhas do mesmo pedido têm `pid` diferente e são o mesmo aparelho. Vem antes do corte da regra
+     9.1 justamente porque é restrita ao pedido: não liga venda nova a aparelho antigo. */
+  var nomeIt=semAcento(String(it.nome||"").toLowerCase()).replace(/\s+/g," ").trim();
+  if(nomeIt&&p.id){
+    var noMesmoPedido=meus.filter(function(e){
+      return e.clienteId===p.clienteId&&e.ativo!==false&&e.pedidoId===p.id&&
+        semAcento(String(e.produto||e.equipamento||"").toLowerCase()).replace(/\s+/g," ").trim()===nomeIt;});
+    if(noMesmoPedido.length===1)return noMesmoPedido[0];
+  }
+  /* REGRA 9.1: VENDA DE APARELHO NOVO NUNCA REAPROVEITA UM APARELHO EXISTENTE.
+     O cliente da OS 3016 tem três purificadores iguais, cada um com o seu Premium I — são três
+     aparelhos reais. Casar pelo produto faria o quarto purificador virar "manutenção" de um dos
+     três, e o plano iria para o aparelho errado. Aparelho novo é sempre aparelho novo; quem diz
+     que é manutenção de um aparelho que já existe é o vendedor, pelo campo (it.equipId). */
+  if(ehAparelhoDeOS(it.nome||"",(produtos.filter(function(x){return x.id===it.pid;})[0]||{}).grupo||""))
+    return null;
+  /* peça, refil ou serviço: liga ao aparelho do mesmo produto, e SÓ quando há um único candidato.
+     Com mais de um, quem escolhe é o vendedor — o sistema não adivinha (regra 9.2). */
   var doProduto=meus.filter(function(e){
     return e.clienteId===p.clienteId&&e.produtoId===it.pid&&e.ativo!==false;});
-  /* APARELHO REPETIDO (relato dele, 08/10: três purificadores iguais, sem série, no mesmo cliente).
-     A conferência era só pelo `produtoId`, e o catálogo dele tem o MESMO produto em mais de um
-     cadastro (a v263 achou 341 grupos de produto repetidos) — cada venda usava um `pid` diferente,
-     nenhum casava, e nascia um aparelho novo a cada venda. Agora, não achando pelo id do produto,
-     procura pelo NOME do produto no mesmo cliente: é o mesmo aparelho, cadastrado duas vezes. */
-  if(!doProduto.length){
-    var nome=semAcento(String(it.nome||"").toLowerCase()).replace(/\s+/g," ").trim();
-    if(nome)doProduto=meus.filter(function(e){
-      return e.clienteId===p.clienteId&&e.ativo!==false&&
-        semAcento(String(e.produto||e.equipamento||"").toLowerCase()).replace(/\s+/g," ").trim()===nome;});
-  }
-  if(!doProduto.length)return null;
-  if(doProduto.length===1)return doProduto[0];
-  return doProduto.sort(function(a,b){
-    return String(proximaDe(a)||"9999").localeCompare(String(proximaDe(b)||"9999"));})[0];
+  if(doProduto.length!==1)return null;      /* nenhum, ou mais de um: não escolhe sozinho */
+  return doProduto[0];
+}
+/* quantos aparelhos do mesmo produto (ou do mesmo nome) o cliente já tem — é o que decide se o
+   sistema pode ligar sozinho, se precisa perguntar, e se série/localização passa a ser obrigatória */
+function aparelhosIguaisDoCliente(clienteId,pid,nome){
+  var n=semAcento(String(nome||"").toLowerCase()).replace(/\s+/g," ").trim();
+  return equipamentos.filter(function(e){
+    if(e.loja!==lojaAtual||e.clienteId!==clienteId||e.ativo===false)return false;
+    if(pid&&e.produtoId===pid)return true;
+    return !!n&&semAcento(String(e.produto||e.equipamento||"").toLowerCase()).replace(/\s+/g," ").trim()===n;
+  });
 }
 function resumoPgto(p){
   var f=(p.formas||[]).filter(function(x){return +x.valor>0;});
@@ -25242,17 +25507,29 @@ async function sincronizarEquipamentos(){
         if(mudou)await grava("equipamentos",ja);
         continue;
       }
-      var e={id:uid(),loja:p.loja,chave:ch,clienteId:p.clienteId,cliente:p.cliente,
-        produtoId:prod.id,produto:prod.nome,serie:it.serie||"",
-        compradoEm:p.data,compradoHora:p.hora||"",
-        valorCompra:(+it.valor||0)*(+it.qtd||1),formaPgto:resumoPgto(p),
-        instaladoEm:(p.instalacao?String(p.instalacao).split(" ")[0]:p.data),
-        manutDias:+prod.manut,ultimaManut:"",ultimaManutHora:"",
-        ultimoValor:null,ultimaForma:"",plano:it.garantia||"Bronze",
-        tecnico:p.instalador||p.vendedor||"",local:it.local||"",obs:"",
-        pedidoId:p.id,pedidoNumero:p.numero,historico:[],ativo:true,
-        demo:!!p.demo,criadoEm:hojeISO()};
-      equipamentos.push(e);await grava("equipamentos",e);criados++;
+      /* REGRA 9.1 (dele, 08/10): UM APARELHO POR UNIDADE VENDIDA. Quantidade 3 de um purificador
+         são três aparelhos, com três planos — antes nascia um só, e os outros dois nunca entravam
+         na Manutenção Periódica nem tinham plano próprio. Peça e refil continuam com um registro
+         por item: eles não são aparelho. */
+      var ehAp=ehAparelhoDeOS(prod.nome||"",prod.grupo||"");
+      var quantos=ehAp?Math.max(1,parseInt(it.qtd,10)||1):1;
+      /* o que já nasceu deste item em outra passagem não é criado de novo */
+      var jaDoItem=equipamentos.filter(function(x){
+        return x.loja===p.loja&&x.pedidoId===p.id&&x.itemId===(it.id||"")&&x.produtoId===prod.id;}).length;
+      for(var u=jaDoItem;u<quantos;u++){
+        var e={id:uid(),loja:p.loja,chave:(quantos>1?ch+"#"+(u+1):ch),clienteId:p.clienteId,cliente:p.cliente,
+          produtoId:prod.id,produto:prod.nome,serie:(u===0?(it.serie||""):""),
+          compradoEm:p.data,compradoHora:p.hora||"",
+          valorCompra:(+it.valor||0),formaPgto:resumoPgto(p),
+          instaladoEm:(p.instalacao?String(p.instalacao).split(" ")[0]:p.data),
+          manutDias:+prod.manut,ultimaManut:"",ultimaManutHora:"",
+          ultimoValor:null,ultimaForma:"",plano:it.garantia||"Bronze",
+          tecnico:p.instalador||p.vendedor||"",local:(u===0?(it.local||""):""),obs:"",
+          pedidoId:p.id,pedidoNumero:p.numero,itemId:it.id||"",
+          unidade:(quantos>1?(u+1):0),unidadesDoItem:(quantos>1?quantos:0),
+          historico:[],ativo:true,demo:!!p.demo,criadoEm:hojeISO()};
+        equipamentos.push(e);await grava("equipamentos",e);criados++;
+      }
     }
   }
   return criados;
@@ -25711,7 +25988,7 @@ function renderManut(){
     bt.onclick=function(ev){ev.stopPropagation();
       var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mpok");})[0];
       if(e)abrirTrocaFeita(e);};});
-  try{ajustarBotaoEquipRepetidos();}catch(e){}
+  try{ajustarBotaoEquipRepetidos();encherLocaisAparelho();}catch(e){}
 }
 function agendarVisita(e){
   var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
