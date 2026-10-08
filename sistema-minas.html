@@ -253,12 +253,15 @@
   .os-card .os-card-corpo{padding:0 15px 15px}
   .os-card.aguardando{background:transparent}
   .os-card.aguardando .os-card-n,.os-card.aguardando .os-card-dono{color:var(--ink-3)}
-  /* etapa que ainda não chegou, e etapa já concluída, nascem recolhidas: a tela mostra a etapa
-     de agora e o caminho em volta, não todos os campos de uma vez. Toque no título para abrir. */
-  .os-card.aguardando .os-card-corpo,.os-card.concluida .os-card-corpo{display:none}
-  .os-card.aguardando.aberta .os-card-corpo,.os-card.concluida.aberta .os-card-corpo{display:block}
+  /* a etapa que ainda não chegou mostra só o motivo e NÃO abre no toque (regra 3);
+     a concluída fica recolhida e abre no toque, em leitura */
+  .os-card.aguardando .os-card-t{cursor:default}
+  .os-card.concluida .os-card-corpo{display:none}
+  .os-card.concluida.aberta .os-card-corpo{display:block}
   .os-card .os-card-mais{font-size:12.5px;color:var(--ink-3);min-width:14px;text-align:center}
-  .os-card.andamento .os-card-mais{visibility:hidden}
+  /* o que a pessoa não pode usar nesta etapa não aparece (regra 6) */
+  .os-leitura-off{display:none!important}
+  .os-card .os-corrigir{margin:0}
   .os-card.andamento{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
   .os-card.andamento .os-card-sit{border-color:var(--accent);color:var(--accent);font-weight:600}
   .os-card.concluida .os-card-sit{border-color:var(--ok);color:var(--ok)}
@@ -2806,7 +2809,9 @@ img{max-width:100%}
             <div id="os_fotos"></div>
           </div>
         </div>
-        <div class="sect">
+        <!-- a alegação é obrigatória na OS interna E na externa, por isso fica fora do bloco de
+             entrada do produto. Vai para o cartão 1 · Abertura (07/10). -->
+        <div class="sect" id="os_secAlegacao">
           <div class="fld"><label for="os_defeito">Alegação do cliente <span class="req">*</span></label>
             <textarea id="os_defeito" rows="3" placeholder="Com as palavras do cliente — é isso que vai na ficha e no canhoto"></textarea></div>
         </div>
@@ -23450,6 +23455,7 @@ function notaServicoOS(o){
     " · "+(feito?"serviço realizado":"a realizar — depois o técnico marca <b>Atividade realizada</b>")+"</div>";
 }
 function abrirAtivServicoOS(o){
+  if(recusaEtapaOS(o,"orcamento"))return;
   var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
   if(!c){toast("A OS precisa de um cliente com cadastro para agendar o técnico.");return;}
   var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
@@ -23674,6 +23680,9 @@ function sairModoOS(){
 }
 function abrirPedidoDaOS(o,modo,ativ,opc){
   if(!o)return;
+  /* o pedido da OS é a ação da etapa de quem o abre: o técnico lança peças e serviços, o atendente
+     finaliza com pagamento e entrega. A trava vale na função (08/10). */
+  if(recusaEtapaOS(o,(modo||"tecnico")==="atendente"?etapaFimOS(o):etapaPecasOS(o)))return;
   var pj=pedidoDaOS(o);
   if(pj){toast("A OS "+o.numero+" já tem o pedido "+pj.numero+" lançado.");return;}
   var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
@@ -23848,6 +23857,7 @@ function renderItensDiagOS(){
 }
 async function addItemDiagOS(){
   var o=editandoOS;if(!o){toast("Abra a OS antes de lançar as peças.");return;}
+  if(recusaEtapaOS(o,etapaPecasOS(o)))return;
   if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") lança as peças.");return;}
   if(o.pedidoId){toast("O pedido "+(o.numeroPedido||"")+" da OS já foi lançado: altere as peças pelo pedido.");return;}
   var pid=$("os_dprod").value,p=produtos.filter(function(x){return x.id===pid;})[0];
@@ -23902,6 +23912,7 @@ function renderCampoOS(){
   });
 }
 async function salvarCampoOS(o){
+  if(recusaEtapaOS(o,"campo"))return false;
   if(!$("oc_problema").value.trim()){
     $("oc_alerta").innerHTML='<div class="note crit"><b>Escreva o que você encontrou no equipamento.</b></div>';
     try{$("oc_problema").focus();}catch(e){}return false;}
@@ -23989,6 +24000,7 @@ async function criarContatoAtendenteOS(o,fase){
 /* serviço executado pelo técnico depois da autorização: abre o contato para o cliente buscar o produto */
 async function atividadeRealizadaOS(){
   var o=editandoOS;if(!o)return;
+  if(recusaEtapaOS(o,etapaExecOS(o)))return;
   if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") marca a atividade como realizada.");return;}
   if(!o.diagnosticoEm){toast("Salve o diagnóstico técnico antes.");return;}
   var at=ativTecDaOS(o);
@@ -27039,7 +27051,15 @@ async function salvarOS(){
   o.hora=$("os_hora").value||o.hora||(novo?agoraHM():"");
   if(!o.atendente)o.atendente=o.criadoPor||usuarioAtual;
   o.local=osLocalSel||o.local||"";o.fotosAvarias=osFotos.slice();
-  o.prazo=$("os_prazo").value;o.tecnico=$("os_tecnico").value;
+  o.prazo=$("os_prazo").value;
+  var tecAntes=o.tecnico||"";o.tecnico=$("os_tecnico").value;
+  /* só a GESTÃO troca o Técnico responsável (regra 5). A trava vale aqui porque campo desabilitado
+     volta a valer no próximo desenho da tela — e a troca fica no histórico, logo abaixo. */
+  if(!novo&&tecAntes!==(o.tecnico||"")&&!ehGestor()){
+    o.tecnico=tecAntes;
+    try{$("os_tecnico").value=tecAntes;}catch(e){}
+    toast("Só a gestão troca o Técnico responsável desta OS.");
+  }
   o.defeito=$("os_defeito").value.trim();
   /* no atendimento externo não existe entrada de produto (20/09): nada de acessórios,
      avarias e fotos da entrada — o aparelho fica com o cliente */
@@ -27072,6 +27092,12 @@ async function salvarOS(){
     o.historico.push({quando:hojeISO(),por:usuarioAtual,
       texto:"Status: "+osStatusO(statusAntes).n+" → "+osStatusO(o.status).n});
   }
+  /* a troca do técnico responsável fica registrada (regra dele, 07/10) */
+  if(!novo&&tecAntes!==(o.tecnico||""))
+    o.historico.push({quando:agoraCarimbo(),por:usuarioAtual,
+      texto:"Técnico alterado de "+(tecAntes||"— sem técnico —")+" para "+(o.tecnico||"— sem técnico —")+" por "+usuarioAtual});
+  /* etapa reaberta pelo botão "Corrigir esta etapa": a correção entra no histórico ao salvar */
+  try{registrarCorrecoesOS(o);}catch(e){console.warn("correção da etapa",e);}
   await grava("ordens",o);
   /* atendimento interno: o Serviço de Orçamento é cobrado e recebido neste momento */
   var adi=null;
@@ -27088,6 +27114,7 @@ async function salvarOS(){
 async function concluirOS(){
   if(editandoOS&&(editandoOS.local==="loja"||editandoOS.local==="externo")){
     toast("Esta OS é finalizada pelo pedido, com as peças e serviços cobrados.");return;}
+  if(recusaEtapaOS(editandoOS,etapaFimOS(editandoOS)))return;
   if(!$("os_laudo").value.trim()){
     $("os_alerta").innerHTML='<div class="note crit"><b>Lance o diagnóstico técnico antes de concluir a OS.</b></div>';return;}
   var o=await salvarOS();if(!o)return;
@@ -27198,7 +27225,7 @@ function marcarLocalOS(){
   if(se)se.hidden=(osLocalSel==="externo");
   $("os_localNota").innerHTML=osLocalSel==="externo"
     ? notaEnderecoExterno()
-    : (osLocalSel==="loja"?'<div class="note"><b>Atendimento interno (na loja).</b> O produto fica na empresa para o técnico analisar. O técnico lança o diagnóstico e as peças e serviços; '+
+    : (osLocalSel==="loja"?'<div class="note os-instrucao"><b>Atendimento interno (na loja).</b> O produto fica na empresa para o técnico analisar. O técnico lança o diagnóstico e as peças e serviços; '+
       'ao marcar <b>Atividade realizada</b>, o atendente recebe a atividade <b>Contactar Cliente OS</b> com todo o processo. '+
       'A OS é finalizada pelo pedido, como toda venda: com instalação futura ou com o cliente retirando na loja. Depois de abrir, imprima a ficha (prender no produto) e o canhoto do cliente.</div>':"");
 }
@@ -27440,32 +27467,137 @@ function etapasDaOS(o){
   /* etapa do técnico sem técnico gravado: o que falta é definir o técnico, não cobrar um nome */
   var daTec=function(frase){return semTec?faltaTecOS():tec+" precisa "+frase;};
   if(ext)return [
-    {k:"abertura",n:"Abertura",dono:atd,papel:"atendente",ok:true,falta:""},
+    {k:"abertura",n:"Abertura",dono:atd,papel:"atendente",ok:true,falta:"",espera:"a abertura"},
     {k:"campo",n:"Atendimento na casa do cliente",dono:tec,papel:"técnico",ok:diag,
+      espera:"o atendimento na casa do cliente",
       falta:daTec("registrar o que encontrou e lançar as peças")+(semTec?"":quandoAtivOS(atTec))},
     {k:"fechar",n:"Pagamento e encerramento",dono:tec,papel:"técnico",ok:fim,
+      espera:"o pagamento e o encerramento",
       falta:daTec("lançar o pagamento e encerrar a OS")}
   ];
   return [
-    {k:"abertura",n:"Abertura",dono:atd,papel:"atendente",ok:true,falta:""},
+    {k:"abertura",n:"Abertura",dono:atd,papel:"atendente",ok:true,falta:"",espera:"a abertura"},
     {k:"avaliacao",n:"Avaliação técnica",dono:tec,papel:"técnico",ok:diag,
+      espera:"a avaliação técnica",
       falta:daTec("registrar a avaliação técnica")+(semTec?"":quandoAtivOS(atTec))},
     {k:"pecas",n:"Peças e serviços",dono:tec,papel:"técnico",ok:diag&&itens>0,
+      espera:"as peças e os serviços",
       falta:daTec("lançar as peças e os serviços desta OS")},
     {k:"orcamento",n:"Orçamento e resposta do cliente",dono:atd,papel:"atendente",
-      ok:!!(o.autorizadoEm||o.pedidoId),
+      ok:!!(o.autorizadoEm||o.pedidoId),espera:"o orçamento e a resposta do cliente",
       falta:(o.orcamentoEm?atd+" precisa falar com o cliente e registrar a resposta"
         :atd+" precisa enviar o orçamento ao cliente")+quandoAtivOS(atCt)},
     {k:"execucao",n:"Execução do serviço",dono:tec,papel:"técnico",ok:!!(o.servicoRealizadoEm||fim),
+      espera:"a execução do serviço",
       falta:daTec("executar o serviço e marcar como realizado")},
     {k:"pagamento",n:"Pagamento e entrega",dono:atd,papel:"atendente",ok:fim,
+      espera:"o pagamento e a entrega",
       falta:atd+" precisa receber o pagamento e entregar o aparelho"}
   ];
+}
+/* ---------- FASE 2: quem edita cada etapa (regras dele, 07/10) ----------
+   Etapa do técnico é do técnico responsável daquela OS — e de mais ninguém, nem do Administrador.
+   Etapa do atendente é de quem abriu a OS, mais a gestão. Quem não é dono vê em leitura. */
+function podeAtendenteOS(o){
+  return ehGestor()||usuarioAtual===((o&&(o.atendente||o.criadoPor))||"\u0000");
+}
+function podeEditarEtapaOS(o,e){
+  if(!o||!e)return false;
+  return e.papel==="técnico"?podeTecnicoOS(o):podeAtendenteOS(o);
+}
+function recadoEtapaOS(o,e){
+  return e.papel==="técnico"
+    ? "Esta etapa é do técnico <b>"+esc(donoTecOS(o))+"</b>. Para outra pessoa preencher, troque o técnico responsável."
+    : "Esta etapa é de <b>"+esc(donoAtendOS(o))+"</b>, que abriu esta OS. Além dele, só a gestão preenche.";
+}
+/* ---------- A TRANCA DE VERDADE (condição dele, 08/10) ----------
+   Esconder o botão NÃO pode ser a única proteção: quem alcançar a função por outro caminho — um
+   botão que outro desenho recriou, a tecla Enter num campo, o console — passaria. Então toda ação
+   de etapa confere a permissão na PRIMEIRA linha, com a mesma conta dos cartões, e para com a
+   mensagem daquela etapa. O botão escondido continua, mas é o enfeite; a tranca é esta. */
+function etapaOSPorChave(o,k){
+  var l=[];try{l=etapasDaOS(o);}catch(e){}
+  for(var i=0;i<l.length;i++)if(l[i].k===k)return l[i];
+  return null;
+}
+/* devolve TRUE quando a ação tem de parar. Etapa que não existe nesta OS não é recusada aqui —
+   quem decide isso é a própria função (o orçamento, por exemplo, já recusa o externo por dentro). */
+function recusaEtapaOS(o,k){
+  var e=etapaOSPorChave(o,k);
+  if(!e||podeEditarEtapaOS(o,e))return false;
+  var m="<b>"+esc(e.n)+"</b> — "+recadoEtapaOS(o,e);
+  var al=$("os_alerta");
+  if(al){
+    al.innerHTML='<div class="note crit">'+m+"</div>";
+    try{al.scrollIntoView({block:"center"});}catch(x){}
+  }
+  toast(m.replace(/<[^>]+>/g,""));
+  return true;
+}
+/* a etapa em que cada ação acontece muda entre a OS externa (3 etapas) e a interna (6) */
+function etapaDiagOS(o){return o&&o.local==="externo"?"campo":"avaliacao";}
+function etapaPecasOS(o){return o&&o.local==="externo"?"campo":"pecas";}
+function etapaExecOS(o){return o&&o.local==="externo"?"campo":"execucao";}
+function etapaFimOS(o){return o&&o.local==="externo"?"fechar":"pagamento";}
+/* trava os campos de um cartão em leitura. Só mexe no que estava livre e MARCA o que travou —
+   assim destravar não abre o que o sistema já tinha fechado por outro motivo. */
+function travarCorpoOS(corpo){
+  if(!corpo)return;
+  /* EXCEÇÃO da regra 5: o Técnico responsável mora no cartão da Avaliação técnica, que é do
+     técnico — então para a gestão o cartão inteiro ficaria em leitura e ela não teria por onde
+     trocar o técnico, que é justamente o que a regra manda ela poder fazer. O campo fica livre
+     para a gestão (e só para ela) mesmo com o resto do cartão travado. */
+  var gestao=false;try{gestao=ehGestor();}catch(e){}
+  var livre=function(el){return gestao&&el&&el.id==="os_tecnico";};
+  Array.prototype.forEach.call(corpo.querySelectorAll("input,select,textarea"),function(el){
+    if(livre(el))return;
+    if(el.tagName==="SELECT"||el.type==="file"||el.type==="checkbox"||el.type==="radio"){
+      if(!el.disabled){el.disabled=true;el.setAttribute("data-ostrav","d");}return;}
+    if(!el.readOnly&&!el.disabled){el.readOnly=true;el.setAttribute("data-ostrav","r");}
+  });
+  /* botão que a pessoa não pode usar não aparece (regra 6) */
+  Array.prototype.forEach.call(corpo.querySelectorAll("button"),function(b){
+    if(b.classList.contains("os-corrigir"))return;
+    b.classList.add("os-leitura-off");b.setAttribute("data-ostrav","b");
+  });
+  /* "o que fazer agora" só para quem pode agir; os demais veem o que já foi feito (ajuste B) */
+  Array.prototype.forEach.call(corpo.querySelectorAll(".os-instrucao"),function(n){
+    n.classList.add("os-leitura-off");n.setAttribute("data-ostrav","b");
+  });
+  /* em leitura, campo em branco não tem o que mostrar — sai da frente em vez de virar uma caixa
+     cinza vazia. O que está preenchido continua à vista. */
+  Array.prototype.forEach.call(corpo.querySelectorAll(".fld"),function(f){
+    var c=f.querySelector("input,select,textarea");
+    if(c&&livre(c))return;
+    if(c&&!String(c.value||"").trim()){f.classList.add("os-leitura-off");f.setAttribute("data-ostrav","b");}
+  });
+}
+function destravarOS(){
+  Array.prototype.forEach.call(document.querySelectorAll("[data-ostrav]"),function(el){
+    var m=el.getAttribute("data-ostrav");
+    if(m==="r")el.readOnly=false;else if(m==="d")el.disabled=false;
+    else el.classList.remove("os-leitura-off");
+    el.removeAttribute("data-ostrav");
+  });
+}
+/* etapas reabertas pelo botão "Corrigir esta etapa" */
+var osCorrigindo={};
+function registrarCorrecoesOS(o){
+  if(!o)return;
+  var ks=Object.keys(osCorrigindo).filter(function(k){return osCorrigindo[k];});
+  if(!ks.length)return;
+  var nomes={};etapasDaOS(o).forEach(function(e){nomes[e.k]=e.n;});
+  o.historico=o.historico||[];
+  ks.forEach(function(k){
+    o.historico.push({quando:agoraCarimbo(),por:usuarioAtual,
+      texto:"Etapa "+(nomes[k]||k)+" corrigida por "+usuarioAtual+" em "+dataBR(agoraCarimbo())});
+    osCorrigindo[k]=false;
+  });
 }
 /* o que vai dentro de cada cartão — os mesmos blocos de sempre, só que agrupados */
 function secoesDaEtapaOS(k,simples){
   var m={
-    abertura:["os_secAbertura","os_secCliente","os_secProduto","os_secEntrada","os_secAtivTec"],
+    abertura:["os_secAbertura","os_secCliente","os_secProduto","os_secEntrada","os_secAlegacao","os_secAtivTec"],
     avaliacao:["os_diagNota","os_blocoTec","os_blocoAval"],
     pecas:["os_blocoPecas"],
     orcamento:["os_orcBox","os_orcNota2"],
@@ -27487,8 +27619,8 @@ function acoesDaEtapaOS(k,ext,simples){
        pagamento:["osFinalizarPed","osAbrirInst"]};
   return m[k]||[];
 }
-var OS_GERIDOS=["os_secAbertura","os_secCliente","os_secProduto","os_secEntrada","os_secAtivTec",
-  "os_secCampo","os_diagNota","os_blocoTec","os_blocoAval","os_blocoPecas",
+var OS_GERIDOS=["os_secAbertura","os_secCliente","os_secProduto","os_secEntrada","os_secAlegacao",
+  "os_secAtivTec","os_secCampo","os_diagNota","os_blocoTec","os_blocoAval","os_blocoPecas",
   "os_valNota","os_pedOS","os_lancAntigo","os_orcBox","os_orcNota2","os_secSit"];
 function montarCartoesOS(){
   var o=editandoOS,wrap=$("os_cartoes"),fx=$("os_proximo");
@@ -27509,29 +27641,55 @@ function montarCartoesOS(){
      destrói o que estiver lá dentro, e com ele iriam os campos da OS (foi o que quebrou a
      segunda abertura no primeiro teste desta versão) */
   OS_GERIDOS.forEach(function(id){var el=$(id);if(el)dep.appendChild(el);});
+  destravarOS();   /* solta o que a montagem anterior travou, antes de decidir de novo */
   /* casca dos cartões */
   wrap.innerHTML=lista.map(function(e,i){
     var sit=e.ok?"concluida":(i===primeiraAberta?"andamento":"aguardando");
     var selo=e.ok?"✅ Concluída":(i===primeiraAberta?"✏️ Em andamento":"🔒 Aguardando");
-    var aberta=(sit!=="andamento"&&osCardAberto[e.k])?" aberta":"";
+    /* etapa que ainda não chegou não abre no toque (regra 3); a concluída abre */
+    var aberta=(sit==="concluida"&&(osCardAberto[e.k]||osCorrigindo[e.k]))?" aberta":"";
     return '<section class="os-card '+sit+aberta+'" data-oscard="'+esc(e.k)+'">'+
-      '<button type="button" class="os-card-t" data-ostoggle="'+esc(e.k)+'">'+
+      '<button type="button" class="os-card-t" data-ostoggle="'+esc(e.k)+'"'+
+        (sit==="aguardando"?' disabled aria-disabled="true"':"")+">"+
         '<span class="os-card-n">'+(i+1)+" · "+esc(e.n)+"</span>"+
         '<span class="os-card-dono">Etapa do '+esc(e.papel)+" · "+esc(e.dono)+"</span>"+
         '<span class="os-card-sit">'+selo+"</span>"+
-        '<span class="os-card-mais">'+(aberta?"−":"+")+"</span>"+
+        '<span class="os-card-mais">'+(sit==="concluida"?(aberta?"−":"+"):"")+"</span>"+
       "</button>"+
       '<div class="os-card-corpo" id="oscorpo_'+esc(e.k)+'"></div></section>';
   }).join("");
-  /* cada bloco vai para o seu cartão; o que sobra vai para o depósito */
-  var usados={};
-  lista.forEach(function(e){
+  /* cada bloco vai para o cartão da sua etapa; o que sobra fica no depósito.
+     A etapa AGUARDANDO não recebe campo nenhum: mostra só o motivo (regra 3). */
+  var usados={},leitura={};
+  lista.forEach(function(e,i){
     var corpo=$("oscorpo_"+e.k);if(!corpo)return;
+    var sit=e.ok?"concluida":(i===primeiraAberta?"andamento":"aguardando");
+    if(sit==="aguardando"){
+      var ant=null;
+      for(var j=i-1;j>=0;j--){if(!lista[j].ok){ant=lista[j];break;}}
+      corpo.innerHTML='<p class="help">Aguardando '+esc((ant&&ant.espera)||"a etapa anterior")+".</p>";
+      return;
+    }
     secoesDaEtapaOS(e.k,simples).forEach(function(id){
       var el=$(id);if(!el)return;usados[id]=true;corpo.appendChild(el);});
+    /* a etapa concluída fica só leitura até o dono clicar em "Corrigir esta etapa" */
+    var dono=podeEditarEtapaOS(o,e);
+    var soLeitura=!dono||(sit==="concluida"&&!osCorrigindo[e.k]);
+    leitura[e.k]=soLeitura;
+    if(!dono)
+      corpo.insertAdjacentHTML("afterbegin",'<div class="note">'+recadoEtapaOS(o,e)+"</div>");
+    else if(sit==="concluida"&&!osCorrigindo[e.k])
+      corpo.insertAdjacentHTML("afterbegin",
+        '<div class="actions" style="justify-content:flex-start;margin-bottom:12px">'+
+        '<button class="btn ghost sm os-corrigir" type="button" data-oscorrigir="'+esc(e.k)+'">Corrigir esta etapa</button></div>');
+    else if(osCorrigindo[e.k])
+      corpo.insertAdjacentHTML("afterbegin",
+        '<div class="note warn"><b>Corrigindo esta etapa.</b> Altere o que precisar e salve — a correção fica no histórico da OS.</div>');
   });
   OS_GERIDOS.forEach(function(id){if(!usados[id]){var el=$(id);if(el)dep.appendChild(el);}});
-  distribuirAcoesOS();
+  distribuirAcoesOS(leitura);
+  /* trava os cartões em leitura DEPOIS de tudo montado, inclusive os botões distribuídos */
+  lista.forEach(function(e){if(leitura[e.k])travarCorpoOS($("oscorpo_"+e.k));});
   /* cartão sem nada dentro diz por quê, em vez de ficar em branco */
   lista.forEach(function(e){
     var corpo=$("oscorpo_"+e.k);if(!corpo||corpo.innerHTML.trim())return;
@@ -27539,6 +27697,9 @@ function montarCartoesOS(){
       ? "Toque em <b>Ver a OS completa</b>, ali em cima, para lançar o pagamento e encerrar."
       : "Esta etapa não tem campos para preencher — ela se resolve pelo andamento da OS.")+"</p>";
   });
+  /* o Técnico responsável só a gestão altera (regra 5) */
+  var st=$("os_tecnico");
+  if(st&&!ehGestor()&&!st.disabled){st.disabled=true;st.setAttribute("data-ostrav","d");}
   /* a faixa do próximo passo */
   var pend=lista.filter(function(e){return !e.ok;})[0];
   fx.innerHTML=pend
@@ -27548,8 +27709,10 @@ function montarCartoesOS(){
 }
 /* o renderPedOS redesenha os botões em vários momentos (incluir peça, remover, salvar) — depois
    de cada redesenho eles voltam para o cartão da etapa a que pertencem */
-function distribuirAcoesOS(){
+var osLeitura={};   /* etapa → está em leitura para quem está olhando */
+function distribuirAcoesOS(mapa){
   var o=editandoOS,wrap=$("os_cartoes");
+  if(mapa)osLeitura=mapa;
   if(!o||!wrap||!wrap.children.length)return;
   var ext=o.local==="externo";
   var fim=["concluida","entregue","cancelada"].indexOf(o.status)>=0;
@@ -27561,7 +27724,12 @@ function distribuirAcoesOS(){
     if(!bts.length){if(velha&&velha.parentNode)velha.parentNode.removeChild(velha);return;}
     var cx=velha||document.createElement("div");
     cx.className="actions os-card-acoes";cx.style.justifyContent="flex-start";
-    bts.forEach(function(b){cx.appendChild(b);});
+    bts.forEach(function(b){
+      cx.appendChild(b);
+      /* botão recriado pelo renderPedOS dentro de uma etapa em leitura some de novo (regra 6) */
+      if(osLeitura[e.k]){b.classList.add("os-leitura-off");b.setAttribute("data-ostrav","b");}
+      else if(b.getAttribute("data-ostrav")==="b"){b.classList.remove("os-leitura-off");b.removeAttribute("data-ostrav");}
+    });
     if(!velha)corpo.appendChild(cx);
   });
 }
@@ -27569,10 +27737,24 @@ function ligarCartoesOS(){
   var wrap=$("os_cartoes");if(!wrap||wrap.__lig)return;
   wrap.__lig=true;
   wrap.addEventListener("click",function(ev){
+    /* "Corrigir esta etapa": reabre a etapa concluída para o dono dela (regra 4) */
+    var c=ev.target.closest&&ev.target.closest("[data-oscorrigir]");
+    if(c){
+      var kc=c.getAttribute("data-oscorrigir");
+      /* "Corrigir" é só do DONO da etapa — a trava vale no clique, mesmo que o botão apareça */
+      var ec=etapaOSPorChave(editandoOS,kc);
+      if(ec&&!podeEditarEtapaOS(editandoOS,ec)){
+        toast(recadoEtapaOS(editandoOS,ec).replace(/<[^>]+>/g,""));return;
+      }
+      osCorrigindo[kc]=true;osCardAberto[kc]=true;
+      try{ajustarEtapasOS();}catch(e){console.warn(e);}
+      toast("Etapa aberta para correção. Altere o que precisar e salve — fica registrado no histórico.");
+      return;
+    }
     var b=ev.target.closest&&ev.target.closest("[data-ostoggle]");if(!b)return;
     var k=b.getAttribute("data-ostoggle"),card=b.closest(".os-card");
-    /* a etapa de agora fica sempre aberta; as outras abrem e fecham no toque */
-    if(!card||card.classList.contains("andamento"))return;
+    /* só a etapa CONCLUÍDA abre e fecha; a de agora fica aberta e a que não chegou não abre */
+    if(!card||!card.classList.contains("concluida"))return;
     var abre=!card.classList.contains("aberta");
     card.classList.toggle("aberta",abre);osCardAberto[k]=abre;
     var m=card.querySelector(".os-card-mais");if(m)m.textContent=abre?"−":"+";
@@ -27589,17 +27771,16 @@ function ajustarEtapasOS(){
   $("os_secDiag").hidden=!o;
   $("os_secValores").hidden=!o;
   $("os_secSit").hidden=!o;
-  Array.prototype.forEach.call(document.querySelectorAll("#os_secDiag textarea,#os_secDiag button,#os_secValores input,#os_secValores select,#os_secValores button"),function(el){
-    if(el.id==="os_total"||el.id==="osVerOrc")return;
-    el.disabled=!tec;});
-  /* v244: quem não é o técnico não vê os campos vazios do diagnóstico. Antes de ele preencher, a etapa
-     fica em "Aguardando avaliação técnica"; depois, mostra o que ele escreveu, em leitura.
-     A linha de designação (técnico, tipo e prazo) continua à vista: é por ela que a gestão troca o técnico. */
-  var secD=$("os_secDiag");
-  if(secD)Array.prototype.forEach.call(secD.children,function(el){
-    if(el.id==="os_diagNota"||(el.classList&&el.classList.contains("sect-t")))return;
-    if(el.querySelector&&el.querySelector("#os_tecnico"))return;
-    el.hidden=!tec;
+  /* A TRAVA ANTIGA (v243/v244) SAIU DAQUI (08/10) — e ela estava criando um defeito de arraste.
+     Ela percorria "#os_secDiag textarea/button" marcando disabled=!tec e punha hidden=!tec nos
+     filhos de os_secDiag. Com os cartões, esses blocos MUDAM DE LUGAR (vão para o corpo do cartão
+     da etapa) e essas marcas não são desfeitas por ninguém: bastava um não-técnico abrir a OS para
+     o bloco da avaliação ficar escondido e desabilitado para o resto da sessão — e o próprio
+     técnico, abrindo depois, não achava o "Salvar diagnóstico". Quem decide agora é a trava por
+     etapa do montarCartoesOS, que marca o que travou (data-ostrav) e devolve no desenho seguinte.
+     O os_diagNota continua logo abaixo: é ele que mostra o diagnóstico em leitura. */
+  ["os_blocoTec","os_blocoAval","os_blocoPecas"].forEach(function(id){
+    var el=$(id);if(el)el.hidden=false;        /* limpa o que a versão anterior deixou escondido */
   });
   $("os_diagNota").innerHTML=!o?"":(!tec
     ? (diag
@@ -27621,6 +27802,7 @@ function ajustarEtapasOS(){
 }
 async function salvarDiagnosticoOS(){
   var o=editandoOS;if(!o)return;
+  if(recusaEtapaOS(o,etapaDiagOS(o)))return;
   if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") lança o diagnóstico.");return;}
   if(!$("os_laudo").value.trim()||!$("os_reparo").value.trim()){
     $("os_alerta").innerHTML='<div class="note crit"><b>Informe o problema encontrado e o que será necessário para o reparo.</b></div>';
@@ -27668,7 +27850,9 @@ function renderOrcamentoOS(o,ext){
   if(!o||ext){box.hidden=true;nota.innerHTML=ext
     ? '<div class="note"><b>Atendimento externo não tem orçamento.</b> O técnico resolve na casa do '+
       "cliente: faz o serviço e cobra, cobra só o atendimento, ou não cobra nada quando é plano "+
-      "Premium ou garantia.<br>Cliente aprovou: <b>Abrir o pedido da OS</b>. Não aprovou: "+
+      "Premium ou garantia.</div>"+
+      /* o passo a passo dos botões é instrução: só aparece para quem pode agir nesta etapa */
+      '<div class="note os-instrucao">Cliente aprovou: <b>Abrir o pedido da OS</b>. Não aprovou: '+
       "<b>Cliente não aprovou · cobrar serviço de atendimento</b>. Nos dois, o pedido é finalizado "+
       "com forma de pagamento e assinatura, e a OS fecha junto.</div>"
     : "";return;}
@@ -27697,7 +27881,10 @@ async function gerarOrcamentoOS(){
   var o=editandoOS;if(!o)return;
   /* orçamento não existe no atendimento externo */
   if(o.local==="externo"){toast("Atendimento externo não tem orçamento: o técnico resolve e cobra na hora.");return;}
-  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") gera o orçamento.");return;}
+  /* o ORÇAMENTO é da etapa do ATENDENTE que abriu a OS (etapa 4), não do técnico: o técnico salva
+     o diagnóstico e lança as peças; quem fala com o cliente e manda a proposta é o atendente.
+     Antes esta linha pedia podeTecnicoOS, o contrário do que as etapas dizem (corrigido 08/10). */
+  if(recusaEtapaOS(o,"orcamento"))return;
   if(!o.diagnosticoEm){toast("Faça o diagnóstico técnico antes do orçamento.");return;}
   /* a lista de peças e serviços é UMA só (07/10): a da etapa 2 */
   if(!((o.itensOS||[]).length)&&!osPecas.length){
@@ -31415,6 +31602,8 @@ function folhaComprovanteOS(){
 /* o ORÇAMENTO da OS indo ao cliente pelo WhatsApp, para ele aprovar (regra dele, 07/10) */
 function enviarOrcamentoOSWhatsApp(o,botao){
   if(!o)return;
+  /* enviar o orçamento é da etapa do atendente — a trava vale aqui, não só no botão (08/10) */
+  if(recusaEtapaOS(o,"orcamento"))return;
   var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
   var tot=(o.itensOS||[]).reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0)-(+o.desconto||0);
   return enviarPdfWhatsApp({chave:"osorc:"+o.id,
