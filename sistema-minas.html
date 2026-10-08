@@ -3420,6 +3420,7 @@ img{max-width:100%}
             <button class="btn ghost" type="button" id="mpNovo">Cadastrar equipamento</button>
             <button class="btn ghost" type="button" id="mpImportar">Importar manutenções</button>
             <button class="btn ghost" type="button" id="mpRepetidos" hidden>Aparelhos repetidos</button>
+            <button class="btn ghost" type="button" id="mpCopias" hidden>Aparelhos repetidos pela sincronizacao</button>
           </div>
           <!-- com a base antiga importada são 16 mil aparelhos: desenhar tudo de uma vez trava a
                aba, como travava a lista de clientes antes da v148 (v257) -->
@@ -5537,6 +5538,22 @@ img{max-width:100%}
 <!-- importar a listagem de manutenções periódicas do sistema antigo (v256) -->
 <!-- APARELHOS REPETIDOS (pedido dele, 08/10): ele quer VER a lista e decidir. Esta janela só
      mostra e explica a causa provável de cada grupo — ela NÃO apaga e NÃO junta nada. -->
+<!-- CÓPIAS DE APARELHO (itens 3 e 6 dele, 08/10): levantamento e, só com a aprovação dele,
+     desativação das cópias. O aparelho mais antigo de cada pedido fica. Nada é apagado. -->
+<div class="modal" id="copModal" hidden>
+  <div class="modal-cx" style="max-width:1040px">
+    <div class="modal-top">
+      <div><h2>Registros de aparelho repetidos pela sincronização</h2>
+        <p class="sub" id="cop_sub"></p></div>
+      <button class="btn mut" type="button" id="cop_fechar">Fechar</button>
+    </div>
+    <div id="cop_aviso"></div>
+    <div class="actions" style="justify-content:flex-start;margin:10px 0">
+      <button class="btn" type="button" id="cop_limpar" hidden>Desativar as cópias</button>
+    </div>
+    <div id="cop_lista"></div>
+  </div>
+</div>
 <div class="modal" id="dupEqModal" hidden>
   <div class="modal-cx" style="max-width:980px">
     <div class="modal-top">
@@ -6966,6 +6983,23 @@ var perfilBanco=null;
 function modoBanco(){return !window.MODO_DEMO_MF&&!!(SUPABASE_URL&&SUPABASE_CHAVE);}
 function bancoCarregado(){return !!(window.supabase&&window.criarDbSupabase);}
 /* banner vermelho: gravação que não entrou (sem internet, sessão vencida ou sem permissão) */
+window.__truncado={};
+/* O CORTE DO LIMITE DEIXA DE SER SILENCIOSO (08/10). O adapter avisa por aoTruncar desde sempre,
+   e o sistema NUNCA tratava esse aviso: a leitura de equipamentos vinha com 1.000 de ~16.000 e
+   ninguem sabia — a tela mostrava uma fracao dos aparelhos e as rotinas decidiam em cima de uma
+   lista incompleta. Agora fica registrado em window.__truncado e aparece na tela. */
+function avisarTruncado(colecao,total,trazidos){
+  try{
+    window.__truncado[colecao]={total:total,trazidos:trazidos,quando:agoraCarimbo()};
+    console.warn("Leitura cortada em "+colecao+": "+trazidos+" de "+total);
+    var b=$("banner");
+    if(b&&!b.__banco){
+      b.hidden=false;
+      b.innerHTML="<b>Lista incompleta:</b> o sistema leu "+trazidos+" de "+total+" registros de <b>"+
+        esc(colecao)+"</b>. Avise o suporte antes de apagar ou criar coisa nesta tela.";
+    }
+  }catch(e){console.warn("avisarTruncado",e);}
+}
 function estadoBanco(ok,erro){
   var b=$("offline");if(!b)return;
   if(ok){if(b.__banco){b.hidden=true;b.__banco=false;b.classList.remove("banner-erro");}return;}
@@ -7578,7 +7612,7 @@ async function carregar(){
     movEst=me.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var rq=await jaPedido("col:requisicoes",function(){return col("requisicoes").limit(500).get();});
     requisicoes=rq.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var eqs=await jaPedido("col:equipamentos",function(){return col("equipamentos").limit(1000).get();});
+    var eqs=await jaPedido("col:equipamentos",function(){return col("equipamentos").limit(30000).get();});
     equipamentos=eqs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var od=await jaPedido("col:ordens",function(){return col("ordens").limit(500).get();});
     ordens=od.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
@@ -10458,6 +10492,13 @@ function ligarEquipRepetidos(){
   var bt=$("mpRepetidos");if(!bt||bt.__ligado)return;
   bt.__ligado=true;
   bt.onclick=abrirEquipRepetidos;
+  var bc=$("mpCopias");
+  if(bc&&!bc.__ligado){
+    bc.__ligado=true;
+    bc.onclick=abrirCopiasAparelho;
+    $("cop_fechar").onclick=function(){$("copModal").hidden=true;};
+    $("cop_limpar").onclick=limparCopiasAparelho;
+  }
   $("deq_fechar").onclick=function(){$("dupEqModal").hidden=true;};
   $("deq_busca").oninput=renderEquipRepetidos;
   /* "São aparelhos diferentes": tira o grupo da lista para sempre (regra 9.5) */
@@ -10473,6 +10514,13 @@ function ajustarBotaoEquipRepetidos(){
   try{n=ehAdministrador()?gruposEquipRepetidos().length:0;}catch(e){n=0;}
   bt.hidden=!n;
   if(n)bt.textContent="Aparelhos repetidos ("+n+")";
+}
+function ajustarBotaoCopias(){
+  var bt=$("mpCopias");if(!bt)return;
+  var n=0;
+  try{n=ehAdministrador()?copiasDeAparelho().length:0;}catch(e){n=0;}
+  bt.hidden=!n;
+  if(n)bt.textContent="Aparelhos repetidos pela sincronizacao ("+n+")";
 }
 /* importador das manutenções periódicas (v256) — mesmo desenho do de clientes */
 function ligarImportManut(){
@@ -10937,6 +10985,7 @@ window.__garantiaApMF=function(e){return textoGarantiaAparelho(e);};
 window.__sincEquipMF=function(){return sincronizarEquipamentos();};
 window.__itensSemApMF=function(){return itensSemAparelhoEscolhido();};
 window.__abrirCliMF=function(c){return abrirCliente(c);};
+window.__copiasMF=function(){return copiasDeAparelho();};
 window.__equipDaVendaMF=function(p,it){return equipDaVenda(p,it);};
 window.__podeGravarCfgMF=function(){return podeGravarConfig();};
 window.__itensVendaMF=function(){return itens;};
@@ -11133,6 +11182,173 @@ function sincronizarValor(){
    Desde 08/10 (complemento dele) cada grupo pode ser marcado como **"São aparelhos diferentes"**:
    o cliente da OS 3016 tem três purificadores iguais de verdade, cada um com o seu Premium I, e
    não faz sentido o sistema apontá-los para sempre. Marcado, o grupo sai da lista. */
+/* ================= CÓPIAS DE APARELHO FEITAS PELA SINCRONIZAÇÃO (itens 3, 4 e 6 dele) =========
+   Ele conferiu o banco e achou 4 pedidos com registros a mais do mesmo aparelho, criados em lotes
+   ao longo de vários dias — um por abertura do sistema. Esta parte LEVANTA e, só com a aprovação
+   dele, DESATIVA as cópias (ativo=false, nunca apaga), passando antes para o aparelho que fica
+   qualquer histórico e agendamento que estiver nas cópias.
+   O que FICA é sempre o MAIS ANTIGO do pedido (menor id, que no sistema é ordem de criação) —
+   é ele que tem o histórico de trocas, os agendamentos e o plano. */
+function copiasDeAparelho(){
+  var por={},out=[];
+  equipamentos.forEach(function(e){
+    if(e.loja!==lojaAtual||e.ativo===false)return;
+    if(!e.pedidoId||!e.produtoId)return;
+    var k=e.pedidoId+"|"+e.produtoId;
+    (por[k]=por[k]||[]).push(e);
+  });
+  Object.keys(por).forEach(function(k){
+    var g=por[k];
+    if(g.length<2)return;
+    var ped=pedidos.filter(function(p){return p.id===g[0].pedidoId;})[0];
+    /* quantas unidades aquele pedido realmente vendeu daquele produto */
+    var qtd=0;
+    if(ped)(ped.itens||[]).forEach(function(it){
+      if(it.pid===g[0].produtoId)qtd+=Math.max(1,parseInt(it.qtd,10)||1);
+    });
+    if(!ped)qtd=1;                                  /* pedido não encontrado: o certo é 1 */
+    if(g.length<=qtd)return;                        /* tem o que vendeu: não é cópia */
+    /* o mais antigo primeiro (o id nasce de Date.now) */
+    var ord=g.slice().sort(function(a,b){return String(a.id).localeCompare(String(b.id));});
+    var cli=clientes.filter(function(c){return c.id===g[0].clienteId;})[0];
+    var ficam=ord.slice(0,qtd),saem=ord.slice(qtd);
+    out.push({chave:k,cliente:cli,clienteNome:(cli&&cli.nome)||g[0].cliente||"",
+      codigo:(cli&&cli.codigo)||"",produto:g[0].produto||"",
+      pedido:ped?ped.numero:"(pedido não encontrado)",pedidoId:g[0].pedidoId,
+      qtdVendida:qtd,agora:g.length,ficam:ficam,saem:saem,
+      comHistorico:saem.filter(function(e){return (e.historico||[]).length;}).length,
+      comAgenda:saem.filter(function(e){return agendamentosDoAparelho(e.id).length;}).length});
+  });
+  return out.sort(function(a,b){return b.saem.length-a.saem.length;});
+}
+/* os agendamentos (atividades) que apontam para um aparelho */
+function agendamentosDoAparelho(eid){
+  if(!eid)return [];
+  return atendimentos.filter(function(a){return a.equipId===eid;});
+}
+/* passa para o aparelho que fica tudo que estiver na cópia, e desativa a cópia */
+async function juntarCopiaAparelho(fica,copia){
+  if(!fica||!copia||fica.id===copia.id)return 0;
+  var mexeu=0;
+  /* histórico: as linhas da cópia vão para o que fica, na ordem de data */
+  if((copia.historico||[]).length){
+    fica.historico=(fica.historico||[]).concat(copia.historico.map(function(h){
+      var c=JSON.parse(JSON.stringify(h));
+      c.texto=(c.texto||"")+" (veio do registro repetido "+copia.id+")";
+      return c;
+    })).sort(function(a,b){return String(a.data||"").localeCompare(String(b.data||""));});
+    mexeu++;
+  }
+  /* o que estava preenchido só na cópia não se perde */
+  ["serie","local","ultimaManut","ultimaManutHora","ultimoValor","ultimaForma",
+   "compradoEm","compradoHora","valorCompra","formaPgto","instaladoEm","obs"].forEach(function(k){
+    if(!fica[k]&&copia[k]){fica[k]=copia[k];mexeu++;}
+  });
+  if((!fica.plano||fica.plano==="Bronze")&&copia.plano&&copia.plano!=="Bronze"){
+    fica.plano=copia.plano;
+    if(copia.planoInicio)fica.planoInicio=copia.planoInicio;
+    mexeu++;
+  }
+  /* os agendamentos passam a apontar para o aparelho que fica */
+  var ags=agendamentosDoAparelho(copia.id);
+  for(var i=0;i<ags.length;i++){
+    ags[i].equipId=fica.id;
+    await grava("atendimentos",ags[i]);
+    mexeu++;
+  }
+  fica.historico=fica.historico||[];
+  fica.historico.push({data:hojeISO(),por:usuarioAtual,
+    texto:"Registro repetido "+copia.id+" desativado e juntado neste aparelho por "+usuarioAtual+
+      (ags.length?" · "+ags.length+" agendamento(s) passaram para cá":"")});
+  await grava("equipamentos",fica);
+  copia.ativo=false;
+  copia.desativadoPor=usuarioAtual;
+  copia.desativadoEm=agoraCarimbo();
+  copia.desativadoMotivo="registro repetido do pedido "+(copia.pedidoNumero||copia.pedidoId)+
+    " — juntado no aparelho "+fica.id;
+  copia.juntadoEm=fica.id;
+  copia.historico=(copia.historico||[]).concat([{data:hojeISO(),por:usuarioAtual,
+    texto:"Registro desativado por ser repetido; o que havia aqui passou para o aparelho "+fica.id}]);
+  await grava("equipamentos",copia);
+  return mexeu;
+}
+async function limparCopiasAparelho(){
+  if(!ehAdministrador()){toast("Só o Administrador faz esta limpeza.");return;}
+  var lista=copiasDeAparelho();
+  if(!lista.length){toast("Nenhuma cópia para desativar.");return;}
+  var nC=lista.reduce(function(a,g){return a+g.saem.length;},0);
+  if(!confirm("Desativar "+nC+" registro(s) repetido(s) de "+lista.length+" pedido(s)?\n\n"+
+    "O aparelho MAIS ANTIGO de cada pedido fica, e recebe o histórico e os agendamentos das "+
+    "cópias. Nada é apagado: as cópias ficam inativas, com o motivo gravado."))return;
+  var bt=$("cop_limpar");if(bt){bt.disabled=true;bt.textContent="Desativando…";}
+  var feitos=0,erros=0;
+  for(var i=0;i<lista.length;i++){
+    var g=lista[i],fica=g.ficam[0];
+    for(var j=0;j<g.saem.length;j++){
+      try{await juntarCopiaAparelho(fica,g.saem[j]);feitos++;}
+      catch(e){console.warn("juntar cópia",e);erros++;}
+    }
+  }
+  try{esquecerManutCli();}catch(x){}
+  if(bt){bt.disabled=false;bt.textContent="Desativar as cópias";}
+  toast(feitos+" registro(s) repetido(s) desativado(s)"+(erros?" · "+erros+" com erro":"")+
+    ". O aparelho mais antigo de cada pedido ficou, com o histórico e os agendamentos.");
+  renderCopiasAparelho();renderManut();render();
+}
+function renderCopiasAparelho(){
+  var box=$("cop_lista");if(!box)return;
+  var lista=copiasDeAparelho();
+  var nC=lista.reduce(function(a,g){return a+g.saem.length;},0);
+  var cls={};lista.forEach(function(g){cls[g.clienteNome]=1;});
+  $("cop_sub").textContent=lista.length
+    ? Object.keys(cls).length+" cliente(s) · "+lista.length+" pedido(s) · "+nC+" registro(s) a mais"
+    : "Nenhum registro repetido nesta loja.";
+  var bt=$("cop_limpar");if(bt)bt.hidden=!lista.length||!ehAdministrador();
+  /* o aviso do corte de leitura, se houver: nesta tela ele importa muito */
+  var tr=(window.__truncado||{}).equipamentos;
+  $("cop_aviso").innerHTML=(tr
+      ? '<div class="note crit"><b>Atenção: a leitura de aparelhos veio cortada ('+tr.trazidos+
+        " de "+tr.total+").</b> O levantamento abaixo só vê o que foi carregado. "+
+        "Não desative nada antes de o sistema ler a lista inteira.</div>"
+      : "")+
+    (lista.length
+      ? '<div class="note warn"><b>'+nC+" registro(s) a mais, criados pela sincronização.</b> "+
+        "O aparelho <b>mais antigo</b> de cada pedido fica — é ele que tem o histórico de trocas, "+
+        "os agendamentos e o plano. As cópias ficam <b>inativas</b>, com o motivo gravado: "+
+        "<b>nada é apagado</b>. Nenhuma linha sai daqui sem você confirmar.</div>"
+      : '<div class="note ok">Nenhum pedido com registro de aparelho repetido.</div>');
+  box.innerHTML=lista.map(function(g){
+    function linhas(arr,marca){
+      return arr.map(function(e){
+        var ags=agendamentosDoAparelho(e.id);
+        return "<tr"+(marca?' style="opacity:.75"':"")+"><td>"+(marca?"sai":"<b>fica</b>")+"</td>"+
+          "<td><code>"+esc(e.id)+"</code></td>"+
+          "<td>"+esc(e.criadoEm?dataCurta(e.criadoEm):"—")+"</td>"+
+          "<td>"+esc(e.serie||"—")+"</td><td>"+esc(e.local||"—")+"</td>"+
+          "<td>"+esc(e.plano||"—")+"</td>"+
+          "<td>"+((e.historico||[]).length||0)+"</td>"+
+          "<td>"+ags.length+"</td>"+
+          "<td>"+esc(e.loja||"—")+"</td><td>"+esc(e.itemId||"—")+"</td></tr>";
+      }).join("");
+    }
+    return '<div class="card" style="margin:12px 0">'+
+      "<h3 style=\"margin:0 0 4px\">"+esc(g.clienteNome)+
+      (g.codigo?' <span class="pill">'+esc(g.codigo)+"</span>":"")+"</h3>"+
+      '<p class="sub" style="margin:0 0 10px">'+esc(g.produto)+" · pedido <b>"+esc(String(g.pedido))+
+      "</b> · vendeu <b>"+g.qtdVendida+"</b> · hoje tem <b>"+g.agora+"</b> registro(s) · "+
+      "a desativar: <b>"+g.saem.length+"</b>"+
+      (g.comHistorico?" · "+g.comHistorico+" com histórico":"")+
+      (g.comAgenda?" · "+g.comAgenda+" com agendamento":"")+"</p>"+
+      '<div class="tw"><table><thead><tr><th>Destino</th><th>Registro</th><th>Criado em</th>'+
+      "<th>Série</th><th>Localização</th><th>Plano</th><th>Histórico</th><th>Agend.</th>"+
+      "<th>Loja</th><th>itemId</th></tr></thead><tbody>"+
+      linhas(g.ficam,false)+linhas(g.saem,true)+"</tbody></table></div></div>";
+  }).join("")||"";
+}
+function abrirCopiasAparelho(){
+  renderCopiasAparelho();
+  $("copModal").hidden=false;
+}
 function chaveEquipRepetido(e){
   return (e.clienteId||"")+"|"+semAcento(String(e.produto||e.equipamento||"").toLowerCase()).replace(/\s+/g," ").trim();
 }
@@ -25479,22 +25695,58 @@ function resumoPgto(p){
     return (x.parc>1?x.parc+"× ":"")+String(x.tipo||"").split(" ")[0];
   }).join(" + ");
 }
+/* O PEDIDO GUARDA O APARELHO QUE ELE GEROU (regra dele, 08/10, item 4) —————————————————————
+   Até aqui o reconhecimento "este pedido já criou o aparelho?" dependia de casar cliente, loja,
+   produto e, na v323, o itemId. Qualquer divergência numa dessas chaves fazia a sincronização
+   criar outro aparelho — e ela roda A CADA ABERTURA DO SISTEMA, então o registro se multiplicava
+   em lotes, um por abertura (foi o que ele viu no banco: 7 registros do pedido 20808, criados em
+   seis momentos diferentes desde 05/10, sendo que o pedido vendeu quantidade 1).
+   Agora o vínculo é explícito e guardado no próprio item do pedido (`it.equipId`): criado o
+   aparelho, o id dele volta para o item e o pedido é regravado. Item que já tem `equipId` é
+   PULADO — não importa o que divergiu no cliente, na loja ou no produto. É o fim da classe
+   inteira do problema, não só da causa de uma vez. */
+function equipamentosTruncados(){
+  return !!(window.__truncado&&window.__truncado.equipamentos);
+}
 async function sincronizarEquipamentos(){
-  var criados=0;
+  var criados=0,ligados=0;
+  /* TRAVA DE SEGURANÇA: se a leitura de equipamentos veio CORTADA pelo limite, a lista em memória
+     não prova que o aparelho não existe — e criar aqui é justamente o que duplica. Nessa situação
+     o sistema NÃO cria nada e avisa. */
+  if(equipamentosTruncados()){
+    console.warn("sincronizarEquipamentos: leitura de equipamentos truncada — nada foi criado.");
+    return 0;
+  }
   for(var i=0;i<pedidos.length;i++){
     var p=pedidos[i];
     /* o aparelho só entra na manutenção periódica depois da aprovação financeira da venda */
     if(p.status==="Cancelada"||!pedidoAprovado(p))continue;
+    var mexeuNoPedido=false;
     for(var j=0;j<(p.itens||[]).length;j++){
       var it=p.itens[j];
       var prod=produtos.filter(function(x){return x.id===it.pid;})[0];
       if(!prod||!(+prod.manut))continue;
+      /* o item JÁ DIZ qual aparelho é dele: nada a criar, nada a adivinhar */
+      if(it.equipId){
+        var alvo=equipamentos.filter(function(x){return x.id===it.equipId;})[0];
+        if(alvo){
+          /* mantém os dados de compra daquele aparelho em dia, como antes */
+          if(alvo.produtoId===it.pid&&(!alvo.compradoEm||String(p.data||"")>=String(alvo.compradoEm||""))){
+            alvo.compradoEm=p.data;alvo.compradoHora=p.hora||"";
+            alvo.valorCompra=(+it.valor||0)*(+it.qtd||1);
+            alvo.formaPgto=resumoPgto(p);
+            if(it.serie&&!alvo.serie)alvo.serie=it.serie;
+            await grava("equipamentos",alvo);
+          }
+        }
+        continue;
+      }
       var ch=chaveEquip(p,it);
       var ja=equipDaVenda(p,it);
       if(ja){
+        /* achou o aparelho: AMARRA no item para nunca mais precisar procurar */
+        it.equipId=ja.id;mexeuNoPedido=true;ligados++;
         var mudou=false;
-        /* item que aponta para OUTRO aparelho (refil trocado num purificador)
-           não sobrescreve os dados de compra daquele aparelho */
         if(ja.produtoId===it.pid){
           if(ja.chave!==ch){ja.chave=ch;mudou=true;}
           if(!ja.compradoEm||String(p.data||"")>=String(ja.compradoEm||"")){
@@ -25508,21 +25760,9 @@ async function sincronizarEquipamentos(){
         if(mudou)await grava("equipamentos",ja);
         continue;
       }
-      /* REGRA 9.1 (dele, 08/10): UM APARELHO POR UNIDADE VENDIDA. Quantidade 3 de um purificador
-         são três aparelhos, com três planos — antes nascia um só, e os outros dois nunca entravam
-         na Manutenção Periódica nem tinham plano próprio. Peça e refil continuam com um registro
-         por item: eles não são aparelho.
-
-         DEFEITO GRAVE DA v323, CORRIGIDO AQUI (relato dele, 08/10): a conta de "quantos já
-         nasceram" olhava o `itemId`, que só existe nos aparelhos criados DEPOIS da v323. Os
-         aparelhos antigos do mesmo pedido não tinham esse campo, não eram reconhecidos, e a
-         sincronização criava a quantidade inteira DE NOVO. E como ela roda a cada abertura do
-         sistema, o pedido 20808 (quantidade 3) foi de 3 para 6 aparelhos, e dobraria a cada vez.
-         Agora a conta é por PEDIDO + PRODUTO e ignora o itemId: o que já existe conta como
-         unidade já criada, venha de antes ou de depois da v323. Só nasce o que falta. */
+      /* REGRA 9.1: um aparelho por UNIDADE vendida, e o que já existe deste pedido + produto conta
+         como unidade já criada (venha de antes ou de depois da v323 — foi o defeito da v323). */
       var ehAp=ehAparelhoDeOS(prod.nome||"",prod.grupo||"");
-      /* a quantidade de TODOS os itens deste mesmo produto no pedido (o catálogo pode ter o
-         produto em duas linhas) e tudo que já existe deste pedido + produto */
       var qtdTotalProd=0;
       (p.itens||[]).forEach(function(i2){
         if(i2.pid!==prod.id)return;
@@ -25534,7 +25774,7 @@ async function sincronizarEquipamentos(){
       var primeiroDoProduto=(p.itens||[]).filter(function(i2){return i2.pid===prod.id;})[0];
       if(primeiroDoProduto&&primeiroDoProduto!==it)continue;
       var faltam=qtdTotalProd-existentes;
-      if(faltam<=0)continue;                 /* já tem tudo: NÃO cria nada (é a correção) */
+      if(faltam<=0)continue;                 /* já tem tudo: NÃO cria nada */
       for(var u=0;u<faltam;u++){
         var ordem=existentes+u+1;
         var e={id:uid(),loja:p.loja,chave:(qtdTotalProd>1?ch+"#"+ordem:ch),clienteId:p.clienteId,cliente:p.cliente,
@@ -25549,9 +25789,14 @@ async function sincronizarEquipamentos(){
           unidade:(qtdTotalProd>1?ordem:0),unidadesDoItem:(qtdTotalProd>1?qtdTotalProd:0),
           historico:[],ativo:true,demo:!!p.demo,criadoEm:hojeISO()};
         equipamentos.push(e);await grava("equipamentos",e);criados++;
+        /* o item guarda o aparelho que ele gerou: é isto que impede a próxima abertura de criar
+           outro. Com quantidade maior que 1, o item aponta para a primeira unidade. */
+        if(!it.equipId){it.equipId=e.id;mexeuNoPedido=true;}
       }
     }
+    if(mexeuNoPedido){try{await grava("pedidos",p);}catch(ep){console.warn("amarrar aparelho no pedido",ep);}}
   }
+  if(ligados)console.log(ligados+" item(ns) de pedido amarrados ao aparelho que já existia");
   return criados;
 }
 /* A VENDA de produto com "Manutenção (dias)" baixa a manutenção do aparelho: o prazo reinicia na data
@@ -25856,7 +26101,11 @@ function renderManut(){
   var grupos=[],prods=[];
   n3.forEach(function(e){
     var p=produtos.filter(function(x){return x.id===e.produtoId;})[0]||{};
-    e._g=p.grupo||"";
+    /* o grupo do produto e so para o filtro desta tela: entra como propriedade NAO ENUMERAVEL
+       para nao ir ao banco junto com o aparelho (ele apareceu gravado como "_g" nos registros
+       que ele conferiu no Supabase — mesmo caminho do __bt da lista de clientes, v148) */
+    try{Object.defineProperty(e,"_g",{value:p.grupo||"",writable:true,enumerable:false,configurable:true});}
+    catch(x){e._g=p.grupo||"";}
     if(e.produto&&prods.indexOf(e.produto)<0)prods.push(e.produto);
     if(e._g&&grupos.indexOf(e._g)<0)grupos.push(e._g);
   });
@@ -26018,7 +26267,7 @@ function renderManut(){
     bt.onclick=function(ev){ev.stopPropagation();
       var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mpok");})[0];
       if(e)abrirTrocaFeita(e);};});
-  try{ajustarBotaoEquipRepetidos();encherLocaisAparelho();}catch(e){}
+  try{ajustarBotaoEquipRepetidos();ajustarBotaoCopias();encherLocaisAparelho();}catch(e){}
 }
 function agendarVisita(e){
   var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
@@ -37255,7 +37504,7 @@ function erro(msg){
     prepararLoginBanco();
     $("login").hidden=false;
     if(!bancoCarregado()){alertaLogin("Não consegui carregar o banco de dados (sem internet?). Recarregue a página.");return;}
-    try{db=window.criarDbSupabase(SUPABASE_URL,SUPABASE_CHAVE,{aoEstado:estadoBanco});}
+    try{db=window.criarDbSupabase(SUPABASE_URL,SUPABASE_CHAVE,{aoEstado:estadoBanco,aoTruncar:avisarTruncado});}
     catch(e){alertaLogin("Banco de dados: "+e.message);return;}
     var sessao=null;
     try{sessao=await db.auth.sessao();}catch(e){}
