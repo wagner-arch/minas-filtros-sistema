@@ -10,7 +10,7 @@ edita é você (ou o Claude, num passo seguinte, com este arquivo na mão).
 
 | | |
 |---|---|
-| Arquivo alvo | `C:\Users\User\Desktop\Notebook Wagner\MinasFiltros\Projetos\Sistema Minas Filtros Claude\sistema-minas.html` |
+| Arquivo alvo | `C:\Users\User\Desktop\Sistema Minas Filtros\sistema-minas.html` |
 | Tamanho conferido | **11.515 linhas**, 1,78 MB (2026-09-09, 14h42) — e **crescendo**: eram 10.943 quando os itens foram escritos e 11.363 quarenta minutos atrás |
 | Companheiros | `supabase\schema.sql` (roda no SQL Editor), `supabase\adapter.js` (vai junto do HTML) |
 | Biblioteca | `https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js` — **conferida hoje: HTTP 200**, 218 KB, define a global `supabase` (o cdnjs **não** publica o supabase-js) |
