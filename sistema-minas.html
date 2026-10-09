@@ -889,6 +889,10 @@
   /* o botão "Filtros (N)" da Manutenção Periódica é só do celular — no computador os filtros
      ficam todos à mostra, como sempre foram (09/10) */
   #mpVerFiltros{display:none}
+  /* "Vence entre ___ e ___": o período por data com o rótulo à vista (09/10) */
+  .mp-datas{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .mp-datas>span{font-size:13px;color:var(--ink-3);white-space:nowrap}
+  .mp-datas input[type=date]{max-width:152px}
   .kpi-bt{cursor:pointer;border:1px solid transparent;transition:border-color .12s,transform .12s}
   .kpi-bt:hover,.kpi-bt:focus-visible{border-color:var(--accent);transform:translateY(-1px)}
   .kpi-bt.crit{border-color:var(--crit)}
@@ -1632,6 +1636,11 @@ img{max-width:100%}
      caixa `.mfil` ao lado dele (v299) — ela precisa entrar na abertura também */
   #mpFiltros.aberto > .mfil{display:block;flex:1 1 100%;max-width:none}
   #mpFiltros.aberto > .mfil .mfil-bt{width:100%;min-height:42px}
+  /* o período por data é um bloco com rótulo, não um campo solto — ele precisa da regra dele
+     para entrar na abertura, como aconteceu com a caixa de cidade e estado */
+  #mpFiltros.aberto > .mp-datas{display:flex;flex:1 1 100%;max-width:none}
+  #mpFiltros.aberto > .mp-datas input[type=date]{flex:1 1 38%;max-width:none;min-height:42px}
+  #mpFiltros.aberto > .mp-datas .btn{flex:1 1 100%;min-height:42px;justify-content:center}
   /* os indicadores acompanham o botão: fechados com ele, abertos com ele */
   #mpLista > #mpKpis{display:none}
   #mpLista.filtros-abertos > #mpKpis{display:grid}
@@ -3482,8 +3491,17 @@ img{max-width:100%}
               title="Idade do cliente a partir de" style="max-width:110px">
             <input id="mpIdadeAte" type="number" min="0" max="120" placeholder="até"
               title="Idade do cliente até" style="max-width:100px">
-            <input id="mpDe" type="date" title="Vence a partir de" style="max-width:160px">
-            <input id="mpAte" type="date" title="Vence até" style="max-width:160px">
+            <!-- PERÍODO POR DATA (pedido dele, 09/10). Os dois campos já existiam desde sempre,
+                 mas eram duas caixas em branco sem rótulo nenhum: só um title, que no celular
+                 ninguém vê. Agora dizem o que fazem, e o "limpar" fica ao lado porque esvaziar
+                 campo de data no telefone dá trabalho. -->
+            <div class="mp-datas" id="mpDatas">
+              <span>Vence entre</span>
+              <input id="mpDe" type="date" title="Vence a partir de" aria-label="Vence a partir de">
+              <span>e</span>
+              <input id="mpAte" type="date" title="Vence até" aria-label="Vence até">
+              <button class="btn mut sm" type="button" id="mpDatasLimpar" hidden>limpar as datas</button>
+            </div>
             <span class="count" id="mpCount"></span>
             <span class="sp"></span>
             <select id="mpPorPag" style="max-width:160px" title="Registros por página">
@@ -11112,6 +11130,12 @@ window.__copiasMF=function(){return copiasDeAparelho();};
 /* ganchos da v327: a recusa do banco e os filtros recolhidos no celular */
 window.__falhaBancoLigarMF=function(on){window.__falhaBancoMF=!!on;return !!window.__falhaBancoMF;};
 window.__ultimaFalhaGravaMF=function(){return ultimaFalhaGrava;};
+window.__datasManutMF=function(){
+  var p=periodoDatasManut();
+  return {de:p.de,ate:p.ate,tem:p.tem,texto:textoPeriodoDatas(p),
+    modoMes:modoMesManut(),limpar:!!($("mpDatasLimpar")&&!$("mpDatasLimpar").hidden),
+    conta:($("mpCount")||{}).textContent||""};
+};
 window.__filtrosManutMF=function(){
   return {ligados:contarFiltrosManut(),
     aberto:!!($("mpFiltros")&&$("mpFiltros").classList.contains("aberto")),
@@ -25762,6 +25786,34 @@ function situacaoMesManut(e,j){
   var dias=Math.round((new Date(j.de+"T00:00:00")-new Date(px+"T00:00:00"))/86400000);
   return {k:"atrasada",dias:dias,prox:px};
 }
+/* ===== PERÍODO POR DATA (pedido dele, 09/10) ==============================================
+   A barra do mês e o "Vence entre" escolhem a MESMA coisa: o período que entra na lista. Ligados
+   ao mesmo tempo eles se cortam e a tela vem vazia sem explicação nenhuma. Quem manda é a data,
+   porque ela é a escolha mais recente e mais específica: o modo de mês sai de cena sozinho e o
+   contador de baixo diz, com todas as letras, qual período está valendo. */
+function periodoDatasManut(){
+  var de=$("mpDe")?$("mpDe").value:"",ate=$("mpAte")?$("mpAte").value:"";
+  /* datas trocadas: o sistema arruma, em vez de devolver lista vazia (mesma regra da idade) */
+  if(de&&ate&&de>ate){var t=de;de=ate;ate=t;$("mpDe").value=de;$("mpAte").value=ate;}
+  return {de:de,ate:ate,tem:!!(de||ate)};
+}
+function textoPeriodoDatas(p){
+  if(!p.tem)return "";
+  if(p.de&&p.ate)return "vencendo entre "+dataCurta(p.de)+" e "+dataCurta(p.ate);
+  if(p.de)return "vencendo a partir de "+dataCurta(p.de);
+  return "vencendo até "+dataCurta(p.ate);
+}
+function ajustarDatasManut(){
+  var p=periodoDatasManut();
+  var bt=$("mpDatasLimpar");if(bt)bt.hidden=!p.tem;
+  if(p.tem&&$("mpMostrar")&&$("mpMostrar").value)$("mpMostrar").value="";
+  return p;
+}
+function limparDatasManut(){
+  if($("mpDe"))$("mpDe").value="";
+  if($("mpAte"))$("mpAte").value="";
+  ajustarDatasManut();
+}
 /* ===== FILTROS RECOLHIDOS NO CELULAR (pedido dele, 09/10) ==================================
    Quantos filtros estão ligados agora — é o número que aparece no botão. A busca e a barra do
    mês ficam fora da conta: elas continuam à mostra, não estão escondidas atrás do botão. */
@@ -26366,6 +26418,8 @@ function renderManut(){
      "Acompanhar este aparelho" na ficha dele (decisão dele, 05/10) — senão o sistema passaria a
      cobrar troca de refil de aparelho que não é nosso, no meio dos 16 mil que ele já tem aqui. */
   var base=equipamentos.filter(function(e){return e.loja===lojaAtual&&aparelhoAcompanhado(e);});
+  /* o período por data vem ANTES de ler o modo de mês: escolhida uma data, é ela que manda */
+  var perDatas=ajustarDatasManut();
   /* TROCAS DO MÊS (09/10): o mês escolhido na barra de cima, o modo e o teto de atraso */
   var modoMes=modoMesManut(),jmes=janelaMesManut(),tetoAtr=tetoAtrasoManut();
   var limiteAtr=limiteAtrasoManut(jmes,tetoAtr);
@@ -26408,7 +26462,7 @@ function renderManut(){
   var n5=n4.filter(function(e){return !prodSel||e.produto===prodSel;});
 
   /* idade do cliente e janela de vencimento */
-  var faixa=$("mpIdade").value,de=$("mpDe").value,ate=$("mpAte").value;
+  var faixa=$("mpIdade").value,de=perDatas.de,ate=perDatas.ate;
   /* idade do cliente de tal a tal (04/10): os dois campos são independentes —
      só "de" é a partir dali, só "até" é no máximo aquilo */
   var idDe=$("mpIdadeDe")&&$("mpIdadeDe").value!==""?+$("mpIdadeDe").value:null;
@@ -26519,7 +26573,8 @@ function renderManut(){
     '<div class="kpi"><div class="l">Agendado visita</div><div class="v">'+nAgd+"</div></div>"+
     '<div class="kpi"><div class="l">Visita realizada</div><div class="v">'+(nCom+nSem)+'</div><div class="l" style="margin-top:4px">'+
       nCom+" com venda · "+nSem+" sem venda</div></div>";
-  $("mpCount").textContent=lista.length+(lista.length===1?" equipamento":" equipamentos");
+  $("mpCount").textContent=lista.length+(lista.length===1?" equipamento":" equipamentos")+
+    (perDatas.tem?" · "+textoPeriodoDatas(perDatas)+" (o filtro de data manda; o mês ficou de fora)":"");
   /* registros por página (v257): com a base antiga importada são 16 mil aparelhos, e desenhar
      tudo de uma vez trava a aba — mesma correção que a lista de clientes levou na v148 */
   var totalMp=lista.length;
@@ -26702,7 +26757,10 @@ function exportarManut(){
       st.n||"",aa?(aa.data?dataCurta(aa.data):"sim"):"",e.loja||""
     ]);
   });
-  var nome="Trocas_de_refil_"+(modo?String(j.rot).replace(/\s+de\s+/," "):"todos")+"_"+nomeLoja();
+  /* o nome do arquivo diz o período que foi exportado — com data escolhida, são as datas */
+  var pd=periodoDatasManut();
+  var nome="Trocas_de_refil_"+(pd.tem?((pd.de||"inicio")+"_a_"+(pd.ate||"fim"))
+    :(modo?String(j.rot).replace(/\s+de\s+/," "):"todos"))+"_"+nomeLoja();
   baixarPlanilhaMF(nome,linhas);
 }
 function abrirEquip(e){
@@ -36681,6 +36739,7 @@ function ligar(){
     toast("Trocas de "+j.rot+": quem vence no mês e quem está atrasado, do mais antigo para o mais novo.");
   };
   if($("mpExportar"))$("mpExportar").onclick=exportarManut;
+  if($("mpDatasLimpar"))$("mpDatasLimpar").onclick=function(){limparDatasManut();mpFiltrou();};
   if($("mpVerFiltros"))$("mpVerFiltros").onclick=alternarFiltrosManut;
   if($("lgt_fechar"))$("lgt_fechar").onclick=function(){$("ligModal").hidden=true;ligEq=null;};
   if($("lgt_copiar"))$("lgt_copiar").onclick=function(){
