@@ -886,6 +886,9 @@
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:16px;margin-bottom:20px}
   .kpi{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:20px 22px}
   /* KPI que leva a algum lugar — hoje o das atividades atrasadas (05/10) */
+  /* o botão "Filtros (N)" da Manutenção Periódica é só do celular — no computador os filtros
+     ficam todos à mostra, como sempre foram (09/10) */
+  #mpVerFiltros{display:none}
   .kpi-bt{cursor:pointer;border:1px solid transparent;transition:border-color .12s,transform .12s}
   .kpi-bt:hover,.kpi-bt:focus-visible{border-color:var(--accent);transform:translateY(-1px)}
   .kpi-bt.crit{border-color:var(--crit)}
@@ -1616,6 +1619,23 @@ img{max-width:100%}
   .tw.cartoes>table>tbody#mpBody>tr>td:nth-child(4){display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
   .tw.cartoes>table>tbody#mpBody>tr>td:nth-child(4) .btn{flex:1 1 44%;min-height:42px;justify-content:center}
   .tw.cartoes>table>tbody#mpBody>tr>td[colspan]{display:block;text-align:center}
+  /* FILTROS RECOLHIDOS NO CELULAR (pedido dele, 09/10): entre abrir a tela e ver a primeira
+     linha havia seis indicadores e onze filtros para rolar. Agora ficam à mostra só a busca e
+     a barra do mês; o resto entra no toque de "Filtros (N)". No computador nada disso vale. */
+  #mpFiltros > *{display:none}
+  #mpFiltros > #mpBusca{display:block;flex:1 1 100%;min-width:0;max-width:none}
+  #mpFiltros > #mpVerFiltros{display:block;flex:1 1 100%;min-height:42px}
+  #mpFiltros.aberto > select,#mpFiltros.aberto > input{display:block;flex:1 1 100%;max-width:none}
+  #mpFiltros.aberto > button{display:block;flex:1 1 42%}
+  #mpFiltros.aberto > .count{display:block;flex:1 1 100%}
+  /* cidade e estado aceitam marcar vários: o <select> fica escondido e quem aparece é a
+     caixa `.mfil` ao lado dele (v299) — ela precisa entrar na abertura também */
+  #mpFiltros.aberto > .mfil{display:block;flex:1 1 100%;max-width:none}
+  #mpFiltros.aberto > .mfil .mfil-bt{width:100%;min-height:42px}
+  /* os indicadores acompanham o botão: fechados com ele, abertos com ele */
+  #mpLista > #mpKpis{display:none}
+  #mpLista.filtros-abertos > #mpKpis{display:grid}
+
   /* a barra do mês fica legível em pé: as setas com o mês numa linha, cada escolha na sua, e os
      dois botões dividindo a última — empilhar tudo deixava a barra com 277 px e empurrava a
      lista para fora da tela */
@@ -2048,6 +2068,9 @@ img{max-width:100%}
           <button class="btn" type="button" id="cliSalvar">Salvar cliente</button>
           <button class="btn mut" type="button" id="cliCancelar">Cancelar</button>
         </div>
+        <!-- o motivo da recusa do banco fica LOGO ABAIXO do botão, onde a pessoa está
+             olhando (mesma correção da v242, no cadastro do colaborador) -->
+        <div id="c_alerta"></div>
         </div>
       </div>
     </section>
@@ -3404,18 +3427,25 @@ img{max-width:100%}
               <option value="mes">Só as que vencem no mês</option>
               <option value="atraso">Só as atrasadas</option>
             </select>
+            <!-- em MESES DE CALENDÁRIO contados do dia 1º do mês escolhido (regra dele, 09/10):
+                 "3 meses" em outubro é tudo que venceu a partir de 1º de julho, e não 90 dias
+                 corridos — era a diferença entre os 415 da tela e os 432 do banco -->
             <select id="mpAtrasoMax" style="max-width:215px" title="Até quanto tempo de atraso entra na lista" hidden>
-              <option value="90">Atraso de até 3 meses</option>
-              <option value="180">Atraso de até 6 meses</option>
-              <option value="365" selected>Atraso de até 12 meses</option>
+              <option value="3">Atraso de até 3 meses</option>
+              <option value="6">Atraso de até 6 meses</option>
+              <option value="12" selected>Atraso de até 12 meses</option>
               <option value="0">Qualquer atraso</option>
             </select>
             <button class="btn" type="button" id="mpTrocasMes">Trocas deste mês</button>
             <span class="sp"></span>
             <button class="btn ghost" type="button" id="mpExportar" hidden>Exportar a lista</button>
           </div>
-          <div class="toolbar">
+          <!-- No CELULAR só a busca e o botão "Filtros (N)" ficam à mostra; o resto desta barra
+               e os indicadores entram no toque do botão (pedido dele, 09/10). No computador o
+               botão some e tudo continua como sempre foi. -->
+          <div class="toolbar" id="mpFiltros">
             <input id="mpBusca" placeholder="Nome, apelido, endereço, CPF, telefone ou nº de série" style="min-width:300px">
+            <button class="btn ghost" type="button" id="mpVerFiltros" aria-expanded="false">Filtros</button>
             <select id="mpUF" style="max-width:175px"></select>
             <select id="mpCidade" style="max-width:170px"></select>
             <select id="mpBairro" style="max-width:170px"></select>
@@ -7024,6 +7054,7 @@ img{max-width:100%}
       <a class="btn ghost" id="ev_mail">Enviar por e-mail</a>
       <button class="btn mut" type="button" id="ev_fechar">Cancelar</button>
     </div>
+    <div id="ev_alerta"></div>
     <div id="ev_nota"></div>
   </div>
 </div>
@@ -8042,7 +8073,13 @@ async function juntarCadastrosCli(ficaId,saiId){
   if((sai.anexos||[]).length)fica.anexos=(fica.anexos||[]).concat(sai.anexos);
   fica.juntadoDe=(fica.juntadoDe||[]).concat([{id:saiId,codigo:sai.codigo||"",nome:sai.nome||"",
     quando:hojeISO(),por:usuarioAtual,registros:movidos}]);
-  await grava("clientes",fica);
+  /* juntar cadastro move histórico e apaga o repetido: se o banco recusar GRAVAR O QUE FICA,
+     o repetido NÃO é apagado — senão o cliente perderia o cadastro e o que veio junto (09/10) */
+  try{await gravaConf("clientes",fica);}
+  catch(eGr){
+    fica.juntadoDe.pop();
+    return {erro:eGr,motivo:motivoBanco(eGr)};
+  }
   clientes=clientes.filter(function(c){return c.id!==saiId;});
   try{await apaga("clientes",saiId);}catch(e){console.warn("apagar cadastro",e);}
   try{esquecerManutCli();}catch(e){}
@@ -8112,15 +8149,20 @@ async function juntarTodosDupCli(){
       if(id===g.fica)continue;
       try{
         var r=await juntarCadastrosCli(g.fica,id);
-        if(r){n.juntados++;n.movidos+=r.movidos;}
-      }catch(e){console.warn("juntar",e);n.erros++;}
+        if(r&&r.erro){n.erros++;n.motivo=r.motivo;}
+        else if(r){n.juntados++;n.movidos+=r.movidos;}
+      }catch(e){console.warn("juntar",e);n.erros++;n.motivo=motivoBanco(e);}
     }
   }
   $("dupCliModal").hidden=true;
   try{esquecerMeusClientes&&esquecerMeusClientes();}catch(e){}
   renderClientes();render();
-  toast(n.juntados+" cadastro(s) repetido(s) juntado(s) · "+n.movidos+" registro(s) movido(s)"+
-    (n.erros?" · "+n.erros+" com erro":"")+".");
+  /* o que o banco recusou NÃO foi juntado e o repetido continua lá — a frase diz isso (09/10) */
+  toast(n.erros
+    ? RECUSA_BANCO+" "+n.erros+" cadastro(s) não foram juntados"+
+      (n.juntados?" · "+n.juntados+" deram certo":"")+". Nenhum deles foi apagado."+
+      (n.motivo?" Motivo do banco: "+n.motivo:"")
+    : n.juntados+" cadastro(s) repetido(s) juntado(s) · "+n.movidos+" registro(s) movido(s).");
 }
 function renderClientes(){
   /* o cadastro de cliente é da LOJA e aparece para todos dela (regra dele, 22/09: "os clientes
@@ -11067,6 +11109,16 @@ window.__itensSemApMF=function(){return itensSemAparelhoEscolhido();};
 window.__abrirCliMF=function(c){return abrirCliente(c);};
 window.__copiasMF=function(){return copiasDeAparelho();};
 /* ganchos das TROCAS DO MÊS na Manutenção Periódica (09/10) */
+/* ganchos da v327: a recusa do banco e os filtros recolhidos no celular */
+window.__falhaBancoLigarMF=function(on){window.__falhaBancoMF=!!on;return !!window.__falhaBancoMF;};
+window.__ultimaFalhaGravaMF=function(){return ultimaFalhaGrava;};
+window.__filtrosManutMF=function(){
+  return {ligados:contarFiltrosManut(),
+    aberto:!!($("mpFiltros")&&$("mpFiltros").classList.contains("aberto")),
+    rotulo:(($("mpVerFiltros")||{}).textContent||"").trim()};
+};
+window.__limiteAtrasoMF=function(meses){return limiteAtrasoManut(janelaMesManut(),meses);};
+window.__ordensMF2=function(){return ordens;};
 window.__mpMesMF=function(ref){
   if(ref)mpMesRef=ref;
   var j=janelaMesManut();
@@ -16018,7 +16070,59 @@ async function garantirCaixaFinanceiro(){
   caixas.push(c);await grava("caixas",c);
   return c;
 }
-async function grava(colecao,obj){if(db){try{await col(colecao).doc(obj.id).set(obj);}catch(e){console.warn(colecao,e);}}}
+/* `grava` é chamada em 250 lugares, muitos deles rotina interna (boot, migração, sincronização).
+   Ela continua NÃO derrubando quem a chama — mas deixou de falhar em silêncio: a falha fica
+   registrada e a pessoa é avisada na tela, para ninguém mais ler "salvo" sem ter salvo.
+   Um aviso por vez (trava de 4 s), senão uma migração com o banco fora encheria a tela. */
+var ultimaFalhaGrava=null,ultimoAvisoGrava=0;
+async function grava(colecao,obj){
+  if(!db)return;
+  try{await col(colecao).doc(obj.id).set(obj);}
+  catch(e){
+    console.warn(colecao,e);
+    ultimaFalhaGrava={colecao:colecao,id:obj&&obj.id,quando:agoraCarimbo(),motivo:motivoBanco(e)};
+    var agora=Date.now();
+    if(agora-ultimoAvisoGrava>4000){
+      ultimoAvisoGrava=agora;
+      try{toast(RECUSA_BANCO);}catch(x){}
+    }
+  }
+}
+/* ===== GRAVAÇÃO QUE NÃO ENGOLE O ERRO (regra dele, 09/10: prioridade máxima) ==================
+   `grava()` acima esconde a falha do banco num console.warn, e a tela diz "salvo" mesmo quando
+   nada foi gravado. Pior: quem escreveu `try{await grava(...)}catch` ficou com uma conferência
+   que NUNCA dispara, porque o erro morre lá dentro — era o caso do "salvar e continuar depois"
+   da venda.
+   `gravaConf` é o MESMO caminho que a venda e o produto já usavam (`col().doc().set()` direto),
+   só que num lugar só: ela deixa o erro subir, e quem chama avisa na tela e desfaz.
+   REGRA PARA O FUTURO: gravação que nasce de um clique da pessoa usa `gravaConf` + aviso;
+   `grava()` fica para rotina interna (boot, migração, sincronização), onde não há ninguém
+   esperando resposta na tela. */
+async function gravaConf(colecao,obj){
+  /* chave só dos testes: liga a recusa do banco para conferir que a tela avisa e nada se
+     perde. Em uso normal ela nunca existe, e a função cai direto no banco de verdade. */
+  if(window.__falhaBancoMF)throw new Error("o banco recusou (teste)");
+  if(!db)return;
+  await col(colecao).doc(obj.id).set(obj);
+}
+/* a frase que a pessoa lê quando o banco recusa — igual em toda tela */
+var RECUSA_BANCO="Não foi salvo. Confira a internet e tente de novo.";
+function motivoBanco(e){
+  var m=String((e&&e.message)||e||"").trim();
+  return m?m:"o banco não respondeu";
+}
+/* aviso em caixa vermelha dentro da tela (quando há um lugar para escrever) */
+function avisarRecusaBanco(idAlerta,e,oQue){
+  var al=idAlerta&&$(idAlerta);
+  var txt="<b>"+esc(RECUSA_BANCO)+"</b>"+(oQue?" "+esc(oQue):"")+
+    '<br><span class="help" style="margin:0">Motivo do banco: '+esc(motivoBanco(e))+"</span>";
+  if(al){
+    al.innerHTML='<div class="note crit">'+txt+"</div>";
+    try{al.scrollIntoView({block:"center"});}catch(x){}
+  }
+  toast(RECUSA_BANCO);
+  return false;
+}
 async function apaga(colecao,id){if(db){try{await col(colecao).doc(id).delete();}catch(e){console.warn(e);}}}
 async function gravarUsuarios(){if(!db)return;try{await db.doc("config/usuarios").set({lista:USUARIOS});}catch(e){console.warn(e);}}
 async function gravarOrigens(){if(!db)return;try{await db.doc("config/origens").set({lista:ORIGENS});}catch(e){console.warn(e);}}
@@ -24660,7 +24764,14 @@ async function addItemDiagOS(){
     nomesOS.push(qj+"× "+j.prod.nome);
   });
   o.total=totalOS(o);
-  await grava("ordens",o);
+  /* recusado pelo banco, a peça sai da lista e os campos NÃO são limpos (09/10) */
+  try{await gravaConf("ordens",o);}
+  catch(eGr){
+    o.itensOS=(o.itensOS||[]).filter(function(x){return x.id!==idPai&&x.vemCom!==idPai;});
+    o.total=totalOS(o);
+    renderItensDiagOS();
+    return avisarRecusaBanco("os_alerta",eGr,"A peça não entrou na OS — tente de novo.");
+  }
   $("os_dprod").value="";$("os_dqtd").value="";$("os_dvalor").value="";
   try{$("os_dprod").dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}
   renderItensDiagOS();try{renderPedOS();}catch(e){}
@@ -25628,9 +25739,19 @@ function andarMesManut(n){
   mpMesRef=iso(d);
 }
 function modoMesManut(){return $("mpMostrar")?$("mpMostrar").value:"";}
+/* o teto de atraso é em MESES DE CALENDÁRIO (regra dele, 09/10), não em dias corridos */
 function tetoAtrasoManut(){
-  var v=$("mpAtrasoMax")?parseInt($("mpAtrasoMax").value,10):365;
-  return isFinite(v)?v:365;
+  var v=$("mpAtrasoMax")?parseInt($("mpAtrasoMax").value,10):12;
+  return isFinite(v)?v:12;
+}
+/* a data mais antiga que entra na lista: o dia 1º do mês escolhido, menos N meses.
+   Em outubro/2026 com teto de 3 meses, é 01/07/2026 — tudo que venceu antes fica de fora. */
+function limiteAtrasoManut(j,meses){
+  var m=(meses==null?tetoAtrasoManut():meses);
+  if(!m)return "";                       /* "qualquer atraso": sem limite */
+  var d=new Date((j&&j.de?j.de:janelaMesManut().de)+"T00:00:00");
+  d.setDate(1);d.setMonth(d.getMonth()-m);
+  return iso(d);
 }
 /* o aparelho em relação ao mês escolhido: vence nele, está atrasado, ou é de outro mês */
 function situacaoMesManut(e,j){
@@ -25640,6 +25761,36 @@ function situacaoMesManut(e,j){
   if(px>=j.de)return {k:"no_periodo",dias:0,prox:px};
   var dias=Math.round((new Date(j.de+"T00:00:00")-new Date(px+"T00:00:00"))/86400000);
   return {k:"atrasada",dias:dias,prox:px};
+}
+/* ===== FILTROS RECOLHIDOS NO CELULAR (pedido dele, 09/10) ==================================
+   Quantos filtros estão ligados agora — é o número que aparece no botão. A busca e a barra do
+   mês ficam fora da conta: elas continuam à mostra, não estão escondidas atrás do botão. */
+var FILTROS_MANUT=["mpUF","mpCidade","mpBairro","mpRua","mpSit","mpPlano","mpStatus",
+  "mpProd","mpGrupo","mpIdade","mpIdadeDe","mpIdadeAte","mpDe","mpAte"];
+function contarFiltrosManut(){
+  var n=0;
+  FILTROS_MANUT.forEach(function(id){
+    /* cidade e estado aceitam marcar vários: o valor fica no multiSel, não no campo (v299) */
+    var m=(typeof multiSel!=="undefined")&&multiSel[id];
+    if(m&&m.length){n++;return;}
+    var el=$(id);
+    if(el&&String(el.value||"").trim()!=="")n++;
+  });
+  return n;
+}
+function atualizarBotaoFiltrosManut(){
+  var bt=$("mpVerFiltros");if(!bt)return;
+  var n=contarFiltrosManut(),aberto=$("mpFiltros")&&$("mpFiltros").classList.contains("aberto");
+  bt.textContent=(aberto?"Esconder os filtros":"Filtros")+(n?" ("+n+")":"");
+  bt.setAttribute("aria-expanded",String(!!aberto));
+}
+function alternarFiltrosManut(){
+  var box=$("mpFiltros"),lista=$("mpLista");
+  if(!box)return;
+  var abrir=!box.classList.contains("aberto");
+  box.classList.toggle("aberto",abrir);
+  if(lista)lista.classList.toggle("filtros-abertos",abrir);
+  atualizarBotaoFiltrosManut();
 }
 function telDoAparelho(e){
   var c=(e&&e._c)||clientes.filter(function(x){return x.id===((e||{}).clienteId);})[0]||{};
@@ -26217,6 +26368,7 @@ function renderManut(){
   var base=equipamentos.filter(function(e){return e.loja===lojaAtual&&aparelhoAcompanhado(e);});
   /* TROCAS DO MÊS (09/10): o mês escolhido na barra de cima, o modo e o teto de atraso */
   var modoMes=modoMesManut(),jmes=janelaMesManut(),tetoAtr=tetoAtrasoManut();
+  var limiteAtr=limiteAtrasoManut(jmes,tetoAtr);
   if($("mpMesRot"))$("mpMesRot").textContent=jmes.rot.charAt(0).toUpperCase()+jmes.rot.slice(1);
   if($("mpAtrasoMax"))$("mpAtrasoMax").hidden=(modoMes!=="atraso"&&modoMes!=="ambos");
   if($("mpExportar"))$("mpExportar").hidden=!podeExportar();
@@ -26282,7 +26434,8 @@ function renderManut(){
     if(!modoMes)return true;
     var sm=situacaoMesManut(e,jmes);
     if(!sm)return false;
-    var cabe=(!tetoAtr||sm.dias<=tetoAtr);
+    /* o teto é uma DATA: o dia 1º do mês escolhido menos N meses de calendário (09/10) */
+    var cabe=(!limiteAtr||sm.prox>=limiteAtr);
     if(modoMes==="mes")return sm.k==="no_periodo";
     if(modoMes==="atraso")return sm.k==="atrasada"&&cabe;
     return sm.k==="no_periodo"||cabe;   /* mês + atrasadas */
@@ -26344,7 +26497,7 @@ function renderManut(){
     var sm=situacaoMesManut(e,jmes);
     if(!sm)return;
     if(sm.k==="no_periodo")noMes++;
-    else if(!tetoAtr||sm.dias<=tetoAtr)atrasadas++;
+    else if(!limiteAtr||sm.prox>=limiteAtr)atrasadas++;
   });
   var semTel=lista.filter(function(e){return !telDoAparelho(e);}).length;
   if($("mpTrocasMes"))
@@ -26357,7 +26510,7 @@ function renderManut(){
     '<div class="kpi"><div class="l">Trocas de '+esc(String(jmes.rot).replace(" de ","/"))+
       '</div><div class="v">'+noMes+"</div>"+
       '<div class="l" style="margin-top:4px">'+atrasadas+" atrasada"+(atrasadas===1?"":"s")+
-      (tetoAtr?" (até "+Math.round(tetoAtr/30)+" meses)":" (qualquer atraso)")+
+      (tetoAtr?" (até "+tetoAtr+" meses, desde "+dataCurta(limiteAtr)+")":" (qualquer atraso)")+
       '</div><div class="l" style="margin-top:2px;color:'+(semTel?"var(--warn)":"inherit")+'">'+
       semTel+" sem telefone nesta lista</div></div>"+
     '<div class="kpi"><div class="l">Vencidas</div><div class="v" style="color:'+(venc.length?"var(--crit)":"inherit")+'">'+venc.length+"</div></div>"+
@@ -26472,6 +26625,8 @@ function renderManut(){
       var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mptel");})[0];
       if(e)abrirLigarManut(e);};});
   try{ajustarBotaoEquipRepetidos();ajustarBotaoCopias();encherLocaisAparelho();}catch(e){}
+  /* o número no botão "Filtros" acompanha o que está ligado (celular, 09/10) */
+  try{atualizarBotaoFiltrosManut();}catch(e){}
 }
 function agendarVisita(e){
   var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
@@ -28209,7 +28364,14 @@ async function salvarOS(){
       texto:"Técnico alterado de "+(tecAntes||"— sem técnico —")+" para "+(o.tecnico||"— sem técnico —")+" por "+usuarioAtual});
   /* etapa reaberta pelo botão "Corrigir esta etapa": a correção entra no histórico ao salvar */
   try{registrarCorrecoesOS(o);}catch(e){console.warn("correção da etapa",e);}
-  await grava("ordens",o);
+  /* o banco recusando, a OS NÃO fica como salva: a nova sai da lista, a tela continua
+     preenchida e o motivo aparece escrito (regra dele, 09/10) */
+  try{await gravaConf("ordens",o);}
+  catch(eGr){
+    if(novo)ordens=ordens.filter(function(x){return x!==o;});
+    avisarRecusaBanco("os_alerta",eGr,"A OS continua aqui na tela — tente de novo.");
+    return null;
+  }
   /* atendimento interno: o Serviço de Orçamento é cobrado e recebido neste momento */
   var adi=null;
   try{adi=await cobrarOrcamentoOS(o);}catch(e){console.warn(e);}
@@ -28229,10 +28391,19 @@ async function concluirOS(){
   if(!$("os_laudo").value.trim()){
     $("os_alerta").innerHTML='<div class="note crit"><b>Lance o diagnóstico técnico antes de concluir a OS.</b></div>';return;}
   var o=await salvarOS();if(!o)return;
+  var statusAntesFim=o.status;
   o.status="concluida";o.concluidaEm=hojeISO();o.concluidaPor=usuarioAtual;
   o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"OS concluída · "+BRL(totalOS(o))});
   try{await baixarEquipClienteOS(o);}catch(eq){console.warn(eq);}
-  await grava("ordens",o);
+  /* recusado pelo banco, a OS NÃO fica marcada como concluída na tela (09/10) */
+  try{await gravaConf("ordens",o);}
+  catch(eGr){
+    o.status=statusAntesFim;o.concluidaEm="";o.concluidaPor="";
+    o.historico.pop();
+    avisarRecusaBanco("os_alerta",eGr,"A OS continua aberta — tente de novo.");
+    try{abrirOS(o);}catch(x){}
+    return;
+  }
   /* a atividade que gerou esta OS se encerra junto */
   var msg="OS "+o.numero+" concluída.";
   if(o.origemAtiv){
@@ -28277,20 +28448,35 @@ function ligarAcoesOS(){
     var o=editandoOS;if(!o)return;
     var quem=prompt("Quem está retirando o equipamento?");
     if(quem===null)return;
+    /* mudança de situação: recusada pelo banco, a OS volta ao que era (09/10) */
+    var antesE={status:o.status,entrega:o.entrega,retiradoPor:o.retiradoPor};
     o.status="entregue";o.entrega=hojeISO();o.retiradoPor=quem.trim();
     o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Entregue a "+(quem.trim()||"—")});
-    await grava("ordens",o);toast("Entrega registrada.");abrirOS(o);renderOS();});
+    try{await gravaConf("ordens",o);}
+    catch(eGr){
+      o.status=antesE.status;o.entrega=antesE.entrega;o.retiradoPor=antesE.retiradoPor;o.historico.pop();
+      avisarRecusaBanco("os_alerta",eGr,"A entrega não foi registrada — tente de novo.");abrirOS(o);return;}
+    toast("Entrega registrada.");abrirOS(o);renderOS();});
   on("osFab",async function(){
     var o=editandoOS;if(!o)return;
     o.fabricantePagou=true;o.fabricantePagouEm=hojeISO();
     o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Fabricante reembolsou "+BRL(totalOS(o))});
-    await grava("ordens",o);toast("Pendência com o fabricante encerrada.");abrirOS(o);renderOS();});
+    try{await gravaConf("ordens",o);}
+    catch(eGr){
+      o.fabricantePagou=false;o.fabricantePagouEm="";o.historico.pop();
+      avisarRecusaBanco("os_alerta",eGr,"Nada foi alterado — tente de novo.");abrirOS(o);return;}
+    toast("Pendência com o fabricante encerrada.");abrirOS(o);renderOS();});
   on("osCancelarOS",async function(){
     var o=editandoOS;if(!o)return;
     var m=prompt("Cancelar a OS "+o.numero+". Por quê?");
     if(m===null)return;
+    var statusAntesC=o.status;
     o.status="cancelada";o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Cancelada: "+m.trim()});
-    await grava("ordens",o);toast("OS cancelada.");abrirOS(o);renderOS();});
+    try{await gravaConf("ordens",o);}
+    catch(eGr){
+      o.status=statusAntesC;o.historico.pop();
+      avisarRecusaBanco("os_alerta",eGr,"A OS NÃO foi cancelada — tente de novo.");abrirOS(o);return;}
+    toast("OS cancelada.");abrirOS(o);renderOS();});
 }
 /* ---------- OS em etapas (pedido do Wagner, 14/09) ----------
    1 Abertura (quem atende abre) → 2 Diagnóstico técnico (o técnico, com a OS aberta) → 3 Valores (mão de obra,
@@ -29068,7 +29254,14 @@ async function salvarDiagnosticoOS(){
   if(primeiro){s.diagnosticoEm=hojeISO();}
   s.diagnosticoPor=usuarioAtual;
   s.historico.push({quando:hojeISO(),por:usuarioAtual,texto:(primeiro?"Diagnóstico lançado: ":"Diagnóstico atualizado: ")+s.laudo});
-  await grava("ordens",s);
+  /* o diagnóstico é o trabalho do técnico: recusado pelo banco, ele NÃO some da tela e a OS
+     não avança de etapa (09/10) */
+  try{await gravaConf("ordens",s);}
+  catch(eGr){
+    s.historico.pop();
+    if(primeiro){s.diagnosticoEm="";s.diagnosticoPor="";}
+    return avisarRecusaBanco("os_alerta",eGr,"O diagnóstico continua aqui na tela — tente de novo.");
+  }
   /* OS interna: salvo o diagnóstico, o sistema já conclui a análise do técnico e cria o contato do atendente
      com o orçamento (regra do Wagner, 15/09) */
   var contatoDiag=null;
@@ -29571,7 +29764,8 @@ async function salvarOrc(){
   o.itens=orcItens.slice();o.total=r.total;
   /* Desconto Especial gravado no orçamento (25/09) */
   o.descontoEspecial=Math.max(0,numMF(($("or_descEsp")||{}).value||0)||0);
-  if(!editandoOrc)orcamentos.push(o);
+  var orcNovo=!editandoOrc;
+  if(orcNovo)orcamentos.push(o);
   editandoOrc=o;
   if(orcOrigemAtiv&&!o.origemAtiv){
     o.origemAtiv=orcOrigemAtiv.id;
@@ -29579,7 +29773,14 @@ async function salvarOrc(){
     await concluirAtivPorAcao(orcOrigemAtiv,"Concluída pelo orçamento "+o.numero);
     orcOrigemAtiv=null;
   }
-  if(db){try{await col("orcamentos").doc(o.id).set(o);}catch(e){console.warn(e);}}
+  /* banco recusando, o orçamento NÃO fica como salvo: o novo sai da lista, a tela continua
+     preenchida e o motivo aparece escrito (regra dele, 09/10) */
+  try{await gravaConf("orcamentos",o);}
+  catch(eGr){
+    if(orcNovo){orcamentos=orcamentos.filter(function(x){return x!==o;});editandoOrc=null;}
+    avisarRecusaBanco("or_alerta",eGr,"O orçamento continua aqui na tela — tente de novo.");
+    return null;
+  }
   try{await consumirAutorizacao(o.clienteId,"orçamento "+o.numero);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: cartão vai para Orçamento enviado, com o valor */
   try{await atualizarFunilCliente(o.clienteId,"orçamento");}catch(eF){console.warn("funil",eF);}
@@ -29751,7 +29952,12 @@ async function registrarEnvio(o,via){
   o.enviosLog=(o.enviosLog||[]);
   o.enviosLog.push({via:via,quando:iso(new Date()),por:usuarioAtual});
   o.enviadoEm=iso(new Date());o.enviadoVia=via;
-  if(db){try{await col("orcamentos").doc(o.id).set(o);}catch(e){console.warn(e);}}
+  /* o registro do envio também é gravação: recusado, a janela NÃO fecha (09/10) */
+  try{await gravaConf("orcamentos",o);}
+  catch(eGr){
+    o.enviosLog.pop();
+    return avisarRecusaBanco("ev_alerta",eGr,"O envio não ficou registrado — tente de novo.");
+  }
   $("envioModal").hidden=true;
   toast("Proposta "+o.numero+" preparada para envio por "+via+".");
   renderOrcam();
@@ -30100,7 +30306,10 @@ async function virarVenda(o){
   /* o orçamento NÃO vira "convertido" aqui: a venda só existe quando o pedido é salvo. Antes
      ele era marcado neste ponto e, se o vendedor não finalizasse, ficava travado como vendido
      sem pedido nenhum na lista — foi o que ele pegou em 26/09. */
-  if(db){try{await col("orcamentos").doc(o.id).set(o);}catch(e){console.warn(e);}}
+  /* efetivar a venda grava o orçamento antes de abrir o pedido: recusado, NÃO avança de tela
+     (senão o vendedor monta a venda achando que o orçamento ficou marcado) */
+  try{await gravaConf("orcamentos",o);}
+  catch(eGr){return avisarRecusaBanco("or_alerta",eGr,"O orçamento não foi marcado — tente de novo antes de abrir a venda.");}
   render();ir("venda");
   try{escolherClienteVenda(c);atualizarEtapas();}catch(e){}
   try{$("v_vend").value=o.vendedor;}catch(e){}
@@ -34172,7 +34381,14 @@ async function salvarAtend(){
       tipoPrimeiroAtend:tiposSel[0]||"",primeiroAtendEm:iso(new Date()),
       criadoEm:iso(new Date()),criadoPor:usuarioAtual,criadoVia:"atendimento"};
     clientes.push(c);clienteVinc=c;leadNovo=c;
-    if(db){try{await col("clientes").doc(c.id).set(c);}catch(e){console.warn(e);}}
+    /* o lead nasce aqui: banco recusando, ele NÃO fica na lista e o atendimento não segue —
+       senão o contato seguiria para um cadastro que não existe no banco (09/10) */
+    try{await gravaConf("clientes",c);}
+    catch(eGr){
+      clientes=clientes.filter(function(x){return x!==c;});
+      clienteVinc=null;leadNovo=null;
+      return avisarRecusaBanco("at_alerta",eGr,"O atendimento continua aqui na tela — tente de novo.");
+    }
   }
 
   /* cadastro antigo ainda sem origem: escolhe agora, uma vez, e fica gravada */
@@ -34209,8 +34425,14 @@ async function salvarAtend(){
   /* atendimento aberto pela aba Aniversariantes: guarda de qual aniversário é o contato */
   if(atendAniv&&!veioDeAtividade)a.aniversario=atendAniv;
   if(!a.criadoEm)a.criadoEm=iso(new Date());
-  if(!editandoAt)atendimentos.push(a);
-  if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}
+  var atNovo=!editandoAt;
+  if(atNovo)atendimentos.push(a);
+  /* banco recusando, o atendimento NÃO fica como salvo e a tela não é limpa (09/10) */
+  try{await gravaConf("atendimentos",a);}
+  catch(eGr){
+    if(atNovo)atendimentos=atendimentos.filter(function(x){return x!==a;});
+    return avisarRecusaBanco("at_alerta",eGr,"O atendimento continua aqui na tela — tente de novo.");
+  }
   /* funil de vendas: cria o cartão do lead ou anda para Em atendimento */
   try{await atualizarFunilCliente(a.clienteId,"atendimento");}catch(eF){console.warn("funil",eF);}
   editandoAt=null;atendManutEq=null;atendAniv=null;
@@ -36459,6 +36681,7 @@ function ligar(){
     toast("Trocas de "+j.rot+": quem vence no mês e quem está atrasado, do mais antigo para o mais novo.");
   };
   if($("mpExportar"))$("mpExportar").onclick=exportarManut;
+  if($("mpVerFiltros"))$("mpVerFiltros").onclick=alternarFiltrosManut;
   if($("lgt_fechar"))$("lgt_fechar").onclick=function(){$("ligModal").hidden=true;ligEq=null;};
   if($("lgt_copiar"))$("lgt_copiar").onclick=function(){
     var t=$("lgt_num").textContent||"";
@@ -36654,6 +36877,8 @@ function ligar(){
   ["c_sexo","c_tipo","c_origem","c_tipoAt"].forEach(function(id){$(id).addEventListener("change",mostrarFaltantes);});
   $("c_tipo").addEventListener("change",toggleTipoPJ);
   $("cliSalvar").onclick=async function(){
+    /* o aviso da tentativa anterior sai da tela antes de tentar de novo */
+    if($("c_alerta"))$("c_alerta").innerHTML="";
     /* cadastro novo só pelo Atendimento (ficha completa aberta de lá) */
     if(!editandoCli&&!voltaAtend&&!leadDireto){
       $("cliFalta").innerHTML='<div class="note crit"><b>Lead novo nasce no Atendimento.</b> Registre o primeiro contato em Atendimentos; esta ficha serve para consultar e editar.</div>';
@@ -36704,8 +36929,16 @@ function ligar(){
       });
     }
     c.uf=$("c_uf").value.trim().toUpperCase();c.temconj=$("c_temconj").value;
-    if(!editandoCli)clientes.push(c);
-    if(db){try{await col("clientes").doc(c.id).set(c);}catch(e){console.warn(e);}}
+    var cliNovo=!editandoCli;
+    if(cliNovo)clientes.push(c);
+    /* banco recusando, o cadastro NÃO se perde: a ficha continua aberta, com tudo preenchido,
+       e o motivo aparece escrito (regra dele, 09/10) */
+    try{await gravaConf("clientes",c);}
+    catch(eGr){
+      if(cliNovo)clientes=clientes.filter(function(x){return x!==c;});
+      avisarRecusaBanco("c_alerta",eGr,"O cadastro continua aqui na tela — tente de novo.");
+      return;
+    }
     var eraLead=lead;
     editandoCli=null;$("cliForm").hidden=true;$("cliLista").hidden=false;
     leadDireto=false;
