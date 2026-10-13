@@ -211,7 +211,7 @@
   }
 
   /* traduz o erro do PostgREST/GoTrue/fetch para algo que o usuário entenda */
-  function traduzir(erro, contexto) {
+  function traduzir(erro, contexto, ehEscrita) {
     var cod = String((erro && (erro.code || erro.status)) || "");
     var msg = String((erro && erro.message) || erro || "");
     var baixa = msg.toLowerCase();
@@ -232,7 +232,9 @@
     }
     if (baixa.indexOf("failed to fetch") >= 0 || baixa.indexOf("networkerror") >= 0 ||
         baixa.indexOf("load failed") >= 0 || baixa.indexOf("timeout") >= 0) {
-      e = ErroBanco("Sem conexão com o servidor — o registro NÃO foi salvo.", contexto, erro);
+      e = ErroBanco(ehEscrita
+        ? "Sem conexão com o servidor — o registro NÃO foi salvo."
+        : "Sem conexão com o servidor — não deu para ler os dados.", contexto, erro);
       e.ehRede = true;
       return e;
     }
@@ -433,7 +435,7 @@
        apaga uma gravação perdida. */
     function conferir(resp, contexto, ehEscrita) {
       if (resp && resp.error) {
-        var e = anotar(traduzir(resp.error, contexto));
+        var e = anotar(traduzir(resp.error, contexto, ehEscrita));
         if (ehEscrita) marcarFalha(e);
         throw e;
       }
@@ -526,11 +528,28 @@
          O preço é que as páginas voltam a vir uma depois da outra (a faixa seguinte depende
          do último código da anterior), e com isso sai o paralelo de 6 da v311 — 23 idas e
          voltas custam cerca de 1 segundo, contra os 31 que saíram. */
+      /* REDE QUE ENGASGA NÃO PODE DERRUBAR A LISTA INTEIRA (13/10). Medido no computador
+         dele, com o sistema no ar: os cadastros são 23 páginas em sequência e, em duas de
+         três aberturas, UMA delas voltou "Failed to fetch" — e a lista inteira ficava vazia,
+         com a tela dizendo que o banco recusou a leitura. Numa leitura de 23 idas, e ainda
+         mais no 4G do celular, uma falha solta é esperada, não é exceção.
+         Agora cada página é tentada até 3 vezes, com espera crescente; erro que NÃO é de
+         rede (permissão, sessão) não se repete, porque repetir não mudaria a resposta. */
+      function esperarMs(ms) { return new Promise(function (ok) { setTimeout(ok, ms); }); }
+      async function pagina(fn) {
+        var ultimo = null;
+        for (var t = 0; t < 3; t++) {
+          if (t) await esperarMs(400 * t);
+          try { return conferir(await fn(), "ler " + colecao); }
+          catch (e) { ultimo = e; if (!e || !e.ehRede) break; }
+        }
+        throw ultimo;
+      }
+
       var tam0 = Math.min(PAGINA, alvo);
-      var r0 = conferir(
-        await montarConsulta(colecao, filtros, true, crescente).limit(tam0),
-        "ler " + colecao
-      );
+      var r0 = await pagina(function () {
+        return montarConsulta(colecao, filtros, true, crescente).limit(tam0);
+      });
       var lote0 = r0.data || [];
       if (typeof r0.count === "number") total = r0.count;
       linhas = lote0.slice();
@@ -546,10 +565,22 @@
         var corte = ultimo && ehTexto(ultimo.id) ? ultimo.id : null;
         if (!corte) break;                       /* sem código não há por onde continuar */
         var tam = Math.min(PAGINA, fim - linhas.length);
-        var r = conferir(
-          await montarConsulta(colecao, filtros, false, crescente, corte).limit(tam),
-          "ler " + colecao
-        );
+        var r;
+        try {
+          r = await pagina(function () {
+            return montarConsulta(colecao, filtros, false, crescente, corte).limit(tam);
+          });
+        } catch (e) {
+          /* três tentativas e nada: o que JÁ VEIO não se joga fora. A lista sai pelo caminho
+             do truncamento, que acende "Lista incompleta: o sistema leu N de M" na faixa do
+             topo (v325) — e as rotinas que criam registro já se recusam a decidir em cima de
+             lista cortada. Perder as 22 páginas que chegaram por causa da 23ª seria pior.
+             Sem NENHUMA linha, o erro sobe como sempre: aí não há lista para mostrar. */
+          if (!linhas.length) throw e;
+          console.warn("[adapter] " + colecao + ": a leitura parou em " + linhas.length +
+            " de " + (total === null ? "?" : total) + " — " + ((e && e.message) || e));
+          break;
+        }
         var lote = r.data || [];
         if (!lote.length) break;
         linhas = linhas.concat(lote);
