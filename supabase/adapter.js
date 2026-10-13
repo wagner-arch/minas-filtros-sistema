@@ -63,6 +63,30 @@
   var VERSAO_ADAPTER = "1.0.0";
   var TABELA = "docs";
   var PAGINA = 1000; /* teto padrão de linhas por resposta do PostgREST */
+
+  /* ======= FILA: no máximo TETO pedidos ao banco ao mesmo tempo (14/10) =======
+     Com as páginas indo 6 a 6, duas coleções grandes lendo juntas (cadastros e aparelhos)
+     mais os grupos passavam de 12 pedidos simultâneos. Medido no banco dele: cada coleção
+     SOZINHA responde em 1 a 5 s, mas TODAS JUNTAS levavam 17 s — o servidor não fica mais
+     rápido com mais pedidos ao mesmo tempo, fica mais lento, e ainda é ele que atende o
+     resto da loja. A fila deixa o tempo previsível e não muda resposta nenhuma. */
+  var TETO_SIMULTANEO = 6;
+  var emVoo = 0, esperando = [];
+  function puxarDaFila() {
+    while (emVoo < TETO_SIMULTANEO && esperando.length) {
+      var t = esperando.shift();
+      emVoo++;
+      (function (tarefa) {
+        Promise.resolve().then(tarefa.fn).then(
+          function (v) { emVoo--; puxarDaFila(); tarefa.ok(v); },
+          function (e) { emVoo--; puxarDaFila(); tarefa.err(e); }
+        );
+      })(t);
+    }
+  }
+  function naFila(fn) {
+    return new Promise(function (ok, err) { esperando.push({ fn: fn, ok: ok, err: err }); puxarDaFila(); });
+  }
   /* quantas páginas de uma mesma coleção viajam juntas (06/10). 6 é o que o navegador abre
      por host em HTTP/1.1; acima disso elas só fariam fila do outro lado. */
   var PARALELO = 6;
@@ -546,7 +570,8 @@
         var ultimo = null;
         for (var t = 0; t < 3; t++) {
           if (t) await esperarMs(400 * t);
-          try { return conferir(await fn(), "ler " + colecao); }
+          /* passa pela fila: no máximo TETO_SIMULTANEO pedidos ao banco de uma vez */
+          try { return conferir(await naFila(fn), "ler " + colecao); }
           catch (e) { ultimo = e; if (!e || !e.ehRede) break; }
         }
         throw ultimo;
@@ -1332,10 +1357,12 @@
       });
       var lim = Math.max(1, Math.min(typeof teto === "number" ? teto : PAGINA, PAGINA));
       var r = conferir(
-        await sb.from(TABELA).select("colecao,id,data")
-          .in("colecao", colecoes)
-          .order("colecao", { ascending: true }).order("id", { ascending: true })
-          .limit(lim),
+        await naFila(function () {
+          return sb.from(TABELA).select("colecao,id,data")
+            .in("colecao", colecoes)
+            .order("colecao", { ascending: true }).order("id", { ascending: true })
+            .limit(lim);
+        }),
         "ler " + colecoes.join("+")
       );
       var linhas = r.data || [];
@@ -1355,7 +1382,9 @@
        inclusive para a que não existe (exists=false), senão o boot leria undefined. */
     adapter.configs = async function (nomes) {
       var r = conferir(
-        await sb.from(TABELA).select("id,data").eq("colecao", "config").limit(PAGINA),
+        await naFila(function () {
+          return sb.from(TABELA).select("id,data").eq("colecao", "config").limit(PAGINA);
+        }),
         "ler config"
       );
       var achados = {};
