@@ -11615,6 +11615,7 @@ window.__pedAbertoMF=function(){return pedAberto;};
 window.__pedidosMF=function(){return pedidos;};
 /* ganchos de teste da importação de manutenções (v256) */
 window.__clientesMF=function(){return clientes;};
+window.__temposMF=function(){return TEMPOS_BOOT;};
 /* ganchos da tela de preparo, para os testes */
 window.__etapasCargaMF=function(){return ETAPAS_CARGA;};
 window.__cargaMF=function(){return CARGA;};
@@ -39099,40 +39100,58 @@ async function mesclarPerfisBanco(){
   USUARIOS=USUARIOS.filter(function(u){return comLogin[u.nome]||u.cadastradoEm||NOMES_USUARIOS_EXEMPLO.indexOf(u.nome)<0;});
   if(USUARIOS.length!==antes)await gravarUsuarios();
 }
+/* QUANTO CADA PARTE DA ENTRADA LEVOU (14/10). Medido no computador dele: o banco terminava
+   de responder aos 16,4 s e a tela só liberava aos 34,2 s — 18,9 SEGUNDOS de conta rodando no
+   navegador, depois que o banco já tinha calado. Sem medir parte por parte não dá para saber
+   qual rotina é. Fica no sistema: é barato e responde a próxima pergunta de desempenho.
+   `window.__temposMF()` devolve a lista; passo acima de 300 ms também vai para o registro. */
+var TEMPOS_BOOT=[];
+async function passoBoot(nome,fn){
+  var t=Date.now();
+  try{await fn();}catch(e){console.warn(nome,e);}
+  var ms=Date.now()-t;
+  TEMPOS_BOOT.push({passo:nome,ms:ms});
+  if(ms>300)console.log("[entrada] "+nome+": "+ms+" ms");
+}
 async function continuarBoot(){
-  try{await carregar();}catch(e){erro("carregar: "+e.message);}
+  TEMPOS_BOOT=[];
+  await passoBoot("ler o banco",async function(){
+    try{await carregar();}catch(e){erro("carregar: "+e.message);}
+  });
   /* estoque antigo guardado no produto vira movimento "Estoque inicial", uma vez só */
-  try{await normalizarGruposProdutos();}catch(e){console.warn("grupos e subgrupos",e);}
+  await passoBoot("grupos e subgrupos",normalizarGruposProdutos);
   /* o cadastro de Grupos de Produtos recolhe o que já está escrito nos produtos (v180) */
   try{if(semearGruposCadastro())await gravarGruposProd();}catch(e){console.warn("cadastro de grupos",e);}
-  try{await normalizarOrigens();}catch(e){console.warn("situação das origens",e);}
-  try{await garantirCategoriasLSoft();}catch(e){console.warn("categorias do sistema antigo",e);}
-  try{await ajustarMotivosDaLista();}catch(e){console.warn("acerto dos motivos",e);}
-  try{await ajustarCentrosDaLista();}catch(e){console.warn("acerto dos centros",e);}
-  try{await ajustarDuplicadosCentros();}catch(e){console.warn("centros repetidos",e);}
-  try{await limparVersoesTroca();}catch(e){console.warn("versões de troca",e);}
-  try{await limparVariacoesProduto();}catch(e){console.warn("variações do produto",e);}
-  try{await ajustarManutencaoMarcas();}catch(e){console.warn("manutenção por marca",e);}
+  await passoBoot("situação das origens",normalizarOrigens);
+  await passoBoot("categorias do sistema antigo",garantirCategoriasLSoft);
+  await passoBoot("acerto dos motivos",ajustarMotivosDaLista);
+  await passoBoot("acerto dos centros",ajustarCentrosDaLista);
+  await passoBoot("centros repetidos",ajustarDuplicadosCentros);
+  await passoBoot("versões de troca",limparVersoesTroca);
+  await passoBoot("variações do produto",limparVariacoesProduto);
+  await passoBoot("manutenção por marca",ajustarManutencaoMarcas);
   /* a aba Ordens de Serviço liberada para Vendedor, Prospector e Estoquista (decisão dele, 05/10):
      as funções já estão gravadas no banco, então o código novo só vale depois de regravar uma vez */
-  try{await liberarTelaOS();}catch(e){console.warn("liberar a tela de OS",e);}
+  await passoBoot("liberar a tela de OS",liberarTelaOS);
   /* os 12 status novos passaram a conduzir a tela: as OS já gravadas ganham o status certo, uma
      vez só, deduzido da lista antiga (pedido dele, 09/10) */
-  try{await ajustarSitOS();}catch(e){console.warn("acerto do status das OS",e);}
+  await passoBoot("acerto do status das OS",ajustarSitOS);
   /* o cliente assinou pelo link enquanto ninguém olhava: a assinatura entra no pedido (03/10) */
-  try{await aplicarAssinaturasRecebidas();}catch(e){console.warn("assinaturas do link",e);}
-  try{await normalizarCentros();}catch(e){console.warn("grupos de centro de custo",e);}
-  try{await normalizarLancamentos();}catch(e){console.warn("centro de custo dos lançamentos",e);}
-  try{await lancarVagasDoMes();}catch(e){console.warn("vaga de estacionamento",e);}
-  try{await migrarEstoqueInicial();}catch(e){console.warn("estoque inicial",e);}
+  await passoBoot("assinaturas do link",aplicarAssinaturasRecebidas);
+  await passoBoot("grupos de centro de custo",normalizarCentros);
+  await passoBoot("centro de custo dos lançamentos",normalizarLancamentos);
+  await passoBoot("vaga de estacionamento",lancarVagasDoMes);
+  await passoBoot("estoque inicial",migrarEstoqueInicial);
   /* só agora as funções existem — é aqui que o menu ganha a forma final */
-  try{sincronizarEquipe();aplicarPerfil();}catch(e){console.warn(e);}
+  await passoBoot("equipe e permissões",async function(){sincronizarEquipe();aplicarPerfil();});
   if(modoBanco()){
     try{$("dtGerar").hidden=true;$("dt_banco").hidden=false;estadoDemo();}catch(e){}
   }else{
     try{montarLogin();estadoDemo();}catch(e){console.warn(e);}
   }
-  try{opcoesProduto();renderFormas();render();}catch(e){erro("render: "+e.message);}
+  await passoBoot("desenhar as telas",async function(){
+    try{opcoesProduto();renderFormas();render();}catch(e){erro("render: "+e.message);}
+  });
   try{ouvirPedidos();}catch(e){console.warn(e);}
   /* ===== O QUE NÃO É DADO DA PESSOA SAI DO CAMINHO DA ENTRADA (14/10) =====
      Medido no computador dele: os dados ficavam prontos aos 14,9 s e a tela de preparo só
