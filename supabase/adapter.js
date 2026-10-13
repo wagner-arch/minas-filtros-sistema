@@ -447,8 +447,11 @@
     /* -------------------- monta o SELECT de uma coleção --------------------
        crescente=false traz os documentos MAIS NOVOS primeiro (usado quando há
        limite, para o corte deixar de fora o antigo e não o de hoje). */
-    function montarConsulta(colecao, filtros, contar, crescente, corte) {
-      var q = sb.from(TABELA).select("id,data", contar ? { count: "exact" } : undefined).eq("colecao", colecao);
+    function montarConsulta(colecao, filtros, contar, crescente, corte, soId) {
+      /* soId: traz SÓ o código, sem o documento. É uma leitura muito leve (o índice já tem o
+         código, o Postgres nem toca nas linhas) e é com ela que se acham os pontos de corte
+         para pedir as páginas em paralelo. */
+      var q = sb.from(TABELA).select(soId ? "id" : "id,data", contar ? { count: "exact" } : undefined).eq("colecao", colecao);
       filtros = filtros || {};
 
       /* PAGINAÇÃO POR FAIXA DE CÓDIGO: a página seguinte começa logo depois do último
@@ -558,6 +561,78 @@
       if (aoAndar && linhas.length) {
         try { aoAndar(linhas.slice(), total === null ? linhas.length : total); }
         catch (e) { console.warn("aoAndar", e); }
+      }
+
+      /* ============ AS PÁGINAS QUE FALTAM VÃO 6 DE CADA VEZ (14/10) ==================
+         A leitura por faixa da v331 matou o custo do "pular N linhas", mas deixou as páginas
+         em FILA INDIANA: a faixa seguinte depende do último código da anterior. Nos 22.338
+         cadastros dele isso são 24 idas uma esperando a outra — 35 s cronometrados.
+         Agora os pontos de corte são descobertos ANTES, com uma leitura que traz SÓ O CÓDIGO
+         (o Postgres responde pelo índice, sem tocar nas linhas: ~7 ms mesmo no fim da lista),
+         e aí as páginas são pedidas em lotes de PARALELO. Cada página continua sendo uma
+         faixa de código — nada depende de "pular registros".
+         CONFERÊNCIA OBRIGATÓRIA no fim: o número de linhas tem de bater com o total e não
+         pode haver código repetido. Não batendo, joga fora e lê em fila, do jeito seguro. */
+      var faltam = fim - linhas.length;
+      if (lote0.length >= tam0 && faltam > 0 && total !== null && faltam > PAGINA) {
+        var juntas = await lerEmParalelo();
+        if (juntas) {
+          linhas = linhas.concat(juntas);
+          if (aoAndar) {
+            try { aoAndar(linhas.slice(), total); } catch (e) { console.warn("aoAndar", e); }
+          }
+        }
+      }
+
+      async function lerEmParalelo() {
+        var nPag = Math.ceil(fim / PAGINA);                  /* páginas no total */
+        if (nPag < 2 || nPag > 400) return null;
+        /* o corte da página p é o código da linha p*PAGINA-1 (a última da página anterior).
+           O da página 1 já está na mão: é o último do lote que acabou de chegar. */
+        var offs = [];
+        for (var p = 2; p < nPag; p++) offs.push(p * PAGINA - 1);
+        var cortes;
+        try {
+          cortes = await Promise.all(offs.map(function (off) {
+            return pagina(function () {
+              return montarConsulta(colecao, filtros, false, crescente, null, true).range(off, off);
+            }).then(function (r) {
+              var d = (r && r.data) || [];
+              return d.length ? d[0].id : null;
+            });
+          }));
+        } catch (e) { return null; }              /* não deu: lê em fila, como antes */
+        cortes.unshift(lote0[lote0.length - 1].id);
+        if (cortes.some(function (c) { return !ehTexto(c); })) return null;
+
+        var partes = new Array(cortes.length);
+        for (var b = 0; b < cortes.length; b += PARALELO) {
+          var bloco = [];
+          for (var k = b; k < Math.min(b + PARALELO, cortes.length); k++) bloco.push(k);
+          try {
+            var lotes = await Promise.all(bloco.map(function (ix) {
+              var tam = Math.min(PAGINA, fim - (ix + 1) * PAGINA);
+              return pagina(function () {
+                return montarConsulta(colecao, filtros, false, crescente, cortes[ix]).limit(tam);
+              }).then(function (r) { return (r && r.data) || []; });
+            }));
+            for (var z = 0; z < bloco.length; z++) partes[bloco[z]] = lotes[z];
+          } catch (e) { return null; }            /* qualquer falha: lê em fila, que sabe parar no meio */
+        }
+        var tudo = [];
+        for (var i = 0; i < partes.length; i++) tudo = tudo.concat(partes[i] || []);
+        /* a conferência: tem de fechar com o total e sem código repetido */
+        var vistos = Object.create(null), repetido = false;
+        linhas.concat(tudo).forEach(function (l) {
+          if (vistos[l.id]) repetido = true; else vistos[l.id] = 1;
+        });
+        if (repetido || linhas.length + tudo.length !== fim) {
+          console.warn("[adapter] " + colecao + ": leitura em paralelo não fechou (" +
+            (linhas.length + tudo.length) + " de " + fim + (repetido ? ", com repetido" : "") +
+            ") — lendo em fila.");
+          return null;
+        }
+        return tudo;
       }
 
       while (lote0.length >= tam0 && linhas.length < fim) {
