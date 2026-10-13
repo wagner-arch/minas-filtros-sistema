@@ -1633,6 +1633,16 @@ img{max-width:100%}
   .tw.cartoes>table>tbody#mpBody>tr>td:nth-child(4){display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
   .tw.cartoes>table>tbody#mpBody>tr>td:nth-child(4) .btn{flex:1 1 44%;min-height:42px;justify-content:center}
   .tw.cartoes>table>tbody#mpBody>tr>td[colspan]{display:block;text-align:center}
+  /* LISTA DE CLIENTES EM CARTÃO (13/10). Ela passou a ter 3 colunas, e com menos de 5 o módulo
+     de celular não a rotula sozinho — então o cartão é desenhado aqui: nome em cima, documento
+     e endereço embaixo, um por linha, sem o rótulo da coluna atravessado na frente. */
+  .tw.cartoes>table>tbody#cliBody>tr{display:block;padding:11px 12px}
+  .tw.cartoes>table>tbody#cliBody>tr>td{display:block;text-align:left;padding:2px 0;border:0}
+  .tw.cartoes>table>tbody#cliBody>tr>td::before{content:none}
+  .tw.cartoes>table>tbody#cliBody>tr>td:nth-child(1) .t-main{font-weight:700;font-size:15.5px}
+  .tw.cartoes>table>tbody#cliBody>tr>td:nth-child(2){font-size:12.5px;color:var(--ink-3)}
+  .tw.cartoes>table>tbody#cliBody>tr>td .t-sub{margin-top:2px;text-align:left}
+  .tw.cartoes>table>tbody#cliBody>tr>td[colspan]{display:block;text-align:center}
   /* FILTROS RECOLHIDOS NO CELULAR (pedido dele, 09/10): entre abrir a tela e ver a primeira
      linha havia seis indicadores e onze filtros para rolar. Agora ficam à mostra só a busca e
      a barra do mês; o resto entra no toque de "Filtros (N)". No computador nada disso vale. */
@@ -1848,9 +1858,9 @@ img{max-width:100%}
             <option value="incompleto">Cadastro incompleto</option>
           </select>
           <select id="cliPorPag" style="max-width:160px" title="Registros por página">
-            <option value="10">10 por página</option>
+            <option value="10" selected>10 por página</option>
             <option value="25">25 por página</option>
-            <option value="50" selected>50 por página</option>
+            <option value="50">50 por página</option>
             <option value="100">100 por página</option>
             <option value="300">300 por página</option>
           </select>
@@ -1859,8 +1869,13 @@ img{max-width:100%}
           <button class="btn ghost" type="button" id="cliRepetidos">Cadastros repetidos</button>
           <button class="btn ghost" type="button" id="cliImportar">Importar clientes</button>
         </div>
-        <div class="tw"><table>
-          <thead><tr><th>Cliente</th><th>Documento</th><th>Endereço</th><th>Mídia de origem</th><th class="num">Indicações</th><th>Cadastro</th></tr></thead>
+        <!-- três colunas (pedido dele, 13/10): mídia de origem, indicações e o "faltam N dados"
+             saíram da lista. As duas últimas custavam caro de desenhar — contavam indicação
+             varrendo os 22 mil cadastros em CADA linha. A informação continua na ficha.
+             A classe "cartoes" entra à mão porque o módulo de celular só rotula sozinho tabela
+             com 5 colunas ou mais, e esta agora tem 3 (mesma correção da v326 no mpBody). -->
+        <div class="tw cartoes"><table>
+          <thead><tr><th>Cliente</th><th>Documento</th><th>Endereço</th></tr></thead>
           <tbody id="cliBody"></tbody>
         </table></div>
         <div class="toolbar" id="cliPaginacao" hidden>
@@ -7151,7 +7166,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=311"></script>
+<script src="supabase/adapter.js?v=331"></script>
 <script>
 (function(){
 "use strict";
@@ -7523,7 +7538,11 @@ function aquecerBoot(){
   if(!db)return;
   PRE_BOOT={};
   LEITURAS_BOOT.forEach(function(a){
-    pedirJa("col:"+a[0],function(){return col(a[0]).limit(a[1]).get();});
+    pedirJa("col:"+a[0],function(){
+      /* é ESTE pedido que vale para os cadastros (o lerClientesDoBanco só recolhe o que já
+         está a caminho), então é aqui que entra o "vai enchendo a lista" */
+      return col(a[0]).limit(a[1]).get(a[0]==="clientes"?{aoAndar:clientesChegando}:undefined);
+    });
   });
   CONFIGS_BOOT.forEach(function(c){
     pedirJa("cfg:"+c,function(){return db.doc("config/"+c).get();});
@@ -7537,14 +7556,33 @@ function aquecerBoot(){
    vazia — que foi o susto do teste com o Renan (v204).
    DANDO ERRADO, A TELA DIZ O MOTIVO (06/10): antes a recusa do banco ia para um console.warn
    que ninguém vê e a lista dizia "Nenhum cliente ainda", com 21.909 cadastros gravados. */
+/* A LISTA SE ENCHE ENQUANTO OS CADASTROS CHEGAM (13/10, pedido dele depois de cronometrar
+   10:00 → 10:01 entre abrir Clientes e a lista aparecer). São 23 páginas de banco; até aqui a
+   tela ficava em "Carregando os cadastros..." até a ÚLTIMA chegar. Agora cada página que chega
+   já entra na lista — e, com 10 por página, a primeira já dá 100 telas para trabalhar.
+   Dois cuidados: não desenha quando ninguém está na tela de Clientes, e no máximo um desenho
+   a cada 400 ms (desenhar 23 vezes seguidas sairia mais caro que a espera). */
+var clientesTotal=0,clienteDesenhoPend=0;
+function clientesChegando(linhas,total){
+  if(!clientesCarregando)return;
+  clientes=(linhas||[]).map(function(d){var o=(d&&d.data)||{};o.id=d.id;return o;});
+  clientesTotal=total||clientes.length;
+  if(telaAtual!=="clientes"||clienteDesenhoPend)return;
+  clienteDesenhoPend=setTimeout(function(){
+    clienteDesenhoPend=0;
+    try{renderClientes();}catch(e){console.warn("lista parcial",e);}
+  },400);
+}
 function lerClientesDoBanco(){
   if(!db)return;
-  clientesCarregando=true;clientesErro="";
+  clientesCarregando=true;clientesErro="";clientesTotal=0;
   try{render();}catch(e){}
-  return jaPedido("col:clientes",function(){return col("clientes").limit(30000).get();})
+  return jaPedido("col:clientes",function(){
+      return col("clientes").limit(30000).get({aoAndar:clientesChegando});})
     .then(function(cs){
       clientes=cs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-      clientesCarregando=false;clientesErro="";
+      clientesCarregando=false;clientesErro="";clientesTotal=clientes.length;
+      if(clienteDesenhoPend){clearTimeout(clienteDesenhoPend);clienteDesenhoPend=0;}
       try{render();}catch(e){console.warn(e);}
       try{sincronizarFunil();}catch(e){console.warn("funil",e);}
     },function(e){
@@ -8276,14 +8314,18 @@ function renderClientes(){
   /* registros por página, como no sistema antigo (pedido dele, 18/09): com 22 mil cadastros,
      desenhar tudo de uma vez trava o navegador */
   var total=lista.length;
-  var porPag=Math.max(10,parseInt(($("cliPorPag")||{}).value,10)||50);
+  var porPag=Math.max(10,parseInt(($("cliPorPag")||{}).value,10)||10);
   var paginas=Math.max(1,Math.ceil(total/porPag));
   if(cliPag>paginas)cliPag=paginas;
   if(cliPag<1)cliPag=1;
   var ini=(cliPag-1)*porPag;
   lista=lista.slice(ini,ini+porPag);
+  /* enquanto o resto não chega, a conta diz que ela ainda vai crescer — senão a pessoa lê
+     "1.000 cadastros" e acha que perdeu a base (foi o susto da v309/v310) */
   $("cliCount").textContent=total+(total===1?" cadastro":" cadastros")+
-    (nLead?" · "+nLead+" lead"+(nLead===1?"":"s"):"");
+    (nLead?" · "+nLead+" lead"+(nLead===1?"":"s"):"")+
+    ((clientesCarregando&&clientesTotal>base.length)
+      ?" · ainda carregando (já vieram "+base.length+" de "+clientesTotal+")":"");
   var pg=$("cliPaginacao");
   if(pg){
     pg.hidden=(total<=porPag);
@@ -8294,27 +8336,21 @@ function renderClientes(){
   }
   var b=$("cliBody");b.innerHTML="";
   if(!total){
-    b.innerHTML='<tr><td colspan="6">'+htmlListaClienteVazia(base.length)+"</td></tr>";
+    b.innerHTML='<tr><td colspan="3">'+htmlListaClienteVazia(base.length)+"</td></tr>";
     var bt=$("cliRecarregar");if(bt)bt.onclick=function(){lerClientesDoBanco();};
     return;}
+  /* TRÊS COLUNAS (13/10). Saíram mídia de origem, indicações e o "faltam N dados" — as duas
+     últimas não eram só largura de tela: `estrelasDe` e `indicadosPor` varrem os cadastros
+     inteiros, e isso rodava UMA VEZ POR LINHA desenhada. Tudo continua na ficha do cliente. */
   lista.forEach(function(c){
-    var f=faltantes(c),ind=estrelasDe(c.id),indTot=indicadosPor(c.id).length;
     var tr=document.createElement("tr");tr.className="clickable";
-    tr.innerHTML='<td><div class="t-main">'+esc(c.nome)+
+    tr.innerHTML='<td data-r="Cliente"><div class="t-main">'+esc(c.nome)+
         (ehLead(c)?' <span class="pill p-acc">lead</span>':"")+seloPlanoCliente(c.id)+seloManutCliente(c)+'</div>'+
         (c.apelido?'<div class="t-sub">'+esc(c.apelido)+'</div>':'')+'</td>'+
-      "<td>"+esc(c.doc||"—")+"</td>"+
-      '<td><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
+      '<td data-r="Documento">'+esc(c.doc||"—")+"</td>"+
+      '<td data-r="Endereço"><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
         '</div><div class="t-sub">'+esc([c.bairro,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
-        mapaLink(c.geo)+"</div></td>"+
-      "<td>"+esc(c.origem||"—")+"</td>"+
-      '<td class="num">'+(ind?'<span class="pill p-acc" title="indicações que viraram venda">★ '+ind+"</span>":(indTot?'<span class="pill p-mut">'+indTot+" indicado</span>":'<span class="pill p-mut">0</span>'))+"</td>"+
-      /* não é prazo: é quantos dados obrigatórios faltam para este cadastro poder virar venda.
-         O título do pill lista quais são (dúvida do Wagner, 18/09). */
-      "<td>"+(f.length
-        ?'<span class="pill p-warn" title="Falta preencher: '+esc(f.join(" · "))+'">faltam '+f.length+
-          " dado"+(f.length===1?"":"s")+"</span>"
-        :'<span class="pill p-ok">completo</span>')+"</td>";
+        mapaLink(c.geo)+"</div></td>";
     tr.onclick=function(){abrirCliente(c);};b.appendChild(tr);
   });
 }

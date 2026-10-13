@@ -445,9 +445,14 @@
     /* -------------------- monta o SELECT de uma coleção --------------------
        crescente=false traz os documentos MAIS NOVOS primeiro (usado quando há
        limite, para o corte deixar de fora o antigo e não o de hoje). */
-    function montarConsulta(colecao, filtros, contar, crescente) {
+    function montarConsulta(colecao, filtros, contar, crescente, corte) {
       var q = sb.from(TABELA).select("id,data", contar ? { count: "exact" } : undefined).eq("colecao", colecao);
       filtros = filtros || {};
+
+      /* PAGINAÇÃO POR FAIXA DE CÓDIGO: a página seguinte começa logo depois do último
+         código lido. Entra aqui, antes do order(), porque depois do order() o construtor
+         do supabase-js não aceita mais filtro nenhum. */
+      if (ehTexto(corte)) q = (crescente !== false) ? q.gt("id", corte) : q.lt("id", corte);
 
       if (ehTexto(filtros.loja)) {
         if (!lojaSegura(filtros.loja)) estourar(ErroBanco("Loja inválida no filtro: " + filtros.loja, colecao, null));
@@ -507,57 +512,54 @@
     async function buscarColecao(colecao, limite, filtros) {
       var alvo = (typeof limite === "number" && limite > 0) ? limite : Infinity;
       var crescente = !isFinite(alvo);  /* sem limite: crescente e completo */
-      var linhas = [], total = null, offset = 0, guarda = 0;
+      var linhas = [], total = null, guarda = 0;
+      var aoAndar = (filtros && typeof filtros.aoAndar === "function") ? filtros.aoAndar : null;
 
-      /* A PRIMEIRA PÁGINA JÁ DIZ QUANTOS SÃO (count exact), E AÍ O RESTO VAI EM PARALELO
-         (06/10). Antes as páginas saíam uma esperando a outra: os 22.331 cadastros dele são
-         23 idas ao banco, e a lista levava perto de um minuto para aparecer — ele abria
-         Clientes, via a tela vazia e achava que tinha perdido a base. Como a ordem é fixa
-         por id, cada .range() é determinístico e pode ser pedido junto. Em lotes, para não
-         abrir 23 conexões de uma vez. */
+      /* CADA PÁGINA COMEÇA DEPOIS DO ÚLTIMO CÓDIGO LIDO — não "pulando N linhas" (13/10).
+         Medido no banco dele: a última das 23 páginas de cadastros levava 2.504 ms, porque
+         "pular 21.000" obriga o Postgres a varrer essas 21.000 linhas e jogá-las fora. As 23
+         páginas somadas faziam o banco varrer 276 mil linhas para entregar 22 mil — perto de
+         31 segundos SÓ DE BANCO, que é o minuto entre abrir Clientes e a lista aparecer.
+         Pedindo "a partir do último código", a mesma página sai em ~2 ms: o índice docs_pk
+         (colecao, id) leva direto ao ponto. Mesma ordem e mesmas linhas, porque a ordem é
+         fixa por id e o id é único dentro da coleção.
+         O preço é que as páginas voltam a vir uma depois da outra (a faixa seguinte depende
+         do último código da anterior), e com isso sai o paralelo de 6 da v311 — 23 idas e
+         voltas custam cerca de 1 segundo, contra os 31 que saíram. */
       var tam0 = Math.min(PAGINA, alvo);
       var r0 = conferir(
-        await montarConsulta(colecao, filtros, true, crescente).range(0, tam0 - 1),
+        await montarConsulta(colecao, filtros, true, crescente).limit(tam0),
         "ler " + colecao
       );
       var lote0 = r0.data || [];
       if (typeof r0.count === "number") total = r0.count;
       linhas = lote0.slice();
-      offset = lote0.length;
 
       var fim = (total !== null) ? Math.min(total, alvo) : alvo;
-      if (lote0.length >= tam0 && linhas.length < fim && total !== null) {
-        var faixas = [];
-        for (var off = offset; off < fim && faixas.length <= 200; off += PAGINA) {
-          faixas.push([off, Math.min(PAGINA, fim - off)]);
+      if (aoAndar && linhas.length) {
+        try { aoAndar(linhas.slice(), total === null ? linhas.length : total); }
+        catch (e) { console.warn("aoAndar", e); }
+      }
+
+      while (lote0.length >= tam0 && linhas.length < fim) {
+        var ultimo = linhas[linhas.length - 1];
+        var corte = ultimo && ehTexto(ultimo.id) ? ultimo.id : null;
+        if (!corte) break;                       /* sem código não há por onde continuar */
+        var tam = Math.min(PAGINA, fim - linhas.length);
+        var r = conferir(
+          await montarConsulta(colecao, filtros, false, crescente, corte).limit(tam),
+          "ler " + colecao
+        );
+        var lote = r.data || [];
+        if (!lote.length) break;
+        linhas = linhas.concat(lote);
+        /* a tela pode ir se enchendo enquanto o resto vem */
+        if (aoAndar) {
+          try { aoAndar(linhas.slice(), total === null ? linhas.length : total); }
+          catch (e) { console.warn("aoAndar", e); }
         }
-        var partes = new Array(faixas.length);
-        for (var b = 0; b < faixas.length; b += PARALELO) {
-          var bloco = faixas.slice(b, b + PARALELO);
-          /* o await é do bloco inteiro: as páginas dele viajam juntas */
-          var lotes = await Promise.all(bloco.map(function (f) {
-            return montarConsulta(colecao, filtros, false, crescente)
-              .range(f[0], f[0] + f[1] - 1)
-              .then(function (rr) { return conferir(rr, "ler " + colecao).data || []; });
-          }));
-          for (var k = 0; k < lotes.length; k++) partes[b + k] = lotes[k];
-        }
-        for (var z = 0; z < partes.length; z++) linhas = linhas.concat(partes[z] || []);
-      } else if (lote0.length >= tam0 && linhas.length < alvo && total === null) {
-        /* sem count (não deveria acontecer): volta ao sequencial de antes, que descobre
-           o fim pela página incompleta */
-        while (linhas.length < alvo) {
-          var tam = Math.min(PAGINA, alvo - linhas.length);
-          var r = conferir(
-            await montarConsulta(colecao, filtros, false, crescente).range(offset, offset + tam - 1),
-            "ler " + colecao
-          );
-          var lote = r.data || [];
-          linhas = linhas.concat(lote);
-          if (!lote.length || lote.length < tam) break;
-          offset += lote.length;
-          if (++guarda > 200) break;                               /* trava anti-laço infinito */
-        }
+        if (lote.length < tam) break;            /* página incompleta: acabou a coleção */
+        if (++guarda > 500) break;               /* trava anti-laço infinito */
       }
 
       /* veio do mais novo para o mais antigo: devolve na ordem de sempre */
