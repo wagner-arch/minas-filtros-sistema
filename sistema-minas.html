@@ -7226,7 +7226,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=336"></script>
+<script src="supabase/adapter.js?v=338"></script>
 <script>
 (function(){
 "use strict";
@@ -7890,7 +7890,7 @@ function aquecerBoot(){
     guardar("col:"+c,
       /* é ESTE pedido que vale para os cadastros (o lerClientesDoBanco só recolhe o que já
          está a caminho), então é aqui que entra o "vai enchendo a lista" */
-      col(c).limit(a[1]).get(c==="clientes"?{aoAndar:clientesChegando}:undefined),
+      col(c).limit(a[1]).get(c==="clientes"?{aoAndar:clientesChegando,fonte:"docs_sem_anexo"}:undefined),
       function(snap){marcarCarga(c,true,snap.size,snap.total||snap.size);});
   });
   /* as pequenas, em grupo. Vindo o grupo cheio (ou falhando), cada coleção se vira sozinha —
@@ -7971,7 +7971,7 @@ function lerClientesDoBanco(){
   clientesCarregando=true;clientesErro="";clientesTotal=0;
   try{render();}catch(e){}
   return jaPedido("col:clientes",function(){
-      return col("clientes").limit(30000).get({aoAndar:clientesChegando});})
+      return col("clientes").limit(30000).get({aoAndar:clientesChegando,fonte:"docs_sem_anexo"});})
     .then(function(cs){
       clientes=cs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
       clientesCarregando=false;clientesErro="";clientesTotal=clientes.length;
@@ -8904,8 +8904,34 @@ function aplicarModoCli(){
       : '<div class="note ok"><b>Cadastro de cliente.</b> Este contato já comprou: CPF, identidade, nascimento, sexo e endereço completo são obrigatórios.</div>');
   mostrarFaltantes();
 }
+/* OS ANEXOS DO CADASTRO VÊM SÓ AO ABRIR A FICHA (14/10). Na entrada os cadastros chegam sem
+   eles — são 10 MB em 2 clientes, e seguravam 10 segundos de toda entrada, de todo mundo.
+   Aqui, com a ficha aberta, busca-se o cadastro inteiro daquele cliente (uma leitura só).
+   Falhando, a aba Anexos avisa em vez de mostrar lista vazia, e o adapter continua impedindo
+   que um salvar grave por cima dos anexos que não foram lidos. */
+async function garantirAnexosCliente(c){
+  if(!c||!c.id||!db||!modoBanco())return c;
+  if(Object.prototype.hasOwnProperty.call(c,"anexos")&&c.__anexosOk)return c;
+  try{
+    var d=await col("clientes").doc(c.id).get();
+    var o=(d&&d.exists&&d.data())||{};
+    c.anexos=o.anexos||[];
+    try{Object.defineProperty(c,"__anexosOk",{value:true,enumerable:false,configurable:true});}catch(e){}
+  }catch(e){
+    console.warn("anexos do cadastro",e);
+    c.__anexosFalhou=(e&&e.message)||String(e);
+    throw e;
+  }
+  return c;
+}
 function abrirCliente(c){
   if(c)leadDireto=false;   /* o atalho "+ Novo › Lead" vale só para a ficha em branco */
+  /* a ficha abre na hora; os anexos chegam logo atrás e a aba se redesenha */
+  if(c)garantirAnexosCliente(c).then(function(){
+    try{if(!$("cliForm").hidden&&editandoCli===c)renderCliHist(c);}catch(e){}
+  },function(){
+    try{if(!$("cliForm").hidden&&editandoCli===c)renderCliHist(c);}catch(e){}
+  });
   editandoCli=c||null;$("cliLista").hidden=true;$("cliForm").hidden=false;
   var v=c||{};
   $("c_codigo").value=v.codigo||proxCodigo();
@@ -14871,8 +14897,15 @@ function renderAnexosCli(c,rotAba){
   var w=$("ch_anx");if(!w||!c)return;
   var lista=anexosDoCliente(c);
   if(rotAba)rotAba("anx",lista.length);
+  /* os anexos do CADASTRO chegam depois da ficha (eles não vêm na entrada). Enquanto isso a
+     aba diz que está buscando, em vez de mentir dizendo que não há nenhum. */
+  var buscando=modoBanco()&&db&&!c.__anexosOk&&!c.__anexosFalhou;
   w.innerHTML=lista.length?lista.map(cartaoAnexo).join("")
-    :'<div class="empty" style="grid-column:1/-1"><div class="big">Nenhum anexo</div>Os arquivos anexados nos pedidos deste cliente aparecem aqui. Você também pode anexar direto nesta aba.</div>';
+    :(buscando
+      ?'<div class="empty" style="grid-column:1/-1"><div class="big">Buscando os anexos…</div>Os arquivos deste cadastro são buscados ao abrir a ficha.</div>'
+      :(c.__anexosFalhou
+        ?'<div class="empty" style="grid-column:1/-1"><div class="big">Não consegui buscar os anexos</div>'+esc(c.__anexosFalhou)+' — feche e abra a ficha de novo. Nenhum anexo foi perdido.</div>'
+        :'<div class="empty" style="grid-column:1/-1"><div class="big">Nenhum anexo</div>Os arquivos anexados nos pedidos deste cliente aparecem aqui. Você também pode anexar direto nesta aba.</div>'));
   Array.prototype.forEach.call(w.querySelectorAll("[data-anxrm]"),function(b){
     b.onclick=async function(){
       if(!confirm("Remover este anexo do cadastro do cliente?"))return;

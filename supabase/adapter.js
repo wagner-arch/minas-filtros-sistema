@@ -451,8 +451,11 @@
       /* soId: traz SÓ o código, sem o documento. É uma leitura muito leve (o índice já tem o
          código, o Postgres nem toca nas linhas) e é com ela que se acham os pontos de corte
          para pedir as páginas em paralelo. */
-      var q = sb.from(TABELA).select(soId ? "id" : "id,data", contar ? { count: "exact" } : undefined).eq("colecao", colecao);
       filtros = filtros || {};
+      /* de onde ler: a tabela de sempre, ou a leitura sem anexos da entrada (14/10).
+         Lista fechada de propósito — nome de tabela não se monta com texto de fora. */
+      var fonte = (filtros.fonte === "docs_sem_anexo") ? "docs_sem_anexo" : TABELA;
+      var q = sb.from(fonte).select(soId ? "id" : "id,data", contar ? { count: "exact" } : undefined).eq("colecao", colecao);
 
       /* PAGINAÇÃO POR FAIXA DE CÓDIGO: a página seguinte começa logo depois do último
          código lido. Entra aqui, antes do order(), porque depois do order() o construtor
@@ -715,6 +718,26 @@
       var corpo = {};
       Object.keys(obj).forEach(function (k) { if (obj[k] !== undefined) corpo[k] = obj[k]; });
       corpo.id = idFinal; /* o HTML sempre espera obj.id === id do documento */
+
+      /* TRAVA DOS ANEXOS DO CADASTRO (14/10). Desde a entrada rápida, os cadastros são lidos
+         SEM o campo "anexos" (são 10 MB em 2 clientes, e seguravam 10 s da entrada). Gravar
+         um desses cadastros gravaria o documento inteiro SEM o campo — ou seja, apagaria os
+         anexos do cliente sem ninguém pedir. Aqui, se o campo não veio, ele é buscado e
+         devolvido antes de gravar.
+         A trava fica no adapter de propósito: são 11 pontos no sistema que gravam cliente, e
+         qualquer caminho novo passa por aqui. Campo PRESENTE e vazio (a pessoa apagou os
+         anexos de verdade) não dispara nada — e nenhum campo é removido do banco. */
+      if (colecao === "clientes" && !Object.prototype.hasOwnProperty.call(corpo, "anexos")) {
+        try {
+          var atual = await buscarDoc("clientes", idFinal);
+          var anx = (atual && atual.exists && atual.data()) ? atual.data().anexos : null;
+          if (anx !== undefined && anx !== null) corpo.anexos = anx;
+        } catch (e) {
+          /* não deu para conferir: não se grava por cima do que não se conseguiu ler */
+          estourar(ErroBanco("Não deu para conferir os anexos deste cadastro antes de salvar. " +
+            "Tente de novo.", "gravar clientes/" + idFinal, e));
+        }
+      }
 
       var campo = campoLojaDe(colecao);
       var loja = null;
