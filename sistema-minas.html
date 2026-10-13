@@ -36845,7 +36845,27 @@ function renderAniversariantes(){
       var c=clientes.filter(function(x){return x.id===b.getAttribute("data-anfi");})[0];if(!c)return;
       ir(ehLead(c)?"leads":"clientes");try{abrirCliente(c);}catch(e){console.warn(e);}};});
 }
+/* NA ENTRADA SÓ SE DESENHA O QUE A PESSOA VAI VER (14/10). O render() abaixo desenha as 45
+   telas de uma vez — com 22.338 cadastros e 16.386 aparelhos isso levava 4,9 SEGUNDOS, medidos
+   no computador dele, e rodava com a pessoa parada na tela de preparo.
+   Agora a entrada desenha só a tela inicial e os avisos; o resto é desenhado logo depois, em
+   segundo plano. E quem trocar de tela antes disso não vê tela vazia: o ir() desenha tudo
+   antes de mostrar, se ainda não tiver sido desenhado. */
+var RENDER_COMPLETO=false;
+function renderEssencial(){
+  try{document.body.classList.toggle("sem-export",!podeExportar());desenharMarcaDagua();}catch(e){}
+  try{esquecerMeusLeads();}catch(e){}
+  try{renderDash();}catch(e){console.warn("painel",e);}
+  try{avisarSolicitacoes();avisarRetiradas();avisarDescontos();avisarPosseVeiculo();}catch(e){}
+  try{renderSino();}catch(e){}
+  try{checarAgenda();}catch(e){}
+}
+function garantirRenderCompleto(){
+  if(RENDER_COMPLETO)return;
+  try{render();}catch(e){console.warn("desenhar as telas",e);}
+}
 function render(){
+  RENDER_COMPLETO=true;
   /* quem não é Administrador não baixa nem imprime tabela/relatório (05/10) */
   try{document.body.classList.toggle("sem-export",!podeExportar());desenharMarcaDagua();}catch(e){}
   esquecerMeusLeads();
@@ -37010,6 +37030,9 @@ function buscarClienteVenda(){
 }
 var telaAtual="";
 function ir(s,doMenu){
+  /* trocou de tela antes de o desenho de fundo terminar: desenha tudo agora, para ninguém
+     chegar numa tela em branco (14/10) */
+  if(!RENDER_COMPLETO)garantirRenderCompleto();
   /* a DRE mora dentro de Relatórios (pedido do Wagner, 16/09) */
   var abaRel="";if(s==="dre"){s="relat";abaRel="dre";}
   var mudou=telaAtual!==s;
@@ -39149,8 +39172,8 @@ async function continuarBoot(){
   }else{
     try{montarLogin();estadoDemo();}catch(e){console.warn(e);}
   }
-  await passoBoot("desenhar as telas",async function(){
-    try{opcoesProduto();renderFormas();render();}catch(e){erro("render: "+e.message);}
+  await passoBoot("desenhar a tela inicial",async function(){
+    try{opcoesProduto();renderFormas();renderEssencial();}catch(e){erro("render: "+e.message);}
   });
   try{ouvirPedidos();}catch(e){console.warn(e);}
   /* ===== O QUE NÃO É DADO DA PESSOA SAI DO CAMINHO DA ENTRADA (14/10) =====
@@ -39163,6 +39186,8 @@ async function continuarBoot(){
   arrumacaoDeFundo();
 }
 function arrumacaoDeFundo(){
+  /* as outras 44 telas são desenhadas aqui, com o sistema já aberto */
+  setTimeout(function(){garantirRenderCompleto();},120);
   setTimeout(async function(){
     try{var nEq=await sincronizarEquipamentos();if(nEq){renderManut();console.log(nEq+" equipamento(s) criados de vendas antigas");}}catch(e){console.warn(e);}
     try{var nFu=await sincronizarFunil();if(nFu){renderFunil();console.log(nFu+" negócio(s) no funil");}}catch(e){console.warn("funil",e);}
