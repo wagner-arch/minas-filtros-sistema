@@ -514,7 +514,7 @@
     async function buscarColecao(colecao, limite, filtros) {
       var alvo = (typeof limite === "number" && limite > 0) ? limite : Infinity;
       var crescente = !isFinite(alvo);  /* sem limite: crescente e completo */
-      var linhas = [], total = null, guarda = 0;
+      var linhas = [], total = null, guarda = 0, parouPorFalha = null;
       var aoAndar = (filtros && typeof filtros.aoAndar === "function") ? filtros.aoAndar : null;
 
       /* CADA PÁGINA COMEÇA DEPOIS DO ÚLTIMO CÓDIGO LIDO — não "pulando N linhas" (13/10).
@@ -579,6 +579,7 @@
           if (!linhas.length) throw e;
           console.warn("[adapter] " + colecao + ": a leitura parou em " + linhas.length +
             " de " + (total === null ? "?" : total) + " — " + ((e && e.message) || e));
+          parouPorFalha = e;
           break;
         }
         var lote = r.data || [];
@@ -597,6 +598,9 @@
       if (!crescente) linhas.reverse();
 
       var snap = fazerQuerySnap(linhas, total === null ? linhas.length : total);
+      /* truncado pelo LIMITE da tela é de propósito; truncado porque a REDE caiu no meio é
+         outra coisa, e é o que a tela de preparo precisa saber para não liberar o sistema */
+      snap.parouPorFalha = parouPorFalha;
       if (snap.truncado && typeof adapter.aoTruncar === "function") {
         try { adapter.aoTruncar(colecao, snap.total, snap.size); }
         catch (e) { console.warn("aoTruncar", e); }
