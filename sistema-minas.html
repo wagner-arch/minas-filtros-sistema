@@ -26589,13 +26589,24 @@ async function sincronizarEquipamentos(){
       if(it.equipId){
         var alvo=equipamentos.filter(function(x){return x.id===it.equipId;})[0];
         if(alvo){
-          /* mantém os dados de compra daquele aparelho em dia, como antes */
+          /* mantém os dados de compra daquele aparelho em dia, como antes — MAS SÓ GRAVA SE
+             ALGO MUDOU DE VERDADE (14/10). A conferência era `data da venda >= data gravada`,
+             que é verdadeira quando as duas são IGUAIS: o aparelho era regravado em toda
+             abertura do sistema, sem nenhuma diferença. Medido no banco dele: os mesmos 4
+             aparelhos, os 3 negócios do funil e uma configuração voltavam a ser gravados a
+             cada entrada, de cada pessoa, a cada F5. */
           if(alvo.produtoId===it.pid&&(!alvo.compradoEm||String(p.data||"")>=String(alvo.compradoEm||""))){
-            alvo.compradoEm=p.data;alvo.compradoHora=p.hora||"";
-            alvo.valorCompra=(+it.valor||0)*(+it.qtd||1);
-            alvo.formaPgto=resumoPgto(p);
-            if(it.serie&&!alvo.serie)alvo.serie=it.serie;
-            await grava("equipamentos",alvo);
+            var novoValor=(+it.valor||0)*(+it.qtd||1),novaForma=resumoPgto(p);
+            var mudou=alvo.compradoEm!==p.data||alvo.compradoHora!==(p.hora||"")
+              ||(+alvo.valorCompra||0)!==novoValor||alvo.formaPgto!==novaForma
+              ||(it.serie&&!alvo.serie);
+            if(mudou){
+              alvo.compradoEm=p.data;alvo.compradoHora=p.hora||"";
+              alvo.valorCompra=novoValor;
+              alvo.formaPgto=novaForma;
+              if(it.serie&&!alvo.serie)alvo.serie=it.serie;
+              await grava("equipamentos",alvo);
+            }
           }
         }
         continue;
@@ -33321,7 +33332,13 @@ async function atualizarFunilCliente(cid,motivo){
   if(etapaIdx(e.k)>etapaIdx(n.etapa)&&!(n.etapa==="negociacao"&&e.k==="orcamento")){
     moverNegocio(n,e.k,true,{pedido:e.pedido,obs:e.k==="venda"?"pedido "+e.pedido.numero:(e.k==="orcamento"?"orçamento "+e.orc.numero:"")});mudou=true;
   }
-  if(e.orc&&(!n.valor||n.etapa==="orcamento")&&+e.orc.total){n.valor=+e.orc.total;n.orcamentoId=e.orc.id;n.orcamentoNumero=e.orc.numero;mudou=true;}
+  /* só marca que mudou quando o valor ou o orçamento MUDARAM MESMO (14/10): antes qualquer
+     negócio com orçamento era regravado em toda abertura do sistema, sem diferença nenhuma */
+  if(e.orc&&(!n.valor||n.etapa==="orcamento")&&+e.orc.total){
+    if((+n.valor||0)!==(+e.orc.total||0)||n.orcamentoId!==e.orc.id){
+      n.valor=+e.orc.total;n.orcamentoId=e.orc.id;n.orcamentoNumero=e.orc.numero;mudou=true;
+    }
+  }
   if(mudou){await gravarNegocio(n);try{if(!$("s-funil").hidden)renderFunil();}catch(x){}}
   return n;
 }
@@ -39084,9 +39101,21 @@ async function continuarBoot(){
   }
   try{opcoesProduto();renderFormas();render();}catch(e){erro("render: "+e.message);}
   try{ouvirPedidos();}catch(e){console.warn(e);}
-  try{var nEq=await sincronizarEquipamentos();if(nEq){renderManut();console.log(nEq+" equipamento(s) criados de vendas antigas");}}catch(e){console.warn(e);}
-  try{var nFu=await sincronizarFunil();if(nFu){renderFunil();console.log(nFu+" negócio(s) no funil");}}catch(e){console.warn("funil",e);}
-  try{await limparFotosAntigas();}catch(e){console.warn(e);}
+  /* ===== O QUE NÃO É DADO DA PESSOA SAI DO CAMINHO DA ENTRADA (14/10) =====
+     Medido no computador dele: os dados ficavam prontos aos 14,9 s e a tela de preparo só
+     liberava aos 28,8 s — 13,9 SEGUNDOS de arrumação rodando com a pessoa esperando.
+     Estas três varrem a base inteira (16.386 aparelhos, 22.338 cadastros) e NÃO são dados
+     que a pessoa vai ler: criam o aparelho de uma venda antiga, acertam o funil e apagam
+     foto de ponto vencida. Agora rodam DEPOIS que o sistema abre, sem segurar ninguém, e
+     cada uma redesenha a sua tela quando termina. */
+  arrumacaoDeFundo();
+}
+function arrumacaoDeFundo(){
+  setTimeout(async function(){
+    try{var nEq=await sincronizarEquipamentos();if(nEq){renderManut();console.log(nEq+" equipamento(s) criados de vendas antigas");}}catch(e){console.warn(e);}
+    try{var nFu=await sincronizarFunil();if(nFu){renderFunil();console.log(nFu+" negócio(s) no funil");}}catch(e){console.warn("funil",e);}
+    try{await limparFotosAntigas();}catch(e){console.warn(e);}
+  },400);
 }
 function erro(msg){
   var b=$("offline");b.hidden=false;
