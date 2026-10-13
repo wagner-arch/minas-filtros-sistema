@@ -7622,7 +7622,7 @@ function etapaDaColecao(c){
   for(var i=0;i<ETAPAS_CARGA.length;i++)if(ETAPAS_CARGA[i].cols.indexOf(c)>=0)return ETAPAS_CARGA[i].k;
   return "resto";
 }
-var CARGA={ativa:false,pronto:{},parcial:{},total:{},falhou:"",avancou:0,aguardando:null,
+var CARGA={ativa:false,pronto:{},parcial:{},total:{},indo:{},falhou:"",avancou:0,aguardando:null,
   promessas:[],pctMax:0};
 /* Referência só para a barra ANDAR DIREITO na primeira entrada de um aparelho, antes de o
    tamanho real chegar. Sem isto a conta pulava para 100% e voltava para 50% (pego no teste):
@@ -7682,14 +7682,17 @@ function pintarCarga(){
     var completa=e.cols.length
       ?e.cols.every(function(c){return CARGA.pronto[c];})
       :!!CARGA.pronto[e.k];
-    var comecou=feito>0||completa;
+    var comecou=feito>0||completa||e.cols.some(function(c){return CARGA.indo[c];})
+      ||(!e.cols.length&&CARGA.indo[CONFIGS_BOOT[0]]);
     var num="";
     if(completa){
       var t=0;e.cols.forEach(function(c){t+=(CARGA.total[c]||0);});
       if(t)num=brInt(t);
     }else if(comecou&&e.cols.length===1){
-      var c0=e.cols[0];
-      num=brInt(CARGA.parcial[c0]||0)+" de "+brInt(CARGA.total[c0]||g[c0]||0);
+      /* "0 de 0" não se mostra: enquanto o tamanho de verdade não chega (ele vem junto com a
+         primeira resposta), a etapa fica só com o relógio */
+      var c0=e.cols[0],tc=CARGA.total[c0]||g[c0]||0;
+      if(tc>0)num=brInt(CARGA.parcial[c0]||0)+" de "+brInt(tc);
     }
     linhas+='<li class="'+(completa?"pronto":(comecou?"fazendo":""))+'">'+
       '<span class="tc-marca">'+(completa?"✓":(comecou?"⏳":"·"))+"</span>"+
@@ -7734,7 +7737,7 @@ function travarFundoCarga(travar){
 }
 function abrirTelaCarga(){
   var t=$("telaCarga");if(!t)return;
-  CARGA.ativa=true;CARGA.falhou="";CARGA.avancou=Date.now();CARGA.promessas=[];CARGA.pctMax=0;CARGA.guardados=null;
+  CARGA.ativa=true;CARGA.falhou="";CARGA.avancou=Date.now();CARGA.promessas=[];CARGA.pctMax=0;CARGA.guardados=null;CARGA.indo={};
   var g=tamanhosGuardados();
   Object.keys(g).forEach(function(c){if(!CARGA.total[c])CARGA.total[c]=g[c];});
   try{$("tc_loja").textContent=nomeLoja()||"Minas Filtros";}catch(e){}
@@ -7857,6 +7860,10 @@ function aquecerBoot(){
   /* uma leitura já feita não se refaz: na primeira vez isto está vazio; no "Tentar de novo",
      é o que impede de baixar tudo de novo */
   function guardar(chave,p,aoPronto){
+    /* a etapa entra em "⏳" assim que o pedido SAI, não só quando a resposta chega: a primeira
+       página dos cadastros leva de 4 a 14 segundos (são 10,6 MB), e a tela ficava parada em 9%
+       sem dizer que já estava trabalhando nela */
+    CARGA.indo[String(chave).replace(/^(col|cfg):/,"")]=true;
     var acompanha=p.then(function(v){
              /* LISTA QUE VEIO PELA METADE É FALHA, NÃO SUCESSO. Desde a v333 a leitura
                 devolve o parcial quando a rede cai no meio (para não zerar a lista inteira),
