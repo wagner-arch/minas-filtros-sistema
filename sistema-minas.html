@@ -7166,7 +7166,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=331"></script>
+<script src="supabase/adapter.js?v=332"></script>
 <script>
 (function(){
 "use strict";
@@ -7534,18 +7534,56 @@ function jaPedido(chave,fn){
   if(p){delete PRE_BOOT[chave];return p;}
   return fn();
 }
+/* AS COLEÇÕES GRANDES VÃO SOZINHAS; O RESTO VAI EM GRUPO (13/10).
+   Medido no navegador dele, com o sistema no ar: uma chamada ao banco responde em 90 ms,
+   mas a abertura disparava 70 de uma vez e a última resposta só chegava aos 12,6 SEGUNDOS —
+   quase toda coleção pequena levava os mesmos ~1,4 s, que é fila, não dado pesado.
+   Como `docs` é uma tabela só, várias coleções cabem no mesmo pedido: as 19 configurações
+   viram UMA chamada (175 ms medidos) e as 30 coleções pequenas viram TRÊS.
+   Quem é grande fica de fora do grupo, porque passaria do teto de mil linhas por resposta. */
+var GRANDES_BOOT=["clientes","equipamentos","produtos","movest"];
+function gruposDoBoot(){
+  var pequenas=LEITURAS_BOOT.filter(function(a){return GRANDES_BOOT.indexOf(a[0])<0;});
+  var g=[],tam=Math.ceil(pequenas.length/3);
+  for(var i=0;i<pequenas.length;i+=tam)g.push(pequenas.slice(i,i+tam));
+  return g;
+}
 function aquecerBoot(){
   if(!db)return;
   PRE_BOOT={};
+  /* as grandes, uma a uma e paginadas */
   LEITURAS_BOOT.forEach(function(a){
+    if(GRANDES_BOOT.indexOf(a[0])<0)return;
     pedirJa("col:"+a[0],function(){
       /* é ESTE pedido que vale para os cadastros (o lerClientesDoBanco só recolhe o que já
          está a caminho), então é aqui que entra o "vai enchendo a lista" */
       return col(a[0]).limit(a[1]).get(a[0]==="clientes"?{aoAndar:clientesChegando}:undefined);
     });
   });
+  /* as pequenas, em grupo. Vindo o grupo cheio (ou falhando), cada coleção se vira sozinha —
+     é a rede de segurança para nenhuma lista chegar cortada em silêncio. */
+  var tetos={};LEITURAS_BOOT.forEach(function(a){tetos[a[0]]=a[1];});
+  gruposDoBoot().forEach(function(g){
+    var nomes=g.map(function(a){return a[0];});
+    var pg=db.varias?db.varias(nomes):Promise.resolve(null);
+    if(pg&&pg.catch)pg.catch(function(){});
+    nomes.forEach(function(c){
+      PRE_BOOT["col:"+c]=pg.then(function(m){
+        return (m&&m[c])?m[c]:col(c).limit(tetos[c]).get();
+      },function(){return col(c).limit(tetos[c]).get();});
+    });
+  });
+  /* as configurações, todas numa chamada só */
+  var pc=db.configs?db.configs(CONFIGS_BOOT):null;
+  if(pc&&pc.catch)pc.catch(function(){});
   CONFIGS_BOOT.forEach(function(c){
-    pedirJa("cfg:"+c,function(){return db.doc("config/"+c).get();});
+    if(pc){
+      PRE_BOOT["cfg:"+c]=pc.then(function(m){
+        return (m&&m[c])?m[c]:db.doc("config/"+c).get();
+      },function(){return db.doc("config/"+c).get();});
+    }else{
+      pedirJa("cfg:"+c,function(){return db.doc("config/"+c).get();});
+    }
   });
 }
 /* OS CADASTROS CHEGAM DEPOIS, SEM SEGURAR A ABERTURA (regra de 24/09: "demora um pouco").

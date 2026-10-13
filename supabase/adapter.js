@@ -1178,6 +1178,64 @@
       return { gravados: gravados, blocos: blocos };
     };
 
+    /* ============ LER VÁRIAS COLEÇÕES NUM PEDIDO SÓ (13/10) ================
+       MEDIDO NO BANCO DELE, com o sistema aberto no navegador: uma chamada sozinha
+       responde em 90 ms, mas a ABERTURA dispara 70 de uma vez e a última resposta só
+       chega aos 12,6 SEGUNDOS — quase toda coleção pequena levava os mesmos ~1,4 s,
+       que é a assinatura de FILA, não de dado pesado. As 19 configurações sozinhas
+       somavam 26 s esperando a vez.
+       Como `docs` é UMA tabela com a coluna `colecao`, várias coleções cabem no mesmo
+       pedido. Medido: as 15 configurações numa chamada = 175 ms (contra 19 chamadas);
+       seis coleções numa chamada = 206 ms (contra 672 ms uma a uma, e ~8 s na fila).
+
+       SEGURANÇA DA COMPLETUDE: o pedido vai com teto de PAGINA linhas. Se voltar
+       CHEIO, alguma coleção do grupo pode ter sido cortada — e aí isto devolve null,
+       para quem chamou ler aquelas coleções uma a uma, do jeito de sempre. Vindo menos
+       que o teto, veio tudo: não há offset nem corte possível. */
+    adapter.varias = async function (colecoes, teto) {
+      if (!Array.isArray(colecoes) || !colecoes.length) return {};
+      colecoes.forEach(function (c) {
+        if (!nomeSeguro(c)) estourar(ErroBanco("Coleção inválida no grupo: " + c, c, null));
+      });
+      var lim = Math.max(1, Math.min(typeof teto === "number" ? teto : PAGINA, PAGINA));
+      var r = conferir(
+        await sb.from(TABELA).select("colecao,id,data")
+          .in("colecao", colecoes)
+          .order("colecao", { ascending: true }).order("id", { ascending: true })
+          .limit(lim),
+        "ler " + colecoes.join("+")
+      );
+      var linhas = r.data || [];
+      if (linhas.length >= lim) return null;       /* pode ter vindo cortado: lê uma a uma */
+      var porColecao = {};
+      colecoes.forEach(function (c) { porColecao[c] = []; });
+      linhas.forEach(function (l) {
+        if (porColecao[l.colecao]) porColecao[l.colecao].push(l);
+      });
+      var saida = {};
+      colecoes.forEach(function (c) { saida[c] = fazerQuerySnap(porColecao[c], porColecao[c].length); });
+      return saida;
+    };
+
+    /* todas as configurações de uma vez (eram 19 idas ao banco, viram 1).
+       Devolve um mapa nome -> o MESMO snapshot que db.doc("config/x").get() devolve,
+       inclusive para a que não existe (exists=false), senão o boot leria undefined. */
+    adapter.configs = async function (nomes) {
+      var r = conferir(
+        await sb.from(TABELA).select("id,data").eq("colecao", "config").limit(PAGINA),
+        "ler config"
+      );
+      var achados = {};
+      (r.data || []).forEach(function (l) { achados[l.id] = l.data; });
+      var saida = {};
+      (Array.isArray(nomes) ? nomes : Object.keys(achados)).forEach(function (n) {
+        saida[n] = Object.prototype.hasOwnProperty.call(achados, n)
+          ? fazerDocSnap(n, achados[n], true)
+          : fazerDocSnap(n, undefined, false);
+      });
+      return saida;
+    };
+
     /* -------------------- superfície principal ---------------------------- */
     adapter.collection = refColecao;
     adapter.doc = refCaminho;
