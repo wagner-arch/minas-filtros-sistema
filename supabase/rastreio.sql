@@ -1,0 +1,23 @@
+-- RASTREIO DOS VENDEDORES (autorizado por Wagner em 14/10/2026)
+-- Ja aplicado no banco do projeto. Este arquivo fica como registro do que foi
+-- criado, para o caso de precisar refazer em outro projeto.
+--
+-- Duas tabelas FORA de public.docs de proposito: docs e carregada inteira na
+-- entrada do sistema, e milhares de pontos por dia deixariam a abertura lenta
+-- outra vez (licao das v331-v343).
+--
+--  public.rastro_pontos   -> os pontos do trajeto (apagados depois de 90 dias)
+--  public.rastro_paradas  -> as paradas (ficam como historico de trabalho)
+--
+-- Regras de acesso:
+--  . o vendedor GRAVA so a propria localizacao e com o proprio nome;
+--  . o vendedor LE so o que e dele;
+--  . Gerente e Administrador leem tudo (funcao sou_gestao_rastreio).
+--
+-- A limpeza dos 90 dias e a funcao limpar_rastro_antigo(dias), chamada pela
+-- rotina do sistema no login do Administrador, uma vez por dia: este projeto
+-- nao tem agendador (pg_cron) instalado.
+--
+-- Para conferir o que esta no ar:
+--   select tablename, policyname, cmd from pg_policies
+--    where schemaname='public' and tablename like 'rastro%';

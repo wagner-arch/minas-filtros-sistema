@@ -1398,6 +1398,85 @@
       return saida;
     };
 
+    /* -------------------- rastreio dos vendedores (14/10) -----------------
+       Fica FORA de `docs` de propósito: `docs` é lida inteira na entrada do
+       sistema, e milhares de pontos por dia deixariam a abertura lenta outra
+       vez (lição das v331–v343). São duas tabelas próprias, com regra de acesso
+       no banco: o vendedor só grava e lê o que é dele; Gerente e Administrador
+       leem tudo. Toda gravação aqui confere a resposta. */
+    adapter.rastro = {
+      /* a credencial que o aplicativo do celular precisa para gravar sozinho,
+         com a tela desligada. Nada é inventado: sai da sessão de verdade. */
+      sessaoParaApp: async function () {
+        var s = await adapter.auth.sessao();
+        if (!s) return null;
+        return { url: String(url || "").replace(/\/+$/, ""), chave: chaveAnon, token: s.access_token || "",
+          refresh: s.refresh_token || "", expira: s.expires_at || 0 };
+      },
+      gravarPontos: async function (linhas) {
+        if (!linhas || !linhas.length) return 0;
+        var r = await naFila(function () { return sb.from("rastro_pontos").insert(linhas); });
+        conferir(r, "gravar o trajeto", true);
+        return linhas.length;
+      },
+      pontos: async function (vendedor, de, ate) {
+        var q = sb.from("rastro_pontos").select("em,lat,lng,precisao,velocidade,parado,vendedor")
+          .gte("em", de).lte("em", ate).order("em", { ascending: true }).limit(5000);
+        if (ehTexto(vendedor)) q = q.eq("vendedor", vendedor);
+        var r = await naFila(function () { return q; });
+        return conferir(r, "ler o trajeto").data || [];
+      },
+      paradas: async function (vendedor, de, ate) {
+        var q = sb.from("rastro_paradas").select("*")
+          .gte("inicio", de).lte("inicio", ate).order("inicio", { ascending: true }).limit(1000);
+        if (ehTexto(vendedor)) q = q.eq("vendedor", vendedor);
+        var r = await naFila(function () { return q; });
+        return conferir(r, "ler as paradas").data || [];
+      },
+      /* os pontos mais recentes de todos: é por eles que o sistema vê quem
+         parou de registrar (saiu do sistema ou o celular matou o aplicativo) */
+      ultimosPontos: async function (quantos) {
+        var r = await naFila(function () {
+          return sb.from("rastro_pontos").select("vendedor,em,lat,lng")
+            .order("em", { ascending: false }).limit(quantos || 300);
+        });
+        return conferir(r, "ler os últimos pontos").data || [];
+      },
+      /* as paradas que viraram aviso e ainda estão no dia */
+      avisos: async function (de) {
+        var r = await naFila(function () {
+          return sb.from("rastro_paradas").select("*")
+            .not("avisado_em", "is", null)
+            .eq("com_atendimento", false).eq("na_loja", false).eq("no_almoco", false)
+            .gte("inicio", de).order("inicio", { ascending: false }).limit(100);
+        });
+        return conferir(r, "ler os avisos do rastreio").data || [];
+      },
+      /* as que o sistema ainda não conferiu (atendimento, loja, almoço) */
+      paradasACoferir: async function (de) {
+        var r = await naFila(function () {
+          return sb.from("rastro_paradas").select("*").is("conferido_em", null)
+            .gte("inicio", de).not("fim", "is", null)
+            .order("inicio", { ascending: true }).limit(300);
+        });
+        return conferir(r, "ler as paradas").data || [];
+      },
+      atualizarParada: async function (id, campos) {
+        var r = await naFila(function () {
+          return sb.from("rastro_paradas").update(campos).eq("id", id);
+        });
+        conferir(r, "atualizar a parada", true);
+        return true;
+      },
+      /* LGPD: apaga os pontos passados de N dias. As paradas ficam como histórico. */
+      limpar: async function (dias) {
+        var r = await naFila(function () {
+          return sb.rpc("limpar_rastro_antigo", { p_dias: dias || 90 });
+        });
+        return conferir(r, "limpar o rastreio antigo").data || 0;
+      }
+    };
+
     /* -------------------- superfície principal ---------------------------- */
     adapter.collection = refColecao;
     adapter.doc = refCaminho;

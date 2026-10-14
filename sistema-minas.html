@@ -1852,6 +1852,7 @@ img{max-width:100%}
     <button data-s="fluxo">Fluxo de Caixa</button>
     <button data-s="relat">Relatórios</button>
     <button data-s="veiculos">Veículos</button>
+    <button data-s="rastreio">Rastreio dos Vendedores</button>
     <button data-s="fin">Aprovação Financeira</button>
     <div class="grp">Configurações</div>
     <button data-s="funcoes">Funções</button>
@@ -3865,6 +3866,22 @@ img{max-width:100%}
       </div>
     </section>
 
+    <!-- RASTREIO DOS VENDEDORES: so Gerente e Administrador (regra dele, 14/10) -->
+    <section class="screen" id="s-rastreio" hidden>
+      <div class="page-head"><h1>Rastreio dos Vendedores</h1><p>O trajeto do dia, as paradas e as que ficaram <b>sem atendimento registrado</b>. A localização vem do aplicativo instalado no celular da empresa — o navegador não pega com a tela desligada. Parada = <b>10 minutos ou mais no mesmo lugar</b>.</p></div>
+      <div class="kpis" id="rs_kpis"></div>
+      <div class="card flush">
+        <div class="toolbar">
+          <div class="fld" style="margin:0"><label for="rs_quem">Vendedor</label><select id="rs_quem"></select></div>
+          <div class="fld" style="margin:0"><label for="rs_dia">Dia</label><input id="rs_dia" type="date"></div>
+          <span class="sp"></span>
+          <button class="btn" type="button" id="rs_buscar">Ver o trajeto</button>
+          <button class="btn ghost" type="button" id="rs_conferir">Conferir as paradas agora</button>
+        </div>
+        <div style="padding:0 16px 16px" id="rs_corpo"></div>
+      </div>
+    </section>
+
     <!-- ESTOQUE DA EMPRESA (ALMOXARIFADO) -->
     <section class="screen" id="s-estEmpresa" hidden>
       <div class="page-head"><h1>Estoque Empresa</h1><p>O almoxarifado da <span id="eeLoja"></span>. Tudo que entra por nota fiscal e tudo que sai para vendedor, consumo ou venda direta.</p></div>
@@ -5207,6 +5224,13 @@ img{max-width:100%}
               <span class="help" style="margin:0">É o ponto de partida do deslocamento quando o veículo dorme na loja. O sistema busca pelo endereço preenchido acima; você também pode colar as coordenadas do Google Maps ou marcar estando na loja.</span></div>
           </div>
         </div>
+        <!-- ponto de cada loja: e por ele que o rastreio sabe que o vendedor esta DENTRO
+             da loja e nao gera aviso de parada (regra dele, 14/10) -->
+        <div class="sect">
+          <p class="sect-t">Onde fica cada loja — o rastreio não avisa parada dentro dela</p>
+          <p class="help">Marque cada loja estando dentro dela, no celular, pelo botão <b>Marcar onde estou</b>. Parada num raio de 150 m de qualquer uma destas não gera aviso. Sem marcar, toda parada na loja virará aviso.</p>
+          <div id="em_geoLojas"></div>
+        </div>
         <div class="sect">
           <p class="sect-t">Redes — viram QR Code no cabeçalho dos documentos e no rodapé da proposta</p>
           <div class="grid g2">
@@ -6202,6 +6226,26 @@ img{max-width:100%}
 <!-- DESTINO DO PURIFICADOR SUCATA (regra dele, 25/09): o aparelho da troca chega ao almoxarifado,
      é avaliado, e daí sai como SEMINOVO (volta ao estoque, com série) ou vai para DESMANCHE —
      que NÃO gera estoque nenhum: a baixa é definitiva e o aparelho acaba ali. -->
+<!-- TERMO DE CIENCIA DO RASTREIO: o vendedor assina com o dedo na primeira entrada.
+     Antes de assinar, o rastreio NAO liga (regra dele, 14/10). -->
+<div class="modal" id="termoModal" hidden>
+  <div class="box" style="width:min(640px,100%)">
+    <h3>Antes de começar: leia e assine</h3>
+    <div class="sub">Este celular é da empresa e registra a sua localização. Sem a sua assinatura, o registro não liga.</div>
+    <div id="tr_texto" style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0"></div>
+    <div class="fld">
+      <label for="tr_sig">Assine com o dedo <span class="req">*</span></label>
+      <canvas id="tr_sig" width="560" height="150"
+        style="width:100%;max-width:560px;height:150px;border:1px dashed var(--line);border-radius:10px;background:#fff;touch-action:none"></canvas>
+    </div>
+    <div id="trm_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="trm_ok">Li, concordo e assino</button>
+      <button class="btn mut" type="button" id="tr_limpar">Limpar a assinatura</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="sucModal" hidden>
   <div class="box" style="width:min(560px,100%)">
     <h3 id="sc_titulo">Purificador Sucata</h3>
@@ -7252,7 +7296,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=341"></script>
+<script src="supabase/adapter.js?v=345"></script>
 <script>
 (function(){
 "use strict";
@@ -7266,7 +7310,7 @@ var SUPABASE_URL="https://clnccthtvfuetmfwuanu.supabase.co";
 var SUPABASE_CHAVE="sb_publishable_d4fzLYOX1QobjBlxXOnhUg_evOgwcw-";
 var perfilBanco=null;
 /* os testes automáticos rodam no modo demonstração (window.MODO_DEMO_MF antes do sistema) */
-function modoBanco(){return !window.MODO_DEMO_MF&&!!(SUPABASE_URL&&SUPABASE_CHAVE);}
+function modoBanco(){if(window.MODO_BANCO_TESTE_MF)return true;return !window.MODO_DEMO_MF&&!!(SUPABASE_URL&&SUPABASE_CHAVE);}
 function bancoCarregado(){return !!(window.supabase&&window.criarDbSupabase);}
 /* banner vermelho: gravação que não entrou (sem internet, sessão vencida ou sem permissão) */
 window.__truncado={};
@@ -11754,6 +11798,37 @@ window.__sucataMF={abrir:function(p,m){return abrirSucata(p,m);},
   lista:function(de,ate,q){return recuperacoesDoPeriodo(de,ate,q);},
   exportar:function(){return exportarRecuperacoes();}};
 window.__trocarUsuarioMF=function(n){usuarioAtual=n;try{render();}catch(e){}return usuarioAtual;};
+/* ---- rastreio dos vendedores (14/10) ---- */
+window.__empresaMF=function(){return EMPRESA;};
+window.__pontosMF=function(){return pontos;};
+window.__facialMF=function(){return faciais;};
+window.__perfilDeMF=function(n){return perfilDe(n);};
+window.__hojeMF=function(){return hojeISO();};
+window.__pendenciasMF=function(){return pendenciasMF();};
+window.__recebeAvisoMF=function(){return recebeAvisoRastreio();};
+window.__rastroParadasMF=function(){return rastroParadas;};
+window.__rastroDesligadosMF=function(){return rastroDesligados;};
+window.__atualizarAvisosMF=function(){return atualizarAvisosRastreio();};
+window.__conferirDesligadoMF=function(){return conferirRastreioDesligado();};
+window.__carregarRastreioMF=function(){return carregarRastreio();};
+window.__termoAssinadoMF=function(n){return termoRastreioAssinado(n);};
+window.__abrirTermoMF=function(){return abrirTermoRastreio();};
+window.__assinarTesteMF=function(){trSigFeita=true;return true;};
+window.__lerParadasDeMF=async function(quem){
+  try{var l=await db.rastro.paradas(quem,hojeISO()+"T00:00:00",hojeISO()+"T23:59:59");return l.length;}
+  catch(e){return -1;}
+};
+/* o teste põe um banco de mentira no lugar do de verdade: o roteiro não fala com o Supabase */
+window.__ligarRastroFalsoMF=function(obj){
+  if(!db)db={};
+  db.rastro=obj;
+  if(!db.doc)db.doc=function(){return {get:function(){return Promise.resolve({exists:false,data:function(){return null;}});},
+    set:function(){return Promise.resolve();}};};
+  if(!db.collection)db.collection=function(){return {doc:function(){return {
+    set:function(){return Promise.resolve();},get:function(){return Promise.resolve({exists:false,data:function(){return null;}});}};}};};
+  window.MODO_BANCO_TESTE_MF=true;
+  return db.rastro;
+};
 /* a OS não escolhe forma de pagamento nesta tela (isso é do pedido que sai dela): então o campo
    já vem com o valor final da forma de referência e a nota diz de onde ele veio */
 function notaPrecoRefOS(idNota,p){
@@ -35929,6 +36004,10 @@ function veTela(s,quem){
      Administrador (foi o que aconteceu com "os" na v245). Prestadores de Serviço entra para
      quem já tem Remunerações ou a Aprovação Financeira, que é a mesma gente que paga. */
   if(s==="prest"&&((f.telas||[]).indexOf("fatur")>=0||(f.telas||[]).indexOf("fin")>=0))return true;
+  /* Rastreio dos Vendedores (14/10): tela nova, então as funções já gravadas no banco não
+     a têm. Regra dele: só Gerente e Administrador — e é o PERFIL que decide, não a lista
+     de telas, para ninguém liberar sem querer a localização da equipe. */
+  if(s==="rastreio")return ["Administrador","Gerente"].indexOf(perfilDe(quem||usuarioAtual))>=0;
   return (f.telas||[]).indexOf(s)>=0;
 }
 var PERFIS_GESTAO=["Administrador","Financeiro","Gerente"];
@@ -36251,6 +36330,519 @@ function atualizarBadgeSolic(){
 function itensReqTexto(r){
   return (r.itens||[]).map(function(i){return (i.qtd||1)+"× "+(i.nome||"");}).join(", ").slice(0,90);
 }
+
+/* =========================================================================
+   RASTREIO DOS VENDEDORES (spec dele de 14/10)
+   O aplicativo Android registra a localização; o SISTEMA é o único dono das
+   regras: o que é parada sem atendimento, o que é dentro da loja e o que é
+   almoço. Assim não há duas contas para a mesma coisa (lição da v326).
+   Regras dele:
+   · parada = 10 min ou mais num raio de 100 m (quem mede é o celular);
+   · avisa qualquer parada de 10 min sem atendimento, MENOS dentro da loja
+     (150 m de cada loja cadastrada) e no almoço;
+   · almoço vale SÓ pelas batidas do Cartão de Ponto do próprio vendedor —
+     esqueceu de bater, a parada avisa (decisão dele, 14/10);
+   · atendimento conta durante a parada e até 60 min depois de sair;
+   · quem recebe: Gerente e Administrador;
+   · o rastreio liga só para a função Vendedor.
+   ========================================================================= */
+var RASTREIO={raioLoja:150,minutos:10,janelaAtend:60,dias:90,funcoes:["Vendedor"]};
+var rastroParadas=[],rastroPontos=[],rastroCarregando=false,rastroErro="";
+var rastroResumoFeito="",rastroDesligados={},rastroAvisos=[],rastroVistos={};
+var RASTRO_SILENCIO=20;   /* minutos sem nenhum ponto = rastreio desligado */
+
+/* perfilDe() ja existe no arquivo (linha ~35949) — nao redefinir aqui */
+function ehVendedorRastreado(nome){
+  return RASTREIO.funcoes.indexOf(perfilDe(nome||usuarioAtual))>=0;
+}
+function recebeAvisoRastreio(){
+  return ehAdministrador()||perfilDe(usuarioAtual)==="Gerente";
+}
+
+/* ---------- onde ficam as lojas (campo novo em Dados da Empresa) ---------- */
+function geoLojas(){return (EMPRESA&&EMPRESA.geoLojas)||{};}
+function renderGeoLojas(){
+  var box=$("em_geoLojas");if(!box)return;
+  var g=geoLojas();
+  box.innerHTML=LOJAS.map(function(l){
+    var v=g[l.id]||"";
+    return '<div class="grid g3" style="margin-bottom:10px">'+
+      '<div class="fld"><label for="em_geo_'+l.id+'">'+esc(l.nome)+"</label>"+
+      '<input id="em_geo_'+l.id+'" value="'+esc(v)+'" placeholder="latitude, longitude" autocomplete="off"></div>'+
+      '<div class="fld"><label>&nbsp;</label><button class="btn ghost" type="button" data-geoloja="'+l.id+'">Marcar onde estou</button></div>'+
+      '<div class="fld"><label>&nbsp;</label><span class="help" style="margin:0">'+
+      (v?'<span class="pill p-ok">marcada</span>':'<span class="pill p-warn">não marcada — parada nesta loja vira aviso</span>')+
+      "</span></div></div>";
+  }).join("");
+  Array.prototype.forEach.call(box.querySelectorAll("[data-geoloja]"),function(bt){
+    bt.onclick=function(){
+      var id=bt.getAttribute("data-geoloja");
+      if(!navigator.geolocation){toast("Este aparelho não informa a localização.");return;}
+      bt.disabled=true;bt.textContent="Procurando…";
+      navigator.geolocation.getCurrentPosition(function(p){
+        $("em_geo_"+id).value=p.coords.latitude.toFixed(6)+", "+p.coords.longitude.toFixed(6);
+        bt.disabled=false;bt.textContent="Marcar onde estou";
+        toast("Ponto da loja marcado. Clique em Salvar dados da empresa.");
+      },function(){bt.disabled=false;bt.textContent="Marcar onde estou";
+        toast("Não deu para pegar a localização. Ligue o GPS e tente de novo.");},
+      {enableHighAccuracy:true,timeout:15000});
+    };
+  });
+}
+function lerGeoLojasDoForm(){
+  var g={};
+  LOJAS.forEach(function(l){var el=$("em_geo_"+l.id);if(el&&el.value.trim())g[l.id]=el.value.trim();});
+  return g;
+}
+/* a parada está dentro de alguma loja? devolve o nome dela */
+function lojaDaParada(lat,lng){
+  var g=geoLojas(),achou="";
+  LOJAS.forEach(function(l){
+    if(achou)return;
+    var c=coordDe(g[l.id]||"");
+    if(!c)return;
+    if(haversineKm({la:lat,lo:lng},c)*1000<=RASTREIO.raioLoja)achou=l.nome;
+  });
+  return achou;
+}
+
+/* ---------- almoço: SÓ pela batida do ponto (decisão dele, 14/10) ---------- */
+function janelaAlmocoDoDia(nome,diaISO){
+  var reg=(pontos||[]).filter(function(p){
+    return p.colaborador===nome&&String(p.data||"")===diaISO;})[0];
+  if(!reg)return null;
+  var ini=reg.almocoIni&&reg.almocoIni.hora;
+  if(!ini)return null;
+  var fim=(reg.almocoFim&&reg.almocoFim.hora)||"";
+  return {ini:diaISO+"T"+ini+":00",fim:diaISO+"T"+(fim||"23:59")+":59"};
+}
+function dentroDoAlmoco(nome,inicioISO,fimISO){
+  var j=janelaAlmocoDoDia(nome,String(inicioISO||"").slice(0,10));
+  if(!j)return false;
+  var a=new Date(inicioISO).getTime(),b=new Date(fimISO||inicioISO).getTime();
+  var x=new Date(j.ini).getTime(),y=new Date(j.fim).getTime();
+  return a<y&&b>x;
+}
+
+/* ---------- atendimento durante a parada e até 60 min depois ---------- */
+function atendimentoNaParada(nome,inicioISO,fimISO){
+  var a=new Date(inicioISO).getTime();
+  var b=new Date(fimISO||inicioISO).getTime()+RASTREIO.janelaAtend*60000;
+  var achado=null;
+  (atendimentos||[]).forEach(function(r){
+    if(achado||r.colaborador!==nome)return;
+    var q=r.criadoEm||((r.data||"")+"T"+(r.inicio||"12:00")+":00");
+    var t=new Date(q).getTime();
+    if(!isNaN(t)&&t>=a&&t<=b)achado=r;
+  });
+  return achado;
+}
+
+/* ---------- a conferência: roda no sistema, não no celular ----------
+   Pega as paradas fechadas que ninguém conferiu e marca na loja / almoço /
+   com atendimento. É ela que decide se a parada vira aviso. */
+async function conferirParadas(){
+  if(!db||!modoBanco()||!db.rastro)return 0;
+  var lista=[];
+  try{lista=await db.rastro.paradasACoferir(somaDias(hojeISO(),-2)+"T00:00:00");}
+  catch(e){console.warn("conferir paradas",e);return 0;}
+  var n=0;
+  for(var i=0;i<lista.length;i++){
+    var p=lista[i];
+    var naLoja=lojaDaParada(+p.lat,+p.lng);
+    var almoco=dentroDoAlmoco(p.vendedor,p.inicio,p.fim);
+    var at=atendimentoNaParada(p.vendedor,p.inicio,p.fim);
+    var campos={conferido_em:new Date().toISOString(),
+      na_loja:!!naLoja,loja_nome:naLoja||null,
+      no_almoco:!!almoco,com_atendimento:!!at,
+      atendimento_id:at?String(at.id):null};
+    /* a parada que vira aviso já sai marcada: é o que o celular da gestão lê */
+    if(!naLoja&&!almoco&&!at&&(+p.minutos||0)>=RASTREIO.minutos)
+      campos.avisado_em=new Date().toISOString();
+    if(!p.endereco){
+      try{campos.endereco=await enderecoDoPonto(+p.lat,+p.lng);}catch(e){}
+    }
+    try{await db.rastro.atualizarParada(p.id,campos);n++;}
+    catch(e){console.warn("atualizar a parada",e);}
+  }
+  if(n){try{renderSino();}catch(e){}try{renderRastreio();}catch(e){}}
+  return n;
+}
+window.__conferirParadasMF=function(){return conferirParadas();};
+
+/* endereço aproximado da parada: o mapa aberto, o mesmo que o sistema já usa */
+async function enderecoDoPonto(lat,lng){
+  try{
+    var x=await fetch("https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat="+lat+"&lon="+lng);
+    var j=await x.json();
+    if(j&&j.display_name)return String(j.display_name).slice(0,160);
+  }catch(e){}
+  return (+lat).toFixed(5)+", "+(+lng).toFixed(5);
+}
+
+/* ---------- a ponte com o aplicativo do celular ---------- */
+function temAppMF(){return !!(window.MFApp&&typeof window.MFApp.sessao==="function");}
+async function entregarSessaoAoApp(){
+  if(!temAppMF()||!db||!modoBanco()||!db.rastro)return;
+  try{
+    var s=await db.rastro.sessaoParaApp();
+    if(!s)return;
+    s.nome=usuarioAtual;
+    s.funcao=perfilDe(usuarioAtual);
+    s.loja=lojaAtual;
+    s.assinou=!!termoRastreioAssinado(usuarioAtual);
+    window.MFApp.sessao(JSON.stringify(s));
+  }catch(e){console.warn("sessão para o aplicativo",e);}
+}
+function avisarAppQueSaiu(){
+  try{if(temAppMF()&&window.MFApp.saiu)window.MFApp.saiu();}catch(e){}
+}
+function notificarNoCelular(titulo,texto){
+  try{if(temAppMF()&&window.MFApp.notificar)window.MFApp.notificar(titulo,texto);}catch(e){}
+}
+
+/* ---------- o termo de ciência (assinado com o dedo) ----------
+   Vai no documento pessoal do colaborador (coleção `facial`, a mesma do
+   consentimento da foto do ponto): é o único que o PRÓPRIO colaborador pode
+   gravar pela regra do banco. Sem ele, o rastreio não liga. */
+function termoRastreioAssinado(nome){
+  var d=facialDoc(nome||usuarioAtual);
+  return (d&&d.termoRastreio&&d.termoRastreio.assinadoEm)?d.termoRastreio:null;
+}
+var trSigFeita=false;
+function textoTermoRastreio(nome){
+  var u=(USUARIOS||[]).filter(function(x){return x.nome===nome;})[0]||{};
+  return '<div class="doc-termo">'+
+    "<h3>TERMO DE CIÊNCIA — CELULAR DA EMPRESA E REGISTRO DE LOCALIZAÇÃO</h3>"+
+    "<p>Eu, <b>"+esc(nome)+"</b>"+(u.cpf?", CPF <b>"+esc(u.cpf)+"</b>":"")+
+    ", declaro que recebi da <b>Minas Filtros</b> um celular que pertence à empresa, para usar no meu trabalho.</p>"+
+    "<p>Fui informado de que, neste celular, o aplicativo da empresa <b>registra a minha localização sempre que o meu usuário estiver conectado neste celular</b>, e que:</p>"+
+    "<ol>"+
+    "<li><b>Para que serve:</b> acompanhar os atendimentos feitos na rua, organizar as visitas e conferir o deslocamento. A localização <b>não é usada para outra finalidade</b>.</li>"+
+    "<li><b>Quando registra:</b> só com o meu usuário conectado no sistema. Saindo do sistema, o registro para.</li>"+
+    "<li><b>Fica visível na tela:</b> enquanto está registrando, aparece um aviso fixo na barra do celular — <i>“Minas Filtros: localização ativa”</i>. Assim eu sei, a qualquer momento, que o registro está ligado.</li>"+
+    "<li><b>Quem vê:</b> apenas o Administrador e o Gerente. Nenhum outro colaborador vê a minha localização.</li>"+
+    "<li><b>Por quanto tempo fica guardado:</b> os pontos do trajeto são apagados automaticamente depois de <b>90 dias</b>. Só o registro das paradas fica guardado como histórico de trabalho.</li>"+
+    "<li><b>Fora do expediente:</b> o celular é da empresa e deve ficar na loja depois do expediente. Não devo usá-lo para assuntos pessoais.</li>"+
+    "<li><b>Meus direitos:</b> posso pedir a qualquer momento para ver os meus próprios registros, e posso falar com a empresa sobre eles.</li>"+
+    "</ol>"+
+    "<p>Declaro que li e entendi este termo, e que <b>recebi o celular da empresa nas condições acima</b>.</p>"+
+    "<p>Pará de Minas, <b>"+dataCurta(hojeISO())+"</b></p></div>";
+}
+function abrirTermoRastreio(){
+  $("tr_texto").innerHTML=textoTermoRastreio(usuarioAtual);
+  $("trm_alerta").innerHTML="";
+  trSigFeita=false;
+  var cv=$("tr_sig");
+  if(cv){try{cv.getContext("2d").clearRect(0,0,cv.width,cv.height);}catch(e){}}
+  ligarAssinaturaTermo();
+  $("termoModal").hidden=false;
+}
+function ligarAssinaturaTermo(){
+  var cv=$("tr_sig");if(!cv||cv.__ligado)return;
+  cv.__ligado=true;
+  var ctx=cv.getContext("2d"),desenhando=false;
+  ctx.lineWidth=2.2;ctx.lineCap="round";ctx.strokeStyle="#111";
+  function pos(e){
+    var r=cv.getBoundingClientRect();
+    var t=(e.touches&&e.touches[0])||e;
+    return {x:(t.clientX-r.left)*(cv.width/r.width),y:(t.clientY-r.top)*(cv.height/r.height)};
+  }
+  function ini(e){desenhando=true;trSigFeita=true;var p=pos(e);ctx.beginPath();ctx.moveTo(p.x,p.y);e.preventDefault();}
+  function mov(e){if(!desenhando)return;var p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke();e.preventDefault();}
+  function fim(){desenhando=false;}
+  cv.addEventListener("mousedown",ini);cv.addEventListener("mousemove",mov);
+  cv.addEventListener("mouseup",fim);cv.addEventListener("mouseleave",fim);
+  cv.addEventListener("touchstart",ini,{passive:false});
+  cv.addEventListener("touchmove",mov,{passive:false});
+  cv.addEventListener("touchend",fim);
+}
+async function assinarTermoRastreio(){
+  if(!trSigFeita){
+    $("trm_alerta").innerHTML='<div class="note crit">Assine com o dedo no quadro acima para continuar.</div>';
+    return;
+  }
+  var img="";
+  try{img=$("tr_sig").toDataURL("image/png");}catch(e){}
+  var termo={assinadoEm:new Date().toISOString(),nome:usuarioAtual,
+    cpf:((USUARIOS||[]).filter(function(x){return x.nome===usuarioAtual;})[0]||{}).cpf||"",
+    assinatura:img,versao:"1.0",aparelho:(temAppMF()&&window.MFApp.marcaDoCelular)?window.MFApp.marcaDoCelular():""};
+  try{
+    /* gravação que nasce de um clique: confere a resposta do banco (regra da v327) */
+    var d=facialDoc(usuarioAtual);
+    var novo=!d;
+    if(!d){d={id:"facial:"+usuarioAtual,loja:lojaAtual,nome:usuarioAtual};faciais.push(d);}
+    var antes=d.termoRastreio;
+    d.termoRastreio=termo;
+    d.atualizadoEm=hojeISO()+" "+agoraHM();
+    try{await gravaConf("facial",d);}
+    catch(eg){
+      if(novo)faciais.splice(faciais.indexOf(d),1);else d.termoRastreio=antes;
+      throw eg;
+    }
+  }catch(e){
+    $("trm_alerta").innerHTML='<div class="note crit"><b>Não foi salvo.</b> Confira a internet e tente de novo. '+
+      'A sua assinatura continua na tela.<div class="t-sub">'+esc((e&&e.message)||String(e))+"</div></div>";
+    return;
+  }
+  $("termoModal").hidden=true;
+  toast("Termo assinado. O registro de localização está ligado neste celular.");
+  entregarSessaoAoApp();
+}
+/* o vendedor entrou e ainda não assinou: o termo aparece e o rastreio não liga */
+function cobrarTermoRastreio(){
+  if(!modoBanco()||!temAppMF())return;
+  if(!ehVendedorRastreado(usuarioAtual))return;
+  if(termoRastreioAssinado(usuarioAtual))return;
+  setTimeout(abrirTermoRastreio,1200);
+}
+
+/* ---------- a tela Rastreio ---------- */
+var rsQuem="",rsDia="";
+async function carregarRastreio(){
+  if(!db||!modoBanco()||!db.rastro){rastroErro="sem banco";return;}
+  var dia=$("rs_dia").value||hojeISO();
+  var quem=$("rs_quem").value||"";
+  rsQuem=quem;rsDia=dia;
+  rastroCarregando=true;rastroErro="";
+  try{renderRastreio();}catch(e){}
+  try{
+    var de=dia+"T00:00:00",ate=dia+"T23:59:59";
+    rastroPontos=await db.rastro.pontos(quem,de,ate);
+    rastroParadas=await db.rastro.paradas(quem,de,ate);
+    rastroErro="";
+  }catch(e){
+    rastroErro=(e&&e.message)||String(e);
+    rastroPontos=[];rastroParadas=[];
+  }
+  rastroCarregando=false;
+  try{renderRastreio();}catch(e){}
+}
+function paradaSemAtendimento(p){
+  return !p.na_loja&&!p.no_almoco&&!p.com_atendimento&&(+p.minutos||0)>=RASTREIO.minutos;
+}
+function renderRastreio(){
+  var h=$("rs_corpo");if(!h)return;
+  /* o campo do vendedor e o dia: enche uma vez, guardando o que já estava escolhido */
+  try{
+    var sel=$("rs_quem");
+    if(sel&&!sel.__cheio){
+      sel.__cheio=true;
+      var guarda=sel.value;
+      sel.innerHTML='<option value="">Todos os vendedores</option>'+
+        (USUARIOS||[]).filter(function(u){return u.ativo&&ehVendedorRastreado(u.nome);})
+          .map(function(u){return '<option value="'+esc(u.nome)+'">'+esc(u.nome)+"</option>";}).join("");
+      if(guarda)sel.value=guarda;
+    }
+    if($("rs_dia")&&!$("rs_dia").value)$("rs_dia").value=hojeISO();
+  }catch(e){}
+  if(!recebeAvisoRastreio()){
+    h.innerHTML='<div class="note crit">Esta tela é do Gerente e do Administrador.</div>';
+    return;
+  }
+  if(!modoBanco()){
+    h.innerHTML='<div class="note">O rastreio funciona com o banco ligado. Nesta demonstração não há localização gravada.</div>';
+    $("rs_kpis").innerHTML="";return;
+  }
+  if(rastroCarregando){h.innerHTML='<div class="note">Buscando o trajeto…</div>';return;}
+  if(rastroErro){
+    h.innerHTML='<div class="note crit"><b>Não deu para ler o trajeto.</b> Confira a internet e tente de novo.'+
+      '<div class="t-sub">'+esc(rastroErro)+"</div></div>";
+    return;
+  }
+  var sem=rastroParadas.filter(paradaSemAtendimento);
+  var naLoja=rastroParadas.filter(function(p){return p.na_loja;});
+  var almoco=rastroParadas.filter(function(p){return p.no_almoco;});
+  var comAt=rastroParadas.filter(function(p){return p.com_atendimento;});
+  var minutosParado=rastroParadas.reduce(function(a,p){return a+(+p.minutos||0);},0);
+  $("rs_kpis").innerHTML=
+    '<div class="kpi"><div class="l">Pontos do trajeto</div><div class="v">'+rastroPontos.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Paradas no dia</div><div class="v">'+rastroParadas.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Sem atendimento</div><div class="v" style="color:'+
+      (sem.length?"var(--crit)":"inherit")+'">'+sem.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Com atendimento</div><div class="v">'+comAt.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Tempo parado</div><div class="v">'+Math.floor(minutosParado/60)+"h"+(minutosParado%60)+"</div></div>";
+
+  var mapa=mapaDoTrajeto();
+  var tabela="";
+  if(!rastroParadas.length){
+    tabela='<div class="empty"><div class="big">Nenhuma parada neste dia</div>'+
+      "O aplicativo registra parada de "+RASTREIO.minutos+" minutos ou mais no mesmo lugar.</div>";
+  }else{
+    tabela='<div class="tw"><table><thead><tr><th>Vendedor</th><th>Chegada</th><th>Saída</th>'+
+      '<th class="num">Parado</th><th>Onde</th><th>Situação</th><th></th></tr></thead><tbody>'+
+      rastroParadas.map(function(p){
+        var cls=p.na_loja?"p-mut":(p.no_almoco?"p-mut":(p.com_atendimento?"p-ok":"p-crit"));
+        var sit=p.na_loja?("na loja"+(p.loja_nome?" ("+esc(p.loja_nome)+")":"")):
+          (p.no_almoco?"no almoço":(p.com_atendimento?"com atendimento":"SEM atendimento"));
+        if(!p.conferido_em)sit="conferindo…";
+        return "<tr><td>"+esc(p.vendedor)+"</td>"+
+          "<td>"+esc(horaDoISO(p.inicio))+"</td><td>"+esc(p.fim?horaDoISO(p.fim):"ainda parado")+"</td>"+
+          '<td class="num"><b>'+(+p.minutos||0)+" min</b></td>"+
+          "<td>"+esc(p.endereco||((+p.lat).toFixed(5)+", "+(+p.lng).toFixed(5)))+"</td>"+
+          '<td><span class="pill '+cls+'">'+sit+"</span></td>"+
+          '<td class="num"><a class="btn ghost sm" target="_blank" rel="noopener" href="https://www.google.com/maps?q='+
+            (+p.lat)+","+(+p.lng)+'">Ver no mapa</a></td></tr>';
+      }).join("")+"</tbody></table></div>";
+  }
+  var lista="";
+  if(sem.length){
+    lista='<div class="sect"><p class="sect-t">Paradas sem atendimento registrado ('+sem.length+")</p>"+
+      sem.map(function(p){
+        return '<div class="note crit" style="margin-bottom:8px"><b>'+esc(p.vendedor)+" · "+
+          (+p.minutos||0)+" minutos parado</b><br>"+esc(p.endereco||"")+"<br>"+
+          "Chegou "+esc(horaDoISO(p.inicio))+" · saiu "+esc(p.fim?horaDoISO(p.fim):"—")+
+          ' · <a target="_blank" rel="noopener" href="https://www.google.com/maps?q='+
+          (+p.lat)+","+(+p.lng)+'">abrir no mapa</a></div>';
+      }).join("")+"</div>";
+  }
+  h.innerHTML=mapa+tabela+lista;
+}
+function horaDoISO(s){
+  try{
+    var d=new Date(s);
+    return (d.getHours()<10?"0":"")+d.getHours()+":"+(d.getMinutes()<10?"0":"")+d.getMinutes();
+  }catch(e){return "";}
+}
+/* o trajeto no mapa aberto (OpenStreetMap), o mesmo que o sistema já usa:
+   paradas sem atendimento em vermelho, as outras em cinza/verde */
+function mapaDoTrajeto(){
+  if(!rastroPontos.length)return "";
+  var las=rastroPontos.map(function(p){return +p.lat;});
+  var los=rastroPontos.map(function(p){return +p.lng;});
+  var la1=Math.min.apply(null,las),la2=Math.max.apply(null,las);
+  var lo1=Math.min.apply(null,los),lo2=Math.max.apply(null,los);
+  var folga=0.004;
+  var cx=((la1+la2)/2).toFixed(6),cy=((lo1+lo2)/2).toFixed(6);
+  var caixa=[(lo1-folga).toFixed(5),(la1-folga).toFixed(5),(lo2+folga).toFixed(5),(la2+folga).toFixed(5)].join(",");
+  var marcas=rastroParadas.slice(0,12).map(function(p){return (+p.lat).toFixed(5)+","+(+p.lng).toFixed(5);}).join("|");
+  return '<div class="sect"><p class="sect-t">Trajeto do dia</p>'+
+    '<iframe title="trajeto" style="width:100%;height:340px;border:1px solid var(--line);border-radius:12px" '+
+    'src="https://www.openstreetmap.org/export/embed.html?bbox='+caixa+'&layer=mapnik'+
+    (marcas?"&marker="+encodeURIComponent(rastroParadas.length?((+rastroParadas[0].lat).toFixed(5)+","+(+rastroParadas[0].lng).toFixed(5)):""):"")+'"></iframe>'+
+    '<p class="help">'+rastroPontos.length+" pontos registrados · "+
+    '<a target="_blank" rel="noopener" href="https://www.google.com/maps?q='+cx+","+cy+
+    '">abrir a região no mapa</a>. Cada parada tem o seu link na tabela abaixo.</p></div>';
+}
+
+/* ---------- o que alimenta o sino (roda de 5 em 5 minutos) ----------
+   Traz as paradas que viraram aviso e vê quem parou de registrar. */
+async function atualizarAvisosRastreio(){
+  if(!recebeAvisoRastreio()||!db||!modoBanco()||!db.rastro)return;
+  try{
+    var lista=await db.rastro.avisos(hojeISO()+"T00:00:00");
+    var novos=lista.filter(function(p){return !rastroVistos["p"+p.id];});
+    rastroAvisos=lista;
+    /* aviso novo toca no celular de quem recebe (o aplicativo da gestão) */
+    novos.forEach(function(p){
+      rastroVistos["p"+p.id]=true;
+      notificarNoCelular("Parada sem atendimento · "+(p.vendedor||""),
+        (+p.minutos||0)+" min parado em "+(p.endereco||"")+" · chegou "+horaDoISO(p.inicio));
+    });
+  }catch(e){console.warn("avisos do rastreio",e);}
+  await conferirRastreioDesligado();
+  try{renderSino();}catch(e){}
+}
+/* REGRA DELE (14/10): o vendedor saiu do sistema no expediente e o Administrador é avisado.
+   O sistema não espera o vendedor avisar: ele olha o ÚLTIMO PONTO de cada um. Assim o aviso
+   sai também quando o celular matou o aplicativo, que dá no mesmo para a gestão. */
+async function conferirRastreioDesligado(){
+  rastroDesligados={};
+  if(!db||!modoBanco()||!db.rastro)return;
+  if(!ehAdministrador())return;                  /* este aviso é do Administrador */
+  if(!diaUtil(hojeISO()))return;
+  var co=cfgOS();                                /* o horário útil já é cadastrado em Dados da Empresa */
+  var agora=horaAgoraHM();
+  if(agora<co.horaIni||agora>co.horaFim)return;  /* fora do expediente não avisa */
+  var ult={};
+  try{
+    (await db.rastro.ultimosPontos(300)).forEach(function(p){
+      if(!ult[p.vendedor]||String(p.em)>String(ult[p.vendedor]))ult[p.vendedor]=p.em;
+    });
+  }catch(e){return;}
+  (USUARIOS||[]).forEach(function(u){
+    if(!u.ativo||!ehVendedorRastreado(u.nome))return;
+    if(!termoRastreioAssinado(u.nome))return;    /* quem não assinou ainda não é rastreado */
+    var q=ult[u.nome];
+    if(!q)return;                                /* nunca registrou: não dá para dizer que desligou */
+    var mins=Math.round((Date.now()-new Date(q).getTime())/60000);
+    if(mins>=RASTRO_SILENCIO)
+      rastroDesligados[u.nome]={dia:hojeISO(),hora:horaDoISO(q),minutos:mins};
+  });
+}
+function diaUtil(iso){
+  var d=new Date(iso+"T12:00:00").getDay();
+  return d>=1&&d<=5;
+}
+
+/* ---------- resumo do fim do dia (18h30) ---------- */
+function horaAgoraHM(){
+  var d=new Date();
+  return (d.getHours()<10?"0":"")+d.getHours()+":"+(d.getMinutes()<10?"0":"")+d.getMinutes();
+}
+async function resumoDoDiaRastreio(){
+  if(!recebeAvisoRastreio()||!db||!modoBanco()||!db.rastro)return null;
+  if(horaAgoraHM()<"18:30")return null;
+  if(rastroResumoFeito===hojeISO())return null;
+  var lista=[];
+  try{lista=await db.rastro.paradas("",hojeISO()+"T00:00:00",hojeISO()+"T23:59:59");}
+  catch(e){return null;}
+  var sem=lista.filter(paradaSemAtendimento);
+  rastroResumoFeito=hojeISO();
+  if(!sem.length)return null;
+  try{renderSino();}catch(e){}
+  notificarNoCelular("Resumo do dia · "+sem.length+" parada(s) sem atendimento",
+    sem.slice(0,4).map(function(p){
+      return p.vendedor+" · "+(+p.minutos||0)+" min · "+(p.endereco||"");}).join("\n"));
+  return sem;
+}
+
+/* ---------- o que liga tudo, depois do login ---------- */
+function ligarRastreio(){
+  if(!modoBanco())return;
+  /* o vendedor: entrega a sessão ao aplicativo e cobra o termo */
+  entregarSessaoAoApp();
+  cobrarTermoRastreio();
+  /* a gestão: avisos no sino, conferência das paradas e o resumo das 18h30 */
+  if(recebeAvisoRastreio()){
+    conferirParadas();
+    atualizarAvisosRastreio();
+    resumoDoDiaRastreio();
+    if(!window.__rastroTimer){
+      window.__rastroTimer=setInterval(function(){
+        conferirParadas();
+        atualizarAvisosRastreio();
+        resumoDoDiaRastreio();
+      },5*60000);
+    }
+  }else if(ehVendedorRastreado(usuarioAtual)){
+    /* o próprio vendedor confere as paradas dele: o celular dele fica o dia todo
+       com o sistema aberto, então a conferência não espera o gerente abrir */
+    conferirParadas();
+    if(!window.__rastroTimer){
+      window.__rastroTimer=setInterval(conferirParadas,5*60000);
+    }
+  }
+  limparRastroAntigo();
+}
+
+/* ---------- LGPD: apagar os pontos passados de 90 dias ----------
+   O banco deste projeto não tem agendador: a rotina roda uma vez por dia,
+   quando o Administrador entra (decisão dele, 14/10). */
+async function limparRastroAntigo(){
+  if(!db||!modoBanco()||!db.rastro||!ehAdministrador())return 0;
+  var hoje=hojeISO(),doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();}
+  if(antes.rastroLimpoEm===hoje)return 0;   /* uma vez por dia, e basta */
+  var n=0;
+  try{n=await db.rastro.limpar(RASTREIO.dias);}
+  catch(e){console.warn("limpar o rastreio",e);return 0;}
+  antes.rastroLimpoEm=hoje;
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador do rastreio",e);}
+  if(n)console.log("rastreio: "+n+" ponto(s) com mais de "+RASTREIO.dias+" dias apagados");
+  return n;
+}
 function pendenciasMF(){
   var L=[];
   function põe(o){L.push(o);}
@@ -36354,6 +36946,33 @@ function pendenciasMF(){
         ir:function(){ir("solic");}});
     });
   }catch(e){console.warn("pend solic",e);}
+  /* 7. RASTREIO (14/10): parada sem atendimento e rastreio desligado no expediente.
+     Só Gerente e Administrador recebem. As paradas vêm da conferência, que já
+     separou loja, almoço e atendimento. */
+  try{
+    if(recebeAvisoRastreio()){
+      (rastroAvisos||[]).forEach(function(p){
+        põe({chave:"rastro:"+p.id,icone:"📍",
+          titulo:"Parada sem atendimento · "+(p.vendedor||""),
+          texto:(+p.minutos||0)+" min parado em "+(p.endereco||((+p.lat).toFixed(5)+", "+(+p.lng).toFixed(5)))+
+            " · chegou "+horaDoISO(p.inicio)+(p.fim?", saiu "+horaDoISO(p.fim):""),
+          quando:p.fim||p.inicio||"",
+          ir:function(){
+            ir("rastreio");
+            try{$("rs_quem").value=p.vendedor||"";$("rs_dia").value=String(p.inicio||"").slice(0,10);
+              carregarRastreio();}catch(e){}
+          }});
+      });
+      Object.keys(rastroDesligados).forEach(function(nome){
+        var d=rastroDesligados[nome];
+        põe({chave:"rastrooff:"+nome+":"+d.dia,icone:"⚠️",
+          titulo:"Rastreio de "+nome+" desligado às "+d.hora,
+          texto:"O vendedor saiu do sistema no horário de expediente. Sem o usuário conectado, o celular não registra a localização.",
+          quando:d.dia+" "+d.hora,
+          ir:function(){ir("rastreio");}});
+      });
+    }
+  }catch(e){console.warn("pend rastreio",e);}
   return L;
 }
 var _pendSino=[];
@@ -37065,7 +37684,7 @@ function render(){
   try{avisarDescontos();}catch(e){console.warn(e);}
   try{avisarPosseVeiculo();}catch(e){console.warn(e);}
   try{renderFin();}catch(e){console.warn("aprovação financeira",e);}
-  try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();try{renderPadroes();}catch(e){}try{renderGruposProd();}catch(e){}renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();try{renderPrest();}catch(e){}renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
+  try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();try{renderPadroes();}catch(e){}try{renderGruposProd();}catch(e){}renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();try{renderPrest();}catch(e){}try{renderGeoLojas();}catch(e){}try{renderRastreio();}catch(e){}renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
   try{notaCreditoPlano();}catch(e){}
   opcoesClienteVenda();
   calcular();
@@ -38505,8 +39124,28 @@ function ligar(){
       garantiaMao:Math.max(1,parseInt($("em_osGarantia").value,10)||90),
       taxaOrc:Math.max(0,numMF($("em_osTaxa").value)||0),
       diasAbandono:Math.max(1,parseInt($("em_osAbandono").value,10)||90)};
+    /* o ponto de cada loja: e por ele que o rastreio sabe que o vendedor esta
+       DENTRO da loja e nao gera aviso de parada (regra dele, 14/10) */
+    try{EMPRESA.geoLojas=lerGeoLojasDoForm();}catch(e){}
     sincChaveGoogle();
     await gravarEmpresa();renderEmpresa();toast("Dados da empresa salvos.");};
+
+  /* ---- rastreio dos vendedores (14/10) ---- */
+  $("rs_buscar").onclick=function(){carregarRastreio();};
+  $("rs_conferir").onclick=async function(){
+    var b=$("rs_conferir");b.disabled=true;b.textContent="Conferindo…";
+    var n=0;
+    try{n=await conferirParadas();await atualizarAvisosRastreio();}catch(e){}
+    b.disabled=false;b.textContent="Conferir as paradas agora";
+    toast(n?(n+" parada(s) conferida(s)."):"Nenhuma parada nova para conferir.");
+    carregarRastreio();
+  };
+  $("trm_ok").onclick=function(){assinarTermoRastreio();};
+  $("tr_limpar").onclick=function(){
+    var cv=$("tr_sig");
+    if(cv){try{cv.getContext("2d").clearRect(0,0,cv.width,cv.height);}catch(e){}}
+    trSigFeita=false;$("trm_alerta").innerHTML="";
+  };
   /* ponto pelo endereço para a loja e a casa do colaborador — MESMA ordem do cadastro do cliente:
      1º base de endereços do IBGE (número exato); só sem ela, o mapa aberto (que não tem o número da casa) */
   function acharGeoPorEndereco(o){
@@ -39148,6 +39787,9 @@ async function entrarSistema(){
   toast("Bem-vindo, "+nome.split(" ")[0]+".");
 }
 function sairSistema(){
+  /* o aplicativo para de registrar a localização na hora: sem usuário logado,
+     nada é gravado (regra dele, 14/10) */
+  try{avisarAppQueSaiu();}catch(e){}
   /* com banco: encerra a sessão no aparelho e volta à tela de entrada */
   if(modoBanco()&&db){(async function(){try{await db.auth.sair();}catch(e){}location.reload();})();return;}
   $("login").hidden=false;
@@ -39292,6 +39934,10 @@ async function entrarComPerfil(){
   await fecharTelaCarga();
   /* só agora, com o sistema aberto: desenhar as outras telas e arrumar o que precisa */
   arrumacaoDeFundo();
+  /* RASTREIO (14/10): entrega a sessão ao aplicativo do celular, cobra o termo de
+     quem ainda não assinou e começa a conferir as paradas. Nada disso roda no
+     navegador comum — só quando o sistema está dentro do aplicativo. */
+  try{ligarRastreio();}catch(e){console.warn("rastreio",e);}
   /* quem opera é quem entrou: o seletor de operador do topo fica travado */
   try{var su=$("usuario");su.value=usuarioAtual;su.disabled=true;}catch(e){}
   try{aplicarPerfil();}catch(e){}
