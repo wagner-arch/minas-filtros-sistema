@@ -32,9 +32,15 @@ Dentro dela, três arquivos:
 | `senha-da-chave.txt` | a senha dela |
 | `chave-em-texto-base64.txt` | a mesma chave escrita como texto, para colar no cofre do GitHub |
 
-Dados dela, para conferência: apelido **minasfiltros**, RSA 2048, validade até
-**14/10/2056**, impressão digital
-`9A3ED34D57C087C775270979A0B0197238ADC91F`.
+Dados dela, para conferência: RSA 2048, validade até **14/10/2056**, impressão
+digital `9A3ED34D57C087C775270979A0B0197238ADC91F`.
+
+> **Sobre o "apelido" da chave:** dentro do arquivo a chave tem um nome interno
+> (o apelido, ou *alias*). **Esse nome não é escolhido por nós** — o Windows
+> grava um nome próprio ao exportar a chave, e ignora o que foi pedido. Foi isso
+> que derrubou as duas primeiras compilações, com o apelido digitado à mão. Você
+> não precisa saber esse nome: **a compilação lê o arquivo e descobre sozinha**,
+> e mostra no registro da execução qual encontrou.
 
 ---
 
@@ -62,12 +68,11 @@ volta por ninguém**, nem por você: dá para substituir, nunca para ver.
      Sem espaço antes nem depois.
    - **Add secret**.
 
-   **O terceiro — o apelido**
-   - Name: `MF_CHAVE_ALIAS`
-   - Secret: escreva exatamente `minasfiltros`
-   - **Add secret**.
+   **São só esses dois.** Não existe um terceiro segredo com o apelido da chave:
+   a compilação o descobre dentro do arquivo. Se você já criou o
+   `MF_CHAVE_ALIAS`, pode deixar ou apagar — ele é ignorado.
 
-5. Confira que a lista mostra os três nomes. Os valores aparecem como
+5. Confira que a lista mostra os dois nomes. Os valores aparecem como
    `***` — é assim mesmo.
 
 **Como saber que deu certo:** vá em **Actions › Aplicativo Android › Run

@@ -3,10 +3,11 @@
 # servidor do GitHub ja vem com os dois.
 #
 # A CHAVE DE ASSINATURA NAO ESTA NESTE REPOSITORIO (ele e publico). Ela vem do
-# cofre: Settings > Secrets and variables > Actions, nos tres segredos
+# cofre: Settings > Secrets and variables > Actions, nos DOIS segredos
 #   MF_CHAVE_BASE64  o arquivo da chave convertido em texto
 #   MF_CHAVE_SENHA   a senha da chave
-#   MF_CHAVE_ALIAS   o apelido da chave (minasfiltros)
+# O apelido da chave NAO e segredo nem se digita a mao: o fluxo le o arquivo e
+# descobre (passo "Descobrir o apelido de dentro da chave").
 # Ver android/CHAVE-DO-APLICATIVO.md.
 #
 # No fim, o fluxo publica o arquivo em Releases (endereco fixo e publico) e
@@ -75,12 +76,39 @@ jobs:
           printf '%s' "$CHAVE" | tr -d '\r\n' | base64 -d > "$RUNNER_TEMP/chave.p12"
           echo "Tamanho da chave: $(stat -c%s "$RUNNER_TEMP/chave.p12") bytes"
 
+      # O APELIDO (alias) E UM NOME INTERNO DO ARQUIVO DA CHAVE, e nao se escolhe por fora:
+      # o Windows, ao exportar a chave, grava um nome proprio e ignora o que foi pedido. Foi
+      # isso que derrubou as execucoes #9 e #10 ("No key with alias ... found in keystore"),
+      # com o segredo MF_CHAVE_ALIAS digitado a mao como "minasfiltros".
+      # Agora a compilacao LE o arquivo e descobre o apelido sozinha. O apelido NAO e segredo:
+      # sem a chave e a senha ele nao serve para nada, e e por isso que da para mostra-lo no
+      # log — e com ele a vista que se descobre um problema destes em um minuto.
+      - name: Descobrir o apelido de dentro da chave
+        env:
+          MF_CHAVE_SENHA: ${{ secrets.MF_CHAVE_SENHA }}
+        run: |
+          SAIDA=$(keytool -list -keystore "$RUNNER_TEMP/chave.p12" -storetype PKCS12 \
+                    -storepass:env MF_CHAVE_SENHA 2>&1) || true
+          if ! echo "$SAIDA" | grep -qi "PrivateKeyEntry"; then
+            # algumas versoes do keytool nao aceitam -storepass:env
+            SAIDA=$(keytool -list -keystore "$RUNNER_TEMP/chave.p12" -storetype PKCS12 \
+                      -storepass "$MF_CHAVE_SENHA" 2>&1) || true
+          fi
+          echo "$SAIDA" | grep -vi "password\|senha" | head -12
+          APELIDO=$(echo "$SAIDA" | grep -i "PrivateKeyEntry" | head -1 | cut -d, -f1 | sed 's/[[:space:]]*$//')
+          if [ -z "$APELIDO" ]; then
+            echo "::error::Nao achei chave privada dentro do arquivo. Confira a senha (MF_CHAVE_SENHA) e o arquivo (MF_CHAVE_BASE64) no cofre. Veja android/CHAVE-DO-APLICATIVO.md"
+            exit 1
+          fi
+          echo "Apelido encontrado dentro da chave: $APELIDO"
+          echo "MF_CHAVE_ALIAS=$APELIDO" >> $GITHUB_ENV
+
       - name: Montar o aplicativo assinado
         working-directory: android
         env:
           MF_CHAVE_ARQ: ${{ runner.temp }}/chave.p12
           MF_CHAVE_SENHA: ${{ secrets.MF_CHAVE_SENHA }}
-          MF_CHAVE_ALIAS: ${{ secrets.MF_CHAVE_ALIAS }}
+          MF_CHAVE_ALIAS: ${{ env.MF_CHAVE_ALIAS }}
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Conferir que o arquivo saiu assinado com a NOSSA chave
