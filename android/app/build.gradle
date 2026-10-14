@@ -2,6 +2,21 @@ plugins{
   id "com.android.application"
   id "org.jetbrains.kotlin.android"
 }
+
+/* A CHAVE DE ASSINATURA NAO FICA NO PROJETO (o repositorio e publico).
+   Ela vem do cofre do GitHub (Settings > Secrets and variables > Actions) por
+   variaveis de ambiente, que a compilacao le abaixo:
+     MF_CHAVE_ARQ   caminho do arquivo da chave na maquina que compila
+     MF_CHAVE_SENHA senha do arquivo
+     MF_CHAVE_ALIAS apelido da chave dentro do arquivo
+   Sem essas variaveis a compilacao usa a chave de teste do proprio Android,
+   que serve para experimentar no computador mas MUDA a cada maquina — por isso
+   o fluxo do GitHub exige as variaveis (ver .github/workflows/android.yml). */
+def chaveArq   = System.getenv("MF_CHAVE_ARQ")
+def chaveSenha = System.getenv("MF_CHAVE_SENHA")
+def chaveAlias = System.getenv("MF_CHAVE_ALIAS") ?: "minasfiltros"
+def temChave   = chaveArq && chaveSenha && file(chaveArq).exists()
+
 android{
   namespace "br.com.minasfiltros.sistema"
   compileSdk 34
@@ -9,13 +24,25 @@ android{
     applicationId "br.com.minasfiltros.sistema"
     minSdk 26                /* Android 8 em diante: cobre Samsung e Redmi da loja */
     targetSdk 34
-    versionCode 1
-    versionName "1.0"
+    versionCode 2            /* SOBE 1 a cada versao nova do aplicativo */
+    versionName "1.1"
+  }
+  signingConfigs{
+    if(temChave){
+      nossa{
+        storeFile     file(chaveArq)
+        storePassword chaveSenha
+        keyAlias      chaveAlias
+        keyPassword   chaveSenha
+        storeType     "PKCS12"
+      }
+    }
   }
   buildTypes{
     release{
       minifyEnabled false
-      signingConfig signingConfigs.debug   /* instalacao interna, fora da loja de aplicativos */
+      /* assinatura fixa: so assim o Android deixa instalar a versao nova POR CIMA */
+      signingConfig temChave ? signingConfigs.nossa : signingConfigs.debug
     }
   }
   compileOptions{
@@ -24,6 +51,16 @@ android{
   }
   kotlinOptions{ jvmTarget = "17" }
 }
+
+/* No servidor do GitHub a chave e obrigatoria: sem ela o arquivo sairia com
+   assinatura diferente a cada vez e ninguem conseguiria atualizar por cima. */
+gradle.taskGraph.whenReady{
+  if(System.getenv("CI") && !temChave){
+    throw new GradleException("A chave de assinatura nao chegou. Confira os segredos "+
+      "MF_CHAVE_BASE64, MF_CHAVE_SENHA e MF_CHAVE_ALIAS em Settings > Secrets and variables > Actions.")
+  }
+}
+
 dependencies{
   implementation "androidx.appcompat:appcompat:1.7.0"
   implementation "androidx.core:core-ktx:1.13.1"

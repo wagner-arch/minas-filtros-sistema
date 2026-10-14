@@ -89,12 +89,31 @@ object Banco {
       c.setRequestProperty("Content-Type", "application/json")
       c.doOutput = true
       c.outputStream.use { it.write(JSONObject().put("refresh_token", rt).toString().toByteArray()) }
-      if (c.responseCode !in 200..299) return false
+      val cod = c.responseCode
+      if (cod !in 200..299) {
+        /* CELULAR PERDIDO OU ROUBADO: quando a gestao desconecta o usuario a
+           distancia, o banco passa a RECUSAR a credencial. Aqui o aplicativo
+           entende isso, apaga a sessao guardada e DESLIGA o rastreio — nada
+           mais e registrado neste aparelho. Falha de internet nao entra neste
+           caminho: ela nem chega a receber resposta (cai no catch). */
+        if (cod == 400 || cod == 401 || cod == 403) desconectado(ctx)
+        return false
+      }
       val o = JSONObject(c.inputStream.bufferedReader().use(BufferedReader::readText))
       val novo = o.optString("access_token")
       if (novo.isEmpty()) return false
       Guardado.trocarToken(ctx, novo, o.optString("refresh_token", rt))
       true
     } catch (e: Exception) { false } finally { try { c?.disconnect() } catch (e: Exception) { } }
+  }
+
+  /* apaga a sessao do aparelho e para o servico de localizacao */
+  private fun desconectado(ctx: Context) {
+    try {
+      Guardado.limparSessao(ctx)
+      ctx.stopService(android.content.Intent(ctx, ServicoLocalizacao::class.java))
+      Avisos.mostrar(ctx, "Sessão encerrada",
+        "Este celular foi desconectado do sistema Minas Filtros. Fale com a gestão.")
+    } catch (e: Exception) { }
   }
 }

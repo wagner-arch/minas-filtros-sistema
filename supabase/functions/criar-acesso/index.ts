@@ -21,6 +21,9 @@
 //   3. cria o usuário no Auth com a senha informada (e-mail já confirmado) ou,
 //      se o e-mail já existir, troca a senha dele;
 //   4. grava/atualiza a linha de public.perfis (nome, função, loja, jornada).
+//   6. com {desconectar:true} (v346) desconecta o colaborador a distancia: desativa o
+//      perfil, bane o usuario no Auth e encerra as sessoes abertas — e para celular
+//      perdido ou roubado. Com {reconectar:true} desfaz.
 //   5. com {somenteFuncao:true} (v200) só atualiza a linha de public.perfis — serve para
 //      trocar a função de quem já tem acesso sem criar senha nova. É a função gravada
 //      ali que decide o menu e as permissões no login.
@@ -102,6 +105,40 @@ Deno.serve(async (req) => {
   const jornada = (corpo.jornada && typeof corpo.jornada === "object") ? corpo.jornada : {};
   // v200: trocar só a função de quem já tem acesso, sem mexer na senha
   const somenteFuncao = corpo.somenteFuncao === true;
+
+  // ---- v346: CELULAR PERDIDO OU ROUBADO — desconectar o colaborador à distância ----
+  // Desativa o perfil, BANE o usuário no Auth (é isso que faz o banco recusar a
+  // renovação da credencial no celular) e tenta encerrar as sessões abertas na
+  // hora. O aplicativo, ao ver a credencial recusada, apaga a sessão guardada e
+  // desliga o registro de localização.
+  if (corpo.desconectar === true || corpo.reconectar === true) {
+    const voltar = corpo.reconectar === true;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return resposta({ erro: "E-mail inválido." }, 400);
+    const { data: lista0, error: erroLista0 } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 });
+    if (erroLista0) return resposta({ erro: "A chave de administrador da função não está valendo: " + erroLista0.message }, 500);
+    const achado0 = (lista0?.users || []).find((u) => String(u.email || "").toLowerCase() === email);
+    if (!achado0) return resposta({ erro: "Esse e-mail não tem acesso no banco." }, 400);
+
+    const { error: erroBan } = await admin.auth.admin.updateUserById(achado0.id, {
+      ban_duration: voltar ? "none" : "876000h",   // 100 anos = até alguém reconectar
+    });
+    if (erroBan) return resposta({ erro: "Não consegui " + (voltar ? "reconectar" : "desconectar") + ": " + erroBan.message }, 400);
+
+    // encerra as sessões já abertas (não espera a credencial vencer)
+    let sessoesEncerradas = false;
+    if (!voltar) {
+      try {
+        const r = await fetch(URL_PROJ + "/auth/v1/admin/users/" + achado0.id + "/logout", {
+          method: "POST",
+          headers: { apikey: CHAVE_ADMIN, Authorization: "Bearer " + CHAVE_ADMIN },
+        });
+        sessoesEncerradas = r.ok;
+      } catch { sessoesEncerradas = false; }
+    }
+
+    await admin.from("perfis").update({ ativo: voltar }).eq("user_id", achado0.id);
+    return resposta({ ok: true, desconectado: !voltar, sessoesEncerradas, user_id: achado0.id });
+  }
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return resposta({ erro: "E-mail inválido." }, 400);
   if (!somenteFuncao && senha.length < 8) return resposta({ erro: "A senha precisa de pelo menos 8 caracteres." }, 400);

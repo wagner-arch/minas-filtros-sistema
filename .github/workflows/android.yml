@@ -1,8 +1,17 @@
 # Monta o arquivo de instalacao do aplicativo Android (APK) na nuvem do GitHub,
 # de graca. Este computador nao tem Java nem o kit do Android instalados, e o
 # servidor do GitHub ja vem com os dois.
-# Depois de rodar, o arquivo fica em:
-#   Actions > a execucao > Artifacts > minas-filtros-apk
+#
+# A CHAVE DE ASSINATURA NAO ESTA NESTE REPOSITORIO (ele e publico). Ela vem do
+# cofre: Settings > Secrets and variables > Actions, nos tres segredos
+#   MF_CHAVE_BASE64  o arquivo da chave convertido em texto
+#   MF_CHAVE_SENHA   a senha da chave
+#   MF_CHAVE_ALIAS   o apelido da chave (minasfiltros)
+# Ver android/CHAVE-DO-APLICATIVO.md.
+#
+# No fim, o fluxo publica o arquivo em Releases (endereco fixo e publico) e
+# atualiza app/versao-app.json, que e o arquivo que o aplicativo le ao abrir
+# para saber se ha versao nova.
 name: Aplicativo Android
 
 on:
@@ -11,6 +20,9 @@ on:
     paths:
       - 'android/**'
       - '.github/workflows/android.yml'
+
+permissions:
+  contents: write             # para criar o Release e gravar o arquivo de versao
 
 jobs:
   montar:
@@ -30,25 +42,97 @@ jobs:
       - name: Conferir o kit do Android que ja vem no servidor
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           ls "$ANDROID_HOME/platforms" || true
-          ls "$ANDROID_HOME/build-tools" || true
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-34" "build-tools;34.0.0" "platform-tools" || true
 
+      # A chave e escrita FORA da pasta do projeto (RUNNER_TEMP), para nao haver
+      # a menor chance de ela entrar num commit. O servidor e apagado no fim.
+      - name: Pegar a chave de assinatura no cofre
+        env:
+          CHAVE: ${{ secrets.MF_CHAVE_BASE64 }}
+        run: |
+          if [ -z "$CHAVE" ]; then
+            echo "::error::O segredo MF_CHAVE_BASE64 nao esta no cofre. Veja android/CHAVE-DO-APLICATIVO.md"
+            exit 1
+          fi
+          printf '%s' "$CHAVE" | tr -d '\r\n' | base64 -d > "$RUNNER_TEMP/chave.p12"
+          echo "Tamanho da chave: $(stat -c%s "$RUNNER_TEMP/chave.p12") bytes"
+
       - name: Montar o aplicativo
         working-directory: android
+        env:
+          MF_CHAVE_ARQ: ${{ runner.temp }}/chave.p12
+          MF_CHAVE_SENHA: ${{ secrets.MF_CHAVE_SENHA }}
+          MF_CHAVE_ALIAS: ${{ secrets.MF_CHAVE_ALIAS }}
         run: |
           gradle wrapper --gradle-version 8.7 --no-daemon
           ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Conferir que o arquivo saiu assinado com a NOSSA chave
+        run: |
+          APK=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          FERR=$(ls -d "$ANDROID_HOME"/build-tools/* | sort | tail -1)
+          "$FERR/apksigner" verify --print-certs "$APK" | tee /tmp/assinatura.txt
+          # a impressao digital da nossa chave; mudou, a atualizacao por cima para de funcionar
+          grep -qi "9a3ed34d57c087c775270979a0b0197238adc91f" /tmp/assinatura.txt \
+            || { echo "::error::O arquivo NAO foi assinado com a chave da empresa."; exit 1; }
+          mkdir -p entrega && cp "$APK" entrega/minas-filtros.apk
+
+      - name: Apagar a chave do servidor
+        if: always()
+        run: rm -f "$RUNNER_TEMP/chave.p12"
 
       - name: Guardar o arquivo de instalacao
         uses: actions/upload-artifact@v4
         with:
           name: minas-filtros-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          path: entrega/minas-filtros.apk
           retention-days: 90
+
+      # Releases: endereco fixo e publico, que nunca expira. O aplicativo baixa
+      # sempre de .../releases/latest/download/minas-filtros.apk
+      - name: Publicar a versao no Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COD=$(grep -oP 'versionCode\s+\K[0-9]+' android/app/build.gradle | head -1)
+          NOME=$(grep -oP 'versionName\s+"\K[^"]+' android/app/build.gradle | head -1)
+          TAG="app-v$COD"
+          echo "COD=$COD" >> $GITHUB_ENV
+          echo "NOME=$NOME" >> $GITHUB_ENV
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" entrega/minas-filtros.apk --clobber
+          else
+            gh release create "$TAG" entrega/minas-filtros.apk \
+              --title "Aplicativo Minas Filtros $NOME" \
+              --notes "Arquivo de instalacao do aplicativo da equipe. Sem login ele nao mostra nada." \
+              --latest
+          fi
+
+      - name: Avisar o site que ha versao nova
+        run: |
+          mkdir -p app
+          cat > app/versao-app.json <<JSON
+          {
+            "versionCode": $COD,
+            "versionName": "$NOME",
+            "arquivo": "https://github.com/${{ github.repository }}/releases/latest/download/minas-filtros.apk",
+            "publicado": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "novidades": "Atualizacao do aplicativo da equipe."
+          }
+          JSON
+          if [ -n "$(git status --porcelain app/versao-app.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add app/versao-app.json
+            git commit -m "Aviso de versao do aplicativo: $NOME (codigo $COD)"
+            git push
+          else
+            echo "O arquivo de versao ja estava igual."
+          fi
 
       # se der errado, o log do Gradle fica guardado para eu olhar
       - name: Guardar o relatorio quando falhar

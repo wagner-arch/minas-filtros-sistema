@@ -98,13 +98,33 @@ celular, uma vez.
 
 ---
 
-## Parte 4 — Quando eu mexer no aplicativo
+## Parte 4 — Atualização: daqui para a frente é automática
 
-As **telas do sistema atualizam sozinhas**, como hoje: nada a fazer.
+**As telas do sistema continuam atualizando sozinhas**, como hoje: nada a fazer.
 
-Só quando eu mexer na **parte da localização** é preciso instalar de novo:
-repita a Parte 1 e a Parte 2. O login e o termo assinado continuam valendo —
-não precisa assinar outra vez.
+**A parte do aplicativo (a localização) agora também se atualiza sozinha:**
+
+1. Ao abrir, o aplicativo confere se há versão nova.
+2. Havendo, ele mostra **"Atualizar agora?"** com o que mudou.
+3. O vendedor toca em **Atualizar agora**: o aplicativo baixa (uns poucos
+   megabytes) e o Android pede **uma confirmação na tela** — toque em
+   **Instalar**. Essa confirmação é obrigatória do Android, para aplicativo que
+   não vem da loja; não existe jeito de pular.
+4. **O login e o termo assinado continuam valendo.** Não precisa entrar de novo
+   nem assinar outra vez.
+
+Se o celular ficar dias sem reabrir o aplicativo, o próprio **sistema avisa**:
+aparece uma faixa amarela no alto da tela dizendo que há versão nova, com o
+botão **Atualizar agora**.
+
+Na primeira vez, o Android pode pedir para **liberar a instalação** por este
+aplicativo: ele abre a tela certa, basta ligar a chave e voltar.
+
+> **Só uma vez, nesta troca:** quem já instalou a versão anterior precisa
+> **desinstalar e instalar de novo** (Parte 1 e Parte 2). Isso acontece porque a
+> assinatura do aplicativo mudou — antes ela mudava a cada compilação, e era
+> justamente isso que impedia atualizar por cima. **Desta vez para a frente, a
+> atualização é por cima**, sem desinstalar nada.
 
 ---
 
@@ -131,3 +151,24 @@ Nada se perde.
 **O aplicativo registra fora do expediente?**
 Registra sempre que o usuário estiver conectado — é o que está escrito no termo.
 Para parar, basta sair do sistema.
+
+**E se um celular da empresa for perdido ou roubado?**
+A gestão desconecta aquele usuário à distância, de qualquer computador:
+**Configurações › Usuários**, abre o colaborador e clica em
+**"Celular perdido — desconectar à distância"**. Na hora:
+
+- a sessão aberta naquele celular é encerrada;
+- o registro de localização **para**;
+- aquele login não entra mais, nem no celular nem no computador;
+- nada do histórico é apagado.
+
+Quando o celular for recuperado (ou o colaborador receber outro), o mesmo botão
+vira **"Reconectar o acesso"** e ele volta a entrar com o mesmo e-mail e a mesma
+senha. Como o aplicativo **não mostra nada sem login**, quem estiver com o
+aparelho não vê cliente, venda nem valor.
+
+**Preciso assinar o termo de novo quando trocar de celular?**
+Não. O termo assinado fica **guardado no sistema**, ligado ao usuário — não no
+aparelho. Reinstalar o aplicativo ou trocar o celular não pede assinatura nova.
+Só se pede de novo quando o **texto** do termo mudar, e aí a tela explica o
+motivo (a assinatura anterior continua guardada).

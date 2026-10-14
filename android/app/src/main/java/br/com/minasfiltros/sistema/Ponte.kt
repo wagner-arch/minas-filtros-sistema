@@ -44,8 +44,19 @@ class Ponte(private val ctx: Context) {
   @JavascriptInterface
   fun rastreando(): Boolean = ServicoLocalizacao.ligado
 
+  /* a versao deste aplicativo, lida do proprio pacote (nao e escrita a mao) */
   @JavascriptInterface
-  fun versaoApp(): String = "1.0"
+  fun versaoApp(): String = Atualizador.nomeInstalado(ctx)
+
+  @JavascriptInterface
+  fun versaoCodigo(): Int = Atualizador.versaoInstalada(ctx)
+
+  /* o sistema manda conferir se ha versao nova (botao do aviso de versao) */
+  @JavascriptInterface
+  fun procurarAtualizacao() {
+    val t = TelaPrincipal.tela
+    if (t != null) t.runOnUiThread { t.conferirAtualizacao(true) }
+  }
 
   /* quantos pontos estao esperando internet */
   @JavascriptInterface

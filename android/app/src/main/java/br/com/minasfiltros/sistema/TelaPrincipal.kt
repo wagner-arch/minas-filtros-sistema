@@ -17,12 +17,15 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.appcompat.app.AlertDialog
 
 class TelaPrincipal : AppCompatActivity() {
 
   companion object {
     const val ENDERECO = "https://wagner-arch.github.io/minas-filtros-sistema/"
     var pagina: WebView? = null
+    /* a tela aberta, para o sistema poder pedir a conferencia de versao */
+    var tela: TelaPrincipal? = null
   }
 
   private lateinit var web: WebView
@@ -35,6 +38,7 @@ class TelaPrincipal : AppCompatActivity() {
     web = WebView(this)
     setContentView(web)
     pagina = web
+    tela = this
 
     web.settings.apply {
       javaScriptEnabled = true
@@ -79,6 +83,8 @@ class TelaPrincipal : AppCompatActivity() {
 
     web.loadUrl(ENDERECO)
     pedirPermissoes()
+    /* confere se ha versao nova do aplicativo (nao atrapalha a abertura: espera 4 s) */
+    web.postDelayed({ conferirAtualizacao(false) }, 4000)
   }
 
   /* Android pede a localizacao em duas etapas: primeiro durante o uso, depois
@@ -116,6 +122,61 @@ class TelaPrincipal : AppCompatActivity() {
     if (c == 10) pedirSempre()
   }
 
+  /* ---------- atualizacao do aplicativo ---------- */
+
+  /* pedida = o usuario mandou conferir pelo sistema; ai avisa tambem quando ja esta em dia */
+  fun conferirAtualizacao(pedida: Boolean) {
+    Thread {
+      val nova = Atualizador.procurar(this)
+      runOnUiThread {
+        if (!isFinishing && !isDestroyed) {
+          if (nova == null) {
+            if (pedida) Toast.makeText(this,
+              "O aplicativo já está na versão mais nova (" + Atualizador.nomeInstalado(this) + ").",
+              Toast.LENGTH_LONG).show()
+          } else {
+            val t = StringBuilder("Versão nova do aplicativo: " + nova.nome + ".\n\n")
+            if (nova.novidades.isNotEmpty()) t.append(nova.novidades).append("\n\n")
+            t.append("A atualização baixa uns poucos megabytes e o Android vai pedir uma ")
+             .append("confirmação na tela. O login e o termo assinado continuam valendo.")
+            AlertDialog.Builder(this)
+              .setTitle("Atualizar agora?")
+              .setMessage(t.toString())
+              .setPositiveButton("Atualizar agora") { _, _ -> baixarEInstalar(nova) }
+              .setNegativeButton("Depois", null)
+              .show()
+          }
+        }
+      }
+    }.start()
+  }
+
+  private fun baixarEInstalar(nova: Atualizador.Nova) {
+    if (!Atualizador.podeInstalar(this)) {
+      AlertDialog.Builder(this)
+        .setTitle("Liberar a instalação")
+        .setMessage("O Android precisa da sua autorização para este aplicativo instalar a " +
+          "versão nova. Na tela que vai abrir, ligue a chave e volte.")
+        .setPositiveButton("Abrir a tela") { _, _ -> Atualizador.abrirPermissaoInstalar(this) }
+        .setNegativeButton("Depois", null)
+        .show()
+      return
+    }
+    Toast.makeText(this, "Baixando a versão nova…", Toast.LENGTH_LONG).show()
+    Thread {
+      val arq = Atualizador.baixar(this, nova)
+      runOnUiThread {
+        if (!isFinishing && !isDestroyed) {
+          if (arq == null) Toast.makeText(this,
+            "Não deu para baixar a versão nova. Confira a internet e tente de novo.",
+            Toast.LENGTH_LONG).show()
+          else if (!Atualizador.instalar(this, arq)) Toast.makeText(this,
+            "Não deu para abrir o instalador do Android.", Toast.LENGTH_LONG).show()
+        }
+      }
+    }.start()
+  }
+
   override fun onBackPressed() {
     /* o Voltar do celular e o Voltar do sistema (modal, formulario, tela anterior) */
     web.evaluateJavascript(
@@ -129,6 +190,7 @@ class TelaPrincipal : AppCompatActivity() {
 
   override fun onDestroy() {
     if (pagina === web) pagina = null
+    if (tela === this) tela = null
     super.onDestroy()
   }
 }

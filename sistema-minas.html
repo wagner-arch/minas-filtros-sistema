@@ -1791,6 +1791,8 @@ img{max-width:100%}
 </div>
 
 <div class="banner" id="offline" hidden>Modo demonstração — os dados desta sessão não estão sendo salvos.</div>
+<div class="banner" id="banner" hidden></div>
+<div class="aviso-versao" id="avisoApp" hidden></div>
 
 <header class="top">
   <div class="brand">Sistema de Gestão</div>
@@ -4654,6 +4656,7 @@ img{max-width:100%}
         <div class="toolbar" style="padding:0 0 18px">
           <h2 id="usTitulo" style="margin:0">Colaborador</h2><span class="sp"></span>
           <button class="btn ghost" type="button" id="usDesativar" hidden>Desativar</button>
+          <button class="btn ghost" type="button" id="usPerdido" hidden>Celular perdido — desconectar</button>
           <button class="btn ghost" type="button" id="usApagar" hidden>Apagar colaborador</button>
           <button class="btn mut" type="button" id="usCancelar">Voltar</button>
         </div>
@@ -11783,6 +11786,8 @@ window.__catsTextoMF=function(){return CATEGORIAS_MF;};
 window.__lerCategoriasMF=function(t){return lerCategoriasTexto(t);};
 window.__centrosMF=function(){return centros;};
 window.__equipeMF=function(){return EQUIPE.slice();};
+window.__usuariosMF=function(){return USUARIOS;};
+window.__dbTesteMF=function(){return db;};
 window.__renderAtivsMF=function(){try{renderAtividades();}catch(e){console.warn(e);}};
 window.__caixaDaFormaMF=function(n){var c=caixaDaForma(n);return c?(c.nome+" ("+(c.banco||"sem banco")+")"):"(sem caixa)";};
 window.__refMF=function(){var r=formaReferencia();return r?{nome:r.nome,parc:r.parc}:null;};
@@ -11813,6 +11818,9 @@ window.__conferirDesligadoMF=function(){return conferirRastreioDesligado();};
 window.__carregarRastreioMF=function(){return carregarRastreio();};
 window.__termoAssinadoMF=function(n){return termoRastreioAssinado(n);};
 window.__abrirTermoMF=function(){return abrirTermoRastreio();};
+window.__termoDesatualizadoMF=function(n){return termoRastreioDesatualizado(n);};
+window.__termoVersaoMF=function(){return TERMO_RASTREIO_VERSAO;};
+window.__conferirVersaoAppMF=function(f){return conferirVersaoApp(f);};
 window.__assinarTesteMF=function(){trSigFeita=true;return true;};
 window.__lerParadasDeMF=async function(quem){
   try{var l=await db.rastro.paradas(quem,hojeISO()+"T00:00:00",hojeISO()+"T23:59:59");return l.length;}
@@ -17236,13 +17244,16 @@ function deOutro(o,campos,n){
   return false;
 }
 function ajustarBotoesUsuario(){
-  var bd=$("usDesativar"),ba=$("usApagar");
+  var bd=$("usDesativar"),ba=$("usApagar"),bp=$("usPerdido");
   if(!bd||!ba)return;
   var u=editandoUs;
   var pode=!!(u&&u.nome&&ehAdministrador()&&u.nome!==usuarioAtual);
   bd.hidden=!pode;ba.hidden=!pode;
+  /* celular perdido ou roubado: só faz sentido para quem tem login no banco */
+  if(bp)bp.hidden=!(pode&&modoBanco()&&u.temLogin);
   if(!pode)return;
   bd.textContent=(u.ativo===false?"Reativar colaborador":"Desativar colaborador");
+  if(bp)bp.textContent=(u.desconectadoEm?"Reconectar o acesso de "+u.nome:"Celular perdido — desconectar à distância");
 }
 /* o aviso da ficha mora logo abaixo dos botões e a tela sobe até ele — antes ele era escrito
    no rodapé do formulário, muitas telas abaixo, e quem clicava em Apagar achava que nada acontecia */
@@ -17275,6 +17286,55 @@ async function desativarColaborador(){
     (ligar?"Ele volta às listas e ao login.":"Ele saiu das listas de responsável e não entra mais no sistema.")+"</div>");
   ajustarBotoesUsuario();renderUsuarios();render();
   toast(u.nome+(ligar?" reativado.":" desativado."));
+}
+/* CELULAR PERDIDO OU ROUBADO (v346) — desconectar aquele usuário à distância.
+   Desativar o colaborador (acima) impede ENTRADA NOVA, mas quem já está logado
+   no celular continua com a credencial até ela vencer. Aqui a Edge Function
+   `criar-acesso` BANE o usuário no banco e encerra as sessões abertas: o
+   aplicativo, ao ver a credencial recusada, apaga a sessão guardada no aparelho
+   e DESLIGA o registro de localização sozinho. */
+async function desconectarAcessoColaborador(){
+  var u=editandoUs;if(!u||!u.nome)return;
+  if(!ehAdministrador()){avisoUsuario('<div class="note crit">Só o Administrador desconecta um acesso.</div>');return;}
+  if(!modoBanco()||!u.temLogin){
+    avisoUsuario('<div class="note crit"><b>'+esc(u.nome)+" não tem login no banco.</b> Não há sessão para desconectar.</div>");
+    return;
+  }
+  var voltar=!!u.desconectadoEm;
+  if(!confirm(voltar
+    ? "Reconectar o acesso de "+u.nome+"?\n\nEle volta a entrar no sistema e no aplicativo com o mesmo e-mail e a mesma senha."
+    : "Desconectar "+u.nome+" à distância?\n\nUse isto quando o celular da empresa for PERDIDO ou ROUBADO.\n\n"+
+      "• A sessão aberta no celular é encerrada e o registro de localização para.\n"+
+      "• Ele não consegue mais entrar, nem no celular nem no computador.\n"+
+      "• Nada do histórico é apagado, e dá para reconectar depois."))return;
+  var r=null,erro="";
+  try{
+    var corpo={email:u.emailAcesso||u.email||"",nome:u.nome,
+      funcao:u.perfil||"Vendedor",loja:u.loja||lojaAtual};
+    if(voltar)corpo.reconectar=true;else corpo.desconectar=true;
+    r=await chamarFuncaoBanco("criar-acesso",corpo);
+  }catch(e){erro=(e&&e.message)||String(e);}
+  if(erro){
+    avisoUsuario('<div class="note crit"><b>O acesso NÃO foi '+(voltar?"reconectado":"desconectado")+":</b> "+esc(erro)+
+      (/desconectar|reconectar|Envio inválido/i.test(erro)?" <br>A função <b>criar-acesso</b> publicada ainda é a antiga: publique de novo o arquivo <b>supabase/functions/criar-acesso/index.ts</b> pelo painel do Supabase.":"")+
+      " <br>Enquanto isso, use <b>Desativar colaborador</b>: ele não entra mais, e a credencial do celular dele deixa de ser renovada em até 1 hora.</div>");
+    return;
+  }
+  /* o banco aceitou: o cadastro acompanha */
+  if(voltar){delete u.desconectadoEm;delete u.desconectadoPor;u.ativo=true;}
+  else{u.desconectadoEm=hojeISO()+" "+agoraHM();u.desconectadoPor=usuarioAtual;u.ativo=false;}
+  $("u_ativo").value=u.ativo===false?"nao":"sim";
+  await gravarUsuarios();sincronizarEquipe();
+  var agora=!!(r&&r.sessoesEncerradas);
+  avisoUsuario(voltar
+    ? '<div class="note ok"><b>'+esc(u.nome)+" — acesso reconectado.</b> Volta a entrar com o mesmo e-mail e a mesma senha.</div>"
+    : '<div class="note ok"><b>'+esc(u.nome)+" — acesso desconectado.</b> "+
+      (agora?"A sessão do celular foi encerrada agora."
+            :"A credencial do celular deixa de valer na renovação seguinte — em até 1 hora.")+
+      " O registro de localização para e esse login não entra mais no sistema. Para liberar de novo, toque em "+
+      "<b>Reconectar o acesso</b>.</div>");
+  ajustarBotoesUsuario();renderUsuarios();render();
+  toast("Acesso de "+u.nome+(voltar?" reconectado.":" desconectado do sistema e do celular."));
 }
 async function apagarColaborador(){
   var u=editandoUs;if(!u||!u.nome)return;
@@ -36501,13 +36561,80 @@ function notificarNoCelular(titulo,texto){
   try{if(temAppMF()&&window.MFApp.notificar)window.MFApp.notificar(titulo,texto);}catch(e){}
 }
 
+
+/* ---------- AVISO DE VERSÃO DO APLICATIVO (v346) ----------
+   O aplicativo já confere a versão sozinho ao abrir. Isto aqui é o aviso DENTRO
+   do sistema, porque o celular do vendedor fica o dia todo aberto e pode ficar
+   dias sem reabrir o aplicativo: a faixa amarela no alto diz que há versão nova
+   e o botão manda o aplicativo baixar e instalar.
+   A versão nova é anunciada em app/versao-app.json, no PRÓPRIO site (mesma
+   origem, sem bloqueio de origem e sem limite de consultas); o arquivo de
+   instalação fica no Releases do GitHub, com endereço fixo que não expira. */
+var APP_VERSAO_ARQ="app/versao-app.json";
+var appVersaoNova=null,appVersaoEm=0,appVersaoDispensada=0;
+function versaoDoApp(){
+  try{if(temAppMF()&&window.MFApp.versaoCodigo)return (+window.MFApp.versaoCodigo())||0;}catch(e){}
+  return 0;
+}
+function nomeVersaoApp(){
+  try{if(temAppMF()&&window.MFApp.versaoApp)return window.MFApp.versaoApp()||"";}catch(e){}
+  return "";
+}
+async function conferirVersaoApp(forcar){
+  if(!temAppMF())return;                       /* no computador não há aplicativo para atualizar */
+  var agora=Date.now();
+  if(!forcar&&appVersaoEm&&agora-appVersaoEm<1800000)return;   /* no máximo a cada 30 min */
+  appVersaoEm=agora;
+  try{
+    var r=await fetch(APP_VERSAO_ARQ+"?t="+agora,{cache:"no-store"});
+    if(!r.ok)return;
+    var j=await r.json();
+    var tem=versaoDoApp();
+    appVersaoNova=(tem>0&&(+j.versionCode||0)>tem)?j:null;
+  }catch(e){return;}                           /* sem internet não se avisa nada */
+  renderAvisoVersaoApp();
+}
+function renderAvisoVersaoApp(){
+  var d=$("avisoApp");if(!d)return;
+  if(!appVersaoNova||appVersaoDispensada===(+appVersaoNova.versionCode||0)){d.hidden=true;return;}
+  d.innerHTML="<div><b>Versão nova do aplicativo: "+esc(appVersaoNova.versionName||"")+"</b>"+
+    "<div class=\"t-sub\">Este celular está na "+esc(nomeVersaoApp()||"anterior")+
+    ". A atualização instala por cima — o login e o termo assinado continuam valendo.</div></div>"+
+    "<div style=\"display:flex;gap:8px;flex-shrink:0\">"+
+    "<button id=\"avApp_ok\">Atualizar agora</button>"+
+    "<button id=\"avApp_dep\" style=\"background:none;border:1px solid #D9A900;color:#3A2A00\">Depois</button></div>";
+  d.hidden=false;
+  $("avApp_ok").onclick=function(){
+    try{if(window.MFApp.procurarAtualizacao)window.MFApp.procurarAtualizacao();}catch(e){}
+    toast("Pedi a atualização ao aplicativo. Confirme na tela que o Android vai mostrar.");
+  };
+  $("avApp_dep").onclick=function(){
+    appVersaoDispensada=+appVersaoNova.versionCode||0;
+    d.hidden=true;
+  };
+}
 /* ---------- o termo de ciência (assinado com o dedo) ----------
    Vai no documento pessoal do colaborador (coleção `facial`, a mesma do
    consentimento da foto do ponto): é o único que o PRÓPRIO colaborador pode
-   gravar pela regra do banco. Sem ele, o rastreio não liga. */
+   gravar pela regra do banco. Sem ele, o rastreio não liga.
+   FICA NO BANCO, LIGADO AO USUÁRIO (regra dele, 14/10): reinstalar o aplicativo
+   ou trocar de celular NÃO faz o vendedor assinar de novo — a assinatura está
+   no sistema, não no aparelho. Só se pede assinatura nova quando o TEXTO do
+   termo muda, e é a versão abaixo que diz isso. Mudou o texto, muda a data. */
+var TERMO_RASTREIO_VERSAO="2026-10-14";
 function termoRastreioAssinado(nome){
   var d=facialDoc(nome||usuarioAtual);
-  return (d&&d.termoRastreio&&d.termoRastreio.assinadoEm)?d.termoRastreio:null;
+  var t=(d&&d.termoRastreio&&d.termoRastreio.assinadoEm)?d.termoRastreio:null;
+  if(!t)return null;
+  /* assinatura de um texto antigo não vale para o texto novo */
+  if((t.versao||"")!==TERMO_RASTREIO_VERSAO)return null;
+  return t;
+}
+/* assinou, mas o texto do termo mudou depois disso */
+function termoRastreioDesatualizado(nome){
+  var d=facialDoc(nome||usuarioAtual);
+  var t=(d&&d.termoRastreio&&d.termoRastreio.assinadoEm)?d.termoRastreio:null;
+  return !!(t&&(t.versao||"")!==TERMO_RASTREIO_VERSAO);
 }
 var trSigFeita=false;
 function textoTermoRastreio(nome){
@@ -36524,6 +36651,7 @@ function textoTermoRastreio(nome){
     "<li><b>Quem vê:</b> apenas o Administrador e o Gerente. Nenhum outro colaborador vê a minha localização.</li>"+
     "<li><b>Por quanto tempo fica guardado:</b> os pontos do trajeto são apagados automaticamente depois de <b>90 dias</b>. Só o registro das paradas fica guardado como histórico de trabalho.</li>"+
     "<li><b>Fora do expediente:</b> o celular é da empresa e deve ficar na loja depois do expediente. Não devo usá-lo para assuntos pessoais.</li>"+
+    "<li><b>Esta assinatura fica guardada no sistema</b>, ligada ao meu usuário: se o aplicativo for reinstalado ou o celular for trocado, <b>não preciso assinar de novo</b>. Assino outra vez apenas se o texto deste termo mudar.</li>"+
     "<li><b>Meus direitos:</b> posso pedir a qualquer momento para ver os meus próprios registros, e posso falar com a empresa sobre eles.</li>"+
     "</ol>"+
     "<p>Declaro que li e entendi este termo, e que <b>recebi o celular da empresa nas condições acima</b>.</p>"+
@@ -36531,7 +36659,10 @@ function textoTermoRastreio(nome){
 }
 function abrirTermoRastreio(){
   $("tr_texto").innerHTML=textoTermoRastreio(usuarioAtual);
-  $("trm_alerta").innerHTML="";
+  /* quem já assinou e está aqui de novo: foi o TEXTO que mudou, e a tela diz isso */
+  $("trm_alerta").innerHTML=termoRastreioDesatualizado(usuarioAtual)
+    ? "<div class=\"note\"><b>O texto do termo mudou.</b> A sua assinatura anterior continua guardada no sistema, mas é preciso assinar esta versão nova para o registro de localização continuar.</div>"
+    : "";
   trSigFeita=false;
   var cv=$("tr_sig");
   if(cv){try{cv.getContext("2d").clearRect(0,0,cv.width,cv.height);}catch(e){}}
@@ -36566,18 +36697,24 @@ async function assinarTermoRastreio(){
   try{img=$("tr_sig").toDataURL("image/png");}catch(e){}
   var termo={assinadoEm:new Date().toISOString(),nome:usuarioAtual,
     cpf:((USUARIOS||[]).filter(function(x){return x.nome===usuarioAtual;})[0]||{}).cpf||"",
-    assinatura:img,versao:"1.0",aparelho:(temAppMF()&&window.MFApp.marcaDoCelular)?window.MFApp.marcaDoCelular():""};
+    assinatura:img,versao:TERMO_RASTREIO_VERSAO,aparelho:(temAppMF()&&window.MFApp.marcaDoCelular)?window.MFApp.marcaDoCelular():""};
   try{
     /* gravação que nasce de um clique: confere a resposta do banco (regra da v327) */
     var d=facialDoc(usuarioAtual);
     var novo=!d;
     if(!d){d={id:"facial:"+usuarioAtual,loja:lojaAtual,nome:usuarioAtual};faciais.push(d);}
     var antes=d.termoRastreio;
+    var antesLista=d.termoRastreioAnteriores;
+    /* assinatura de versão antiga do texto NÃO se perde: fica no histórico */
+    if(antes&&antes.assinadoEm){
+      d.termoRastreioAnteriores=(antesLista||[]).concat([antes]).slice(-5);
+    }
     d.termoRastreio=termo;
     d.atualizadoEm=hojeISO()+" "+agoraHM();
     try{await gravaConf("facial",d);}
     catch(eg){
-      if(novo)faciais.splice(faciais.indexOf(d),1);else d.termoRastreio=antes;
+      if(novo)faciais.splice(faciais.indexOf(d),1);
+      else{d.termoRastreio=antes;d.termoRastreioAnteriores=antesLista;}
       throw eg;
     }
   }catch(e){
@@ -36803,6 +36940,10 @@ function ligarRastreio(){
   /* o vendedor: entrega a sessão ao aplicativo e cobra o termo */
   entregarSessaoAoApp();
   cobrarTermoRastreio();
+  /* versão nova do aplicativo: confere ao entrar, de 30 em 30 min e quando a aba volta */
+  conferirVersaoApp(true);
+  setInterval(function(){conferirVersaoApp(false);},1800000);
+  document.addEventListener("visibilitychange",function(){if(!document.hidden)conferirVersaoApp(false);});
   /* a gestão: avisos no sino, conferência das paradas e o resumo das 18h30 */
   if(recebeAvisoRastreio()){
     conferirParadas();
@@ -38163,6 +38304,7 @@ function ligar(){
   $("u_apagarFoto").onclick=function(){usFacial="";usFacialSig=null;mostrarFacial();};
   $("usDesativar").onclick=desativarColaborador;
   $("usApagar").onclick=apagarColaborador;
+  $("usPerdido").onclick=desconectarAcessoColaborador;
   $("u_addFilho").onclick=function(){usFilhos.push({nome:"",nasc:""});renderFilhos();};
   $("usSalvar").onclick=async function(){
     var n=$("u_nome").value.trim();
