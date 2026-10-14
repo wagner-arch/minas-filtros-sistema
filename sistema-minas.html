@@ -3268,7 +3268,8 @@ img{max-width:100%}
         <div class="actions">
           <button class="btn" type="button" id="orcSalvar">Salvar orçamento</button>
           <button class="btn ghost" type="button" id="orcImprimir">Ver proposta</button>
-          <button class="btn ghost" type="button" id="orcEnviar">Enviar proposta</button>
+          <button class="btn ghost" type="button" id="orcBaixar">Baixar em PDF</button>
+          <button class="btn ghost" type="button" id="orcEnviar">Enviar por e-mail ou WhatsApp</button>
           <!-- excluir orçamento: o vendedor só no mesmo dia; depois, só o Administrador (25/09) -->
           <button class="btn ghost" type="button" id="orcVerVenda" hidden>Abrir a venda</button>
           <button class="btn mut" type="button" id="orcExcluir" hidden>Excluir orçamento</button>
@@ -3282,9 +3283,10 @@ img{max-width:100%}
         <div class="toolbar" style="padding:0 0 18px">
           <h2 style="margin:0">Proposta</h2>
           <span class="sp"></span>
-          <button class="btn" type="button" id="opImprimir">Imprimir / PDF</button>
-          <button class="btn zap" type="button" id="opZap">Enviar Orçamento para cliente via WhatsApp</button>
-          <button class="btn ghost" type="button" id="opEnviar">Enviar proposta</button>
+          <button class="btn" type="button" id="opBaixar">Baixar em PDF</button>
+          <button class="btn" type="button" id="opEmail">Enviar por e-mail</button>
+          <button class="btn zap" type="button" id="opZap">Enviar pelo WhatsApp</button>
+          <button class="btn ghost" type="button" id="opImprimir">Imprimir</button>
           <button class="btn ghost" type="button" id="opEfetivar">Efetivar a venda</button>
           <button class="btn mut" type="button" id="opVoltar">Voltar</button>
         </div>
@@ -7267,13 +7269,22 @@ img{max-width:100%}
 
 <div class="modal" id="envioModal" hidden>
   <div class="box">
-    <h3>Enviar proposta</h3>
+    <h3>Enviar a proposta</h3>
     <div class="sub" id="ev_sub"></div>
-    <p class="big-q">Você gostaria de enviar por e-mail ou pelo WhatsApp?</p>
+    <div class="fld"><label for="ev_email">E-mail do cliente</label>
+      <input id="ev_email" type="email" inputmode="email" autocomplete="email" placeholder="nome@exemplo.com.br"></div>
+    <div class="t-sub" style="margin:-4px 0 12px">Por e-mail o sistema baixa a proposta em PDF e abre o seu programa de e-mail já preenchido — você anexa o arquivo e dá o envio. No celular, abre o compartilhar com o arquivo pronto.</div>
     <div class="actions">
-      <button class="btn zap" type="button" id="ev_zapPdf">Enviar Orçamento em PDF via WhatsApp</button>
+      <button class="btn" type="button" id="ev_mailPdf">Enviar por e-mail com o PDF</button>
+      <a class="btn ghost" id="ev_mail">Só a mensagem por e-mail</a>
+    </div>
+    <div class="actions">
+      <button class="btn zap" type="button" id="ev_zapPdf">Enviar o PDF pelo WhatsApp</button>
       <a class="btn ghost" id="ev_zap" target="_blank" rel="noopener">Só a mensagem pelo WhatsApp</a>
-      <a class="btn ghost" id="ev_mail">Enviar por e-mail</a>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" type="button" id="ev_baixar">Baixar em PDF</button>
+      <span class="sp"></span>
       <button class="btn mut" type="button" id="ev_fechar">Cancelar</button>
     </div>
     <div id="ev_alerta"></div>
@@ -11641,6 +11652,7 @@ window.__empresaMF=function(){return EMPRESA;};
 window.__osListaMF=function(){return ordens;};
 window.__orcamentosMF=function(){return orcamentos;};
 window.__verPropostaMF=function(o){return verProposta(o);};
+window.__gerarPdfPropostaMF=function(o){garantirFolhaProposta(o);return gerarPdfProposta(o);};
 window.__pdfFichaOSMF=function(o,p){return gerarPdfFichaOS(o,p);};
 window.__motivosSistemaMF=function(){return motivosDoSistema();};
 window.__motivosMF=function(){return motivos;};
@@ -31326,21 +31338,38 @@ async function abrirEnvio(o){
   envioOrc=o;
   var zp=$("ev_zapPdf");zp.disabled=false;if(zp.__rotulo)zp.textContent=zp.__rotulo;zp.hidden=!String(o.tel||"").replace(/\D/g,"");
   $("ev_sub").textContent="Orçamento "+o.numero+" · "+o.cliente+" · "+BRL(o.total);
+  $("ev_alerta").innerHTML="";
   var txt=textoProposta(o),tel=(o.tel||"").replace(/\D/g,"");
   var z=$("ev_zap"),m=$("ev_mail"),nota="";
+  /* o e-mail: o do orçamento, senão o do cadastro do cliente — e dá para digitar aqui */
+  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var em=String(o.email||c.email||"").trim();
+  var cam=$("ev_email");
+  if(cam){cam.value=em;cam.oninput=function(){ligarEnvioEmail(o);};}
   if(tel){z.style.display="";z.href="https://wa.me/55"+tel+"?text="+encodeURIComponent(txt);}
   else{z.style.display="none";nota+='<div class="note warn"><b>Sem telefone no orçamento.</b> Preencha o campo Telefone para enviar por WhatsApp.</div>';}
-  if(o.email){m.style.display="";
-    m.href="mailto:"+encodeURIComponent(o.email)+
-      "?subject="+encodeURIComponent("Proposta nº "+o.numero+" — "+(EMPRESA.razao||nomeLoja()))+
-      "&body="+encodeURIComponent(txt);}
-  else{m.style.display="none";nota+='<div class="note warn"><b>Sem e-mail no orçamento.</b> Preencha o campo E-mail para enviar por e-mail.</div>';}
   nota+='<div class="note">O sistema monta a mensagem e abre o WhatsApp ou o seu programa de e-mail já preenchido — você confere e dá o envio. Disparo automático, sem passar por você, exige a API oficial do WhatsApp Business e um servidor de e-mail, que entram na versão de produção.</div>';
   $("ev_nota").innerHTML=nota;
   o.enviosLog=(o.enviosLog||[]);
+  ligarEnvioEmail(o);
   $("envioModal").hidden=false;
+  if(cam&&!em)try{cam.focus();}catch(e){}
   z.onclick=function(){registrarEnvio(o,"WhatsApp");};
   m.onclick=function(){registrarEnvio(o,"E-mail");};
+}
+/* os dois caminhos de e-mail acompanham o endereço digitado, a cada tecla */
+function ligarEnvioEmail(o){
+  var cam=$("ev_email"),m=$("ev_mail"),bp=$("ev_mailPdf");
+  var em=String((cam&&cam.value)||"").trim(),ok=emailValidoMF(em);
+  if(bp)bp.disabled=!ok;
+  if(m){
+    if(ok){
+      m.style.display="";
+      m.href="mailto:"+encodeURIComponent(em)+
+        "?subject="+encodeURIComponent(assuntoPropostaEmail(o))+
+        "&body="+encodeURIComponent(textoProposta(o));
+    }else{m.style.display="none";m.removeAttribute("href");}
+  }
 }
 async function registrarEnvio(o,via){
   o.enviosLog=(o.enviosLog||[]);
@@ -34439,13 +34468,101 @@ function cfgVendaWhatsApp(p){
 }
 function prepararPdfVenda(p){var cf=cfgVendaWhatsApp(p);return prepararPdf(cf.chave,cf.gerar);}
 function enviarVendaWhatsApp(p,botao){if(!p)return;return enviarPdfWhatsApp(cfgVendaWhatsApp(p),botao);}
+/* ---------- BAIXAR E ENVIAR A PROPOSTA (v347, pedido dele) ----------
+   Na tela de orçamento ele pediu duas coisas: baixar o arquivo e enviar por
+   e-mail. O PDF é a MESMA proposta que a tela mostra (`op_folha`) — um
+   documento só, sem segundo modelo para divergir depois (lição da v326).
+   E-MAIL COM ANEXO AUTOMÁTICO EXIGE SERVIDOR DE E-MAIL, que não existe aqui:
+   então o sistema baixa o PDF e abre o programa de e-mail já preenchido
+   (assunto, texto e destinatário), e no celular abre o compartilhar com o
+   arquivo pronto. É o mesmo caminho da folha de pagamento (v89). */
+function emailValidoMF(e){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e||"").trim());}
+function gerarPdfProposta(o){
+  return pdfDoElemento($("op_folha"),nomeArquivoPdf("Orcamento",o.numero,o.cliente),
+    {mode:["css"],avoid:["tr",".cond",".assina",".bloco-cli"]});
+}
+/* a folha da proposta é montada por verProposta: sem ela na tela não há PDF */
+function garantirFolhaProposta(o){
+  var f=$("op_folha");
+  if(editandoOrc&&editandoOrc.id===o.id&&f&&f.innerHTML&&!$("orcProposta").hidden)return;
+  verProposta(o);
+}
+async function pdfDaProposta(o,botao,rotulo){
+  garantirFolhaProposta(o);
+  var antes=botao?botao.textContent:"",lig=!!botao;
+  if(lig){botao.disabled=true;botao.textContent=rotulo||"Gerando o PDF…";}
+  try{return await prepararPdf("orc:"+o.id,function(){return gerarPdfProposta(o);});}
+  finally{if(lig){botao.disabled=false;botao.textContent=antes;}}
+}
+async function baixarPropostaPdf(o,botao){
+  if(!o)return;
+  try{
+    var f=await pdfDaProposta(o,botao);
+    baixarArquivo(f);
+    toast("Proposta "+o.numero+" baixada: "+f.name);
+  }catch(e){
+    toast("Não deu para gerar o PDF: "+((e&&e.message)||e));
+  }
+}
+function assuntoPropostaEmail(o){
+  return "Proposta nº "+o.numero+" — "+(EMPRESA.razao||nomeLoja());
+}
+/* grava o e-mail digitado no orçamento e, quando o cadastro do cliente está sem
+   e-mail, nele também — senão o vendedor digita o mesmo endereço toda vez */
+async function guardarEmailDoCliente(o,em){
+  if(!em||o.email===em)return;
+  o.email=em;
+  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  if(c&&!String(c.email||"").trim()){
+    c.email=em;
+    try{await gravaConf("clientes",c);}
+    catch(e){c.email="";toast("O e-mail não ficou guardado no cadastro do cliente: "+((e&&e.message)||e));}
+  }
+}
+async function enviarPropostaEmail(o,botao){
+  if(!o)return;
+  var cam=$("ev_email"),em=String((cam&&cam.value)||o.email||"").trim();
+  if(!emailValidoMF(em)){
+    $("ev_alerta").innerHTML='<div class="note crit"><b>Falta o e-mail do cliente.</b> '+
+      "Escreva o endereço no campo acima para enviar a proposta por e-mail.</div>";
+    if(cam)try{cam.focus();}catch(e){}
+    return;
+  }
+  var f;
+  try{f=await pdfDaProposta(o,botao);}
+  catch(e){
+    $("ev_alerta").innerHTML='<div class="note crit"><b>Não deu para gerar o PDF.</b> '+
+      esc((e&&e.message)||String(e))+"</div>";
+    return;
+  }
+  await guardarEmailDoCliente(o,em);
+  var assunto=assuntoPropostaEmail(o),corpo=textoProposta(o);
+  /* no celular o compartilhar do aparelho leva o arquivo junto, e aí o e-mail sai com o anexo */
+  if(ehCelular()&&navigator.canShare&&navigator.canShare({files:[f]})){
+    try{if(navigator.clipboard)navigator.clipboard.writeText(em);}catch(e){}
+    try{
+      await navigator.share({files:[f],title:assunto,text:"Para: "+em+"\n\n"+corpo});
+      await registrarEnvio(o,"E-mail (PDF)");
+      toast("No e-mail, cole o endereço do cliente: "+em);
+    }catch(e){
+      if(!(e&&e.name==="AbortError"))toast("O compartilhar não abriu: "+((e&&e.message)||e));
+    }
+    return;
+  }
+  baixarArquivo(f);
+  var a=document.createElement("a");
+  a.href="mailto:"+encodeURIComponent(em)+"?subject="+encodeURIComponent(assunto)+
+    "&body="+encodeURIComponent(corpo+"\n\n(anexe o arquivo "+f.name+", que acabou de ser baixado)");
+  document.body.appendChild(a);a.click();a.parentNode.removeChild(a);
+  await registrarEnvio(o,"E-mail (PDF)");
+  toast("E-mail para "+em+" aberto. Anexe o arquivo "+f.name+" — ele está em Downloads.");
+}
 /* orçamento: a proposta com timbrado que está na tela (verProposta) vira o PDF */
 function enviarOrcWhatsApp(o,botao){
   if(!o)return;
   var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
   return enviarPdfWhatsApp({chave:"orc:"+o.id,
-    gerar:function(){return pdfDoElemento($("op_folha"),nomeArquivoPdf("Orcamento",o.numero,o.cliente),
-      {mode:["css"],avoid:["tr",".cond",".assina",".bloco-cli"]});},
+    gerar:function(){return gerarPdfProposta(o);},
     tel:o.tel||c.tel,cliente:o.cliente,titulo:"Orçamento "+o.numero,oQue:"do orçamento "+o.numero,
     msg:textoProposta(o),
     registrar:async function(){await registrarEnvio(o,"WhatsApp (PDF)");}},botao);
@@ -39452,7 +39569,13 @@ function ligar(){
     mtLinhas.sort(function(a,b){return (+a.de||0)-(+b.de||0);});
     FAIXAS_COM=JSON.parse(JSON.stringify(mtLinhas));
     await gravarFaixas();renderMetas();renderFatur();toast("Faixas de comissão salvas.");};
-  $("opEnviar").onclick=function(){if(editandoOrc)abrirEnvio(editandoOrc);};
+  /* baixar e enviar por e-mail: o orçamento é salvo primeiro, senão o PDF sairia
+     sem o que acabou de ser digitado na tela */
+  $("orcBaixar").onclick=async function(){var b=this,o=await salvarOrc();if(o)baixarPropostaPdf(o,b);};
+  $("opBaixar").onclick=function(){if(editandoOrc)baixarPropostaPdf(editandoOrc,this);};
+  $("opEmail").onclick=function(){if(editandoOrc)abrirEnvio(editandoOrc);};
+  $("ev_mailPdf").onclick=function(){var o=envioOrc;if(o)enviarPropostaEmail(o,this);};
+  $("ev_baixar").onclick=function(){var o=envioOrc;if(o)baixarPropostaPdf(o,this);};
   $("ev_fechar").onclick=function(){$("envioModal").hidden=true;};
   /* orçamento em PDF: a proposta com o timbrado é montada (se não estiver aberta) e vira o arquivo */
   $("opZap").onclick=function(){if(editandoOrc)enviarOrcWhatsApp(editandoOrc,this);};
