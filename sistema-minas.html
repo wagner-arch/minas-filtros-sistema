@@ -7310,7 +7310,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=345"></script>
+<script src="supabase/adapter.js?v=349"></script>
 <script>
 (function(){
 "use strict";
@@ -7322,7 +7322,7 @@ var $=function(id){return document.getElementById(id);};
    (nome, função, loja) vem de public.perfis. Sem as constantes o sistema volta ao modo demonstração. */
 var SUPABASE_URL="https://clnccthtvfuetmfwuanu.supabase.co";
 var SUPABASE_CHAVE="sb_publishable_d4fzLYOX1QobjBlxXOnhUg_evOgwcw-";
-var perfilBanco=null;
+var perfilBanco=null,emailLogado="";
 /* os testes automáticos rodam no modo demonstração (window.MODO_DEMO_MF antes do sistema) */
 function modoBanco(){if(window.MODO_BANCO_TESTE_MF)return true;return !window.MODO_DEMO_MF&&!!(SUPABASE_URL&&SUPABASE_CHAVE);}
 function bancoCarregado(){return !!(window.supabase&&window.criarDbSupabase);}
@@ -7926,6 +7926,163 @@ function fecharTelaCarga(){
    Como `docs` é uma tabela só, várias coleções cabem no mesmo pedido: as 19 configurações
    viram UMA chamada (175 ms medidos) e as 30 coleções pequenas viram TRÊS.
    Quem é grande fica de fora do grupo, porque passaria do teto de mil linhas por resposta. */
+/* ============ O QUE FICA GUARDADO NO APARELHO — ETAPA 3 (v349) ============
+   Meta dele: menos de 10 s na PRIMEIRA entrada e menos de 3 s nas SEGUINTES.
+   As v336–v343 derrubaram a entrada de 45 s para 21–25 s mexendo em como o
+   banco é lido; o que sobrou é o TAMANHO: 24 MB de cadastros e 11 MB de
+   aparelhos atravessam a rede a cada entrada, mesmo quando nada mudou.
+
+   COMO FUNCIONA, e a peça que torna isto possível: a tabela `docs` tem a coluna
+   `atualizado_em`, escrita pela TRIGGER DO BANCO em todo insert e update — é
+   carimbo do servidor, nunca do navegador, então dá para confiar nele.
+   Na entrada, cada coleção grande responde a UMA pergunta de 59 ms ("quantos
+   documentos existem e quando foi a última gravação?") e aí:
+     · carimbo e contagem iguais ao guardado  -> NÃO BAIXA NADA;
+     · carimbo mais novo  -> baixa SÓ a diferença (11 ms no banco dele) e mescla;
+     · contagem que não fecha (houve exclusão) -> baixa tudo, como sempre.
+   O guardado fica no IndexedDB do próprio aparelho, separado POR LOJA E POR
+   USUÁRIO (o que cada um vê depende da regra do banco), e é apagado no Sair.
+
+   REGRA QUE MANDA NO DESENHO: na menor dúvida, baixa tudo. Lista guardada que
+   não fecha com a contagem do banco é jogada fora — ninguém trabalha com lista
+   pela metade (a regra dele da v334), e cache que mente é pior que cache
+   nenhum. */
+/* 1,5 s e nao 4: o pior caso (navegador que nao deixa guardar nada — modo privado, pagina
+   aberta de arquivo local) paga esta espera UMA VEZ e desiste de vez. Sem isso, a entrada
+   ficava 4 segundos MAIS LENTA em cada coleção grande, justamente onde o cofre nao serve. */
+var COFRE_NOME="mf_cofre",COFRE_VER=1,COFRE_ARMARIO="colecoes",COFRE_ESPERA=1500;
+var cofreBase=null,cofreAbrindo=null,cofreRuim=false,COFRE_USADO={},cofreFila=[];
+function cofreAbrir(){
+  if(cofreRuim)return Promise.resolve(null);
+  if(cofreBase)return Promise.resolve(cofreBase);
+  /* UMA abertura só: as quatro coleções grandes pedem o cofre no mesmo instante, e sem isto
+     cada uma abria a sua conexão (e cada uma esperava o seu tempo limite) */
+  if(cofreAbrindo)return cofreAbrindo;
+  cofreAbrindo=new Promise(function(ok){
+    var respondeu=false;
+    function sair(v){if(!respondeu){respondeu=true;cofreAbrindo=null;ok(v);}}
+    /* travou ou nem respondeu (IndexedDB bloqueado, como numa página aberta de arquivo
+       local): desiste DE VEZ nesta sessão e o sistema segue lendo do banco, como antes */
+    setTimeout(function(){if(!respondeu)cofreRuim=true;sair(null);},COFRE_ESPERA);
+    try{
+      if(!window.indexedDB){cofreRuim=true;return sair(null);}
+      var req=indexedDB.open(COFRE_NOME,COFRE_VER);
+      req.onupgradeneeded=function(){
+        var b=req.result;
+        if(!b.objectStoreNames.contains(COFRE_ARMARIO))b.createObjectStore(COFRE_ARMARIO,{keyPath:"chave"});
+      };
+      req.onsuccess=function(){cofreBase=req.result;sair(cofreBase);};
+      req.onerror=function(){cofreRuim=true;sair(null);};
+      req.onblocked=function(){cofreRuim=true;sair(null);};
+    }catch(e){cofreRuim=true;sair(null);}
+  });
+  return cofreAbrindo;
+}
+/* por loja E por usuário: a regra do banco mostra coisas diferentes para cada um */
+function cofreChave(c){return c+"|"+(lojaAtual||"")+"|"+(usuarioAtual||"");}
+async function cofreLer(c){
+  var b=await cofreAbrir();if(!b)return null;
+  return new Promise(function(ok){
+    var respondeu=false;
+    function sair(v){if(!respondeu){respondeu=true;ok(v);}}
+    setTimeout(function(){if(!respondeu)cofreRuim=true;sair(null);},COFRE_ESPERA);
+    try{
+      var t=b.transaction(COFRE_ARMARIO,"readonly"),r=t.objectStore(COFRE_ARMARIO).get(cofreChave(c));
+      r.onsuccess=function(){
+        var v=r.result;
+        /* lista que não fecha com a própria contagem guardada não serve */
+        if(!v||!v.lista||!v.lista.length||v.lista.length!==v.total)return sair(null);
+        sair(v);
+      };
+      r.onerror=function(){sair(null);};
+    }catch(e){sair(null);}
+  });
+}
+async function cofreGravar(c,lista,total,ultima){
+  var b=await cofreAbrir();if(!b)return false;
+  return new Promise(function(ok){
+    var respondeu=false;
+    function sair(v){if(!respondeu){respondeu=true;ok(v);}}
+    setTimeout(function(){if(!respondeu)console.warn("[cofre] "+c+": a gravação não respondeu");sair(false);},COFRE_ESPERA*6);
+    try{
+      var t=b.transaction(COFRE_ARMARIO,"readwrite");
+      var r=t.objectStore(COFRE_ARMARIO).put({chave:cofreChave(c),colecao:c,loja:lojaAtual,
+        usuario:usuarioAtual,lista:lista,total:total,ultima:ultima,quando:new Date().toISOString()});
+      /* o motivo da recusa fica registrado: cota cheia e dado não copiável são
+         problemas diferentes, e sem o nome do erro não há como saber qual foi */
+      r.onerror=function(){console.warn("[cofre] "+c+": o pedido falhou — "+((r.error&&r.error.name)||"?")+" "+((r.error&&r.error.message)||""));};
+      t.oncomplete=function(){sair(true);};
+      t.onerror=function(){console.warn("[cofre] "+c+": a gravação falhou — "+((t.error&&t.error.name)||"?")+" "+((t.error&&t.error.message)||""));sair(false);};
+      t.onabort=function(){console.warn("[cofre] "+c+": a gravação foi cancelada — "+((t.error&&t.error.name)||"?")+" "+((t.error&&t.error.message)||""));sair(false);};
+    }catch(e){console.warn("[cofre] "+c+": não deu para gravar — "+((e&&e.name)||"")+" "+((e&&e.message)||e));sair(false);}
+  });
+}
+async function cofreApagarTudo(){
+  var b=await cofreAbrir();if(!b)return;
+  try{
+    var t=b.transaction(COFRE_ARMARIO,"readwrite");
+    t.objectStore(COFRE_ARMARIO).clear();
+  }catch(e){}
+}
+/* gravar 24 MB faz o navegador copiar tudo na MESMA linha em que a tela roda (lição da
+   v343): então a gravação espera a tela abrir, junto da arrumação de fundo */
+function cofreGravarDepois(c,lista,total,ultima){
+  cofreFila.push({c:c,lista:lista,total:total,ultima:ultima});
+}
+async function cofreGravarAFila(){
+  while(cofreFila.length){
+    var it=cofreFila.shift();
+    try{
+      var t0=Date.now();
+      var ok=await cofreGravar(it.c,it.lista,it.total,it.ultima);
+      console.log("[cofre] "+it.c+": "+(ok?"guardado "+it.lista.length+" em "+(Date.now()-t0)+" ms":"não deu para guardar"));
+    }catch(e){console.warn("[cofre]",it.c,e);}
+    await new Promise(function(ok){setTimeout(ok,60);});   /* deixa a tela respirar */
+  }
+}
+/* a leitura de uma coleção grande, usando o que já está no aparelho */
+async function lerGrandeGuardada(c,teto,filtros){
+  var f=filtros||{},cof=null,res=null,t0=Date.now();
+  try{cof=await cofreLer(c);}catch(e){cof=null;}
+  try{res=await db.resumo(c,f);}catch(e){res=null;}
+  /* sem resposta do resumo (banco fora, sem permissão): o caminho de sempre */
+  if(!res)return col(c).limit(teto).get(f);
+  /* 1. NADA MUDOU: a entrada não baixa nada desta coleção */
+  if(cof&&cof.ultima&&res.ultima&&cof.total===res.total&&cof.ultima>=res.ultima){
+    COFRE_USADO[c]={de:"aparelho",quantos:cof.lista.length,ms:Date.now()-t0};
+    console.log("[cofre] "+c+": "+cof.lista.length+" do aparelho, nada mudou ("+(Date.now()-t0)+" ms)");
+    return db.snapDeLista(cof.lista,res.total);
+  }
+  /* 2. MUDOU POUCO: baixa só a diferença e mescla */
+  if(cof&&cof.ultima&&res.ultima&&res.ultima>cof.ultima){
+    try{
+      var del=await db.mudancas(c,cof.ultima,f);
+      if(del&&!del.parouPorFalha){
+        var mapa={};
+        cof.lista.forEach(function(o){if(o&&o.id)mapa[o.id]=o;});
+        del.docs.forEach(function(d){var o=d.data()||{};o.id=d.id;mapa[o.id]=o;});
+        var lista=Object.keys(mapa).sort().map(function(k){return mapa[k];});
+        /* A CONTAGEM É A PROVA: não fechando, houve exclusão e o certo é baixar tudo */
+        if(lista.length===res.total){
+          COFRE_USADO[c]={de:"aparelho+diferenca",quantos:lista.length,novos:del.size,ms:Date.now()-t0};
+          console.log("[cofre] "+c+": "+del.size+" mudaram, "+lista.length+" no total ("+(Date.now()-t0)+" ms)");
+          cofreGravarDepois(c,lista,res.total,res.ultima);
+          return db.snapDeLista(lista,res.total);
+        }
+        console.log("[cofre] "+c+": a conta não fechou ("+lista.length+" contra "+res.total+") — baixando tudo");
+      }
+    }catch(e){console.warn("[cofre] diferença de "+c,e);}
+  }
+  /* 3. primeira vez neste aparelho, ou a conta não fechou: baixa tudo, como sempre */
+  var snap=await col(c).limit(teto).get(f);
+  COFRE_USADO[c]={de:"banco",quantos:snap.size,ms:Date.now()-t0};
+  /* só guarda lista COMPLETA: cortada pelo limite ou pela rede, não entra no cofre */
+  if(snap&&!snap.parouPorFalha&&!snap.truncado&&snap.size===res.total){
+    cofreGravarDepois(c,snap.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;}),
+      res.total,res.ultima);
+  }
+  return snap;
+}
 var GRANDES_BOOT=["clientes","equipamentos","produtos","movest"];
 /* O QUE JÁ VEIO FICA GUARDADO: é isto que faz o "Tentar de novo" continuar de onde parou,
    em vez de baixar os 22 mil cadastros outra vez (regra dele, 13/10). */
@@ -7973,8 +8130,10 @@ function aquecerBoot(){
     if(jaVeio("col:"+c)){PRE_BOOT["col:"+c]=Promise.resolve(CARGA_OK["col:"+c]);marcarCarga(c,true,CARGA_OK["col:"+c].size,CARGA_OK["col:"+c].total);return;}
     guardar("col:"+c,
       /* é ESTE pedido que vale para os cadastros (o lerClientesDoBanco só recolhe o que já
-         está a caminho), então é aqui que entra o "vai enchendo a lista" */
-      col(c).limit(a[1]).get(c==="clientes"?{aoAndar:clientesChegando,fonte:"docs_sem_anexo"}:undefined),
+         está a caminho), então é aqui que entra o "vai enchendo a lista".
+         E é por aqui que entra o GUARDADO NO APARELHO (v349): a coleção grande só é
+         baixada quando o banco diz que mudou. */
+      lerGrandeGuardada(c,a[1],c==="clientes"?{aoAndar:clientesChegando,fonte:"docs_sem_anexo"}:undefined),
       function(snap){marcarCarga(c,true,snap.size,snap.total||snap.size);});
   });
   /* as pequenas, em grupo. Vindo o grupo cheio (ou falhando), cada coleção se vira sozinha —
@@ -11800,6 +11959,13 @@ window.__centrosMF=function(){return centros;};
 window.__equipeMF=function(){return EQUIPE.slice();};
 window.__usuariosMF=function(){return USUARIOS;};
 window.__dbTesteMF=function(){return db;};
+/* o teste do cofre troca o banco por um de mentira e inspeciona o que foi usado */
+window.__dbPorMF=function(x){db=x;return db;};
+window.__lerGrandeGuardadaMF=function(c,teto,f){return lerGrandeGuardada(c,teto,f);};
+window.__cofreUsadoMF=function(){return COFRE_USADO;};
+window.__cofreFilaMF=function(){return cofreGravarAFila();};
+window.__cofreApagarMF=function(){return cofreApagarTudo();};
+window.__cofreLerMF=function(c){return cofreLer(c);};
 window.__renderAtivsMF=function(){try{renderAtividades();}catch(e){console.warn(e);}};
 window.__caixaDaFormaMF=function(n){var c=caixaDaForma(n);return c?(c.nome+" ("+(c.banco||"sem banco")+")"):"(sem caixa)";};
 window.__refMF=function(){var r=formaReferencia();return r?{nome:r.nome,parc:r.parc}:null;};
@@ -17255,14 +17421,23 @@ function deOutro(o,campos,n){
   for(var i=0;i<campos.length;i++){if(o[campos[i]]&&o[campos[i]]===n)return true;}
   return false;
 }
+/* o cadastro desta linha é o do PRÓPRIO usuário logado? pelo nome e também pelo e-mail,
+   porque o nome do cadastro pode não ser igual ao nome do perfil do banco */
+function ehMeuCadastro(u){
+  if(!u)return false;
+  if(u.nome&&u.nome===usuarioAtual)return true;
+  var em=String(u.emailAcesso||u.email||"").trim().toLowerCase();
+  return !!(emailLogado&&em&&em===emailLogado);
+}
 function ajustarBotoesUsuario(){
   var bd=$("usDesativar"),ba=$("usApagar"),bp=$("usPerdido");
   if(!bd||!ba)return;
   var u=editandoUs;
   var pode=!!(u&&u.nome&&ehAdministrador()&&u.nome!==usuarioAtual);
   bd.hidden=!pode;ba.hidden=!pode;
-  /* celular perdido ou roubado: só faz sentido para quem tem login no banco */
-  if(bp)bp.hidden=!(pode&&modoBanco()&&u.temLogin);
+  /* celular perdido ou roubado: só para quem tem login no banco, e NUNCA no próprio
+     cadastro — desconectar a si mesmo tranca a pessoa fora, sem ninguém para reconectar */
+  if(bp)bp.hidden=!(pode&&modoBanco()&&u.temLogin&&!ehMeuCadastro(u));
   if(!pode)return;
   bd.textContent=(u.ativo===false?"Reativar colaborador":"Desativar colaborador");
   if(bp)bp.textContent=(u.desconectadoEm?"Reconectar o acesso de "+u.nome:"Celular perdido — desconectar à distância");
@@ -17310,6 +17485,15 @@ async function desconectarAcessoColaborador(){
   if(!ehAdministrador()){avisoUsuario('<div class="note crit">Só o Administrador desconecta um acesso.</div>');return;}
   if(!modoBanco()||!u.temLogin){
     avisoUsuario('<div class="note crit"><b>'+esc(u.nome)+" não tem login no banco.</b> Não há sessão para desconectar.</div>");
+    return;
+  }
+  /* A TRAVA VALE DENTRO DA FUNÇÃO, não só no botão (regra da v321): ninguém desconecta o
+     PRÓPRIO acesso — ficaria trancado fora, sem ninguém para reconectar. O banco recusa
+     também, pela mesma razão (trava na função criar-acesso). */
+  if(ehMeuCadastro(u)&&!u.desconectadoEm){
+    avisoUsuario('<div class="note crit"><b>Este é o seu próprio acesso.</b> Desconectar a si mesmo trancaria '+
+      "você fora do sistema, sem ninguém para reconectar. Peça a outro Administrador, ou use "+
+      "<b>Sair</b> se quiser apenas encerrar a sessão neste aparelho.</div>");
     return;
   }
   var voltar=!!u.desconectadoEm;
@@ -40073,8 +40257,14 @@ function sairSistema(){
   /* o aplicativo para de registrar a localização na hora: sem usuário logado,
      nada é gravado (regra dele, 14/10) */
   try{avisarAppQueSaiu();}catch(e){}
-  /* com banco: encerra a sessão no aparelho e volta à tela de entrada */
-  if(modoBanco()&&db){(async function(){try{await db.auth.sair();}catch(e){}location.reload();})();return;}
+  /* com banco: encerra a sessão no aparelho e volta à tela de entrada.
+     E APAGA O GUARDADO NO APARELHO (v349): são 22 mil cadastros de clientes gravados
+     no celular — quem sai do sistema não deixa a base da loja no aparelho. */
+  if(modoBanco()&&db){(async function(){
+    try{await cofreApagarTudo();}catch(e){}
+    try{await db.auth.sair();}catch(e){}
+    location.reload();
+  })();return;}
   $("login").hidden=false;
   montarLogin();
   $("lg_senha").focus();
@@ -40191,6 +40381,9 @@ async function entrarComPerfil(){
     $("login").hidden=false;return false;
   }
   perfilBanco=p;usuarioAtual=p.nome;
+  /* o e-mail de quem entrou: e por ele que o banco reconhece a pessoa, e e com ele que o
+     sistema sabe que um cadastro da lista e o DELA MESMA (o nome do cadastro pode diferir) */
+  try{var ses=await db.auth.sessao();emailLogado=String((ses&&ses.user&&ses.user.email)||"").toLowerCase();}catch(e){emailLogado="";}
   var escolhida=$("lg_loja").value;
   lojaAtual=(p.funcao==="Administrador"&&escolhida)?escolhida:(p.loja||escolhida||"mf");
   db.lojaPadrao=lojaAtual;
@@ -40312,6 +40505,9 @@ function arrumacaoDeFundo(){
      tela de preparo fecha (14/10): o navegador é uma linha só, e desenhá-las enquanto a tela
      ainda esperava travava a aba por quase 5 segundos — a tela não conseguia nem fechar. */
   setTimeout(function(){garantirRenderCompleto();},120);
+  /* guardar as coleções grandes no aparelho (v349): copiar 24 MB trava a linha do
+     navegador, então isto roda com o sistema JÁ ABERTO, nunca antes */
+  setTimeout(function(){cofreGravarAFila();},900);
   /* ATENÇÃO (14/10): isto roda em paralelo com a tela de preparo esperando o resto chegar,
      e o navegador é uma linha só — rotina pesada aqui SEGURA a tela, mesmo não sendo ela que
      a tela espera. Por isso cada uma é cronometrada e espera um instante entre elas, para a

@@ -23,7 +23,8 @@
 //   4. grava/atualiza a linha de public.perfis (nome, função, loja, jornada).
 //   6. com {desconectar:true} (v346) desconecta o colaborador a distancia: desativa o
 //      perfil, bane o usuario no Auth e encerra as sessoes abertas — e para celular
-//      perdido ou roubado. Com {reconectar:true} desfaz.
+//      perdido ou roubado. Com {reconectar:true} desfaz. O Administrador NAO pode
+//      desconectar a si mesmo: ficaria trancado fora, sem ninguem para reconectar.
 //   5. com {somenteFuncao:true} (v200) só atualiza a linha de public.perfis — serve para
 //      trocar a função de quem já tem acesso sem criar senha nova. É a função gravada
 //      ali que decide o menu e as permissões no login.
@@ -118,6 +119,9 @@ Deno.serve(async (req) => {
     if (erroLista0) return resposta({ erro: "A chave de administrador da função não está valendo: " + erroLista0.message }, 500);
     const achado0 = (lista0?.users || []).find((u) => String(u.email || "").toLowerCase() === email);
     if (!achado0) return resposta({ erro: "Esse e-mail não tem acesso no banco." }, 400);
+
+    // o Administrador não desconecta a si mesmo: ficaria trancado fora, sem ninguém para reconectar
+    if (!voltar && achado0.id === dadosUsuario.user.id) return resposta({ erro: "Você não pode desconectar o seu próprio acesso." }, 400);
 
     const { error: erroBan } = await admin.auth.admin.updateUserById(achado0.id, {
       ban_duration: voltar ? "none" : "876000h",   // 100 anos = até alguém reconectar
