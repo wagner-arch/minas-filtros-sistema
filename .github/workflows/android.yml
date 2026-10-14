@@ -1,11 +1,12 @@
 # Monta o arquivo de instalacao do aplicativo Android (APK) na nuvem do GitHub,
 # de graca. Este computador nao tem Java nem o kit do Android instalados, e o
-# GitHub ja faz isso sozinho. Depois de rodar, o arquivo fica em
-# Actions > a execucao > Artifacts > minas-filtros-apk.
+# servidor do GitHub ja vem com os dois.
+# Depois de rodar, o arquivo fica em:
+#   Actions > a execucao > Artifacts > minas-filtros-apk
 name: Aplicativo Android
 
 on:
-  workflow_dispatch:          # roda quando o Wagner clicar
+  workflow_dispatch:          # roda quando o Wagner clicar em "Run workflow"
   push:
     paths:
       - 'android/**'
@@ -23,14 +24,24 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Preparar o kit do Android
-        uses: android-actions/setup-android@v3
+      # O servidor ubuntu-latest JA TRAZ o kit do Android instalado. A action
+      # android-actions/setup-android falhou aqui na primeira tentativa e nao e
+      # necessaria: basta usar o que ja esta na maquina e aceitar as licencas.
+      - name: Conferir o kit do Android que ja vem no servidor
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls "$ANDROID_HOME/platforms" || true
+          ls "$ANDROID_HOME/build-tools" || true
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-34" "build-tools;34.0.0" "platform-tools" || true
 
       - name: Montar o aplicativo
         working-directory: android
         run: |
-          gradle wrapper --gradle-version 8.7
-          ./gradlew assembleRelease --no-daemon
+          gradle wrapper --gradle-version 8.7 --no-daemon
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Guardar o arquivo de instalacao
         uses: actions/upload-artifact@v4
@@ -38,3 +49,14 @@ jobs:
           name: minas-filtros-apk
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 90
+
+      # se der errado, o log do Gradle fica guardado para eu olhar
+      - name: Guardar o relatorio quando falhar
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-da-falha
+          path: |
+            android/app/build/reports/**
+            android/build/reports/**
+          retention-days: 7
