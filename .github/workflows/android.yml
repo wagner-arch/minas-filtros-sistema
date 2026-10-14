@@ -17,9 +17,12 @@ name: Aplicativo Android
 on:
   workflow_dispatch:          # roda quando o Wagner clicar em "Run workflow"
   push:
+    # so no main: empurrar uma ETIQUETA dispara o push ignorando o filtro de pastas,
+    # e o fluxo rodava (e falhava) a cada publicacao do sistema
+    branches: [main]
     paths:
-      - 'android/**'
-      - '.github/workflows/android.yml'
+      - "android/**"
+      - ".github/workflows/android.yml"
 
 permissions:
   contents: write             # para criar o Release e gravar o arquivo de versao
@@ -47,6 +50,18 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-34" "build-tools;34.0.0" "platform-tools" || true
 
+      - name: Preparar o Gradle
+        working-directory: android
+        run: gradle wrapper --gradle-version 8.7 --no-daemon
+
+      # Esta compilacao NAO precisa da chave: ela existe para provar que o codigo
+      # do aplicativo esta certo. Falhando aqui, o problema e o codigo; falhando
+      # no passo seguinte, falta a chave no cofre. Sem esta separacao, um erro de
+      # programacao ficaria escondido atras da falta da chave.
+      - name: Conferir se o codigo do aplicativo compila
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
       # A chave e escrita FORA da pasta do projeto (RUNNER_TEMP), para nao haver
       # a menor chance de ela entrar num commit. O servidor e apagado no fim.
       - name: Pegar a chave de assinatura no cofre
@@ -54,21 +69,19 @@ jobs:
           CHAVE: ${{ secrets.MF_CHAVE_BASE64 }}
         run: |
           if [ -z "$CHAVE" ]; then
-            echo "::error::O segredo MF_CHAVE_BASE64 nao esta no cofre. Veja android/CHAVE-DO-APLICATIVO.md"
+            echo "::error::O segredo MF_CHAVE_BASE64 nao esta no cofre. O codigo do aplicativo compilou; falta so a chave. Veja android/CHAVE-DO-APLICATIVO.md"
             exit 1
           fi
           printf '%s' "$CHAVE" | tr -d '\r\n' | base64 -d > "$RUNNER_TEMP/chave.p12"
           echo "Tamanho da chave: $(stat -c%s "$RUNNER_TEMP/chave.p12") bytes"
 
-      - name: Montar o aplicativo
+      - name: Montar o aplicativo assinado
         working-directory: android
         env:
           MF_CHAVE_ARQ: ${{ runner.temp }}/chave.p12
           MF_CHAVE_SENHA: ${{ secrets.MF_CHAVE_SENHA }}
           MF_CHAVE_ALIAS: ${{ secrets.MF_CHAVE_ALIAS }}
-        run: |
-          gradle wrapper --gradle-version 8.7 --no-daemon
-          ./gradlew assembleRelease --no-daemon --stacktrace
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Conferir que o arquivo saiu assinado com a NOSSA chave
         run: |
