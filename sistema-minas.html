@@ -891,6 +891,13 @@
   #mpVerFiltros{display:none}
   /* EXECUÇÃO DO SERVIÇO (09/10): a lista das peças não é tabela de propósito — o técnico usa na
      bancada, no celular, e assim cada item ocupa a largura toda e quebra sozinho */
+  /* peças da recuperação do seminovo: mesma razão da lista acima — o almoxarifado lança
+     isto no celular, e seis colunas de tabela não cabem em 390 px */
+  .rec-lista{margin-top:10px;border-top:1px solid var(--line)}
+  .rec-item{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .rec-n{flex:1 1 100%;font-weight:600;min-width:0}
+  .rec-v{flex:1 1 200px;font-size:13.5px;color:var(--ink-3);min-width:0}
+  .rec-b{flex:0 0 auto;margin-left:auto}
   .oe-lista{margin-top:10px;border-top:1px solid var(--line)}
   .oe-item{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:11px 0;border-bottom:1px solid var(--line)}
   .oe-nome{flex:1 1 230px;min-width:0}
@@ -3868,6 +3875,7 @@ img{max-width:100%}
             <button type="button" data-t="saldo" aria-current="true">Saldo</button>
             <button type="button" data-t="mov">Movimentações</button>
             <button type="button" data-t="req">Requisições</button>
+            <button type="button" data-t="rec">Recuperações</button>
           </div>
           <input id="eeBusca" placeholder="Buscar produto">
           <select id="eeFiltro" style="max-width:200px">
@@ -3876,7 +3884,14 @@ img{max-width:100%}
             <option value="zerado">Zerados ou negativos</option>
             <option value="comsaldo">Só com saldo</option>
           </select>
+          <div class="fld" id="eeRecPer" hidden style="margin:0">
+            <label for="eeRecDe">Recuperado entre</label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input id="eeRecDe" type="date"><span>e</span><input id="eeRecAte" type="date">
+            </div>
+          </div>
           <span class="count" id="eeCount"></span><span class="sp"></span>
+          <button class="btn ghost" type="button" id="eeRecCsv" hidden>Exportar</button>
           <button class="btn" type="button" id="eeMov">Lançar movimento</button>
           <button class="btn ghost" type="button" id="eeTransf">Transferir</button>
         </div>
@@ -6197,6 +6212,17 @@ img{max-width:100%}
         <p class="help">Só aparecem os purificadores seminovos do catálogo. O aparelho sai da sucata e entra no estoque como este produto.</p></div>
       <div class="fld"><label for="sc_serie">Número de série <span class="req">*</span></label>
         <input id="sc_serie" type="text" placeholder="a série que o aparelho recebeu na revisão"></div>
+      <div class="sect">
+        <p class="sect-t">Peças e refis usados na recuperação</p>
+        <p class="help">Lance o que foi aplicado neste aparelho. As peças saem do almoxarifado da loja e o <b>custo do seminovo é a soma delas</b> — mão de obra e o valor dado ao cliente na troca não entram.</p>
+        <div class="grid g3">
+          <div class="fld"><label for="sc_peca">Peça ou refil</label><select id="sc_peca"></select></div>
+          <div class="fld"><label for="sc_pqtd">Quantidade</label><input id="sc_pqtd" type="number" min="1" step="1" value="" placeholder="Qtd" inputmode="numeric"></div>
+          <div class="fld" style="align-self:end"><button class="btn ghost" type="button" id="sc_padd">Incluir a peça</button></div>
+        </div>
+        <div id="sc_itens"></div>
+        <div id="sc_custo"></div>
+      </div>
     </div>
     <div class="note warn" id="sc_avisoDes" hidden>
       <b>Desmanche é definitivo.</b> O aparelho sai do estoque e não volta como produto nenhum —
@@ -11336,7 +11362,7 @@ function qtdInformada(id){
    veio no documento, e um "1" sugerido viraria erro de estoque.
    Nessas telas isso substitui a regra da v84 (quantidade sempre em branco). */
 var QTD_AUTO={v_prod:"v_qtd",or_prod:"or_qtd",os_dprod:"os_dqtd",os_peca:"os_pqtd",
-  pd_prod:"pd_qtd",ins_prod:"ins_qtd"};
+  pd_prod:"pd_qtd",ins_prod:"ins_qtd",sc_peca:"sc_pqtd"};
 function ligarQtdAutomatica(){
   /* em CAPTURA, de propósito: roda antes do onchange de cada tela, então quem calcula o preço
      pela quantidade (precoPelaForma/qtdDoForm) já lê 1 e não um campo vazio */
@@ -11717,6 +11743,17 @@ window.__renderAtivsMF=function(){try{renderAtividades();}catch(e){console.warn(
 window.__caixaDaFormaMF=function(n){var c=caixaDaForma(n);return c?(c.nome+" ("+(c.banco||"sem banco")+")"):"(sem caixa)";};
 window.__refMF=function(){var r=formaReferencia();return r?{nome:r.nome,parc:r.parc}:null;};
 window.__precoRefMF=function(cheia){return precoReferencia(cheia);};
+window.__movEstMF=function(){return movEst;};
+window.__sucataMF={abrir:function(p,m){return abrirSucata(p,m);},
+  peca:function(pid,q){var pr=produtos.filter(function(x){return x.id===pid;})[0];
+    if(!pr)return false;$("sc_peca").value=pid;$("sc_pqtd").value=q;addPecaSucata();return true;},
+  pecas:function(){return sucPecas;},
+  custo:function(){return custoRecuperacao(sucPecas);},
+  confirmar:function(){return confirmarSucata();},
+  pode:function(){return podeAvaliarSucata();},
+  lista:function(de,ate,q){return recuperacoesDoPeriodo(de,ate,q);},
+  exportar:function(){return exportarRecuperacoes();}};
+window.__trocarUsuarioMF=function(n){usuarioAtual=n;try{render();}catch(e){}return usuarioAtual;};
 /* a OS não escolhe forma de pagamento nesta tela (isso é do pedido que sai dela): então o campo
    já vem com o valor final da forma de referência e a nota diz de onde ele veio */
 function notaPrecoRefOS(idNota,p){
@@ -12658,9 +12695,58 @@ function usadoTrocaDoColab(quem){
    · DESMANCHE  → sai do estoque e acaba ali. NÃO vira estoque de coisa nenhuma; fica só o
      registro no histórico, com quem avaliou e o que foi aproveitado na observação. */
 var LOC_RECUP="recuperacao",LOC_DESM="desmanche";
-var sucPend=null;
+var sucPend=null,sucPecas=[];
+/* Quem registra a recuperação é o almoxarifado — a ação "Movimentar e transferir estoque"
+   (regra dele, 13/10). Administrador e Estoquista têm; Financeiro e Gerente só olham. */
 function podeAvaliarSucata(){
-  return ehGestor()||podeAprovarRetirada();
+  return pode("moverEstoque");
+}
+/* custo do seminovo = soma das peças aplicadas (quantidade × custo do cadastro).
+   Mão de obra e o valor dado ao cliente na troca NÃO entram — regra dele. */
+function custoPecaRecup(pid){
+  var p=produtos.filter(function(x){return x.id===pid;})[0];
+  return p?custoTotalDe(p):0;
+}
+function custoRecuperacao(itens){
+  return Math.round((itens||[]).reduce(function(a,i){
+    return a+custoPecaRecup(i.pid)*(+i.qtd||0);},0)*100)/100;
+}
+function pecasSemCustoRecup(itens){
+  return (itens||[]).filter(function(i){return custoPecaRecup(i.pid)<=0;}).map(function(i){return i.nome;});
+}
+function renderPecasSucata(){
+  var box=$("sc_itens"),cx=$("sc_custo");if(!box)return;
+  if(!sucPecas.length){
+    box.innerHTML='<div class="note">Nenhuma peça lançada. Aparelho recuperado sem troca de peça fica com custo R$ 0,00.</div>';
+    cx.innerHTML="";return;
+  }
+  /* lista em blocos, não tabela: o estoquista usa isto na bancada, e seis colunas não
+     cabem em 390 px (a mesma lição da v252 e da execução da OS, v330) */
+  box.innerHTML='<div class="rec-lista">'+
+    sucPecas.map(function(i,ix){
+      var cu=custoPecaRecup(i.pid),s=saldoEm(i.pid,LOC_EMPRESA),falta=s<(+i.qtd||0);
+      return '<div class="rec-item"><div class="rec-n">'+esc(i.nome)+
+        (cu<=0?' <span class="pill p-warn">sem custo no cadastro</span>':"")+"</div>"+
+        '<div class="rec-v">'+(+i.qtd||0)+" × "+BRL(cu)+" = <b>"+BRL(cu*(+i.qtd||0))+"</b> · "+
+        '<span class="pill '+(falta?"p-crit":"p-ok")+'">'+s+(falta?" — falta no almoxarifado":" no almoxarifado")+"</span></div>"+
+        '<div class="rec-b"><button class="btn mut sm" type="button" data-scrm="'+ix+'">Remover</button></div></div>';
+    }).join("")+"</div>";
+  var sem=pecasSemCustoRecup(sucPecas);
+  cx.innerHTML='<div class="note '+(sem.length?"warn":"ok")+'"><b>Custo deste seminovo: '+BRL(custoRecuperacao(sucPecas))+"</b>"+
+    (sem.length?"<br>Peça sem custo no cadastro: o custo do seminovo vai ficar menor que o real — "+esc(sem.join(", ")):"")+"</div>";
+  Array.prototype.forEach.call(box.querySelectorAll("[data-scrm]"),function(bt){
+    bt.onclick=function(){sucPecas.splice(+bt.getAttribute("data-scrm"),1);renderPecasSucata();};});
+}
+function addPecaSucata(){
+  if(!podeAvaliarSucata())return;
+  var pr=produtos.filter(function(x){return x.id===$("sc_peca").value;})[0];
+  if(!pr){toast("Escolha a peça.");return;}
+  var q=qtdInformada("sc_pqtd");if(!q)return;
+  var ja=sucPecas.filter(function(i){return i.pid===pr.id;})[0];
+  if(ja)ja.qtd=(+ja.qtd||0)+q;
+  else sucPecas.push({pid:pr.id,nome:pr.nome,cod:pr.cod||"",qtd:q});
+  limparInclusao("sc_peca","sc_pqtd");
+  renderPecasSucata();
 }
 function produtosSeminovos(){
   return porNomeAZ(produtos.filter(function(p){
@@ -12670,7 +12756,7 @@ function abrirSucata(p,modo){
   if(!podeAvaliarSucata()){toast("Só o responsável pelo estoque avalia o purificador da sucata.");return;}
   var s=estEmpresaDe(p);
   if(!(s>0)){toast("Não há Purificador Sucata no almoxarifado.");return;}
-  sucPend={pid:p.id,modo:modo};
+  sucPend={pid:p.id,modo:modo};sucPecas=[];
   var rec=(modo==="rec");
   $("sc_titulo").textContent=rec?"Recuperado — virou seminovo":"Desmanche do purificador";
   $("sc_sub").textContent="Purificador Sucata · "+s+(s===1?" unidade":" unidades")+" no almoxarifado";
@@ -12685,6 +12771,14 @@ function abrirSucata(p,modo){
       : '<option value="">— nenhum produto seminovo no catálogo —</option>';
     if(!ls.length)$("sc_alerta").innerHTML='<div class="note warn">Nenhum produto com "seminovo" no nome está cadastrado. '+
       "Cadastre o seminovo em Produtos antes de recuperar este aparelho.</div>";
+    var sp=$("sc_peca");sp.innerHTML="";
+    porNomeAZ(produtos.filter(function(x){
+      return (x.status||"ativo")==="ativo"&&!ehProdutoSucata(x)&&x.grupo!=="Planos"&&x.cod!=="OS-CLIENTE";
+    })).forEach(function(x){
+      var o=document.createElement("option");o.value=x.id;o.textContent=x.nome;
+      o.setAttribute("data-cod",x.cod||"");sp.appendChild(o);});
+    $("sc_pqtd").value="";
+    renderPecasSucata();
   }
   $("sucModal").hidden=false;
 }
@@ -12701,15 +12795,51 @@ async function confirmarSucata(){
     if(!pn){$("sc_alerta").innerHTML='<div class="note crit">Escolha em qual seminovo este aparelho se transformou.</div>';return;}
     if(!serie){$("sc_alerta").innerHTML='<div class="note crit">Informe o número de série que o aparelho recebeu.</div>';
       try{$("sc_serie").focus();}catch(e){}return;}
+    /* peça sem saldo no almoxarifado trava a conclusão (regra dele): não dá para aplicar o
+       que a loja não tem, e deixar o estoque negativo esconderia o buraco. */
+    var faltando=sucPecas.filter(function(i){return saldoEm(i.pid,LOC_EMPRESA)<(+i.qtd||0);});
+    if(faltando.length){
+      $("sc_alerta").innerHTML='<div class="note crit"><b>Sem saldo no almoxarifado para concluir.</b><br>'+
+        faltando.map(function(i){return esc(i.nome)+" — precisa de "+(+i.qtd||0)+" e tem "+saldoEm(i.pid,LOC_EMPRESA);}).join("<br>")+
+        "<br>Dê entrada na peça ou tire da lista.</div>";return;}
+    var custo=custoRecuperacao(sucPecas),semC=pecasSemCustoRecup(sucPecas);
+    var txtPecas=sucPecas.map(function(i){return (+i.qtd||0)+"× "+i.nome;}).join(", ");
     var det="Série "+serie+(obs?" · "+obs:"");
-    await lancarMov(pu.id,1,LOC_EMPRESA,LOC_RECUP,"Recuperado","Virou "+pn.nome+" · "+det);
-    await lancarMov(pn.id,1,LOC_RECUP,LOC_EMPRESA,"Recuperado","Recuperado de Purificador Sucata · "+det);
-    toast("1 "+pn.nome+" no estoque do almoxarifado · série "+serie+". A sucata baixou.");
+    var ccRec=await centroFixo("Material Para Instalação","Pagamento de Mercadorias","saida");
+    var hoje=hojeISO(),agora=new Date().toISOString(),novos=[];
+    /* a sucata sai */
+    novos.push({id:uid(),loja:lojaAtual,produtoId:pu.id,qtd:1,origem:LOC_EMPRESA,destino:LOC_RECUP,
+      doc:"Recuperado",obs:"Virou "+pn.nome+" · "+det,centroId:"",data:hoje,por:usuarioAtual,em:agora});
+    /* cada peça sai do almoxarifado e entra no aparelho */
+    sucPecas.forEach(function(i){
+      novos.push({id:uid(),loja:lojaAtual,produtoId:i.pid,qtd:+i.qtd||0,origem:LOC_EMPRESA,destino:LOC_RECUP,
+        doc:"Peça na recuperação",obs:"Aplicada em "+pn.nome+" · série "+serie,
+        centroId:ccRec,data:hoje,por:usuarioAtual,em:agora});});
+    /* o seminovo entra — e é NESTE movimento que mora o custo daquele aparelho */
+    novos.push({id:uid(),loja:lojaAtual,produtoId:pn.id,qtd:1,origem:LOC_RECUP,destino:LOC_EMPRESA,
+      doc:"Recuperado",obs:"Recuperado de Purificador Sucata · "+det+
+        (sucPecas.length?" · peças: "+txtPecas:" · sem troca de peça")+" · custo "+BRL(custo),
+      centroId:"",data:hoje,por:usuarioAtual,em:agora,
+      recuperacao:{serie:serie,produtoId:pn.id,produto:pn.nome,custo:custo,
+        pecas:sucPecas.map(function(i){var cu=custoPecaRecup(i.pid);
+          return {pid:i.pid,nome:i.nome,cod:i.cod||"",qtd:+i.qtd||0,custoUnit:cu,total:Math.round(cu*(+i.qtd||0)*100)/100};}),
+        semCusto:semC,obs:obs,por:usuarioAtual,em:agora,data:hoje}});
+    var feitos=[];
+    try{
+      for(var k=0;k<novos.length;k++){await gravaConf("movest",novos[k]);feitos.push(novos[k]);}
+    }catch(eRec){
+      for(var d=0;d<feitos.length;d++){try{await apaga("movest",feitos[d].id);}catch(e2){}}
+      $("sc_alerta").innerHTML='<div class="note crit"><b>Não foi salvo.</b> Confira a internet e tente de novo. '+
+        "Nada mudou no estoque — o que você lançou continua na tela."+
+        '<div class="t-sub">'+esc((eRec&&eRec.message)||String(eRec))+"</div></div>";return;}
+    novos.forEach(function(m){movEst.push(m);});
+    toast("1 "+pn.nome+" no estoque do almoxarifado · série "+serie+" · custo "+BRL(custo)+
+      (sucPecas.length?" ("+sucPecas.length+(sucPecas.length===1?" peça)":" peças)"):"")+". A sucata baixou.");
   }else{
     await lancarMov(pu.id,1,LOC_EMPRESA,LOC_DESM,"Desmanche",obs||"Aparelho desmontado");
     toast("Purificador desmontado. Ele saiu do estoque e não gera saldo de nenhum produto.");
   }
-  $("sucModal").hidden=true;sucPend=null;
+  $("sucModal").hidden=true;sucPend=null;sucPecas=[];
   renderEstEmpresa();renderEstColab();renderProdutos();
 }
 async function registrarTrocaDaVenda(ped){
@@ -16164,8 +16294,41 @@ async function confirmarEstoque(){
 
 /* ---------- Estoque Empresa ---------- */
 var eeAba="saldo";
+/* as recuperações não têm coleção própria: elas SÃO os movimentos de entrada do seminovo
+   que carregam o bloco `recuperacao` (série, peças e custo daquele aparelho). */
+function recuperacoesDoPeriodo(de,ate,busca){
+  var q=(busca||"").toLowerCase();
+  return movEst.filter(function(m){
+    if(m.loja!==lojaAtual||!m.recuperacao)return false;
+    var d=m.recuperacao.data||m.data||"";
+    if(de&&d<de)return false;
+    if(ate&&d>ate)return false;
+    if(!q)return true;
+    var r=m.recuperacao;
+    return (r.produto||"").toLowerCase().indexOf(q)>=0||(r.serie||"").toLowerCase().indexOf(q)>=0||
+      (r.pecas||[]).some(function(i){return (i.nome||"").toLowerCase().indexOf(q)>=0;});
+  }).sort(function(a,b2){return ((b2.recuperacao.data||b2.data||"")+(b2.em||""))
+    .localeCompare((a.recuperacao.data||a.data||"")+(a.em||""));});
+}
+function exportarRecuperacoes(){
+  if(!podeExportar())return recusaExport();
+  var lista=recuperacoesDoPeriodo(($("eeRecDe")||{}).value,($("eeRecAte")||{}).value,($("eeBusca").value||""));
+  var linhas=[["Data","Aparelho","Série","Peças usadas","Custo","Quem registrou","Observação","Loja"]];
+  lista.forEach(function(m){
+    var r=m.recuperacao||{};
+    linhas.push([dataBR(r.data||m.data),r.produto||"",r.serie||"",
+      (r.pecas||[]).map(function(i){return (+i.qtd||0)+"× "+i.nome+" ("+BRL(i.total)+")";}).join(" | "),
+      String(+r.custo||0).replace(".",","),r.por||m.por||"",r.obs||"",nomeLoja()]);
+  });
+  baixarPlanilhaMF("Recuperacoes_de_seminovo_"+nomeLoja(),linhas);
+}
 function renderEstEmpresa(){
   $("eeLoja").textContent=nomeLoja();
+  try{
+    $("eeRecPer").hidden=(eeAba!=="rec");
+    $("eeRecCsv").hidden=(eeAba!=="rec"||!podeExportar());
+    $("eeFiltro").hidden=(eeAba==="rec");
+  }catch(eR){}
   var q=($("eeBusca").value||"").toLowerCase(),f=$("eeFiltro").value;
   var todos=produtos.filter(function(p){return (p.status||"ativo")==="ativo";});
   var comSaldo=todos.filter(function(p){return estEmpresaDe(p)!==0;});
@@ -16236,6 +16399,30 @@ function renderEstEmpresa(){
         '<td class="num"><b>'+m.qtd+"</b></td>"+
         "<td>"+esc(m.doc||"—")+(m.obs?'<div class="t-sub">'+esc(m.obs)+"</div>":"")+"</td>"+
         "<td>"+esc(m.por||"—")+"</td></tr>";
+    });
+  }
+  /* ---- Recuperações: sai dos próprios movimentos de entrada do seminovo ----
+     cada movimento com o bloco `recuperacao` é UM aparelho: série, peças e custo dele. */
+  else if(eeAba==="rec"){
+    h.innerHTML='<th>Data</th><th>Aparelho</th><th>Série</th><th>Peças usadas</th>'+
+      '<th class="num">Custo</th><th>Quem registrou</th>';
+    var lr2=recuperacoesDoPeriodo(($("eeRecDe")||{}).value,($("eeRecAte")||{}).value,q);
+    $("eeCount").textContent=lr2.length+(lr2.length===1?" recuperação":" recuperações")+
+      (lr2.length?" · custo total "+BRL(lr2.reduce(function(a,m){return a+(+m.recuperacao.custo||0);},0)):"");
+    if(!lr2.length){
+      b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma recuperação neste período</div>'+
+        "Ela nasce no botão <b>Recuperado → seminovo</b> da linha do Purificador Sucata, na aba Saldo.</div></td></tr>";return;}
+    lr2.forEach(function(m){
+      var r=m.recuperacao||{},pc=r.pecas||[];
+      b.innerHTML+="<tr><td>"+esc(dataBR(r.data||m.data))+"</td>"+
+        "<td>"+esc(r.produto||"—")+"</td>"+
+        "<td><code>"+esc(r.serie||"—")+"</code></td>"+
+        "<td>"+(pc.length
+          ? pc.map(function(i){return esc((+i.qtd||0)+"× "+i.nome)+" <span class=\"t-sub\">"+BRL(i.total)+"</span>";}).join("<br>")
+          : '<span class="pill p-mut">sem troca de peça</span>')+
+          ((r.semCusto||[]).length?'<div class="t-sub" style="color:var(--warn)">sem custo no cadastro: '+esc(r.semCusto.join(", "))+"</div>":"")+"</td>"+
+        '<td class="num"><b>'+BRL(r.custo)+"</b></td>"+
+        "<td>"+esc(r.por||m.por||"—")+(r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+"</td></tr>";
     });
   }
   else {
@@ -37163,6 +37350,8 @@ function ligar(){
 
   /* ---- Estoques ---- */
   $("eeBusca").oninput=renderEstEmpresa;$("eeFiltro").onchange=renderEstEmpresa;
+  $("eeRecDe").onchange=renderEstEmpresa;$("eeRecAte").onchange=renderEstEmpresa;
+  $("eeRecCsv").onclick=exportarRecuperacoes;
   Array.prototype.forEach.call($("eeAbas").querySelectorAll("button"),function(b){
     b.onclick=function(){eeAba=b.getAttribute("data-t");
       Array.prototype.forEach.call($("eeAbas").querySelectorAll("button"),function(x){
@@ -37202,7 +37391,8 @@ function ligar(){
 
   /* ---- destino do purificador da sucata: seminovo ou desmanche (25/09) ---- */
   $("sc_ok").onclick=function(){confirmarSucata();};
-  $("sc_cancelar").onclick=function(){$("sucModal").hidden=true;sucPend=null;};
+  $("sc_cancelar").onclick=function(){$("sucModal").hidden=true;sucPend=null;sucPecas=[];};
+  $("sc_padd").onclick=function(){addPecaSucata();};
 
   /* ---- janela da instalação ---- */
   $("ins_add").onclick=async function(){
@@ -39903,7 +40093,7 @@ function erro(msg){
      começa com o que foi digitado vem primeiro; tocou (ou Enter no primeiro), a
      lista fica com o escolhido e dispara o "change" que já preenche valor, série e
      garantia. A lista continua ali, mostrando o produto escolhido. */
-  var CAMPOS_PRODUTO=["v_prod","or_prod","os_prod","os_peca","os_dprod","pd_prod","mp_prod","nf_prod","es_prod","mn_peca","ins_prod"];
+  var CAMPOS_PRODUTO=["v_prod","or_prod","os_prod","os_peca","os_dprod","pd_prod","mp_prod","nf_prod","es_prod","mn_peca","ins_prod","sc_peca"];
   function ligarBuscaProduto(){
     CAMPOS_PRODUTO.forEach(function(id){
       var sel=document.getElementById(id);
