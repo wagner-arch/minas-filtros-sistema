@@ -3073,6 +3073,13 @@ img{max-width:100%}
                 <button class="btn ghost" type="button" id="os_dadd">Incluir na OS</button></div>
             </div>
             <div id="os_ditens"></div>
+            <!-- QUEM DIZ QUE O ORÇAMENTO ESTÁ PRONTO É O TÉCNICO (v350): é este botão que
+                 chama o atendente. Antes a atividade nascia ao salvar o diagnóstico, com as
+                 peças ainda por lançar. -->
+            <div id="os_pecasFim" class="actions" style="margin-top:14px;padding-top:14px" hidden>
+              <button class="btn" type="button" id="os_concluirPecas">Concluir o orçamento e avisar o atendente</button>
+            </div>
+            <div id="os_pecasNota"></div>
           </div>
         </div>
 
@@ -30041,9 +30048,15 @@ function etapasDaOS(o){
     {k:"avaliacao",n:"Avaliação técnica",dono:tec,papel:"técnico",ok:diag,
       espera:"a avaliação técnica",
       falta:daTec("registrar a avaliação técnica")+(semTec?"":quandoAtivOS(atTec))},
-    {k:"pecas",n:"Peças e serviços",dono:tec,papel:"técnico",ok:diag&&itens>0,
+    /* QUEM DIZ QUE ESTA ETAPA ACABOU É O TÉCNICO (v350): ter item lançado não basta — ele
+       pode estar no meio do lançamento. A etapa do orçamento só abre depois do botão
+       "Concluir o orçamento". OS que já andou (orçamento gerado, autorizada, com pedido ou
+       recusada) continua pronta, para não travar o que está em andamento. */
+    {k:"pecas",n:"Peças e serviços",dono:tec,papel:"técnico",
+      ok:!!(o.pecasProntasEm||o.orcamentoEm||o.autorizadoEm||o.pedidoId||o.recusadoEm),
       espera:"as peças e os serviços",
-      falta:daTec("lançar as peças e os serviços desta OS")},
+      falta:daTec((diag&&itens>0)?"concluir o orçamento — as peças já estão lançadas"
+                                 :"lançar as peças e os serviços desta OS")},
     {k:"orcamento",n:"Orçamento e resposta do cliente",dono:atd,papel:"atendente",
       ok:!!(o.autorizadoEm||o.pedidoId||o.recusadoEm),espera:"o orçamento e a resposta do cliente",
       falta:(o.orcamentoEm?atd+" precisa falar com o cliente e registrar a resposta"
@@ -30514,6 +30527,8 @@ function ajustarEtapasOS(){
   try{renderExecucaoOS();}catch(e){console.warn("execução",e);}
   /* OS externa: a tela do técnico em campo manda no que aparece (v151) */
   try{renderCampoOS();}catch(e){console.warn("campo",e);}
+  /* o botão que fecha o trabalho do técnico e chama o atendente (v350) */
+  try{renderConcluirPecas(o);}catch(e){console.warn("concluir peças",e);}
   /* por último: os blocos acima vão para dentro dos cartões de etapa (07/10) */
   try{ligarCartoesOS();montarCartoesOS();}catch(e){console.warn("cartões da OS",e);}
 }
@@ -30540,28 +30555,106 @@ async function salvarDiagnosticoOS(){
     if(primeiro){s.diagnosticoEm="";s.diagnosticoPor="";}
     return avisarRecusaBanco("os_alerta",eGr,"O diagnóstico continua aqui na tela — tente de novo.");
   }
-  /* OS interna: salvo o diagnóstico, o sistema já conclui a análise do técnico e cria o contato do atendente
-     com o orçamento (regra do Wagner, 15/09) */
-  var contatoDiag=null;
-  if(primeiro&&s.local==="loja"&&!s.atividadeContatoId){
-    var atD=ativTecDaOS(s);
-    if(atD&&atD.status!=="finalizado"){
-      atD.resultado="Diagnóstico: "+(s.laudo||"");
-      atD.obs=(atD.obs?atD.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): diagnóstico lançado. "+(s.laudo||"");
-      await concluirAtivPorAcao(atD,"Diagnóstico lançado · OS "+s.numero);
-    }
-    contatoDiag=await criarContatoAtendenteOS(s,"orcamento");
-    s.historico.push({quando:hojeISO(),por:usuarioAtual,
-      texto:"Contato com o cliente (orçamento) agendado para "+contatoDiag.colaborador+" hoje às "+contatoDiag.inicio});
-    await grava("ordens",s);
-  }
+  /* A ATIVIDADE DO ATENDENTE NÃO NASCE MAIS AQUI (v350, pedido dele): quando o diagnóstico é
+     salvo, as peças e os serviços ainda não foram lançados — o atendente era chamado para
+     falar com o cliente sem ter os valores. Quem chama o atendente agora é o botão
+     "Concluir o orçamento e avisar o atendente", no fim da lista de peças. */
   $("os_alerta").innerHTML="";
-  toast(contatoDiag
-    ? "Diagnóstico salvo e sua atividade encerrada. "+contatoDiag.colaborador+" recebeu a atividade "+
-      "Contactar Cliente OS para hoje às "+contatoDiag.inicio+", com o diagnóstico e as peças lançadas."
-    : (primeiro?"Diagnóstico salvo. Lance as peças e os serviços com o preço para gerar o orçamento.":"Diagnóstico atualizado."));
+  toast(primeiro
+    ? "Diagnóstico salvo. Agora lance as peças e os serviços com o preço e toque em Concluir o orçamento."
+    : "Diagnóstico atualizado.");
   abrirOS(s);renderOS();render();
-  setTimeout(function(){try{$("os_secValores").scrollIntoView({block:"start"});}catch(e){}},60);
+  setTimeout(function(){try{$("os_blocoPecas").scrollIntoView({block:"start"});}catch(e){}},60);
+}
+/* ====== O TÉCNICO DIZ QUANDO O ORÇAMENTO ESTÁ PRONTO (v350, pedido dele) ======
+   Antes, a atividade do atendente nascia ao SALVAR O DIAGNÓSTICO — e nessa hora as peças
+   e os serviços ainda nem tinham sido lançados: o atendente era chamado para falar com o
+   cliente sem ter o que dizer, e o próprio aviso prometia "com as peças lançadas".
+   Agora o fim do trabalho do técnico tem um botão: lançadas as peças, ele conclui, e é AÍ
+   que nasce a atividade para quem abriu a OS. A etapa do orçamento só abre depois disso. */
+function renderConcluirPecas(o){
+  var box=$("os_pecasFim"),nota=$("os_pecasNota");
+  if(!box||!nota)return;
+  box.hidden=true;nota.innerHTML="";
+  if(!o||!o.id)return;
+  if(o.local==="externo"||osFechada(o))return;      /* externo não tem orçamento (v318) */
+  var itens=(o.itensOS||[]).filter(function(i){return !i.orcamentoOS;});
+  if(o.pecasProntasEm){
+    nota.innerHTML='<div class="note ok"><b>Orçamento concluído pelo técnico</b> em '+
+      esc(dataBR(o.pecasProntasEm))+(o.pecasProntasPor?" por "+esc(o.pecasProntasPor):"")+
+      " · "+itens.length+" item(ns) · "+BRL(totalOS(o))+
+      (o.atividadeContatoId?". <b>"+esc(donoAtendOS(o))+"</b> recebeu a atividade para falar com o cliente.":"")+
+      "</div>";
+    return;
+  }
+  var e=etapaOSPorChave(o,"pecas");
+  if(!e||!podeEditarEtapaOS(o,e)){
+    /* quem não é o técnico vê o que falta, sem botão (regra da v321) */
+    if(!o.diagnosticoEm)return;
+    nota.innerHTML='<div class="note"><b>Aguardando o técnico concluir o orçamento.</b> '+
+      esc(donoTecOS(o))+" lança as peças e os serviços e conclui — aí você recebe a atividade "+
+      "para falar com o cliente.</div>";
+    return;
+  }
+  box.hidden=false;
+  nota.innerHTML='<div class="note os-instrucao">Terminou de lançar as peças e os serviços? '+
+    "Toque em <b>Concluir o orçamento e avisar o atendente</b>: "+esc(donoAtendOS(o))+
+    " recebe na hora a atividade para falar com o cliente, com o diagnóstico e os valores.</div>";
+}
+async function concluirPecasOS(){
+  var o=editandoOS;if(!o)return;
+  if(recusaEtapaOS(o,etapaPecasOS(o)))return;
+  if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") conclui o orçamento.");return;}
+  if(!o.diagnosticoEm){
+    $("os_alerta").innerHTML='<div class="note crit"><b>Salve o diagnóstico antes.</b> O atendente precisa dele para falar com o cliente.</div>';
+    return;
+  }
+  if(o.pecasProntasEm){toast("O orçamento desta OS já foi concluído.");return;}
+  var itens=(o.itensOS||[]).filter(function(i){return !i.orcamentoOS;});
+  /* sem nada a cobrar é caso real (garantia, plano Premium): pergunta, não impede */
+  if(!itens.length&&!confirm("Nenhuma peça ou serviço foi lançado.\n\nConcluir assim mesmo? "+
+    "O atendente vai falar com o cliente sem valores a cobrar."))return;
+  var s=await salvarOS();if(!s)return;
+  var antes={em:s.pecasProntasEm,por:s.pecasProntasPor};
+  s.pecasProntasEm=hojeISO()+" "+agoraHM();
+  s.pecasProntasPor=usuarioAtual;
+  s.historico.push({quando:hojeISO(),por:usuarioAtual,
+    texto:"Orçamento concluído pelo técnico: "+itens.length+" item(ns) · "+BRL(totalOS(s))});
+  try{await gravaConf("ordens",s);}
+  catch(eGr){
+    s.pecasProntasEm=antes.em;s.pecasProntasPor=antes.por;s.historico.pop();
+    return avisarRecusaBanco("os_alerta",eGr,"Nada foi perdido — as peças continuam na tela.");
+  }
+  /* a atividade do técnico se encerra aqui: o trabalho dele era diagnosticar e orçar */
+  var at=ativTecDaOS(s);
+  if(at&&at.status!=="finalizado"){
+    at.resultado="Orçamento concluído: "+BRL(totalOS(s));
+    try{await concluirAtivPorAcao(at,"Orçamento concluído · OS "+s.numero);}catch(e){console.warn(e);}
+  }
+  /* e o atendente é chamado AGORA, com as peças já lançadas */
+  var ct=null;
+  if(!s.atividadeContatoId){
+    try{ct=await criarContatoAtendenteOS(s,"orcamento");}
+    catch(e){return avisarRecusaBanco("os_alerta",e,"O orçamento foi concluído, mas a atividade do atendente não nasceu — tente de novo.");}
+    s.historico.push({quando:hojeISO(),por:usuarioAtual,
+      texto:"Contato com o cliente (orçamento) agendado para "+ct.colaborador+" hoje às "+ct.inicio});
+  }else{
+    /* já havia atividade (OS antiga, criada no diagnóstico): ela recebe o resumo com os valores */
+    try{
+      var ja=atendimentos.filter(function(x){return x.id===s.atividadeContatoId;})[0];
+      if(ja&&ja.status!=="finalizado"){
+        ja.obs=resumoProcessoOS(s,"orcamento");
+        await grava("atendimentos",ja);
+        ct=ja;
+      }
+    }catch(e){console.warn(e);}
+  }
+  await grava("ordens",s);
+  $("os_alerta").innerHTML="";
+  toast(ct
+    ? "Orçamento concluído. "+ct.colaborador+" recebeu a atividade Contactar Cliente OS para hoje às "+ct.inicio+"."
+    : "Orçamento concluído.");
+  abrirOS(s);renderOS();render();
 }
 /* ORÇAMENTO SÓ NA OS INTERNA (regra dele, 07/10). No externo o técnico resolve na hora: ou faz o
    serviço e cobra, ou cobra o atendimento, ou é zerado pelo plano Premium / garantia — não existe
@@ -39203,6 +39296,7 @@ function ligar(){
     notaPrecoRefOS("os_dprecoNota",pd);
   };
   $("os_dadd").onclick=addItemDiagOS;
+  $("os_concluirPecas").onclick=concluirPecasOS;
   $("os_peca").onchange=function(){
     var pid=$("os_peca").value;
     var p=produtos.filter(function(x){return x.id===pid;})[0];
