@@ -2512,9 +2512,9 @@ img{max-width:100%}
             </div>
             <div class="grid g3">
               <div class="fld"><label for="v_imagem">Autoriza uso de imagem?</label>
-                <select id="v_imagem"><option value="">— escolha —</option><option value="sim">Sim</option><option value="nao">Não</option></select></div>
+                <select id="v_imagem"><option value="">— escolha —</option><option value="sim" selected>Sim</option><option value="nao">Não</option></select></div>
             </div>
-            <p class="help">Nasce <b>sem resposta</b>: pergunte ao cliente e marque Sim ou Não — o pedido não fecha sem isso. O termo só é gerado quando ele aceita, porque consentimento tem que ser livre e específico.</p>
+            <p class="help">Começa em <b>Sim</b>, que é o caso de quase toda venda — <b>e o vendedor pode trocar para Não</b> a qualquer momento. Marcando Não, o Termo de Uso de Imagem não é gerado.</p>
           </div>
 
           <div class="card vstep" data-s="6">
@@ -7643,6 +7643,12 @@ var SEED=[
  {cod:"SRV-ATEND",nome:"Serviço de atendimento técnico",pop:"Serviço de atendimento",marca:"Minas Filtros",grupo:"Serviços",un:"UN",cheia:100.00,campanha:100.00,minimo:100.00,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
  /* toda OS de atendimento interno cobra o orçamento na abertura (regra do Wagner, 20/09) */
  {cod:"SRV-ORC",nome:"Serviço de Orçamento",pop:"Serviço de Orçamento",marca:"Minas Filtros",grupo:"Serviços",un:"UN",cheia:50.00,campanha:50.00,minimo:50.00,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
+ /* O REFIL QUE O CONTRATO DO PLANO NOMEIA (regra dele, 17/10): "deve ser somente um elemento
+    filtrante e sempre o Refil Water Flex pH+ H2; se não tiver esse produto, favor adicionar".
+    Conferido no banco dele: existem vários Water Flex, nenhum com este nome — então ele nasce
+    aqui. PREÇO FICA EM BRANCO de propósito: valor de venda é decisão dele, e o produto aparece
+    na tela de Produtos marcado como "completar cadastro" até ele preencher. */
+ {cod:"REFIL-PLANO",nome:"REFIL WATER FLEX PH+ H2",pop:"Refil Water Flex pH+ H2",marca:"WATER FLEX",grupo:"Refis",subgrupo:"Refil",un:"UN",cheia:0,campanha:0,minimo:0,campativa:"nao",custo:0,pontos:0,manut:365,gar:0,serie:"nao",estoque:0},
  /* purificador usado que o cliente dá na troca: entra no estoque do vendedor pela forma "Desconto de Troca" e
     ele devolve ao almoxarifado no dia seguinte (regra do Wagner, 16/09) — não aparece na venda */
  {cod:"SUCATA",nome:"Purificador Sucata",pop:"Purificador sucata da troca",marca:"Diversas",grupo:"Usados na troca",subgrupo:"Purificador sucata",un:"UN",cheia:0,campanha:0,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
@@ -8332,6 +8338,12 @@ async function carregar(){
       var nor=JSON.parse(JSON.stringify(orcSeed));nor.id="srv-orc";
       await col("produtos").doc(nor.id).set(nor);produtos.push(nor);
     }
+    /* o refil que o contrato do plano nomeia: garante na base já gravada (17/10) */
+    var rfSeed=SEED.filter(function(x){return x.cod==="REFIL-PLANO";})[0];
+    if(rfSeed&&!produtos.some(function(x){return x.cod==="REFIL-PLANO";})){
+      var nrf=JSON.parse(JSON.stringify(rfSeed));nrf.id="refil-plano";
+      await col("produtos").doc(nrf.id).set(nrf);produtos.push(nrf);
+    }
     /* purificador da troca: garante na base já gravada e renomeia o que entrou como "usado"
        para SUCATA (25/09) — é o mesmo produto, então o saldo e o histórico seguem inteiros */
     var usdSeed=SEED.filter(function(x){return x.cod===COD_SUCATA;})[0];
@@ -8359,6 +8371,20 @@ async function carregar(){
       px.garantia=px.garantia||sx.garantia;px.contratoTexto=px.contratoTexto||sx.contratoTexto;
       px.grupos=px.grupos||(sx.grupos||[]).slice();
       await col("produtos").doc(px.id).set(px);
+    }
+    /* PLANO JÁ GRAVADO com os direitos montados na aba (v93): o direito do refil ganha o produto
+       que o contrato nomeia (17/10). Sem isto, o plano do banco dele continuaria imprimindo a
+       lista inteira de refis na cláusula quarta. A cobertura não muda: `palavras` fica como está. */
+    for(var bq=0;bq<produtos.length;bq++){
+      var pq=produtos[bq];
+      if(pq.grupo!=="Planos"||!Array.isArray(pq.direitos)||!pq.direitos.length)continue;
+      var mexeu=false;
+      pq.direitos.forEach(function(d){
+        if(d.tipo==="visita"||d.contratoProduto)return;
+        if(!/refil|elemento filtrante/i.test(String(d.item||"")+" "+String(d.palavras||"")))return;
+        d.contratoProduto="REFIL-PLANO";mexeu=true;
+      });
+      if(mexeu)await col("produtos").doc(pq.id).set(pq);
     }
     var ts=await jaPedido("cfg:tipos_atendimento",function(){return db.doc("config/tipos_atendimento").get();});
     if(ts.exists&&ts.data()&&ts.data().lista&&ts.data().lista.length){tipos=ts.data().lista;}
@@ -11920,6 +11946,8 @@ window.__gruposTelaMF=function(){return GRUPOS_TELA;};   /* conferir o menu x a 
 window.__pendentesMF=function(){return Object.keys(TELAS_PEND);};  /* telas que o render deixou para depois */
 window.__renderTudoMF=function(){return renderTudo();};
 window.__cliPorIdMF=function(id){return cliPorId(id);};
+window.__itensContratoMF=function(pl){return itensContratoPlano(pl);};   /* a cláusula quarta do plano */
+window.__direitoDoItemMF=function(pl,pid,nome){return direitoDoItem(pl,pid,nome);};
 /* ganchos do módulo novo de OS (etapa 1, 05/10) */
 window.__custodiaMF=function(){return custodia;};
 window.__ordensMF=function(){return ordens;};
@@ -15166,7 +15194,10 @@ function retomarRascunho(r){
     if($("v_idata"))$("v_idata").value=r.idata||"";
     if($("v_ihora"))$("v_ihora").value=r.ihora||"";
     if($("v_obs"))$("v_obs").value=r.obs||"";
-    if(r.usoImagem&&$("v_imagem"))$("v_imagem").value=r.usoImagem;
+    /* o que está guardado no rascunho manda; guardado SEM resposta (rascunho antigo, de quando
+       o campo nascia vazio) volta a "— escolha —" — o padrão "Sim" é da venda NOVA, e ninguém
+       pode ganhar uma autorização que não deu */
+    if($("v_imagem"))$("v_imagem").value=r.usoImagem||"";
   }catch(e2){console.warn(e2);}
   rascunhoAberto=r;
   renderFormas();calcular();atualizarEtapas();
@@ -15190,7 +15221,8 @@ function limparPedido(){
   instRespVenda="";try{marcarInstalacao("");}catch(e){}
   try{irEtapa(1);}catch(e){}
   try{escolherClienteVenda(null);$("v_cliBusca").value="";}catch(e){}
-  $("v_idata").value="";$("v_ihora").value="";$("v_obs").value="";$("v_imagem").value="";
+  /* uso de imagem começa em "Sim" na venda nova (regra dele, 17/10) — e segue trocável */
+  $("v_idata").value="";$("v_ihora").value="";$("v_obs").value="";$("v_imagem").value="sim";
   ANEXOS.forEach(function(a){a.arquivo="";a.dados=null;});
   limparAssinatura();renderFormas();renderAnexos();
   /* venda nova nunca herda a edição de um pedido salvo */
@@ -15851,8 +15883,11 @@ function direitosPadrao(pl){
     /* credito:true = direito de troca programada, que o cliente recebe de qualquer jeito
        e por isso pode virar abatimento se ele trocar de aparelho (regra do Wagner, 16/09).
        Peça de reposição por defeito não vira crédito: só vale se quebrar. */
+    /* contratoProduto: o refil que o CONTRATO nomeia — um só (regra dele, 17/10). A cobertura
+       continua ampla pelas `palavras`: qualquer refil que o cliente trocar é do plano. */
     {id:"refil",item:"Troca de elemento filtrante (refil)",tipo:"item",qtd:1,palavras:"refil, elemento filtrante",
-      credito:true,contratoPadrao:"{q} ({qe}) troca de elemento filtrante anual",fem:true},
+      credito:true,contratoProduto:"REFIL-PLANO",
+      contratoPadrao:"{q} ({qe}) troca de elemento filtrante anual",fem:true},
     {id:"visita",item:"Visita técnica mensal",tipo:"visita",qtd:12,palavras:"",
       contratoPadrao:"Visita técnica mensal sem custo adicional, totalizando {n} visitas durante a vigência do contrato"}].concat(comuns);
   lista.forEach(function(d){d.produtos=d.tipo==="visita"?[]:produtosPorPalavras(d.palavras);});
@@ -15880,7 +15915,21 @@ function linhaContratoDireito(d){
     t=(d.tipo==="visita"?"{q} ({qe}) ":"{q} ({qe}) ")+it.charAt(0).toLowerCase()+it.slice(1);
   }
   t=t.replace(/\{q\}/g,String(q).padStart(2,"0")).replace(/\{qe\}/g,numExtenso(q,fem)).replace(/\{n\}/g,String(q));
-  var nomes=(d.produtos||[]).map(function(pid){var p=prodPorId(pid);return p?p.nome:"";}).filter(Boolean);
+  /* O QUE O CONTRATO NOMEIA x O QUE O SISTEMA RECONHECE (17/10) — e são coisas diferentes.
+     `d.produtos` é a lista que o plano COBRE: no banco dele, "refil, elemento filtrante" casa com
+     centenas de produtos, e o contrato saía com essa lista inteira dentro da cláusula quarta
+     (print dele: "01 (uma) troca de elemento filtrante anual (VENDA ANTECIPADA REFIL, REFIL
+     PROLUX G, ...)" por meia página). O contrato do cliente não é catálogo.
+     `d.contratoProduto` é o produto que o contrato NOMEIA — um só. Sem ele, a lista sai só
+     quando for curta: acima de 3 nomes o contrato fica com a frase genérica, que é o certo. */
+  var nomes;
+  if(d.contratoProduto){
+    var pc=prodPorId(d.contratoProduto)||produtos.filter(function(p){return p.cod===d.contratoProduto;})[0];
+    nomes=pc?[pc.nome]:[];
+  }else{
+    nomes=(d.produtos||[]).map(function(pid){var p=prodPorId(pid);return p?p.nome:"";}).filter(Boolean);
+    if(nomes.length>3)nomes=[];
+  }
   if(nomes.length&&!base)t+=" ("+nomes.join(", ")+")";
   return t.replace(/[;.]\s*$/,"");
 }
@@ -25549,7 +25598,9 @@ function abrirPedidoParaEditar(p){
     if(p.vendedor)$("v_vend").value=p.vendedor;
     if(p.instalador)$("v_inst").value=p.instalador;
     $("v_obs").value=p.obs||"";
-    if(p.usoImagem)$("v_imagem").value=p.usoImagem;
+    /* pedido JÁ GRAVADO: vale o que está nele. Pedido antigo que ficou sem resposta volta a
+       "— escolha —" em vez de ganhar um "Sim" que o cliente nunca deu (17/10) */
+    $("v_imagem").value=p.usoImagem||"";
     if(p.instalacao){
       var pr=String(p.instalacao).split(" ");
       $("v_idata").value=pr[0]||"";$("v_ihora").value=pr[1]||"";
