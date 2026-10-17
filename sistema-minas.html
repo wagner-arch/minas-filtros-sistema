@@ -8208,6 +8208,7 @@ var clientesTotal=0,clienteDesenhoPend=0;
 function clientesChegando(linhas,total){
   if(!clientesCarregando)return;
   clientes=(linhas||[]).map(function(d){var o=(d&&d.data)||{};o.id=d.id;return o;});
+  try{esquecerIndices();}catch(e){}   /* a lista foi recriada: o índice por id não vale mais */
   clientesTotal=total||clientes.length;
   /* é por aqui que a barra da tela de preparo anda de verdade: os cadastros são mais da
      metade de tudo que o sistema baixa */
@@ -8238,6 +8239,8 @@ function lerClientesDoBanco(){
     });
 }
 async function carregar(){
+  /* as listas são recriadas inteiras aqui: nenhum índice por id vale mais */
+  try{esquecerIndices();}catch(e){}
   /* dicionário de nomes padrão dos lançamentos: vale mesmo sem banco */
   PADROES_LANC=JSON.parse(JSON.stringify(SEED_PADROES));
   funcoes=JSON.parse(JSON.stringify(SEED_FUNCOES));
@@ -9298,7 +9301,7 @@ function htmlLixeiraAcao(ativId,ix){
 }
 async function apagarAcaoAtiv(ativId,ix){
   if(!ehAdministrador()){toast("Só o Administrador pode apagar.");return;}
-  var a=atendimentos.filter(function(x){return x.id===ativId;})[0];
+  var a=atendPorId(ativId);
   if(!a||!a.acoes||!a.acoes[ix]){toast("Esta linha já não existe.");return;}
   var l=a.acoes[ix];
   if(!confirm("Apagar esta linha do histórico?\n\n"+dataCurta(l.quando)+" · "+(l.por||"")+"\n"+
@@ -9367,7 +9370,7 @@ function selo(n){
 }
 function preencherIndicados(sel){
   $("c_indicado").value=sel||"";
-  var c=sel?clientes.filter(function(x){return x.id===sel;})[0]:null;
+  var c=sel?cliPorId(sel):null;
   $("c_indicBusca").value=c?c.nome:"";
   $("c_indicSug").hidden=true;
 }
@@ -9566,7 +9569,35 @@ function avisoProduto(html){
   al.innerHTML=html?'<div class="note crit" style="margin-top:10px">'+html+"</div>":"";
   if(html)try{al.scrollIntoView({block:"center",behavior:"smooth"});}catch(e){try{al.scrollIntoView();}catch(e2){}}
 }
-function produtoPor(id){return produtos.filter(function(x){return x.id===id;})[0]||null;}
+/* ========== ÍNDICE POR ID (16/10) — a aba travava ao finalizar um processo ==================
+   Procurar um registro varrendo a lista inteira não custa nada quando é UMA vez. Dentro de um
+   laço, custa o PRODUTO dos dois tamanhos — e é isso que travava a aba: o laço do renderManut
+   (para cada aparelho, um filter sobre os clientes) são 16.387 × 22.339 = 366 MILHÕES de
+   comparações, e ele roda a cada render(), ou seja, a cada gravação.
+   MEDIDO no tamanho real do banco dele: esse laço levava 7.817 ms; com índice, 13 ms.
+   É a mesma armadilha da v148 (lista de clientes) e da v258 (manutenção no cadastro).
+   O índice guarda REFERÊNCIAS, então alterar um registro no lugar continua certo; ele só é
+   refeito quando a lista troca de tamanho ou é recriada inteira (o que `carregar()` faz). */
+var IDX_MAPA={},IDX_SELO={};
+function indicePorId(nome,lista){
+  if(!lista)return {};
+  var selo=lista.length;
+  if(IDX_SELO[nome]!==selo||IDX_MAPA[nome]==null||IDX_MAPA[nome].__lista!==lista){
+    var m={__lista:lista};
+    for(var i=0;i<lista.length;i++){var o=lista[i];if(o&&o.id!=null)m[o.id]=o;}
+    IDX_MAPA[nome]=m;IDX_SELO[nome]=selo;
+  }
+  return IDX_MAPA[nome];
+}
+/* lista recriada inteira com o MESMO tamanho não mudaria o selo — por isso o `carregar()`
+   esquece os índices à mão, e qualquer rotina que troque uma lista por outra deve fazer igual */
+function esquecerIndices(){IDX_MAPA={};IDX_SELO={};}
+function cliPorId(id){return id?(indicePorId("clientes",clientes)[id]||null):null;}
+function prodPorId(id){return id?(indicePorId("produtos",produtos)[id]||null):null;}
+function equipPorId(id){return id?(indicePorId("equipamentos",equipamentos)[id]||null):null;}
+function pedPorId(id){return id?(indicePorId("pedidos",pedidos)[id]||null):null;}
+function atendPorId(id){return id?(indicePorId("atendimentos",atendimentos)[id]||null):null;}
+function produtoPor(id){return prodPorId(id);}
 /* texto curto da composição, usado na lista de Produtos e na tela de venda (v249) */
 function textoComposicao(p){
   var c=composicaoDe(p);
@@ -10767,7 +10798,7 @@ async function soltarProdutosPresos(){
     try{
       if(p.loja)delete p.loja; /* o campo no documento também sai, senão volta a prender */
       await grava("produtos",p);
-      if(!produtos.filter(function(x){return x.id===p.id;}).length)produtos.push(p);
+      if(!prodPorId(p.id))produtos.push(p);
       ok++;
     }catch(e){falhou++;motivo=e.message||String(e);}
   }
@@ -11508,7 +11539,7 @@ window.foraDaVendaMF=function(q){
 };
 /* o atalho do aviso abre o cadastro daquele produto */
 window.abrirProdutoMF=function(id){
-  var p=produtos.filter(function(x){return x.id===id;})[0];
+  var p=prodPorId(id);
   if(!p)return;
   ir("produtos");try{abrirProduto(p);}catch(e){console.warn(e);}
 };
@@ -11519,7 +11550,7 @@ window.abrirProdutoMF=function(id){
    aparecer na venda; salvando, ele já entra escolhido no item e o pedido continua de pé. */
 var prodRapCtx=null;
 window.completarProdutoMF=function(pid,selId){
-  var p=produtos.filter(function(x){return x.id===pid;})[0];
+  var p=prodPorId(pid);
   if(!p)return;
   if(!veTela("produtos",usuarioAtual)){
     toast(p.nome+" está com o cadastro pela metade. Peça ao Administrador para completar o preço e o grupo.");
@@ -11543,7 +11574,7 @@ window.completarProdutoMF=function(pid,selId){
 };
 async function salvarProdutoRapido(){
   var ctx=prodRapCtx;if(!ctx)return;
-  var p=produtos.filter(function(x){return x.id===ctx.pid;})[0];if(!p)return;
+  var p=prodPorId(ctx.pid);if(!p)return;
   var cheia=numMF($("pr_cheia").value)||0,g=$("pr_grupo").value.trim(),sg=$("pr_subgrupo").value.trim();
   if(!(cheia>0)||!g||!sg){
     $("pr_alerta").innerHTML='<div class="note crit"><b>Faltam dados.</b> Preço, grupo e subgrupo são os três que fazem o produto aparecer na venda.</div>';
@@ -11694,14 +11725,14 @@ function qtdDoForm(){return Math.max(1,parseInt($("v_qtd")?$("v_qtd").value:"1",
 function somaTabelaCarrinho(){
   return (itens||[]).reduce(function(a,i){
     if(i.planoCobre)return a;
-    var p=produtos.filter(function(x){return x.id===i.pid;})[0];
+    var p=prodPorId(i.pid);
     return a+(((p&&+p.cheia)||0)*(i.qtd||1));},0);
 }
 /* soma das tabelas do que está sendo montado no formulário e ainda não entrou no carrinho:
    o produto escolhido e, se houver, o plano de garantia que vai junto com ele */
 function tabelaDoFormulario(){
   var t=0,q=Math.max(1,parseInt($("v_qtd")?$("v_qtd").value:"1",10)||1);
-  var p=produtos.filter(function(x){return x.id===($("v_prod")?$("v_prod").value:"");})[0];
+  var p=prodPorId(($("v_prod")?$("v_prod").value:""));
   if(p&&+p.cheia>0)t+=(+p.cheia)*q;
   var pl=$("v_gar")?planoDaGarantia($("v_gar").value):null;
   if(pl&&+pl.cheia>0)t+=(+pl.cheia)*q;
@@ -11886,6 +11917,9 @@ window.__tiposMF=function(){return tipos;};
 window.__requisicoesMF=function(){return requisicoes;};
 window.__renderMF=function(){render();};
 window.__gruposTelaMF=function(){return GRUPOS_TELA;};   /* conferir o menu x a tela de Permissões */
+window.__pendentesMF=function(){return Object.keys(TELAS_PEND);};  /* telas que o render deixou para depois */
+window.__renderTudoMF=function(){return renderTudo();};
+window.__cliPorIdMF=function(id){return cliPorId(id);};
 /* ganchos do módulo novo de OS (etapa 1, 05/10) */
 window.__custodiaMF=function(){return custodia;};
 window.__ordensMF=function(){return ordens;};
@@ -11982,7 +12016,7 @@ window.__refMF=function(){var r=formaReferencia();return r?{nome:r.nome,parc:r.p
 window.__precoRefMF=function(cheia){return precoReferencia(cheia);};
 window.__movEstMF=function(){return movEst;};
 window.__sucataMF={abrir:function(p,m){return abrirSucata(p,m);},
-  peca:function(pid,q){var pr=produtos.filter(function(x){return x.id===pid;})[0];
+  peca:function(pid,q){var pr=prodPorId(pid);
     if(!pr)return false;$("sc_peca").value=pid;$("sc_pqtd").value=q;addPecaSucata();return true;},
   pecas:function(){return sucPecas;},
   custo:function(){return custoRecuperacao(sucPecas);},
@@ -12055,7 +12089,7 @@ function ajustarLayoutItens(){
 /* o produto escolhido aceita troca? a nota diz quanto é e põe a forma com um toque (03/10) */
 function notaTrocaVenda(){
   var el=$("v_trocaNota");if(!el)return;
-  var p=produtos.filter(function(x){return x.id===($("v_prod")?$("v_prod").value:"");})[0];
+  var p=prodPorId(($("v_prod")?$("v_prod").value:""));
   var v=descontoTrocaDe(p);
   var ja=formas.filter(function(f){return f.tipo===FORMA_TROCA;})[0];
   if(!v||ja){el.innerHTML="";return;}
@@ -12150,7 +12184,7 @@ function baseDoCampoValor(p,qtd){
    entrada inteira; ao entrar o plano, o produto não era refeito e caía abaixo da tabela). */
 function atualizarPrecoItemNovo(soProduto){
   var vv=$("v_valor");if(!vv)return;
-  var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
+  var p=prodPorId($("v_prod").value);
   if(!p)return;
   if(vv.__manual)  {notaPrecoForma(p);return;}   /* valor digitado à mão fica como está */
   vv.value=brMF(precoPelaForma(+p.cheia||0,qtdDoForm(),tabelaTotalVenda(true)));
@@ -12159,7 +12193,7 @@ function atualizarPrecoItemNovo(soProduto){
   try{calcular();}catch(e){}
 }
 function sincronizarValor(){
-  var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
+  var p=prodPorId($("v_prod").value);
   if($("v_valor"))$("v_valor").__manual=false;
   if(p){$("v_valor").value=brMF(precoPelaForma(+p.cheia||0,qtdDoForm(),tabelaTotalVenda(true)));notaPrecoForma(p);
     /* número de série só para os grupos marcados em Configurações › Planos de Garantia › Número de série */
@@ -12416,7 +12450,7 @@ function auditoriaVinculoNome(){
     if(p.loja!==lojaAtual)return;
     if(String(p.data||"")<DATA_V322&&String(p.aprovadoEm||"")<DATA_V322)return;
     (p.itens||[]).forEach(function(it){
-      var prod=produtos.filter(function(x){return x.id===it.pid;})[0];
+      var prod=prodPorId(it.pid);
       if(!prod||!(+prod.manut))return;
       /* aparelho novo não era caso da regra do nome */
       if(ehAparelhoDeOS(it.nome||prod.nome||"",prod.grupo||""))return;
@@ -12453,7 +12487,7 @@ function auditoriaVinculoNome(){
     if(o.loja!==lojaAtual)return;
     if(String(o.abertura||"")<DATA_V322)return;
     if(!o.equipId)return;
-    var e=equipamentos.filter(function(x){return x.id===o.equipId;})[0];
+    var e=equipPorId(o.equipId);
     if(!e)return;
     var ig=aparelhosIguaisDoCliente(o.clienteId,e.produtoId,e.produto||e.equipamento);
     if(ig.length<2)return;
@@ -12553,7 +12587,7 @@ function garantiaDoAparelho(e){
   if(!e)return null;
   var base=e.compradoEm||e.instaladoEm||"";
   if(!base)return null;
-  var p=produtos.filter(function(x){return x.id===e.produtoId;})[0];
+  var p=prodPorId(e.produtoId);
   var meses=(p&&(+p.gar)>0)?+p.gar:12;     /* o campo "Garantia (meses)" do produto; 12 quando vazio */
   var fim=somaMeses(base,meses);
   return {ini:base,fim:fim,vigente:String(fim)>=hojeISO(),meses:meses};
@@ -12648,7 +12682,7 @@ function equipDaOSPedido(){
   return porNome?{e:porNome,firme:false}:null;
 }
 function ajustarEquipItem(){
-  var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
+  var p=prodPorId($("v_prod").value);
   var w=$("v_equipWrap"),sel=$("v_equip"),ajuda=$("v_equipAjuda");
   if(!w||!sel)return;
   var lista=equipsDoCliente();
@@ -12731,7 +12765,7 @@ function itensSemAparelhoEscolhido(){
   if(quantos<2)return [];
   return (itens||[]).filter(function(i){
     if(i.equipId||i.planoCobre)return false;
-    var p=produtos.filter(function(x){return x.id===i.pid;})[0];
+    var p=prodPorId(i.pid);
     if(!p||!(+p.manut>0))return false;
     if(ehAparelhoDeOS(i.nome||p.nome||"",p.grupo||""))return false;   /* aparelho novo não precisa */
     return true;
@@ -12739,7 +12773,7 @@ function itensSemAparelhoEscolhido(){
 }
 function notaGarantia(){
   var g=$("v_gar").value,pl=planoDaGarantia(g),w=$("v_planoWrap");
-  var prodG=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
+  var prodG=prodPorId($("v_prod").value);
   var semPlanoNoGrupo=!!(prodG&&!planosDoProduto(prodG).length);
   if(w){
     w.hidden=!pl;
@@ -12790,7 +12824,7 @@ function notaGarantia(){
    série OU localização. Um dos dois basta — com série não pede localização,
    com localização não pede série. */
 function ajustarLocalItem(){
-  var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
+  var p=prodPorId($("v_prod").value);
   var w=$("v_localWrap"),sel=$("v_equip"),wEq=$("v_equipWrap");
   if(!w)return;
   var ehNovo=(!sel||!wEq||wEq.hidden||!sel.value);
@@ -12815,7 +12849,7 @@ function addItem(){
     focarSemJurosPendente();
     return;
   }
-  var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
+  var p=prodPorId($("v_prod").value);
   if(!p){toast("Escolha o produto.");try{$("v_prod_busca").focus();}catch(e){}return;}
   var gar=$("v_gar").value, serie=temSerieGrupo(p)?$("v_serie").value.trim():"", qtd=parseInt($("v_qtd").value,10)||0;
   if(!(qtd>=1)){toast("Informe a quantidade.");try{$("v_qtd").focus();}catch(e){}return;}
@@ -12975,7 +13009,7 @@ function podeAvaliarSucata(){
 /* custo do seminovo = soma das peças aplicadas (quantidade × custo do cadastro).
    Mão de obra e o valor dado ao cliente na troca NÃO entram — regra dele. */
 function custoPecaRecup(pid){
-  var p=produtos.filter(function(x){return x.id===pid;})[0];
+  var p=prodPorId(pid);
   return p?custoTotalDe(p):0;
 }
 function custoRecuperacao(itens){
@@ -13010,7 +13044,7 @@ function renderPecasSucata(){
 }
 function addPecaSucata(){
   if(!podeAvaliarSucata())return;
-  var pr=produtos.filter(function(x){return x.id===$("sc_peca").value;})[0];
+  var pr=prodPorId($("sc_peca").value);
   if(!pr){toast("Escolha a peça.");return;}
   var q=qtdInformada("sc_pqtd");if(!q)return;
   var ja=sucPecas.filter(function(i){return i.pid===pr.id;})[0];
@@ -13142,7 +13176,7 @@ function valorDoDireito(d){
   var ids=(d&&d.produtos)||[];
   var v=0;
   ids.forEach(function(pid){
-    var p=produtos.filter(function(x){return x.id===pid;})[0];
+    var p=prodPorId(pid);
     if(p)v=Math.max(v,+p.cheia||0);
   });
   if(!v&&d&&d.palavras){
@@ -13820,7 +13854,7 @@ function calcular(){
   tb.innerHTML="";
   if(!itens.length)tb.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum item</div>Escolha um produto acima e clique em Adicionar.</div></td></tr>';
   itens.forEach(function(i,idx){
-    var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
+    var p=prodPorId(i.pid)||{cheia:0};
     var cobPl=!!i.planoCobre;
     var depI=cobPl?0:centavos(baseDoItem(i)*fatorDescCom),
         unit=cobPl?0:centavos(valorBaseItem(i)*fatorDescCom),
@@ -13958,7 +13992,7 @@ function calcular(){
 var voltaVenda=false;
 function avisoCadastroVenda(){
   var el=$("v_cadAviso");
-  var c=clientes.filter(function(x){return x.id===$("v_cliente").value;})[0];
+  var c=cliPorId($("v_cliente").value);
   if(!c){if(el)el.innerHTML="";return false;}
   var f=faltamObrig(c,"cliente");
   if(!el)return !f.length;
@@ -13981,7 +14015,7 @@ var usados=[],trocaResp=null,trocaDepois=null;
 var SIT_USADO={funcionando:"Funcionando",funcionando_ressalva:"Funcionando com ressalva",
   parado:"Parado / com defeito",sucata:"Sucata"};
 function ehPurificador(i){
-  var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{};
+  var p=prodPorId(i.pid)||{};
   return /purificad/i.test(String(p.grupo||"")+" "+String(p.nome||i.nome||""));
 }
 function vendaTemPurificador(lista){return (lista||[]).some(ehPurificador);}
@@ -14315,7 +14349,7 @@ async function salvarPedido(){
         var atFimOS=ativTecDaOS(osDoPed);
         if(atFimOS&&atFimOS.status!=="finalizado")await concluirAtivPorAcao(atFimOS,"OS "+osDoPed.numero+" finalizada pelo pedido "+ped.numero);
         if(osDoPed.origemAtiv){
-          var aOrOS=atendimentos.filter(function(x){return x.id===osDoPed.origemAtiv;})[0];
+          var aOrOS=atendPorId(osDoPed.origemAtiv);
           if(aOrOS&&aOrOS.status!=="finalizado")await concluirAtivPorAcao(aOrOS,"Concluída pela OS "+osDoPed.numero);
         }
       }
@@ -14351,7 +14385,7 @@ async function salvarPedido(){
   /* a estrela do padrinho só nasce quando o indicado fecha a primeira venda */
   var padrinho=null;
   if(eraLead&&cli&&cli.indicado){
-    padrinho=clientes.filter(function(x){return x.id===cli.indicado;})[0]||null;
+    padrinho=cliPorId(cli.indicado)||null;
     if(padrinho){
       padrinho.estrelas=estrelasDe(padrinho.id);
       padrinho.ultimaIndicacao=iso(new Date());
@@ -14575,7 +14609,7 @@ async function materialDaInstalacaoPrest(p){
   var l=lancDoPedido(p&&p.id);
   if(!l||l.reciboId)return;
   var mat=(p.itens||[]).filter(function(i){return i.daInstalacao;})
-    .reduce(function(s,i){var prod=produtos.filter(function(x){return x.id===i.pid;})[0];
+    .reduce(function(s,i){var prod=prodPorId(i.pid);
       return s+((+((prod&&prod.custo)||0))*(+i.qtd||1));},0);
   if(!mat)return;
   l.material=Math.round(mat*100)/100;l.materialDe="instalação";
@@ -15119,7 +15153,7 @@ function retomarRascunho(r){
   itens=JSON.parse(JSON.stringify(r.itens||[]));
   formas=JSON.parse(JSON.stringify(r.formas||[]));
   if(!formas.length)formas=formasIniciais();
-  var c=clientes.filter(function(x){return x.id===r.clienteId;})[0];
+  var c=cliPorId(r.clienteId);
   try{if(c)escolherClienteVenda(c);}catch(e){}
   try{
     if($("v_frete"))$("v_frete").value=r.frete?brMF(r.frete):"";
@@ -15235,11 +15269,11 @@ function anexosDoCliente(c){
 function acharAnexo(chave){
   var pt=String(chave).split(":"),dono=pt[1],aid=pt.slice(2).join(":");
   if(pt[0]==="ped"){
-    var p=pedidos.filter(function(x){return x.id===dono;})[0];
+    var p=pedPorId(dono);
     var a=p&&(p.arquivos||[]).filter(function(x){return x.id===aid;})[0];
     return a?{a:a,origem:"Pedido "+p.numero+" · "+(p.cliente||"")}:null;}
   if(pt[0]==="cli"){
-    var c=clientes.filter(function(x){return x.id===dono;})[0];
+    var c=cliPorId(dono);
     var b=c&&(c.anexos||[]).filter(function(x){return x.id===aid;})[0];
     return b?{a:b,origem:"Cadastro de "+(c.nome||"")}:null;}
   if(pt[0]==="vst"){
@@ -15772,14 +15806,14 @@ function itensDeEstoque(p){return (p.itens||[]).concat(p.materiaisInstalacao||[]
 /* serviço (grupo Serviços / mão de obra, ex. Serviço de atendimento técnico): linha da venda, sem estoque nem reposição */
 function ehServico(i){
   if(!i)return false;
-  var pr=produtos.filter(function(x){return x.id===i.pid;})[0];
+  var pr=prodPorId(i.pid);
   return !!(pr&&/servi|m[ãa]o de obra/i.test(pr.grupo||""));
 }
 /* plano de garantia vendido: é linha da venda (total, comissão), mas é serviço — não tem estoque */
 function ehPlano(i){
   if(!i)return false;
   if(i.plano)return true;
-  var pr=produtos.filter(function(x){return x.id===i.pid;})[0];
+  var pr=prodPorId(i.pid);
   return !!(pr&&pr.grupo==="Planos");
 }
 /* garantia do item → produto do plano no catálogo (Configurações › Planos de Garantia) */
@@ -15846,7 +15880,7 @@ function linhaContratoDireito(d){
     t=(d.tipo==="visita"?"{q} ({qe}) ":"{q} ({qe}) ")+it.charAt(0).toLowerCase()+it.slice(1);
   }
   t=t.replace(/\{q\}/g,String(q).padStart(2,"0")).replace(/\{qe\}/g,numExtenso(q,fem)).replace(/\{n\}/g,String(q));
-  var nomes=(d.produtos||[]).map(function(pid){var p=produtos.filter(function(x){return x.id===pid;})[0];return p?p.nome:"";}).filter(Boolean);
+  var nomes=(d.produtos||[]).map(function(pid){var p=prodPorId(pid);return p?p.nome:"";}).filter(Boolean);
   if(nomes.length&&!base)t+=" ("+nomes.join(", ")+")";
   return t.replace(/[;.]\s*$/,"");
 }
@@ -16083,7 +16117,7 @@ function contarDireitos(){
   });
 }
 function nomeProdutoId(pid){
-  var p=produtos.filter(function(x){return x.id===pid;})[0];
+  var p=prodPorId(pid);
   return p?(p.cod+" · "+p.nome):"(produto não encontrado)";
 }
 /* aba do cadastro do plano: Dados e contrato · Produtos e serviços do plano (pedido do Wagner, 14/09) */
@@ -16101,7 +16135,7 @@ function opcoesAlvoPlano(){
 }
 function addProdutoPlano(){
   var pid=$("pl_prod").value,q=parseInt($("pl_qtd").value,10)||0,alvo=$("pl_dirAlvo").value;
-  var p=produtos.filter(function(x){return x.id===pid;})[0];
+  var p=prodPorId(pid);
   if(!p){toast("Escolha o produto ou serviço do catálogo.");return;}
   var l=lerDireitosForm(),msg="";
   var ja=l.filter(function(d){return (d.produtos||[]).indexOf(pid)>=0;})[0];
@@ -16195,7 +16229,7 @@ function htmlCoberturaItem(cid,p,equipId,lista){
 }
 function notaPlanoVenda(){
   var el=$("v_planoCli");if(!el)return;
-  var p=produtos.filter(function(x){return x.id===$("v_prod").value;})[0];
+  var p=prodPorId($("v_prod").value);
   var eq=($("v_equip")&&!$("v_equipWrap").hidden)?$("v_equip").value:"";
   el.innerHTML=htmlCoberturaItem($("v_cliente").value,p,eq,itens);
 }
@@ -16208,7 +16242,7 @@ function equipIdOS(){
 }
 function notaPlanoOS(){
   var el=$("os_planoNota");if(!el)return;
-  var p=produtos.filter(function(x){return x.id===$("os_peca").value;})[0];
+  var p=prodPorId($("os_peca").value);
   el.innerHTML=htmlCoberturaItem(clienteIdOS(),p,equipIdOS(),osPecas);
 }
 function resumoDireitos(pl){
@@ -16369,7 +16403,7 @@ function gruposDeProdutos(){
 function opcoesGarantia(){
   [["v_gar","v_prod",false],["mp_plano","mp_prod",true]].forEach(function(par){
     var s=$(par[0]);if(!s)return;
-    var prod=produtos.filter(function(x){return x.id===($(par[1])||{}).value;})[0];
+    var prod=prodPorId(($(par[1])||{}).value);
     var atual=s.value||"Bronze";
     var nomes=["Bronze"].concat(planosDoProduto(prod).map(function(x){return x.garantia;}));
     /* equipamento já cadastrado mantém o plano que tem; na venda, plano que não atende o produto volta a Bronze */
@@ -16548,7 +16582,7 @@ async function confirmarEstoque(){
   /* consumo interno vira despesa no fluxo, pelo custo total do produto */
   if(esModo==="consumo"){
     var valor=esItens.reduce(function(a,i){
-      var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{};
+      var p=prodPorId(i.pid)||{};
       return a+custoTotalDe(p)*i.qtd;},0);
     if(valor>0){
       var cxp=daLoja(caixas).filter(function(c){return c.padrao==="sim";})[0]||daLoja(caixas)[0];
@@ -16657,13 +16691,13 @@ function renderEstEmpresa(){
     var lm=movEst.filter(function(m){return m.loja===lojaAtual;})
       .filter(function(m){
         if(!q)return true;
-        var p=produtos.filter(function(x){return x.id===m.produtoId;})[0]||{};
+        var p=prodPorId(m.produtoId)||{};
         return (p.nome||"").toLowerCase().indexOf(q)>=0||(p.cod||"").toLowerCase().indexOf(q)>=0;})
       .sort(function(a,b2){return (b2.data+(b2.em||"")).localeCompare(a.data+(a.em||""));}).slice(0,300);
     $("eeCount").textContent=lm.length+(lm.length===1?" movimento":" movimentos");
     if(!lm.length){b.innerHTML='<tr><td colspan="7"><div class="empty"><div class="big">Sem movimentação</div>Entradas de nota e transferências aparecem aqui.</div></td></tr>';return;}
     lm.forEach(function(m){
-      var p=produtos.filter(function(x){return x.id===m.produtoId;})[0]||{};
+      var p=prodPorId(m.produtoId)||{};
       b.innerHTML+="<tr><td>"+esc(dataBR(m.data))+"</td><td>"+esc(p.nome||"—")+"</td>"+
         '<td><span class="pill p-mut">'+esc(nomeLocal(m.origem))+"</span></td>"+
         '<td><span class="pill p-acc">'+esc(nomeLocal(m.destino))+"</span></td>"+
@@ -16908,7 +16942,7 @@ function renderEstColab(){
     });
     Array.prototype.forEach.call(b.querySelectorAll("[data-ecd]"),function(bt){
       bt.onclick=function(){
-        var p=produtos.filter(function(x){return x.id===bt.getAttribute("data-ecd");})[0];
+        var p=prodPorId(bt.getAttribute("data-ecd"));
         abrirEstoque("dev",quem);
         esItens=[{pid:p.id,nome:p.nome,cod:p.cod,qtd:1}];renderEsItens();};});
   }
@@ -16981,7 +17015,7 @@ function renderEstColab(){
     var lm=movEst.filter(function(m){return m.loja===lojaAtual&&(m.origem===loc||m.destino===loc);})
       .filter(function(m){
         if(!q)return true;
-        var p=produtos.filter(function(x){return x.id===m.produtoId;})[0]||{};
+        var p=prodPorId(m.produtoId)||{};
         return (p.nome||"").toLowerCase().indexOf(q)>=0;})
       .sort(function(a,b2){return (a.data+(a.em||"")).localeCompare(b.data+(b2.em||""));});
     lm.sort(function(a,b2){return (a.data+(a.em||"")).localeCompare(b2.data+(b2.em||""));});
@@ -17012,11 +17046,11 @@ function renderEstConsumo(){
   var comSaldo=produtos.filter(function(p){return saldoEm(p.id,LOC_CONSUMO)!==0;});
   var totalMes=lm.filter(function(m){return m.destino===LOC_CONSUMO&&comp(m.data)===compAtual();})
     .reduce(function(a,m){
-      var p=produtos.filter(function(x){return x.id===m.produtoId;})[0]||{};
+      var p=prodPorId(m.produtoId)||{};
       return a+custoTotalDe(p)*(+m.qtd||0);},0);
   var totalAno=lm.filter(function(m){return m.destino===LOC_CONSUMO&&(m.data||"").slice(0,4)===hojeISO().slice(0,4);})
     .reduce(function(a,m){
-      var p=produtos.filter(function(x){return x.id===m.produtoId;})[0]||{};
+      var p=prodPorId(m.produtoId)||{};
       return a+custoTotalDe(p)*(+m.qtd||0);},0);
   $("ucKpis").innerHTML=
     '<div class="kpi"><div class="l">Itens em consumo</div><div class="v">'+comSaldo.length+"</div></div>"+
@@ -17044,7 +17078,7 @@ function renderEstConsumo(){
     $("ucCount").textContent=l2.length+(l2.length===1?" baixa":" baixas");
     if(!l2.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma baixa</div></div></td></tr>';return;}
     l2.forEach(function(m){
-      var p=produtos.filter(function(x){return x.id===m.produtoId;})[0]||{};
+      var p=prodPorId(m.produtoId)||{};
       var c=centroPor(m.centroId);
       b.innerHTML+="<tr><td>"+esc(dataBR(m.data))+"</td><td>"+esc(p.nome||"—")+"</td>"+
         '<td class="num">'+m.qtd+"</td><td>"+esc(c?c.nome:"—")+"</td>"+
@@ -20771,7 +20805,7 @@ function relVendas(P){
   var base=$("rv_base").value,sit=$("rv_sit").value,vend=$("rv_vend").value,prosp=$("rv_prosp").value,inst=$("rv_inst").value;
   var cliQ=semAcento($("rv_cli").value||""),forma=$("rv_forma").value,grupo=$("rv_grupo").value,prod=$("rv_prod").value;
   var origem=$("rv_origem").value,vmin=valorNum("rv_vmin"),vmax=valorNum("rv_vmax"),agrupa=$("rv_agrupa").value,modo=$("rv_modo").value;
-  function prodDe(i){return produtos.filter(function(x){return x.id===i.pid;})[0]||{};}
+  function prodDe(i){return prodPorId(i.pid)||{};}
   var ls=pedidos.filter(function(p){
     if(p.loja!==lojaAtual)return false;
     var d=base==="aprovacao"?String(p.aprovadoEm||"").slice(0,10):p.data;
@@ -20786,7 +20820,7 @@ function relVendas(P){
     if(vend&&p.vendedor!==vend)return false;
     if(prosp&&p.prospector!==prosp)return false;
     if(inst&&(p.instalador||p.vendedor)!==inst)return false;
-    var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
+    var c=cliPorId(p.clienteId)||{};
     if(cliQ&&semAcento(p.cliente||"").indexOf(cliQ)<0)return false;
     if(!multiCasa("rv_cidade",c.cidade))return false;
     if(!multiCasa("rv_uf",c.uf))return false;
@@ -20799,7 +20833,7 @@ function relVendas(P){
     return true;
   }).sort(function(a,b){return (a.data+(a.hora||"")).localeCompare(b.data+(b.hora||""))||a.numero-b.numero;});
   function linha(p){
-    var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
+    var c=cliPorId(p.clienteId)||{};
     return {p:p,num:p.numero,data:p.data,cliente:p.cliente||"—",cidade:c.cidade||"",origem:c.origem||"",vend:p.vendedor||"",
       itens:(p.itens||[]).map(function(i){return (i.qtd||1)+"× "+i.nome;}).join(", "),
       formas:(p.formas||[]).filter(function(f){return +f.valor>0;}).map(function(f){return f.tipo+" "+(f.parc||1)+"×";}).join(" + "),
@@ -21247,7 +21281,7 @@ function renderFaturamento(){
     return (p.formas||[]).filter(function(f){return +f.valor>0;})
       .map(function(f){return {n:f.tipo+(f.parc>1?" "+f.parc+"×":""),v:+f.valor||0};});});
   $("fbOrigem").innerHTML=agrupa(function(p){
-    var c=clientes.filter(function(x){return x.id===p.clienteId;})[0];
+    var c=cliPorId(p.clienteId);
     return [{n:(c&&c.origem)||"Sem origem",v:+p.total||0}];});
   var pm={};
   vs.forEach(function(p){(p.itens||[]).forEach(function(i){
@@ -21305,7 +21339,7 @@ function abrirNota(){
   sincCustoNf();calcNota();
 }
 function sincCustoNf(){
-  var p=produtos.filter(function(x){return x.id===$("nf_prod").value;})[0];
+  var p=prodPorId($("nf_prod").value);
   if(p)$("nf_custo").value=(+p.custo||0).toFixed(2);
 }
 /* rateia frete e despesas pelo peso do item no valor da nota:
@@ -21334,7 +21368,7 @@ function calcNota(){
   var b=$("nf_itens");b.innerHTML="";
   if(!nfItens.length)b.innerHTML='<tr><td colspan="10"><div class="empty"><div class="big">Nenhum item</div>Importe o XML da nota ou escolha o produto acima e clique em Adicionar item.</div></td></tr>';
   r.linhas.forEach(function(l){
-    var i=l.i,p=produtos.filter(function(x){return x.id===i.pid;})[0]||{};
+    var i=l.i,p=prodPorId(i.pid)||{};
     var atual=(+p.custo||0)+(+p.frete||0),dif=l.custoFinal-atual;
     b.innerHTML+="<tr><td><div class=\"t-main\">"+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+"</code>"+
         (i.codForn?" · fornecedor "+esc(i.codForn):"")+"</div></td>"+
@@ -21620,7 +21654,7 @@ async function darEntrada(){
      para o cadastro, e o histórico guarda de onde cada valor veio */
   var fEnt=fornecPor(n.fornecedorId);
   for(var i=0;i<n.itens.length;i++){
-    var it=n.itens[i],p=produtos.filter(function(x){return x.id===it.pid;})[0];
+    var it=n.itens[i],p=prodPorId(it.pid);
     if(!p)continue;
     var q=(it.qtdConf==null?it.qtd:it.qtdConf);
     if(q<=0)continue;
@@ -24816,7 +24850,7 @@ function abrirDetalhes(a){
   /* regra dele (20/09): "essas repetições da mesma ação não aparecer" — limpa o que já estava
      gravado antes da correção, não só o que nasce daqui para a frente */
   try{limparAcoesRepetidas(a);}catch(e){console.warn(e);}
-  var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
+  var c=cliPorId(a.clienteId)||{};
   var ativ=(a.natureza==="atividade"),d=quando(a),agora=new Date();
   var atrasou=(ativ&&a.status!=="finalizado"&&d&&d<agora);
   $("dt_titulo").textContent=(ativ?"Detalhes da atividade":"Detalhes do atendimento")+" · "+(a.cliente||"—");
@@ -24946,7 +24980,7 @@ function abrirDetalhes(a){
     $("ag_sub").textContent="Combine o novo horário com o cliente.";
     $("ag_det").innerHTML="<b>"+esc(a.cliente||"—")+"</b> · "+esc(dataCurta(a.data))+(a.inicio?" às "+esc(a.inicio):"")+
       (a.obs?"<br>"+esc(a.obs):"");
-    var c2=clientes.filter(function(x){return x.id===a.clienteId;})[0];
+    var c2=cliPorId(a.clienteId);
     var tel=(c2&&c2.tel?c2.tel:a.tel||"").replace(/\D/g,"");
     if(tel){$("ag_zap").href="https://wa.me/55"+tel;$("ag_zap").style.display="";
       $("ag_tel").href="tel:+55"+tel;$("ag_tel").style.display="";}
@@ -24985,7 +25019,7 @@ function pedidoDoRegistro(a){
 }
 /* abre a venda com o cliente e o vendedor já escolhidos; o pedido salvo fecha a origem */
 async function abrirPedidoPelaVenda(a,texto){
-  var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
+  var c=cliPorId(a.clienteId)||{};
   pedOrigemAtiv=a;   /* a origem vem ANTES de abrir a tela, senão o bloqueio da v276 pega */
   ir("venda");
   try{if(c.id){escolherClienteVenda(c);atualizarEtapas();}
@@ -25094,7 +25128,7 @@ async function confirmarFinalizar(){
       toast("Inclua os produtos usados, confira o pagamento e finalize a instalação do pedido "+piF.numero+".");},300);
   }
   if(pedirRetorno){
-    var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
+    var c=cliPorId(a.clienteId)||{};
     setTimeout(function(){
       /* contato de OS: o retorno continua ligado à OS, com o tipo Contactar Cliente OS */
       var ctxOS=(a.osId&&a.osEtapa==="contato")?ordens.filter(function(x){return x.id===a.osId;})[0]:null;
@@ -25154,7 +25188,7 @@ async function concluirAtivPorAcao(a,texto,situacao){
 var acReg=null;
 function abrirAcoes(a){
   acReg=a;
-  var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
+  var c=cliPorId(a.clienteId)||{};
   var ativ=(a.natureza==="atividade");
   $("ac_sub").textContent=(a.cliente||"—")+" · "+dataCurta(a.data||"")+(a.inicio?" às "+a.inicio:"");
   $("ac_resumo").innerHTML="<b>"+(ativ?"Continuar a partir desta atividade.":"Atendimento registrado.")+"</b>"+
@@ -25428,7 +25462,7 @@ function notaServicoOS(o){
 }
 function abrirAtivServicoOS(o){
   if(recusaEtapaOS(o,"orcamento"))return;
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  var c=cliPorId(o.clienteId);
   if(!c){toast("A OS precisa de um cliente com cadastro para agendar o técnico.");return;}
   var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
   abrirNovaAtividade({clienteId:c.id,cliente:c.nome,tel:c.tel,doc:c.doc,cidade:c.cidade,origem:c.origem,
@@ -25500,7 +25534,7 @@ function abrirPedidoParaEditar(p){
   ir("venda");
   try{limparPedido();}catch(e){}
   pedEditando=p;
-  var c=clientes.filter(function(x){return x.id===p.clienteId;})[0];
+  var c=cliPorId(p.clienteId);
   if(c)try{escolherClienteVenda(c);}catch(e){}
   itens=JSON.parse(JSON.stringify(p.itens||[]));
   formas=JSON.parse(JSON.stringify(p.formas||[]));
@@ -25664,7 +25698,7 @@ function abrirPedidoDaOS(o,modo,ativ,opc){
   if(recusaEtapaOS(o,(modo||"tecnico")==="atendente"?etapaFimOS(o):etapaPecasOS(o)))return;
   var pj=pedidoDaOS(o);
   if(pj){toast("A OS "+o.numero+" já tem o pedido "+pj.numero+" lançado.");return;}
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  var c=cliPorId(o.clienteId);
   if(!c){toast("A OS precisa de um cliente com cadastro para lançar peças e serviços.");return;}
   pedOrigemAtiv=null;
   ir("venda");
@@ -25713,8 +25747,8 @@ function horaDaqui(min){
   return String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0");
 }
 function resumoProcessoOS(o,fase){
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
-  var origem=o.origemAtiv?atendimentos.filter(function(x){return x.id===o.origemAtiv;})[0]:null;
+  var c=cliPorId(o.clienteId)||{};
+  var origem=o.origemAtiv?atendPorId(o.origemAtiv):null;
   var primeiro=origem||atendsDe(o.clienteId).filter(function(a){return a.natureza==="atendimento"&&(a.data||"")<=(o.abertura||"9999");})
     .sort(function(x,y){return String(y.data||"").localeCompare(String(x.data||""));})[0];
   var at=ativTecDaOS(o),ped=pedidoDaOS(o),lista=ped?ped.itens:(o.itensOS||[]),fs=ped?ped.formas:(o.formasOS||[]);
@@ -25841,7 +25875,7 @@ async function addItemDiagOS(){
   if(recusaEtapaOS(o,etapaPecasOS(o)))return;
   if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") lança as peças.");return;}
   if(o.pedidoId){toast("O pedido "+(o.numeroPedido||"")+" da OS já foi lançado: altere as peças pelo pedido.");return;}
-  var pid=$("os_dprod").value,p=produtos.filter(function(x){return x.id===pid;})[0];
+  var pid=$("os_dprod").value,p=prodPorId(pid);
   var qtd=parseInt($("os_dqtd").value,10)||0,val=numMF($("os_dvalor").value);
   if(!p){toast("Escolha a peça ou o serviço.");try{$("os_dprod").focus();}catch(e){}return;}
   if(qtd<=0){toast("Informe a quantidade.");try{$("os_dqtd").focus();}catch(e){}return;}
@@ -25985,7 +26019,7 @@ function ligarCampoOS(){
   $("oc_completa").onclick=function(){osCompletaAberta=!osCompletaAberta;renderCampoOS();ajustarEtapasOS();};
 }
 async function criarContatoAtendenteOS(o,fase,opc){
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var c=cliPorId(o.clienteId)||{};
   var hora=horaDaqui(10),quem=o.atendente||o.criadoPor||usuarioAtual;
   var op=opc||{};
   var ac={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:o.clienteId||"",cliente:o.cliente,tel:o.tel||c.tel||"",
@@ -26051,7 +26085,7 @@ function renderPedOS(){
   if(!loja){w.innerHTML="";return;}
   $("os_valNota").innerHTML="";
   var ped=pedidoDaOS(o),lista=ped?(ped.itens||[]):(o.itensOS||[]),fs=ped?ped.formas:(o.formasOS||[]);
-  var tec=podeTecnicoOS(o),ac=o.atividadeContatoId?atendimentos.filter(function(x){return x.id===o.atividadeContatoId;})[0]:null;
+  var tec=podeTecnicoOS(o),ac=o.atividadeContatoId?atendPorId(o.atividadeContatoId):null;
   var total=lista.reduce(function(a,i){return a+(+i.valor||0)*qtdItemOS(i);},0);
   var tabela=lista.length
     ? '<div class="tw"><table><thead><tr><th>Peça ou serviço</th><th class="num">Qtd</th><th class="num">Total</th></tr></thead><tbody>'+
@@ -26213,7 +26247,7 @@ function renderAtividades(){
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-avr]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
-      var a=atendimentos.filter(function(x){return x.id===bt.getAttribute("data-avr");})[0];
+      var a=atendPorId(bt.getAttribute("data-avr"));
       if(a)abrirDetalhes(a);};});
 }
 
@@ -26299,7 +26333,7 @@ function renderLeads(){
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-ldo]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
-      var c=clientes.filter(function(x){return x.id===bt.getAttribute("data-ldo");})[0];
+      var c=cliPorId(bt.getAttribute("data-ldo"));
       if(!c)return;
       ir("orcam");abrirOrc(null);
       orcCli=c;$("or_nome").value=c.nome||"";$("or_tel").value=c.tel||"";
@@ -26308,7 +26342,7 @@ function renderLeads(){
       $("or_achou").innerHTML='<div class="note ok"><b>Lead vinculado.</b> Dados preenchidos automaticamente.</div>';};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-lda]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
-      var c=clientes.filter(function(x){return x.id===bt.getAttribute("data-lda");})[0];
+      var c=cliPorId(bt.getAttribute("data-lda"));
       if(!c)return;
       abrirNovaAtividade({clienteId:c.id,cliente:c.nome,tel:c.tel,doc:c.doc,cidade:c.cidade,
         origem:c.origem,colaborador:usuarioAtual,dias:2,obs:"",
@@ -26929,7 +26963,7 @@ function alternarFiltrosManut(){
   atualizarBotaoFiltrosManut();
 }
 function telDoAparelho(e){
-  var c=(e&&e._c)||clientes.filter(function(x){return x.id===((e||{}).clienteId);})[0]||{};
+  var c=(e&&e._c)||cliPorId(((e||{}).clienteId))||{};
   return String(c.tel||"").replace(/\D/g,"");
 }
 /* atividade ainda aberta ligada a este aparelho — é o cliente que já está sendo tratado.
@@ -26954,10 +26988,10 @@ function visitasDoEquip(e){
 /* "com venda" = venda de produto com "Manutenção (dias)" no cadastro (regra do Wagner, 14/09):
    pedido ligado à visita que tenha esse produto, ou manutenção cobrada com peça desse tipo */
 function pedidoTemManut(pid){
-  var p=pedidos.filter(function(x){return x.id===pid;})[0];
+  var p=pedPorId(pid);
   if(!p||!pedidoAprovado(p))return false;
   return (p.itens||[]).some(function(it){
-    var pr=produtos.filter(function(x){return x.id===it.pid;})[0];return !!(pr&&+pr.manut>0);});
+    var pr=prodPorId(it.pid);return !!(pr&&+pr.manut>0);});
 }
 function vendaDaVisita(a){
   if(a.vendaManutReg)return true;
@@ -26991,7 +27025,7 @@ function statusManut(e){
   var feitas=vs.filter(function(a){return a.status==="finalizado";}).concat(
     pedidos.filter(function(p){
       return pedidoAprovado(p)&&p.clienteId===e.clienteId&&(p.itens||[]).some(function(it){
-        if(it.equipId!==e.id)return false;var pr=produtos.filter(function(x){return x.id===it.pid;})[0];return !!(pr&&+pr.manut>0);});
+        if(it.equipId!==e.id)return false;var pr=prodPorId(it.pid);return !!(pr&&+pr.manut>0);});
     }).map(function(p){
       return {status:"finalizado",concluidaEm:dataInstalacaoPedido(p),data:dataInstalacaoPedido(p),
         concluidaPor:p.instaladoPor||respInstalacao(p)||p.vendedor||"",vendaPedidoId:p.id,resultado:"Pedido "+p.numero};}))
@@ -27024,7 +27058,7 @@ function statusManut(e){
 /* dois cliques no nome do cliente na Manutenção Periódica: abre o atendimento ligado ao aparelho.
    A visita marcada no fecho ("Finalizar e criar atividade futura") nasce ligada a ele → Agendado visita. */
 function abrirAtendManut(e){
-  var c=e&&clientes.filter(function(x){return x.id===e.clienteId;})[0];
+  var c=e&&cliPorId(e.clienteId);
   if(!c){toast("Este equipamento não está ligado a um cadastro de cliente.");return;}
   ir("atend");
   try{abrirAtend(null);}catch(er){console.warn(er);}
@@ -27090,7 +27124,7 @@ function equipDaVenda(p,it){
      aparelhos reais. Casar pelo produto faria o quarto purificador virar "manutenção" de um dos
      três, e o plano iria para o aparelho errado. Aparelho novo é sempre aparelho novo; quem diz
      que é manutenção de um aparelho que já existe é o vendedor, pelo campo (it.equipId). */
-  if(ehAparelhoDeOS(it.nome||"",(produtos.filter(function(x){return x.id===it.pid;})[0]||{}).grupo||""))
+  if(ehAparelhoDeOS(it.nome||"",(prodPorId(it.pid)||{}).grupo||""))
     return null;
   /* peça, refil ou serviço: liga ao aparelho do mesmo produto, e SÓ quando há um único candidato.
      Com mais de um, quem escolhe é o vendedor — o sistema não adivinha (regra 9.2). */
@@ -27145,11 +27179,11 @@ async function sincronizarEquipamentos(){
     var mexeuNoPedido=false;
     for(var j=0;j<(p.itens||[]).length;j++){
       var it=p.itens[j];
-      var prod=produtos.filter(function(x){return x.id===it.pid;})[0];
+      var prod=prodPorId(it.pid);
       if(!prod||!(+prod.manut))continue;
       /* o item JÁ DIZ qual aparelho é dele: nada a criar, nada a adivinhar */
       if(it.equipId){
-        var alvo=equipamentos.filter(function(x){return x.id===it.equipId;})[0];
+        var alvo=equipPorId(it.equipId);
         if(alvo){
           /* mantém os dados de compra daquele aparelho em dia, como antes — MAS SÓ GRAVA SE
              ALGO MUDOU DE VERDADE (14/10). A conferência era `data da venda >= data gravada`,
@@ -27297,7 +27331,7 @@ async function manutencaoPelaVenda(ped){
   var alvos=[],j,it,prod,ja;
   for(j=0;j<(ped.itens||[]).length;j++){
     it=ped.itens[j];
-    prod=produtos.filter(function(x){return x.id===it.pid;})[0];
+    prod=prodPorId(it.pid);
     ja=equipDaVenda(ped,it);            /* antes de sincronizar: já existia? */
     if(!ja)continue;
     /* regra do Wagner (14/09): só conta como manutenção o produto com "Manutenção (dias)" no cadastro */
@@ -27500,12 +27534,12 @@ function renderManutCli(c,rotAba){
   Array.prototype.forEach.call(b.querySelectorAll("[data-mca]"),function(bt){
     bt.onclick=function(ev){
       ev.stopPropagation();
-      var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mca");})[0];
+      var e=equipPorId(bt.getAttribute("data-mca"));
       if(e)agendarVisita(e);};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mcok]"),function(bt){
     bt.onclick=function(ev){
       ev.stopPropagation();
-      var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mcok");})[0];
+      var e=equipPorId(bt.getAttribute("data-mcok"));
       if(e)abrirTrocaFeita(e);};});
 }
 function renderManut(){
@@ -27521,10 +27555,12 @@ function renderManut(){
   if($("mpMesRot"))$("mpMesRot").textContent=jmes.rot.charAt(0).toUpperCase()+jmes.rot.slice(1);
   if($("mpAtrasoMax"))$("mpAtrasoMax").hidden=(modoMes!=="atraso"&&modoMes!=="ambos");
   if($("mpExportar"))$("mpExportar").hidden=!podeExportar();
-  /* endereço vem do cadastro do cliente, para os filtros encadearem */
+  /* endereço vem do cadastro do cliente, para os filtros encadearem.
+     ÍNDICE POR ID (16/10): aqui estava o travamento da aba — um filter sobre os 22.339 clientes
+     para CADA um dos 16.387 aparelhos, 366 milhões de comparações a cada render(). Medido:
+     7.817 ms antes, 13 ms agora. */
   base.forEach(function(e){
-    var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
-    e._c=c;
+    e._c=cliPorId(e.clienteId)||{};
   });
   encherMulti("mpUF",unicos(base.map(function(e){return e._c;}),"uf"),"Todos os estados","estados");
   var baseUF=base.filter(function(e){return multiCasa("mpUF",e._c.uf);});
@@ -27540,7 +27576,7 @@ function renderManut(){
   /* produto e grupo saem dos próprios equipamentos da lista */
   var grupos=[],prods=[];
   n3.forEach(function(e){
-    var p=produtos.filter(function(x){return x.id===e.produtoId;})[0]||{};
+    var p=prodPorId(e.produtoId)||{};
     /* o grupo do produto e so para o filtro desta tela: entra como propriedade NAO ENUMERAVEL
        para nao ir ao banco junto com o aparelho (ele apareceu gravado como "_g" nos registros
        que ele conferiu no Supabase — mesmo caminho do __bt da lista de clientes, v148) */
@@ -27753,7 +27789,7 @@ function renderManut(){
       var agora=new Date().getTime();
       if(bt.__toque&&agora-bt.__toque<650){
         bt.__toque=0;
-        var eq=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mpeq");})[0];
+        var eq=equipPorId(bt.getAttribute("data-mpeq"));
         abrirAtendManut(eq);
         return;
       }
@@ -27764,22 +27800,22 @@ function renderManut(){
     };});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mpa]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
-      var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mpa");})[0];
+      var e=equipPorId(bt.getAttribute("data-mpa"));
       if(e)agendarVisita(e);};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mpok]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
-      var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mpok");})[0];
+      var e=equipPorId(bt.getAttribute("data-mpok"));
       if(e)abrirTrocaFeita(e);};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mptel]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
-      var e=equipamentos.filter(function(x){return x.id===bt.getAttribute("data-mptel");})[0];
+      var e=equipPorId(bt.getAttribute("data-mptel"));
       if(e)abrirLigarManut(e);};});
   try{ajustarBotaoEquipRepetidos();ajustarBotaoCopias();encherLocaisAparelho();}catch(e){}
   /* o número no botão "Filtros" acompanha o que está ligado (celular, 09/10) */
   try{atualizarBotaoFiltrosManut();}catch(e){}
 }
 function agendarVisita(e){
-  var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
+  var c=cliPorId(e.clienteId)||{};
   var px=proximaDe(e),h=hojeISO();
   var dias=px&&px>h?Math.round((new Date(px+"T00:00:00")-new Date(h+"T00:00:00"))/86400000):1;
   abrirNovaAtividade({clienteId:e.clienteId,cliente:e.cliente||c.nome,tel:c.tel,doc:c.doc,cidade:c.cidade,
@@ -27796,7 +27832,7 @@ function agendarVisita(e){
 var ligEq=null;
 function abrirLigarManut(e){
   if(!e)return;
-  var c=(e._c&&e._c.id)?e._c:(clientes.filter(function(x){return x.id===e.clienteId;})[0]||{});
+  var c=(e._c&&e._c.id)?e._c:(cliPorId(e.clienteId)||{});
   var tel=String(c.tel||"").trim();
   if(!tel){toast("Este cliente não tem telefone no cadastro.");return;}
   ligEq=e;
@@ -27838,7 +27874,7 @@ function exportarManut(){
     "Plano","Última troca","Próxima troca","Situação","Dias de atraso","Status de contato",
     "Atividade aberta","Loja"]];
   lista.forEach(function(e){
-    var c=(e._c&&e._c.id)?e._c:(clientes.filter(function(x){return x.id===e.clienteId;})[0]||{});
+    var c=(e._c&&e._c.id)?e._c:(cliPorId(e.clienteId)||{});
     var sm=situacaoMesManut(e,j),st=statusManut(e),aa=atividadeAbertaDoAparelho(e);
     var px=proximaDe(e);
     linhas.push([
@@ -27883,7 +27919,7 @@ function abrirEquip(e){
 }
 function notaEquip(){
   try{opcoesGarantia();}catch(e){}
-  var p=produtos.filter(function(x){return x.id===$("mp_prod").value;})[0];
+  var p=prodPorId($("mp_prod").value);
   /* grupo sem número de série: o aparelho é identificado pela localização (série já gravada continua) */
   var sgE=!p||temSerieGrupo(p),ms=$("mp_serie");
   ms.disabled=!sgE&&!ms.value.trim();
@@ -27951,7 +27987,7 @@ async function salvarEquip(){
     var dup=equipamentos.filter(function(x){return x.loja===lojaAtual&&x.serie===serie&&x!==editandoEq;})[0];
     if(dup){$("mp_alerta").innerHTML='<div class="note crit"><b>Já existe equipamento com esta série</b> — '+esc(dup.cliente||"")+".</div>";return null;}
   }
-  var p=produtos.filter(function(x){return x.id===pid;})[0]||{};
+  var p=prodPorId(pid)||{};
   var e=editandoEq||{id:uid(),loja:lojaAtual,historico:[],ativo:true,criadoEm:hojeISO()};
   e.cliente=eqCli?eqCli.nome:$("mp_nome").value.trim();e.clienteId=eqCli?eqCli.id:(e.clienteId||"");
   e.produtoId=pid;e.produto=p.nome||"";e.serie=serie;
@@ -27970,14 +28006,14 @@ async function salvarEquip(){
    aqui é só o acerto da data, com o intervalo vindo do cadastro do produto. */
 var tfEq=null;
 function diasManutDe(e){
-  var p=produtos.filter(function(x){return x.id===e.produtoId;})[0]||{};
+  var p=prodPorId(e.produtoId)||{};
   return +e.manutDias||+p.manut||0;
 }
 function abrirTrocaFeita(e){
   if(!e)return;
   tfEq=e;
-  var c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
-  var p=produtos.filter(function(x){return x.id===e.produtoId;})[0]||{};
+  var c=cliPorId(e.clienteId)||{};
+  var p=prodPorId(e.produtoId)||{};
   var dias=diasManutDe(e),s=sitEq(e),px=proximaDe(e);
   $("tf_eq").innerHTML="<b>"+esc(e.produto||"—")+"</b>"+
     (e.serie?" · série "+esc(e.serie):(e.local?" · "+esc(e.local):""))+
@@ -28077,7 +28113,7 @@ function notaManutEq(){
   var e=mnEq||eqPor($("mn_serie").value);
   mnEq=e;
   if(!e){$("mn_eq").innerHTML='<div class="note warn"><b>Série não encontrada.</b> Confira o número ou cadastre o equipamento primeiro.</div>';return;}
-  var s=sitEq(e),c=clientes.filter(function(x){return x.id===e.clienteId;})[0]||{};
+  var s=sitEq(e),c=cliPorId(e.clienteId)||{};
   $("mn_eq").innerHTML="<b>"+esc(e.produto)+"</b> · "+esc(e.cliente||c.nome||"")+
     (c.cidade?" · "+esc(c.cidade):"")+
     (e.serie?"<br>Série "+esc(e.serie):(e.local?"<br>Sem série · <b>"+esc(e.local)+"</b>":"<br>Sem série e sem localização"))+
@@ -28107,7 +28143,7 @@ function buscarSerie(){
 /* regra do Wagner (14/09): a manutenção só conta (reinicia o prazo, conclui a visita e agenda a próxima)
    com a troca de um produto que tenha "Manutenção (dias)" no cadastro */
 function pecaContaManut(i){
-  var p=produtos.filter(function(x){return x.id===i.pid;})[0];
+  var p=prodPorId(i.pid);
   return !!(p&&+p.manut>0);
 }
 function renderMnPecas(){
@@ -28791,7 +28827,7 @@ function ehAparelhoDeOS(nome,grupo){
 function equipEhAparelho(e){
   if(!e)return false;
   var p=null;
-  try{p=produtos.filter(function(x){return x.id===e.produtoId;})[0]||null;}catch(x){}
+  try{p=prodPorId(e.produtoId)||null;}catch(x){}
   return ehAparelhoDeOS(e.produto||e.equipamento||"",(p&&p.grupo)||"");
 }
 function aparelhosDoCliente(cid){
@@ -28909,7 +28945,7 @@ function osaLocalNome(k){
     :k==="naloja"?"O equipamento já está na loja":"—";
 }
 function nomeEquipOSA(){
-  var e=equipamentos.filter(function(x){return x.id===OSA.equipId;})[0];
+  var e=equipPorId(OSA.equipId);
   return e?(e.produto||e.equipamento||"Aparelho"):"";
 }
 
@@ -28982,7 +29018,7 @@ async function osaAbrirOS(){
       if(!novo)throw new Error("não consegui cadastrar o equipamento");
       equipId=novo.id;eqNome=novo.equipamento;
     }else{
-      var ja=equipamentos.filter(function(x){return x.id===equipId;})[0];
+      var ja=equipPorId(equipId);
       eqNome=(ja&&(ja.produto||ja.equipamento))||"Equipamento";serie=serie||(ja&&ja.serie)||"";
     }
     var num=await numeroNovo("os",ordens,3001);
@@ -29039,7 +29075,7 @@ async function osaAbrirOS(){
 }
 /* atividade de OS, no formato que a agenda ja entende */
 async function criarAtivOS(o,quem,data,hora,obs,etapa){
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var c=cliPorId(o.clienteId)||{};
   var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
   var a={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:o.clienteId,cliente:o.cliente,
     tel:c.tel||"",doc:c.doc||"",cidade:c.cidade||"",
@@ -29076,7 +29112,7 @@ async function registrarAtendimentoAberturaOS(o,c){
 
 /* ---------- termo de recebimento (item 6: entrada na custodia) ---------- */
 function htmlTermoRecebimento(o){
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var c=cliPorId(o.clienteId)||{};
   var k=custodiaDaOS(o.id);
   /* A4 EM PÉ (06/10): o termo é de uma página só e tem de caber na caixa de 820 px que mostra o
      documento — a folha deitada da ficha da OS tem 1123 px e rolava de lado, cortando o texto.
@@ -29194,7 +29230,7 @@ function ligarAssistenteOS(){
     var t=ev.target,b=t&&t.closest?t.closest("[data-osacli],[data-oseq],[data-osafx],[data-osap],[data-osaja]"):null;
     if(!b)return;
     if(b.dataset.osacli){
-      var c=clientes.filter(function(x){return x.id===b.dataset.osacli;})[0];
+      var c=cliPorId(b.dataset.osacli);
       if(c)osaEscolherCliente(c);return;}
     if(b.dataset.oseq){
       if(b.dataset.oseq==="novo"){OSA.equipNovo=true;OSA.equipId="";}
@@ -29250,7 +29286,7 @@ var OS_STATUS=[
 ];
 var DIAS_DESCARTE=90;
 function sincronizarSerieOS(){
-  var p=produtos.filter(function(x){return x.id===$("os_prod").value;})[0];
+  var p=prodPorId($("os_prod").value);
   var comSerie=!!(p&&p.serie==="sim");
   var e=$("os_serie");
   e.disabled=!comSerie;
@@ -29401,7 +29437,7 @@ function abrirOS(o,ctx){
 
   /* veio de uma atividade: já traz o cliente e não pede nada de novo */
   if(osOrigemAtiv){
-    var a=osOrigemAtiv,c=clientes.filter(function(x){return x.id===a.clienteId;})[0];
+    var a=osOrigemAtiv,c=cliPorId(a.clienteId);
     if(c)preencherClienteOS(c);
     else{$("os_nome").value=a.cliente||"";$("os_tel").value=a.tel||"";$("os_doc").value=a.doc||"";
       $("os_cidade").value=a.cidade||"";}
@@ -29474,7 +29510,7 @@ function buscarClienteOS(){
   box.hidden=false;
 }
 function notaGarantiaOS(){
-  var pid=$("os_prod").value,p=produtos.filter(function(x){return x.id===pid;})[0];
+  var pid=$("os_prod").value,p=prodPorId(pid);
   var compra=$("os_compra").value;
   if(!p||!compra){$("os_garNota").innerHTML="";return;}
   var meses=+p.gar||12;
@@ -29570,7 +29606,7 @@ async function salvarOS(){
   o.tel=tel;o.doc=$("os_doc").value.trim();o.email=$("os_email").value.trim();
   o.endereco=$("os_end").value.trim();o.cidade=$("os_cidade").value.trim();
   o.produtoId=$("os_prod").value;
-  var p=produtos.filter(function(x){return x.id===o.produtoId;})[0];
+  var p=prodPorId(o.produtoId);
   o.equipamento=p?p.nome:($("os_marca").value.trim()||"Equipamento");
   o.serie=$("os_serie").value.trim();o.marca=$("os_marca").value.trim();o.compra=$("os_compra").value;
   o.tipo=$("os_tipoSel").value;o.abertura=$("os_abertura").value||hojeISO();
@@ -29669,7 +29705,7 @@ async function concluirOS(){
   /* a atividade que gerou esta OS se encerra junto */
   var msg="OS "+o.numero+" concluída.";
   if(o.origemAtiv){
-    var a=atendimentos.filter(function(x){return x.id===o.origemAtiv;})[0];
+    var a=atendPorId(o.origemAtiv);
     if(a){
       await registrarAcaoAtiv(a,"os",o.id,o.numero,"OS "+o.numero+" concluída · "+BRL(totalOS(o)));
       if(await concluirAtivPorAcao(a,"Concluída pela OS "+o.numero))
@@ -29751,7 +29787,7 @@ function localOSN(k){return k==="externo"?"Atendimento externo (no endereço do 
 /* atendimento externo: o local é sempre o endereço do cadastro do cliente (regra do Wagner, 14/09) */
 function clienteDaOS(){
   if(osCli)return osCli;
-  return editandoOS?(clientes.filter(function(x){return x.id===editandoOS.clienteId;})[0]||null):null;
+  return editandoOS?(cliPorId(editandoOS.clienteId)||null):null;
 }
 function enderecoCadastroCli(c){
   if(!c)return "";
@@ -29824,7 +29860,7 @@ function lerFotosOS(){
 }
 function ativTecDaOS(o){
   if(!o||!o.atividadeTecId)return null;
-  return atendimentos.filter(function(x){return x.id===o.atividadeTecId;})[0]||null;
+  return atendPorId(o.atividadeTecId)||null;
 }
 /* seção "Atividade do técnico" da OS: sem atividade ainda, os campos ficam na própria OS (técnico, data, hora, o que fazer) */
 function renderAtivTecOS(){
@@ -29860,13 +29896,13 @@ function renderAtivTecOS(){
 /* o = OS já gravada; null = OS nova, ainda no formulário (ela é gravada quando a atividade for criada) */
 function abrirAtivTecnicoOS(o){
   var cid=o?o.clienteId:(osCli?osCli.id:"");
-  var c=clientes.filter(function(x){return x.id===cid;})[0];
+  var c=cliPorId(cid);
   if(!c){
     $("os_alerta").innerHTML='<div class="note crit"><b>Para agendar o técnico, o cliente precisa ter cadastro.</b> '+
       "Escolha o cliente pela busca do campo Cliente — sem cadastro, registre o primeiro contato em Atendimentos.</div>";
     try{$("os_nome").focus();}catch(e){}
     return false;}
-  var pf=produtos.filter(function(x){return x.id===$("os_prod").value;})[0];
+  var pf=prodPorId($("os_prod").value);
   var local=o?o.local:osLocalSel,equip=o?o.equipamento:(pf?pf.nome:$("os_marca").value.trim());
   var serie=o?o.serie:$("os_serie").value.trim(),alega=o?o.defeito:$("os_defeito").value.trim();
   var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
@@ -29891,7 +29927,7 @@ async function criarAtividadeTecnicoOS(){
     try{$("os_secAtivTec").scrollIntoView({block:"center"});}catch(e){}return;}
   var cid=editandoOS?editandoOS.clienteId:(osCli?osCli.id:"");
   if(osCli)cid=osCli.id;
-  var c=clientes.filter(function(x){return x.id===cid;})[0];
+  var c=cliPorId(cid);
   if(!c){
     $("os_alerta").innerHTML='<div class="note crit"><b>Para agendar o técnico, o cliente precisa ter cadastro.</b> '+
       "Escolha o cliente pela busca do campo Cliente — sem cadastro, registre o primeiro contato em Atendimentos.</div>";
@@ -29927,7 +29963,7 @@ async function criarAtividadeTecnicoOS(){
 }
 /* "Abrir OS para o cliente" nas ações do atendimento/atividade: a OS já nasce gravada, com o cliente (regra do Wagner, 14/09) */
 async function criarOSDaAcao(a,c){
-  if(!c||!c.id)c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||{};
+  if(!c||!c.id)c=cliPorId(a.clienteId)||{};
   var o={id:uid(),loja:lojaAtual,numero:(await numeroNovo("os",ordens,3001)),
     historico:[],criadoEm:hojeISO(),criadoPor:usuarioAtual,atendente:usuarioAtual,
     cliente:c.nome||a.cliente||"",clienteId:c.id||a.clienteId||"",tel:c.tel||a.tel||"",doc:c.doc||a.doc||"",email:c.email||"",
@@ -29958,7 +29994,7 @@ function tecnicoSugeridoOS(o){
   if(o&&o.tecnico)return o.tecnico;
   var l=tecnicosOS();
   var a=osOrigemAtiv;
-  if(!a&&o&&o.origemAtiv)a=atendimentos.filter(function(x){return x.id===o.origemAtiv;})[0];
+  if(!a&&o&&o.origemAtiv)a=atendPorId(o.origemAtiv);
   if(a&&a.colaborador&&l.indexOf(a.colaborador)>=0)return a.colaborador;
   if(l.indexOf(usuarioAtual)>=0)return usuarioAtual;
   return "";
@@ -30029,7 +30065,7 @@ function etapasDaOS(o){
   var itens=(o.itensOS||[]).filter(function(i){return !i.orcamentoOS;}).length;
   var atTec=null,atCt=null;
   try{atTec=ativTecDaOS(o);}catch(e){}
-  try{atCt=o.atividadeContatoId?atendimentos.filter(function(x){return x.id===o.atividadeContatoId;})[0]:null;}catch(e){}
+  try{atCt=o.atividadeContatoId?atendPorId(o.atividadeContatoId):null;}catch(e){}
   var atd=donoAtendOS(o),tec=donoTecOS(o),semTec=!temTecOS(o);
   /* etapa do técnico sem técnico gravado: o que falta é definir o técnico, não cobrar um nome */
   var daTec=function(frase){return semTec?faltaTecOS():tec+" precisa "+frase;};
@@ -30644,7 +30680,7 @@ async function concluirPecasOS(){
   }else{
     /* já havia atividade (OS antiga, criada no diagnóstico): ela recebe o resumo com os valores */
     try{
-      var ja=atendimentos.filter(function(x){return x.id===s.atividadeContatoId;})[0];
+      var ja=atendPorId(s.atividadeContatoId);
       if(ja&&ja.status!=="finalizado"){
         ja.obs=resumoProcessoOS(s,"orcamento");
         await grava("atendimentos",ja);
@@ -30953,7 +30989,7 @@ async function receberEquipamentoOS(){
   }
   /* a atividade "Receber aparelho da OS" se encerra sozinha */
   try{
-    var ar=o.atividadeReceberId?atendimentos.filter(function(x){return x.id===o.atividadeReceberId;})[0]:null;
+    var ar=o.atividadeReceberId?atendPorId(o.atividadeReceberId):null;
     if(ar&&ar.status!=="finalizado")await concluirAtivPorAcao(ar,"Equipamento recebido · OS "+o.numero);
   }catch(e){console.warn("atividade de receber",e);}
   /* e o técnico é avisado: sem atividade aberta, nasce uma para hoje */
@@ -31236,14 +31272,14 @@ function reprecificarOrc(){
   var nome=$("or_forma").value,n=+$("or_parc").value||1;
   (orcItens||[]).forEach(function(i){
     if(!i.precoAuto)return;
-    var p=produtos.filter(function(x){return x.id===i.pid;})[0];
+    var p=prodPorId(i.pid);
     if(!p||!(+p.cheia>0))return;
     i.valor=precoNaForma(p.cheia,nome,n);
   });
   sincOrcValor();
 }
 function sincOrcValor(){
-  var p=produtos.filter(function(x){return x.id===$("or_prod").value;})[0];
+  var p=prodPorId($("or_prod").value);
   var vv=$("or_valor");
   if(p&&!vv.__manual)vv.value=brMF(precoNaForma(p.cheia,$("or_forma").value,$("or_parc").value));
   notaPrecoOrc(p);
@@ -31275,7 +31311,7 @@ function calcOrc(){
   }));
   var base=0,pontos=0,abaixo=false;
   orcItens.forEach(function(i,idx){
-    var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
+    var p=prodPorId(i.pid)||{cheia:0};
     var depI=(partesO[idx]||0),unit=centavos(depI/(i.qtd||1)),fx=faixa(unit,p);
     base+=depI*fx.f;pontos+=(+i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;
     tb.innerHTML+='<tr><td><div class="t-main"><button class="lixo" type="button" data-orm="'+idx+'" title="Remover este item">&#128465;</button>'+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+
@@ -31366,7 +31402,7 @@ function podeExcluirOrc(o){
 function pedidoDoOrcamento(o){
   if(!o)return null;
   if(o.pedidoId){
-    var p=pedidos.filter(function(x){return x.id===o.pedidoId;})[0];
+    var p=pedPorId(o.pedidoId);
     if(p)return p;
   }
   var p2=pedidos.filter(function(x){return x.orcamentoId===o.id;})[0];
@@ -31622,7 +31658,7 @@ async function abrirEnvio(o){
   var txt=textoProposta(o),tel=(o.tel||"").replace(/\D/g,"");
   var z=$("ev_zap"),m=$("ev_mail"),nota="";
   /* o e-mail: o do orçamento, senão o do cadastro do cliente — e dá para digitar aqui */
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var c=cliPorId(o.clienteId)||{};
   var em=String(o.email||c.email||"").trim();
   var cam=$("ev_email");
   if(cam){cam.value=em;cam.oninput=function(){ligarEnvioEmail(o);};}
@@ -31847,7 +31883,7 @@ async function criarAtividadeRetorno(){
         /* cliente autorizou: OS liberada para execução e o contato pendente se encerra */
         osT.autorizadoEm=hojeISO();osT.autorizadoPor=usuarioAtual;osT.servicoRealizadoEm="";
         if(!osFechada(osT))aplicarSitOS(osT,"liberada","cliente autorizou o serviço");
-        var acA=osT.atividadeContatoId?atendimentos.filter(function(x){return x.id===osT.atividadeContatoId;})[0]:null;
+        var acA=osT.atividadeContatoId?atendPorId(osT.atividadeContatoId):null;
         /* o contato pendente não fecha sozinho: segue a finalização normal (motivo, o que aconteceu, agendar outra) */
         if(acA&&acA.status!=="finalizado")contatoParaFinalizar=acA;
       }
@@ -31871,7 +31907,7 @@ async function criarAtividadeRetorno(){
   /* nasceu de outra atividade: a anterior se encerra como reagendada */
   var msgExtra="";
   if(naCtx.origemAtiv){
-    var ant=atendimentos.filter(function(x){return x.id===naCtx.origemAtiv;})[0];
+    var ant=atendPorId(naCtx.origemAtiv);
     if(ant){
       await registrarAcaoAtiv(ant,"atividade",a.id,"","Nova atividade criada para "+dataBR(a.data)+(a.inicio?" às "+a.inicio:""));
       if(await concluirAtivPorAcao(ant,"Continuou na atividade de "+a.data,"reagendada"))
@@ -31968,7 +32004,7 @@ function pedirRetornoOrc(o){
 async function virarVenda(o){
   if(o.situacao==="convertido"){toast("Este orçamento já virou venda.");return;}
   /* leva os itens e a condição para a tela de pedido — a venda só nasce ao salvar lá */
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  var c=cliPorId(o.clienteId);
   /* orçamento feito sem vínculo: acha o cadastro pelo telefone (lead registrado depois no Atendimento) */
   if(!c){
     var tel=String(o.tel||"").replace(/\D/g,"");
@@ -31991,7 +32027,7 @@ async function virarVenda(o){
   var acr=acrescimoForma(formas[0])||1;
   itens=(o.itens||[]).map(function(i){
     var fin=+i.valor||0,q=i.qtd||1;
-    var pr=produtos.filter(function(x){return x.id===i.pid;})[0]||{};
+    var pr=prodPorId(i.pid)||{};
     return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:q,
       /* o valor do orçamento é o COBRADO; o comercial é ele dividido pelo acréscimo da forma */
       valorBase:baseDoFinal(fin,q,0),valorTabela:+pr.cheia||fin,valor:fin,
@@ -32058,7 +32094,7 @@ function recalcPedido(itens,formas,fatorAbaixo,descEspecial){
   var base=0,pontos=0,abaixo=false,depAbaixo=0,linhas=[];
   itens.forEach(function(i,ix){
     if(i.planoCobre)return;   /* coberto pelo plano: sem custo, fora da faixa e da comissão */
-    var p=produtos.filter(function(x){return x.id===i.pid;})[0]||{cheia:0};
+    var p=prodPorId(i.pid)||{cheia:0};
     /* pedido do modelo novo (v206) guarda o valor base do item: a tabela é decidida por ele.
        Pedido antigo continua pela repartição do depreciado, como sempre foi. */
     var novoM=(i.valorBase!=null);
@@ -32344,7 +32380,7 @@ function ligarPedDet(){
     el.onchange=function(){pedRasc.formas[+el.getAttribute("data-pf")].valor=numMF(el.value);renderPedDet();};});
   var add=$("pd_add");
   if(add)add.onclick=function(){
-    var pr=produtos.filter(function(x){return x.id===$("pd_prod").value;})[0];if(!pr){toast("Escolha o produto.");return;}
+    var pr=prodPorId($("pd_prod").value);if(!pr){toast("Escolha o produto.");return;}
     var qp=qtdInformada("pd_qtd");if(!qp)return;
     pedRasc.itens.push({pid:pr.id,nome:pr.nome,cod:pr.cod,qtd:qp,
       valor:numMF($("pd_valor").value)||0,serie:"",pontos:+pr.pontos||0,garantia:"Bronze"});
@@ -32524,7 +32560,7 @@ async function aprovarVenda(p,caixaId){
     if(baixou.length&&loc.indexOf("colab:")===0){
       var rq={id:uid(),loja:p.loja,tipo:"requisicao",colaborador:quem,
         itens:baixou.map(function(b){
-          var pr=produtos.filter(function(x){return x.id===b.pid;})[0]||{};
+          var pr=prodPorId(b.pid)||{};
           return {pid:b.pid,nome:pr.nome||"",cod:pr.cod||"",qtd:b.qtd,atendida:b.qtd};}),
         obs:"Reposição · Pedido "+p.numero+((p.itens||[]).some(function(i){return i.daInstalacao;})
           ?" (produtos vendidos, com os incluídos na instalação)":" (produtos vendidos)"),
@@ -32602,7 +32638,7 @@ function htmlItensAbaixo(r){
 }
 /* a venda inteira na janela da autorização (pedido do Wagner: "preciso ver a venda completa e com observação") */
 function htmlVendaCompletaDesc(p){
-  var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
+  var c=cliPorId(p.clienteId)||{};
   var formas=(p.formas||[]).filter(function(f){return +f.valor>0;});
   var pr=String(p.instalacao||"").split(" ");
   return '<div class="sect"><p class="sect-t">Venda completa · pedido '+esc(p.numero)+" · "+esc(dataCurta(p.data))+(p.hora?" "+esc(p.hora):"")+"</p>"+
@@ -32864,7 +32900,7 @@ function renderInstalacao(){
         (p.obsInstalacao?"<br>Observações do instalador: "+esc(p.obsInstalacao):"")+"</div>"
       : '<div class="note">Venda sem instalação.</div>';
   }
-  var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
+  var c=cliPorId(p.clienteId)||{};
   var tel=String(c.tel||"").replace(/\D/g,"");
   var end=[[c.rua,c.num].filter(Boolean).join(", "),c.comp,c.bairro,[c.cidade,c.uf].filter(Boolean).join("/"),c.cep].filter(Boolean).join(" · ");
   var gm=(c.geo&&window.linkMapaMF)?window.linkMapaMF(c.geo):(end?"https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(end):"");
@@ -33306,7 +33342,7 @@ function docContratoPlano(p,c,cobertos,plano){
     cidade:EMPRESA.cidade||"Pará de Minas",data_extenso:dataExtensoModelo(dataV)
   };
   vars.__produtosHtml="<ul>"+cobertos.map(function(i){
-    var pr=produtos.filter(function(x){return x.id===i.pid;})[0]||{};
+    var pr=prodPorId(i.pid)||{};
     return "<li>"+(i.qtd||1)+" - <b>"+docMaiusc(i.nome)+"</b> da Marca: <b>"+docMaiusc(pr.marca)+
       "</b> com Número de Série: <b>"+esc(i.serie||"")+"</b></li>";
   }).join("")+"</ul>";
@@ -33326,7 +33362,7 @@ function planosDaVenda(p){
   return ordem.map(function(id){return por[id];});
 }
 function htmlDocVenda(p){
-  var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
+  var c=cliPorId(p.clienteId)||{};
   /* Termo de Uso de Imagem logo depois da Declaração (regra dele, 12/09) — mas só quando CABE:
      com a Garantia Fiduciária na mesma folha ele estourava a página e saía cortado no PDF
      (defeito que ele pegou no pedido 20813). Nesse caso o termo ganha folha própria. */
@@ -33370,7 +33406,7 @@ function itensFichaOS(o,p){
   return l;
 }
 function htmlFichaOS(o,p){
-  var c=clientes.filter(function(x){return x.id===(o.clienteId||(p?p.clienteId:""));})[0]||{};
+  var c=cliPorId((o.clienteId||(p?p.clienteId:"")))||{};
   var itens=itensFichaOS(o,p),total=p?(+p.total||0):totalOS(o);
   var fimD=o.entrega||o.concluidaEm||(p?p.data:"")||"";
   var ass=(p&&p.assinaturaImg)||o.assinaturaImg||"";
@@ -33503,7 +33539,7 @@ async function gerarPdfFichaOS(o,p){
   }
 }
 function cfgFichaOSWhatsApp(o,p){
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var c=cliPorId(o.clienteId)||{};
   return {chave:"os:"+o.id,gerar:function(){return gerarPdfFichaOS(o,p);},
     tel:o.tel||c.tel,cliente:o.cliente,titulo:"OS "+o.numero,oQue:"da OS "+o.numero,
     msg:"Olá, "+primeiroNome(o.cliente)+"! Segue a sua ordem de serviço Nº "+o.numero+" da "+
@@ -33538,7 +33574,7 @@ function renderPlanos(){
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-pled]"),function(el){
     el.onclick=function(ev){ev.stopPropagation();
-      abrirPlano(produtos.filter(function(x){return x.id===el.getAttribute("data-pled");})[0]);};});
+      abrirPlano(prodPorId(el.getAttribute("data-pled")));};});
 }
 function abrirPlano(pl){
   editandoPlano=pl||null;
@@ -33972,7 +34008,7 @@ function negocioNovo(c,etapa,via,desde){
 /* chamado depois de salvar atendimento, orçamento e pedido: cria o negócio do lead ou anda o cartão */
 async function atualizarFunilCliente(cid,motivo){
   if(!cid)return null;
-  var c=clientes.filter(function(x){return x.id===cid;})[0];if(!c)return null;
+  var c=cliPorId(cid);if(!c)return null;
   var n=negocioAberto(cid),mudou=false;
   if(!n){
     var ult=ultimoNegocio(cid);
@@ -34228,7 +34264,7 @@ function clienteDoNeg(n){return clientes.filter(function(c){return c.id===n.clie
    BUSCA O CADASTRO NO BANCO pelo id — uma leitura só — e diz o motivo quando não vier. */
 async function buscarClientePorId(id){
   if(!id)return null;
-  var c=clientes.filter(function(x){return x.id===id;})[0];
+  var c=cliPorId(id);
   if(c)return c;
   if(!db)return null;
   try{
@@ -34238,7 +34274,7 @@ async function buscarClientePorId(id){
   return null;
 }
 async function abrirClienteDoFunil(id,n){
-  var c=clientes.filter(function(x){return x.id===id;})[0];
+  var c=cliPorId(id);
   if(!c){
     toast(clientesCarregando?"Procurando o cadastro…":"Buscando o cadastro no banco…");
     c=await buscarClientePorId(id);
@@ -34292,7 +34328,7 @@ async function salvarNegocio(){
   if(!n){
     var cid=$("ng_cli").value;
     if(!cid){$("ng_alerta").innerHTML='<div class="note crit"><b>Escolha o lead ou cliente.</b></div>';return;}
-    var c=clientes.filter(function(x){return x.id===cid;})[0];if(!c)return;
+    var c=cliPorId(cid);if(!c)return;
     if(negocioAberto(cid)){$("ng_alerta").innerHTML='<div class="note crit"><b>'+esc(c.nome)+" já tem um negócio aberto no funil.</b></div>";return;}
     n=negocioNovo(c,"novo","");
   }
@@ -34576,12 +34612,12 @@ function followupsPendentes(){
   });
 }
 function abrirFollowup(a){
-  var c=clientes.filter(function(x){return x.id===a.clienteId;})[0]||null;
+  var c=cliPorId(a.clienteId)||null;
   abrirWhatsApp({cliente:c,tel:a.tel,nome:a.cliente,mensagem:a.zapMsg,
     titulo:"Follow-up de "+dataCurta(a.data),origem:"follow-up programado",followup:a.id});
 }
 async function marcarFollowupEnviado(id){
-  var a=atendimentos.filter(function(x){return x.id===id;})[0];if(!a)return;
+  var a=atendPorId(id);if(!a)return;
   a.zapEnviadoEm=agoraCarimbo();a.zapEnviadoPor=usuarioAtual;a.finalizado=true;a.status="concluida";
   (a.historico=a.historico||[]).push({quando:a.zapEnviadoEm,por:usuarioAtual,texto:"Mensagem programada enviada pelo WhatsApp"});
   try{await grava("atendimentos",a);}catch(e){console.warn("follow-up",e);}
@@ -34660,10 +34696,10 @@ function ligarWhatsApp(){
       var t=titulos.filter(function(x){return x.id===alvo.getAttribute("data-zaptit");})[0];if(!t)return;
       abrirWhatsApp({cliente:t.clienteId||null,nome:t.pessoa,titulo:t,origem:"cobrança "+(t.docRef||"")});return;}
     if(alvo.hasAttribute("data-zapeq")){
-      var e=equipamentos.filter(function(x){return x.id===alvo.getAttribute("data-zapeq");})[0];if(!e)return;
+      var e=equipPorId(alvo.getAttribute("data-zapeq"));if(!e)return;
       abrirWhatsApp({cliente:e.clienteId||null,nome:e.cliente,equip:e,origem:"manutenção periódica"});return;}
     if(alvo.hasAttribute("data-zapativ")){
-      var a=atendimentos.filter(function(x){return x.id===alvo.getAttribute("data-zapativ");})[0];if(!a)return;
+      var a=atendPorId(alvo.getAttribute("data-zapativ"));if(!a)return;
       abrirWhatsApp({cliente:a.clienteId||null,nome:a.cliente,tel:a.tel,ativ:a.natureza==="atividade"?a:null,origem:(a.tipo||"atividade")});return;}
     var href=alvo.getAttribute("href")||"",mt=/wa\.me\/(\d+)/.exec(href),mx=/[?&]text=([^&]*)/.exec(href);
     var texto="";try{texto=mx?decodeURIComponent(mx[1].replace(/\+/g," ")):"";}catch(er){texto="";}
@@ -34739,7 +34775,7 @@ function abrirEnvioPcWhatsApp(cfg,f,tel,quem){
 function cfgVendaWhatsApp(p){
   var osW=osDoPedido(p);
   if(osW)return cfgFichaOSWhatsApp(osW,p);
-  var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
+  var c=cliPorId(p.clienteId)||{};
   return {chave:"ped:"+p.id,gerar:function(){return gerarPdfVenda(p);},tel:c.tel,cliente:p.cliente,
     titulo:"Pedido "+p.numero,oQue:"do pedido "+p.numero,
     msg:"Olá, "+primeiroNome(p.cliente)+"! Segue o seu pedido de venda Nº "+p.numero+" da "+(EMPRESA.razao||"Minas Filtros")+
@@ -34808,7 +34844,7 @@ function assuntoPropostaEmail(o){
 async function guardarEmailDoCliente(o,em){
   if(!em||o.email===em)return;
   o.email=em;
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0];
+  var c=cliPorId(o.clienteId);
   if(c&&!String(c.email||"").trim()){
     c.email=em;
     try{await gravaConf("clientes",c);}
@@ -34856,7 +34892,7 @@ async function enviarPropostaEmail(o,botao){
 /* orçamento: a proposta com timbrado que está na tela (verProposta) vira o PDF */
 function enviarOrcWhatsApp(o,botao){
   if(!o)return;
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var c=cliPorId(o.clienteId)||{};
   return enviarPdfWhatsApp({chave:"orc:"+o.id,
     gerar:function(){return gerarPdfProposta(o);},
     tel:o.tel||c.tel,cliente:o.cliente,titulo:"Orçamento "+o.numero,oQue:"do orçamento "+o.numero,
@@ -34883,7 +34919,7 @@ function enviarOrcamentoOSWhatsApp(o,botao){
   if(!o)return;
   /* enviar o orçamento é da etapa do atendente — a trava vale aqui, não só no botão (08/10) */
   if(recusaEtapaOS(o,"orcamento"))return;
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var c=cliPorId(o.clienteId)||{};
   var tot=(o.itensOS||[]).reduce(function(a,i){return a+(+i.valor||0)*qtdItemOS(i);},0)-(+o.desconto||0);
   return enviarPdfWhatsApp({chave:"osorc:"+o.id,
     gerar:async function(){
@@ -34918,7 +34954,7 @@ async function marcarOrcamentoEnviadoOS(o,como,valor){
 }
 function enviarOSWhatsApp(o,botao){
   if(!o)return;
-  var c=clientes.filter(function(x){return x.id===o.clienteId;})[0]||{};
+  var c=cliPorId(o.clienteId)||{};
   return enviarPdfWhatsApp({chave:"os:"+o.id,
     gerar:async function(){
       var el=folhaComprovanteOS();
@@ -34939,7 +34975,7 @@ function abrirVendaOk(p){
   vendaOkPedido=p;pdfPronto=null;
   /* respondeu "sim, enviar o link" na pergunta da assinatura: o link sai na hora (03/10) */
   if(lkEnviarZap){lkEnviarZap=false;$("vendaOkModal").hidden=true;abrirLinkAssinatura(p,true);return;}
-  var c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
+  var c=cliPorId(p.clienteId)||{};
   var osV=osDoPedido(p);
   $("vok_titulo").textContent=osV?("OS "+osV.numero+" finalizada · pedido "+p.numero):("Pedido "+p.numero+" registrado");
   $("vok_sub").textContent=p.cliente+" · "+BRL(p.total)+(c.tel?" · WhatsApp "+c.tel:" · sem telefone no cadastro");
@@ -35062,7 +35098,7 @@ async function abrirLinkAssinatura(p,jaEnviar){
     var doc=osDoPedido(p)?htmlFichaOS(osDoPedido(p),p):htmlDocVenda(p);
     var reg={
       loja:p.loja||lojaAtual,pedido_id:p.id,pedido_numero:p.numero,
-      cliente:p.cliente||"",cliente_doc:(clientes.filter(function(x){return x.id===p.clienteId;})[0]||{}).doc||p.doc||"",
+      cliente:p.cliente||"",cliente_doc:(cliPorId(p.clienteId)||{}).doc||p.doc||"",
       total:+p.total||0,documento:doc,estilo:cssDocumentoVenda(),
       criado_por:usuarioAtual,
       expira_em:new Date(Date.now()+LINK_DIAS*864e5).toISOString()
@@ -35100,7 +35136,7 @@ async function aplicarAssinaturasRecebidas(avisar){
   try{
     var lista=await db.assinaturasNovas();
     for(var i=0;i<lista.length;i++){
-      var a=lista[i],p=pedidos.filter(function(x){return x.id===a.pedido_id;})[0];
+      var a=lista[i],p=pedPorId(a.pedido_id);
       if(!p){try{await db.marcarAssinaturaAplicada(a.token);}catch(e0){}continue;}
       p.assinaturaImg=a.assinatura;
       p.assinaturaLink={quando:a.assinado_em,nome:a.assinante_nome||"",doc:a.assinante_doc||"",token:a.token};
@@ -35184,7 +35220,7 @@ function renderFin(){
   var daqui=pedidos.filter(function(p){return p.loja===lojaAtual;});
   function casa(p){return !q||(String(p.numero)+" "+(p.cliente||"")).toLowerCase().indexOf(q)>=0;}
   function soma(l){return l.reduce(function(a,p){return a+(+p.total||0);},0);}
-  function porId(id){return pedidos.filter(function(x){return x.id===id;})[0];}
+  function porId(id){return pedPorId(id);}
   var fila=daqui.filter(function(p){return vendaPendente(p)&&p.status==="Aguardando aprovação financeira";});
   var antes=daqui.filter(function(p){return vendaPendente(p)&&p.status!=="Aguardando aprovação financeira";});
   var limite=somaDias(hojeISO(),-30);
@@ -35424,7 +35460,7 @@ function ouvirPedidos(){
       pedidos=snap.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
       try{renderPedidos();}catch(e){}
       if(pedAberto){
-        var f=pedidos.filter(function(x){return x.id===pedAberto.id;})[0];
+        var f=pedPorId(pedAberto.id);
         if(f){pedAberto=f;try{renderPedDet();}catch(e){}}
       }
       checarPendencias();
@@ -35923,7 +35959,7 @@ function ajustarIndicadorAt(){
   if(!mostra){$("at_indicado").value="";$("at_indicBusca").value="";$("at_indicSug").hidden=true;return;}
   /* cadastro que já tem indicador: mostra quem foi e não deixa trocar por aqui */
   if(c&&c.indicado){
-    var q=clientes.filter(function(x){return x.id===c.indicado;})[0];
+    var q=cliPorId(c.indicado);
     $("at_indicado").value=c.indicado;
     $("at_indicBusca").value=(q&&q.nome)||"";
     $("at_indicBusca").readOnly=true;
@@ -36131,7 +36167,7 @@ function renderAtend(){
   Array.prototype.forEach.call(b.querySelectorAll("[data-real]"),function(bt){
     bt.onclick=function(ev){
       ev.stopPropagation();
-      var a=atendimentos.filter(function(x){return x.id===bt.getAttribute("data-real");})[0];
+      var a=atendPorId(bt.getAttribute("data-real"));
       if(a)abrirDetalhes(a);
     };});
 }
@@ -37455,7 +37491,7 @@ function pendenciasMF(){
           r.recusaVista=true;
           try{await grava("requisicoes",r);}catch(e){console.warn(e);}
           ir("pedidos");
-          var p=pedidos.filter(function(x){return x.id===r.pedidoId;})[0];
+          var p=pedPorId(r.pedidoId);
           if(p)try{abrirPedido(p);}catch(e){}
         }});
     });
@@ -37959,11 +37995,11 @@ function ligarEventosCal(){
     el.onclick=function(ev){
       ev.stopPropagation();
       if(id.indexOf("ped:")===0){
-        var pp=pedidos.filter(function(x){return x.id===id.slice(4);})[0];
+        var pp=pedPorId(id.slice(4));
         if(pp)abrirInstalacao(pp);
         return;
       }
-      var a=atendimentos.filter(function(x){return x.id===id;})[0];
+      var a=atendPorId(id);
       if(a)abrirDetalhes(a);};
   });
   /* "+2" e o número do dia levam para a vista do dia, onde nada fica escondido */
@@ -38093,14 +38129,14 @@ function abrirAtendAniv(c,s){
   toast("Atendimento de aniversário de "+(c.nome||"")+" aberto.");
 }
 function atenderAniv(id){
-  var c=clientes.filter(function(x){return x.id===id;})[0];if(!c)return;
+  var c=cliPorId(id);if(!c)return;
   var h=hojeISO(),s=situacaoAniv(c,h);if(!s)return;
   if(s.ok0){toast((c.nome||"")+" já foi contactado em "+h.slice(0,4)+" ("+dataCurta(s.ok0.data)+"). O próximo contato é em "+dataCurta(s.prox.data)+".");return;}
   abrirAtendAniv(c,s);
 }
 function perguntarContatoAniv(){
   var a=atendPend;if(!a)return;
-  var c=clientes.filter(function(x){return x.id===a.clienteId;})[0];
+  var c=cliPorId(a.clienteId);
   var ci=cicloAnivAtend(a,c);
   $("anv_sub").textContent=(a.cliente||"")+(ci?" · aniversário em "+dataCurta(ci.data):"");
   $("anv_det").innerHTML="<b>Sim</b> finaliza como <b>"+esc(MOT_ANIV_OK)+"</b>: o cliente fica Contactado"+(ci?" em "+ci.ano:"")+
@@ -38111,7 +38147,7 @@ function perguntarContatoAniv(){
 async function responderContatoAniv(sim){
   var a=atendPend;if(!a)return;
   $("anivModal").hidden=true;
-  var c=clientes.filter(function(x){return x.id===a.clienteId;})[0];
+  var c=cliPorId(a.clienteId);
   var ci=cicloAnivAtend(a,c),daPagina=!!(a.aniversario&&a.aniversario.origem==="aniversariantes");
   a.completo=sim?"sim":"nao";a.motivos=[sim?MOT_ANIV_OK:MOT_ANIV_NAO];a.status="finalizado";
   if(ci)a.aniversario={ano:ci.ano,data:ci.data,contatado:sim,origem:daPagina?"aniversariantes":""};
@@ -38227,7 +38263,7 @@ function renderAniversariantes(){
     b.onclick=function(){atenderAniv(b.getAttribute("data-anat"));};});
   Array.prototype.forEach.call(body.querySelectorAll("[data-anfi]"),function(b){
     b.onclick=function(){
-      var c=clientes.filter(function(x){return x.id===b.getAttribute("data-anfi");})[0];if(!c)return;
+      var c=cliPorId(b.getAttribute("data-anfi"));if(!c)return;
       ir(ehLead(c)?"leads":"clientes");try{abrirCliente(c);}catch(e){console.warn(e);}};});
 }
 /* NA ENTRADA SÓ SE DESENHA O QUE A PESSOA VAI VER (14/10). O render() abaixo desenha as 45
@@ -38249,21 +38285,88 @@ function garantirRenderCompleto(){
   if(RENDER_COMPLETO)return;
   try{render();}catch(e){console.warn("desenhar as telas",e);}
 }
+/* ===== DESENHAR SÓ O QUE ESTÁ À VISTA (16/10) ================================================
+   O render() desenhava as ~50 telas de uma vez, e ele é chamado em 83 pontos do sistema — ou
+   seja, TODA vez que a pessoa finaliza alguma coisa. Com a base real isso travava a aba
+   ("Página sem resposta", print dele de 16/10 na OS).
+   A v340 já tinha resolvido isso na ENTRADA, com o renderEssencial: desenhar as 45 telas custava
+   4.915 ms e passou a custar 51 ms. Agora a mesma ideia vale no dia a dia.
+   COMO FUNCIONA: `tela(nome,fn)` desenha na hora quando aquela tela está aberta; estando
+   escondida, só MARCA que ela precisa ser redesenhada. Quem desenha é o `ir()`, no instante em
+   que a pessoa chega na tela — então ninguém vê lista velha.
+   O que NÃO é tela (avisos, sino, listas de escolha, a conta da venda) continua rodando sempre:
+   é barato e vale em qualquer lugar do sistema. */
+var TELAS_PEND={};
+function telaAberta(id){var s=$("s-"+id);return !!s&&!s.hidden;}
+function desenhaTela(id,fn){
+  if(typeof fn!=="function")return;
+  if(telaAberta(id)){delete TELAS_PEND[id];try{fn();}catch(e){console.warn("desenhar "+id,e);}}
+  else (TELAS_PEND[id]=TELAS_PEND[id]||[]).push(fn);
+}
+/* chamado pelo ir(), ANTES de a tela aparecer */
+function desenharPendentes(id){
+  var fs=TELAS_PEND[id];if(!fs)return;
+  delete TELAS_PEND[id];
+  /* a lista pode ter a mesma função várias vezes (vários render() seguidos): desenha uma só */
+  var feitas=[];
+  fs.forEach(function(f){
+    if(feitas.indexOf(f)>=0)return;
+    feitas.push(f);
+    try{f();}catch(e){console.warn("desenhar "+id,e);}
+  });
+}
+/* desenha tudo o que está pendente — para quem realmente precisa de todas as telas prontas
+   (a impressão de relatório, por exemplo, ou um teste que leia uma tela sem abri-la) */
+function renderTudo(){
+  var ids=Object.keys(TELAS_PEND);
+  ids.forEach(function(id){
+    var fs=TELAS_PEND[id];delete TELAS_PEND[id];
+    var feitas=[];
+    (fs||[]).forEach(function(f){
+      if(feitas.indexOf(f)>=0)return;feitas.push(f);
+      try{f();}catch(e){console.warn("desenhar "+id,e);}});
+  });
+}
 function render(){
   RENDER_COMPLETO=true;
   /* quem não é Administrador não baixa nem imprime tabela/relatório (05/10) */
   try{document.body.classList.toggle("sem-export",!podeExportar());desenharMarcaDagua();}catch(e){}
   esquecerMeusLeads();
-  renderClientes();renderProdutos();renderPedidos();renderAgenda();
-  try{if(!$("s-aniver").hidden)renderAniversariantes();}catch(e){console.warn(e);}
-  try{if($("s-funil")&&!$("s-funil").hidden)renderFunil();}catch(e){console.warn(e);}
-  try{renderSolic();}catch(e){console.warn("solicitações",e);}
+  desenhaTela("clientes",renderClientes);desenhaTela("produtos",renderProdutos);
+  desenhaTela("pedidos",renderPedidos);desenhaTela("agenda",renderAgenda);
+  desenhaTela("aniver",renderAniversariantes);
+  desenhaTela("funil",renderFunil);
+  try{desenhaTela("solic",renderSolic);}catch(e){console.warn("solicitações",e);}
   try{avisarSolicitacoes();}catch(e){console.warn(e);}
   try{avisarRetiradas();}catch(e){console.warn(e);}
   try{avisarDescontos();}catch(e){console.warn(e);}
   try{avisarPosseVeiculo();}catch(e){console.warn(e);}
-  try{renderFin();}catch(e){console.warn("aprovação financeira",e);}
-  try{renderPgto();renderTipos();renderMotivos();renderPlanos();try{renderBeneficios();}catch(e){}renderAtend();renderAtividades();renderMetasOp();renderCfgMetas();renderPonto();renderFuncoes();renderPermissoes();renderOrcam();renderLeads();renderEmpresa();renderFatur();renderMetas();renderDash();renderUsuarios();renderCadCaixas();renderCentros();try{renderPadroes();}catch(e){}try{renderGruposProd();}catch(e){}renderOrigens();renderFornec();renderReceber();renderPagar();renderCaixasMov();renderFluxo();try{renderDRE();}catch(e){}try{renderVeiculos();}catch(e){}renderFaturamento();renderNotas();renderOS();renderManut();try{renderPrest();}catch(e){}try{renderGeoLojas();}catch(e){}try{renderRastreio();}catch(e){}renderEstEmpresa();renderEstColab();renderEstConsumo();opcoesFinanceiro();checarAgenda();}catch(e){}
+  try{desenhaTela("fin",renderFin);}catch(e){console.warn("aprovação financeira",e);}
+  try{
+    desenhaTela("pgto",renderPgto);desenhaTela("tipos",renderTipos);
+    desenhaTela("motivos",renderMotivos);desenhaTela("planos",renderPlanos);
+    desenhaTela("beneficios",renderBeneficios);
+    desenhaTela("atend",renderAtend);desenhaTela("ativ",renderAtividades);
+    desenhaTela("metasop",renderMetasOp);desenhaTela("cfgmetas",renderCfgMetas);
+    desenhaTela("ponto",renderPonto);desenhaTela("funcoes",renderFuncoes);
+    desenhaTela("permissoes",renderPermissoes);desenhaTela("orcam",renderOrcam);
+    desenhaTela("leads",renderLeads);desenhaTela("empresa",renderEmpresa);
+    desenhaTela("fatur",renderFatur);desenhaTela("metas",renderMetas);
+    desenhaTela("dash",renderDash);desenhaTela("usuarios",renderUsuarios);
+    desenhaTela("cadcaixas",renderCadCaixas);desenhaTela("centros",renderCentros);
+    desenhaTela("centros",renderPadroes);desenhaTela("grupos",renderGruposProd);
+    desenhaTela("origens",renderOrigens);desenhaTela("fornec",renderFornec);
+    desenhaTela("receber",renderReceber);desenhaTela("pagar",renderPagar);
+    desenhaTela("caixas",renderCaixasMov);desenhaTela("fluxo",renderFluxo);
+    desenhaTela("relat",renderDRE);desenhaTela("veiculos",renderVeiculos);
+    desenhaTela("faturamento",renderFaturamento);desenhaTela("notas",renderNotas);
+    desenhaTela("os",renderOS);desenhaTela("manut",renderManut);
+    desenhaTela("prest",renderPrest);desenhaTela("empresa",renderGeoLojas);
+    desenhaTela("rastreio",renderRastreio);
+    desenhaTela("estEmpresa",renderEstEmpresa);desenhaTela("estColab",renderEstColab);
+    desenhaTela("estConsumo",renderEstConsumo);
+    opcoesFinanceiro();checarAgenda();
+  }catch(e){console.warn("render",e);}
   try{notaCreditoPlano();}catch(e){}
   opcoesClienteVenda();
   calcular();
@@ -38431,6 +38534,9 @@ function ir(s,doMenu){
   try{abrirGrupoDaTela(s);}catch(e){}   /* grupo fechado do menu reabre na tela em que a pessoa está */
   Array.prototype.forEach.call(document.querySelectorAll(".screen"),function(x){x.hidden=true;});
   $("s-"+s).hidden=false;window.scrollTo(0,0);
+  /* a tela aparece já com o que mudou: o render() não desenha tela escondida, só marca que ela
+     precisa ser refeita, e é aqui que isso acontece — no instante em que a pessoa chega nela */
+  try{desenharPendentes(s);}catch(e){console.warn("desenhar "+s,e);}
   /* regra do Wagner (14/09): saiu de Produtos e voltou → a página começa do zero, sem o produto que estava aberto */
   if((mudou||doMenu)&&s==="produtos")resetarProdutos();
   if((mudou||doMenu)&&s==="prest")try{resetarPrest();}catch(e){}
@@ -38576,7 +38682,7 @@ function ligar(){
   $("ucBaixa").onclick=function(){abrirEstoque("consumo","");};
 
   $("es_add").onclick=function(){
-    var p=produtos.filter(function(x){return x.id===$("es_prod").value;})[0];if(!p){toast("Escolha o produto.");return;}
+    var p=prodPorId($("es_prod").value);if(!p){toast("Escolha o produto.");return;}
     var q=qtdInformada("es_qtd");if(!q)return;
     var ja=esItens.filter(function(i){return i.pid===p.id;})[0];
     if(ja)ja.qtd+=q;else esItens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:q});
@@ -38595,7 +38701,7 @@ function ligar(){
   /* ---- janela da instalação ---- */
   $("ins_add").onclick=async function(){
     var p=instAberta;if(!p||!podeInstalar(p))return;
-    var pr=produtos.filter(function(x){return x.id===$("ins_prod").value;})[0];
+    var pr=prodPorId($("ins_prod").value);
     if(!pr){toast("Escolha o produto.");return;}
     var q=qtdInformada("ins_qtd");if(!q)return;
     /* entra na venda pelo preço de tabela, cobrado do cliente */
@@ -38649,7 +38755,7 @@ function ligar(){
   };
   $("lk_zap").onclick=function(){
     if(!lkUrl)return;
-    var p=lkPedido||{},c=clientes.filter(function(x){return x.id===p.clienteId;})[0]||{};
+    var p=lkPedido||{},c=cliPorId(p.clienteId)||{};
     abrirWhatsApp({tel:p.tel||c.tel||"",cliente:c.id?c:null,nome:p.cliente||c.nome||"",
       mensagem:textoLinkAssinatura(p),titulo:"Enviar o link de assinatura",origem:"link de assinatura"});
   };
@@ -39092,7 +39198,7 @@ function ligar(){
   $("nf_prod").onchange=sincCustoNf;
   ["nf_frete","nf_desp","nf_parc"].forEach(function(id){$(id).oninput=calcNota;});
   $("nf_add").onclick=function(){
-    var p=produtos.filter(function(x){return x.id===$("nf_prod").value;})[0];if(!p){toast("Escolha o produto.");return;}
+    var p=prodPorId($("nf_prod").value);if(!p){toast("Escolha o produto.");return;}
     var qn=qtdInformada("nf_qtd");if(!qn)return;
     nfItens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qn,
       custo:numMF($("nf_custo").value)||0});
@@ -39229,7 +39335,7 @@ function ligar(){
   $("mn_serie").onblur=function(){setTimeout(function(){$("mn_sug").hidden=true;},180);};
   $("mn_peca").onchange=function(){};
   $("mn_add").onclick=function(){
-    var p=produtos.filter(function(x){return x.id===$("mn_peca").value;})[0];if(!p){toast("Escolha a peça.");return;}
+    var p=prodPorId($("mn_peca").value);if(!p){toast("Escolha a peça.");return;}
     var qm=qtdInformada("mn_qtd");if(!qm)return;
     mnPecas.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qm,valor:+p.cheia||0,manut:+p.manut||0});
     renderMnPecas();limparInclusao("mn_peca","mn_qtd");};
@@ -39317,7 +39423,7 @@ function ligar(){
   ["os_mao","os_taxa","os_desc"].forEach(function(id){$(id).oninput=calcOS;});
   /* v224: a OS também carrega o valor final da forma de referência (24× Rendimentos) */
   $("os_dprod").onchange=function(){
-    var pd=produtos.filter(function(x){return x.id===$("os_dprod").value;})[0];
+    var pd=prodPorId($("os_dprod").value);
     $("os_dvalor").value=pd?brMF(precoReferencia(+pd.cheia||0)):"";
     notaPrecoRefOS("os_dprecoNota",pd);
   };
@@ -39325,12 +39431,12 @@ function ligar(){
   $("os_concluirPecas").onclick=concluirPecasOS;
   $("os_peca").onchange=function(){
     var pid=$("os_peca").value;
-    var p=produtos.filter(function(x){return x.id===pid;})[0];
+    var p=prodPorId(pid);
     $("os_pvalor").value=p?brMF(precoReferencia(+p.cheia||0)):"";
     notaPrecoRefOS("os_pprecoNota",p);
     try{notaPlanoOS();}catch(e){console.warn(e);}};
   $("os_addPeca").onclick=function(){
-    var p=produtos.filter(function(x){return x.id===$("os_peca").value;})[0];if(!p){toast("Escolha a peça.");return;}
+    var p=prodPorId($("os_peca").value);if(!p){toast("Escolha a peça.");return;}
     var qo=qtdInformada("os_pqtd");if(!qo)return;
     /* cliente com plano vigente: o que o plano ainda cobre sai sem custo; o esgotado é cobrado (regra do Wagner, 14/09) */
     var vOs=numMF($("os_pvalor").value)||0,cobO=coberturaCliente(clienteIdOS(),p,equipIdOS(),osPecas),msgO="";
@@ -39834,7 +39940,7 @@ function ligar(){
   $("or_parc").onchange=function(){reprecificarOrc();calcOrc();};
   $("or_vend").onchange=calcOrc;
   $("or_add").onclick=function(){
-    var p=produtos.filter(function(x){return x.id===$("or_prod").value;})[0];if(!p){toast("Escolha o produto.");return;}
+    var p=prodPorId($("or_prod").value);if(!p){toast("Escolha o produto.");return;}
     var qr=qtdInformada("or_qtd");if(!qr)return;
     var dig=numMF($("or_valor").value)||0;
     /* entrou pelo valor sugerido? então acompanha a forma de pagamento (25/09) */
@@ -40165,7 +40271,7 @@ var etapa=1;
    1 Cliente · 2 Pagamento e itens · 3 Entrega · 4 Finalizar */
 function feitaEtapa(n){
   if(n===1){
-    var cc=clientes.filter(function(x){return x.id===$("v_cliente").value;})[0];
+    var cc=cliPorId($("v_cliente").value);
     return !!cc&&!faltamObrig(cc,"cliente").length;}
   /* a etapa 2 virou ITENS/PAGAMENTO: os dois na mesma tela (pedido dele, 03/10), então ela
      só está feita com item lançado E o total repartido nas formas */
