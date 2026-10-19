@@ -25968,11 +25968,56 @@ function htmlDiagnosticoOS(o){
 /* ---------- peças e serviços lançados pelo técnico no diagnóstico (regra do Wagner, 21/09) ----------
    É a MESMA lista que vai para o pedido da OS (o.itensOS): o atendente abre o pedido com tudo pronto
    e só escolhe a forma de pagamento com o cliente. */
+/* ORÇAMENTO FECHADO (19/10, regra dele, com print da OS 3017): a etapa 3 estava CONCLUÍDA e a
+   lista de peças continuava com campo de quantidade, campo de valor e botão Remover. O medo dele,
+   nas palavras dele: o atendente manda a proposta e, ao chegar no cliente, as peças mudaram; e o
+   técnico apagar o que lançou e depois dizer que nunca lançou. Agora a lista TRAVA assim que o
+   orçamento fecha, e quem precisa mexer usa "Corrigir esta etapa" — com rastro no histórico.
+   A CAUSA de a trava da v321 não pegar aqui: `renderItensDiagOS` roda DEPOIS do `ajustarEtapasOS`
+   (linha do `abrirOS`), então a tabela era refeita por cima do que o `travarCorpoOS` tinha travado.
+   Por isso a regra mora AQUI, na montagem da própria lista, e não depende da ordem do desenho. */
+function orcamentoFechadoOS(o){
+  if(!o)return "";
+  if(o.pedidoId)return "o pedido desta OS já foi lançado";
+  if(o.autorizadoEm)return "o cliente já autorizou o serviço";
+  if(o.orcamentoEnviadoEm)return "o orçamento já foi enviado ao cliente";
+  if(o.orcamentoEm)return "o orçamento já foi gerado";
+  if(o.pecasProntasEm)return "o orçamento já foi concluído e o atendente avisado";
+  return "";
+}
+function corrigindoPecasOS(o){
+  try{return !!osCorrigindo[etapaPecasOS(o)];}catch(e){return false;}
+}
+/* toda alteração em peça depois de a OS existir fica no histórico, com nome, dia e hora */
+function histPecaOS(o,texto){
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),hora:agoraHM(),por:usuarioAtual,texto:texto});
+}
+/* mexeu nas peças com o orçamento JÁ ENVIADO: o que o cliente recebeu deixou de valer, e o
+   atendente precisa saber disso antes de cobrar o valor antigo. */
+function marcarOrcamentoDesatualizado(o,antes,depois){
+  if(!o||!o.orcamentoEnviadoEm)return;
+  o.orcamentoDesatualizado={quando:agoraCarimbo(),por:usuarioAtual,
+    de:(o.orcamentoDesatualizado&&o.orcamentoDesatualizado.de!=null)?o.orcamentoDesatualizado.de:antes,
+    para:depois};
+}
+/* grava a OS conferindo o banco (regra da v327) e, recusada, devolve o que estava na tela */
+async function gravarPecasOS(o,voltar){
+  try{await gravaConf("ordens",o);return true;}
+  catch(e){
+    try{voltar();}catch(e2){}
+    toast("Não foi salvo. Confira a internet e tente de novo. "+((e&&e.message)||e));
+    try{renderItensDiagOS();renderPedOS();calcOS();}catch(e3){}
+    return false;
+  }
+}
 function renderItensDiagOS(){
   var w=$("os_ditens"),o=editandoOS;if(!w)return;
   var l=(o&&o.itensOS)||[];
   var tot=l.reduce(function(a,i){return a+(+i.valor||0)*qtdItemOS(i);},0);
-  var podeMexer=!!o&&podeTecnicoOS(o)&&!o.pedidoId&&["entregue","cancelada"].indexOf(o.status)<0;
+  var fechado=orcamentoFechadoOS(o),corrigindo=corrigindoPecasOS(o);
+  var podeMexer=!!o&&podeTecnicoOS(o)&&["entregue","cancelada"].indexOf(o.status)<0&&
+    (!fechado||corrigindo);
   if(!l.length){
     w.innerHTML='<p class="help">Nenhuma peça ou serviço incluído ainda.</p>';return;}
   w.innerHTML='<div class="tw"><table><thead><tr><th>Peça ou serviço</th><th class="num">Qtd</th>'+
@@ -26000,20 +26045,51 @@ function renderItensDiagOS(){
     '<tr><td colspan="3"><b>Total das peças e serviços</b></td><td class="num"><b>'+
       BRL(Math.max(0,centavos(tot-(+o.desconto||0))))+"</b></td><td></td></tr>"+
     "</tbody></table></div>";
+  /* a lista diz POR QUE travou e qual é o caminho para mexer */
+  if(fechado&&!corrigindo&&podeTecnicoOS(o)&&["entregue","cancelada"].indexOf(o.status)<0)
+    w.insertAdjacentHTML("afterbegin",'<div class="note"><b>Lista fechada: '+esc(fechado)+".</b> "+
+      "Para alterar, toque em <b>Corrigir esta etapa</b>, aqui em cima — a alteração fica no "+
+      "histórico da OS com o seu nome e a hora.</div>");
+  else if(corrigindo&&fechado)
+    w.insertAdjacentHTML("afterbegin",'<div class="note warn"><b>Corrigindo o orçamento · '+esc(fechado)+
+      ".</b> Tudo que você alterar aqui fica registrado no histórico da OS"+
+      (o.orcamentoEnviadoEm?" e o atendente é avisado de que precisa mandar o orçamento de novo":"")+".</div>");
   Array.prototype.forEach.call(w.querySelectorAll("[data-osdrm]"),function(bt){
     bt.onclick=async function(){
       var ix=+bt.getAttribute("data-osdrm"),alvo=o.itensOS[ix];
+      if(!alvo)return;
+      var qa=qtdItemOS(alvo),antes=totalOS(o);
+      if(!confirm("Retirar "+qa+"× "+alvo.nome+" ("+BRL((+alvo.valor||0)*qa)+") desta OS?\n\n"+
+        "A retirada fica registrada no histórico com o seu nome e a hora."))return;
+      var copia=o.itensOS.slice();
       /* tirou o principal: o que veio junto com ele sai também (v248) */
       o.itensOS=o.itensOS.filter(function(x){return x!==alvo&&!(alvo&&alvo.id&&x.vemCom===alvo.id);});
       o.total=totalOS(o);
-      await grava("ordens",o);renderItensDiagOS();try{renderPedOS();}catch(e){}
+      histPecaOS(o,"Peça retirada do orçamento por "+usuarioAtual+": "+qa+"× "+alvo.nome+
+        " ("+BRL((+alvo.valor||0)*qa)+") · total da OS de "+BRL(antes)+" para "+BRL(o.total));
+      marcarOrcamentoDesatualizado(o,antes,o.total);
+      var ok=await gravarPecasOS(o,function(){o.itensOS=copia;o.total=totalOS(o);
+        if(o.historico)o.historico.pop();});
+      if(!ok)return;
+      toast("Peça retirada e registrada no histórico da OS.");
+      renderItensDiagOS();try{renderPedOS();calcOS();}catch(e){}
     };});
   /* alterar quantidade e valor do item já lançado (regra dele, 25/09) */
-  function mexerItemOS(inp,attr,aplicar){
+  function mexerItemOS(inp,attr,aplicar,descrever){
     inp.onchange=async function(){
       var it=o.itensOS[+inp.getAttribute(attr)];if(!it)return;
+      var qAntes=qtdItemOS(it),vAntes=+it.valor||0,tAntes=totalOS(o);
       aplicar(it,inp);o.total=totalOS(o);
-      await grava("ordens",o);renderItensDiagOS();try{renderPedOS();calcOS();}catch(e){}
+      var txt=descrever?descrever(it,qAntes,vAntes):"";
+      if(txt){
+        histPecaOS(o,txt+" · total da OS de "+BRL(tAntes)+" para "+BRL(o.total));
+        marcarOrcamentoDesatualizado(o,tAntes,o.total);
+      }
+      var ok=await gravarPecasOS(o,function(){
+        it.qtd=qAntes;it.valor=vAntes;o.total=totalOS(o);
+        if(txt&&o.historico)o.historico.pop();});
+      if(!ok)return;
+      renderItensDiagOS();try{renderPedOS();calcOS();}catch(e){}
     };
     inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};
   }
@@ -26029,17 +26105,33 @@ function renderItensDiagOS(){
           x.qtd=(reg?reg.qtd:1)*it.qtd;
         });
       }
+    },function(it,qAntes){
+      return qtdItemOS(it)===qAntes?"":"Quantidade alterada por "+usuarioAtual+" em "+it.nome+
+        ": de "+qAntes+" para "+qtdItemOS(it);
     });});
   Array.prototype.forEach.call(w.querySelectorAll("[data-osdv]"),function(inp){
-    mexerItemOS(inp,"data-osdv",function(it,el){var v=numMF(el.value);it.valor=(v<0?0:v);});});
+    mexerItemOS(inp,"data-osdv",function(it,el){var v=numMF(el.value);it.valor=(v<0?0:v);},
+    function(it,qAntes,vAntes){
+      return (+it.valor||0)===vAntes?"":"Valor alterado por "+usuarioAtual+" em "+it.nome+
+        ": de "+BRL(vAntes)+" para "+BRL(+it.valor||0);
+    });});
   /* Desconto Especial da OS: grava no mesmo `o.desconto` do bloco de valores (25/09) */
   Array.prototype.forEach.call(w.querySelectorAll("[data-osdesc]"),function(inp){
     inp.onchange=async function(){
-      var v=numMF(inp.value);
+      var v=numMF(inp.value),dAntes=+o.desconto||0,tAntes=totalOS(o);
       o.desconto=Math.min(Math.max(0,v),tot);
       if($("os_desc"))$("os_desc").value=brMF(+o.desconto||0);
       o.total=totalOS(o);
-      await grava("ordens",o);renderItensDiagOS();try{renderPedOS();calcOS();}catch(e){}
+      var mudou=(+o.desconto||0)!==dAntes;
+      if(mudou){
+        histPecaOS(o,"Desconto Especial alterado por "+usuarioAtual+": de "+BRL(dAntes)+
+          " para "+BRL(+o.desconto||0)+" · total da OS de "+BRL(tAntes)+" para "+BRL(o.total));
+        marcarOrcamentoDesatualizado(o,tAntes,o.total);
+      }
+      var ok=await gravarPecasOS(o,function(){o.desconto=dAntes;o.total=totalOS(o);
+        if(mudou&&o.historico)o.historico.pop();});
+      if(!ok)return;
+      renderItensDiagOS();try{renderPedOS();calcOS();}catch(e){}
     };
     inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};
   });
@@ -30688,6 +30780,8 @@ function ligarCartoesOS(){
       }
       osCorrigindo[kc]=true;osCardAberto[kc]=true;
       try{ajustarEtapasOS();}catch(e){console.warn(e);}
+      /* a lista de peças decide sozinha se está travada (19/10): refaz depois dos cartões */
+      try{renderItensDiagOS();}catch(e){console.warn(e);}
       toast("Etapa aberta para correção. Altere o que precisar e salve — fica registrado no histórico.");
       return;
     }
@@ -30899,7 +30993,15 @@ function renderOrcamentoOS(o,ext){
   /* a resposta do cliente é registrada pelo atendente (decisão dele, 09/10) */
   if($("osRecusou"))$("osRecusou").hidden=!(["orcDisp","agAssin","novoOrc"].indexOf(sitO)>=0);
   if($("osDevolvido"))$("osDevolvido").hidden=(sitO!=="recDevol");
-  nota.innerHTML=sitO==="recDevol"
+  /* as peças mudaram DEPOIS de o orçamento ir ao cliente: o atendente precisa saber antes de
+     cobrar o valor antigo (19/10) */
+  var desat=o.orcamentoDesatualizado?
+    '<div class="note crit"><b>As peças mudaram depois que o orçamento foi enviado.</b> '+
+    esc(o.orcamentoDesatualizado.por||"")+" alterou em "+esc(dataBR(o.orcamentoDesatualizado.quando||""))+
+    ": de "+BRL(o.orcamentoDesatualizado.de||0)+" para "+BRL(o.orcamentoDesatualizado.para||total)+
+    ". Gere o orçamento de novo e mande ao cliente antes de combinar o valor. "+
+    "O que mudou está no histórico da OS.</div>":"";
+  nota.innerHTML=desat+(sitO==="recDevol"
     ? '<div class="note crit"><b>Cliente recusou o orçamento</b> em '+esc(dataBR(o.recusadoEm||""))+
       (o.recusaMotivo?" · "+esc(o.recusaMotivo):"")+". Devolva o aparelho e toque em "+
       "<b>Aparelho devolvido ao cliente</b> para encerrar a OS.</div>"
@@ -30922,7 +31024,7 @@ function renderOrcamentoOS(o,ext){
           "ao cliente pelo WhatsApp e esperar a aprovação.</div>"
         : '<div class="note ok"><b>Diagnóstico salvo · '+itens.length+" item(ns) · "+BRL(total)+
           ".</b> "+(souAtd?"Gere o orçamento e mande ao cliente pelo WhatsApp."
-                         :"Quem gera e manda o orçamento é "+esc(o.atendente||"quem abriu a OS")+".")+"</div>";
+                         :"Quem gera e manda o orçamento é "+esc(o.atendente||"quem abriu a OS")+".")+"</div>");
 }
 async function gerarOrcamentoOS(){
   var o=editandoOS;if(!o)return;
@@ -30937,7 +31039,10 @@ async function gerarOrcamentoOS(){
   if(!((o.itensOS||[]).length)&&!osPecas.length){
     $("os_alerta").innerHTML='<div class="note crit"><b>Lance as peças e os serviços na etapa 2 antes de gerar o orçamento.</b></div>';return;}
   var s=await salvarOS();if(!s)return;
-  var antesOrc={em:s.orcamentoEm,por:s.orcamentoPor,val:s.orcamentoValor,n:(s.historico||[]).length};
+  var antesOrc={em:s.orcamentoEm,por:s.orcamentoPor,val:s.orcamentoValor,n:(s.historico||[]).length,
+    desat:s.orcamentoDesatualizado};
+  /* orçamento novo em cima das peças novas: o aviso de "as peças mudaram" deixa de valer (19/10) */
+  delete s.orcamentoDesatualizado;
   s.orcamentoEm=hojeISO();s.orcamentoPor=usuarioAtual;s.orcamentoValor=totalOS(s);
   s.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Orçamento gerado · "+BRL(totalOS(s))});
   /* o status anda por botão: gerou o orçamento, a OS fica em "Orçamento disponível" (09/10) */
@@ -30945,6 +31050,7 @@ async function gerarOrcamentoOS(){
   try{await gravaConf("ordens",s);}
   catch(eGr){
     undoOrc();s.orcamentoEm=antesOrc.em;s.orcamentoPor=antesOrc.por;s.orcamentoValor=antesOrc.val;
+    if(antesOrc.desat)s.orcamentoDesatualizado=antesOrc.desat;
     if((s.historico||[]).length>antesOrc.n)s.historico.length=antesOrc.n;
     return avisarRecusaBanco("os_alerta",eGr,"O orçamento não foi gravado — tente de novo.");
   }
