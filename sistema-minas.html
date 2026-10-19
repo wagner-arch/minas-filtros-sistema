@@ -2252,10 +2252,18 @@ img{max-width:100%}
         <div class="sect">
           <p class="sect-t">Preços e comissão</p>
           <div class="grid g4">
-            <div class="fld"><label for="p_cheia">Tabela 100% <span class="req">*</span></label><input id="p_cheia" type="text" inputmode="decimal" step="0.01"></div>
+            <!-- FAIXA DE PREÇO (19/10, regra dele): cada tabela vai de um MÁXIMO a um MÍNIMO.
+                 Exemplo dele: PMF107 — 100% de 2.600,00 a 3.499,00 · 70% de 2.500,00 a 2.599,00.
+                 O máximo da 100% é o preço de etiqueta e é ELE que entra no pedido ("todo
+                 lançamento de venda, na inclusão do pedido o sistema deve buscar o valor tabela
+                 100% Máxima"). O mínimo continua sendo o piso que paga 100% de comissão.
+                 Os tetos das tabelas de baixo são DERIVADOS — um centavo abaixo do piso da tabela
+                 de cima —, então nunca sobra buraco nem sobreposição entre as faixas. -->
+            <div class="fld"><label for="p_cheiaMax">Tabela 100% máxima</label><input id="p_cheiaMax" type="text" inputmode="decimal" step="0.01" placeholder="preço de etiqueta"></div>
+            <div class="fld"><label for="p_cheia">Tabela 100% mínima <span class="req">*</span></label><input id="p_cheia" type="text" inputmode="decimal" step="0.01"></div>
             <!-- zerada = só vale a tabela cheia (regra dele, 20/09) -->
-            <div class="fld"><label for="p_campanha">Tabela 70%</label><input id="p_campanha" type="text" inputmode="decimal" step="0.01" placeholder="deixe zerada para valer só a cheia"></div>
-            <div class="fld"><label for="p_minimo">Campanha</label><input id="p_minimo" type="text" inputmode="decimal" step="0.01"></div>
+            <div class="fld"><label for="p_campanha">Tabela 70% mínima</label><input id="p_campanha" type="text" inputmode="decimal" step="0.01" placeholder="deixe zerada para valer só a cheia"></div>
+            <div class="fld"><label for="p_minimo">Campanha mínima</label><input id="p_minimo" type="text" inputmode="decimal" step="0.01"></div>
             <div class="fld"><label for="p_campativa">Campanha ativa <span class="pill p-crit" style="font-size:10px;padding:1px 7px;margin-left:4px">Admin</span></label>
               <select id="p_campativa"><option value="nao">Desativada</option><option value="sim">Ativa</option></select></div>
           </div>
@@ -8561,6 +8569,38 @@ function repartirDep(dep,pesos){
   if(maior>=0)partes[maior]+=depC-dado;
   return partes.map(function(c){return c/100;});
 }
+/* ===== FAIXA DE PREÇO DA TABELA (19/10, regra dele) =========================================
+   "na tabela de purificadores preciso ter uma faixa de preços de 100%, ou seja do preço máximo
+   ao mínimo 100% e do preço máximo ao mínimo 70%. Ex.: PMF107 tabela 100% máxima 3.499,00 a
+   mínima 2.600,00, tabela 70% máxima 2.599,00 a 2.500,00."
+   Cada tabela passou a ter TETO e PISO, e foi preciso guardar UM campo novo só — `cheiaMax`, o
+   preço de etiqueta. O teto de cada tabela de baixo é o piso da tabela de cima menos um centavo
+   (70% vai de `campanha` até `cheia − 0,01`, exatamente o número do exemplo dele): derivando,
+   nunca existe buraco — valor que não cai em tabela nenhuma — nem duas tabelas disputando o
+   mesmo valor.
+   `precoTabela(p)` é o valor que ENTRA NO PEDIDO (regra dele no mesmo dia: "todo lançamento de
+   venda, na inclusão do pedido o sistema deve buscar o valor tabela 100% Máxima"); `p.cheia`
+   continua decidindo a comissão, e por isso a faixa não mudou UMA LINHA do cálculo. */
+function precoTabela(p){
+  if(!p)return 0;
+  var mx=+p.cheiaMax||0,c=+p.cheia||0;
+  return mx>c?mx:c;   /* máximo em branco, ou menor que o piso: vale o cadastro de sempre */
+}
+function temFaixaPreco(p){return !!(p&&(+p.cheiaMax||0)>(+p.cheia||0));}
+/* as faixas montadas, de cima para baixo, para a tela poder explicá-las em palavras */
+function faixasDoProduto(p){
+  if(!p)return [];
+  var f=[],c=+p.cheia||0,ca=+p.campanha||0,m=+p.minimo||0,campOn=(p.campativa==="sim");
+  var cent=function(v){return Math.round(v*100)/100;};
+  if(c>0)f.push({n:"100%",de:c,ate:temFaixaPreco(p)?(+p.cheiaMax||0):0});
+  if(ca>0&&c>0)f.push({n:"70%",de:ca,ate:cent(c-0.01)});
+  if(campOn&&m>0)f.push({n:"Campanha",de:m,ate:cent((ca>0?ca:c)-0.01)});
+  return f;
+}
+function textoFaixa(x){return BRL(x.de)+(x.ate>0?" a "+BRL(x.ate):" ou mais");}
+function textoFaixasProduto(p){
+  return faixasDoProduto(p).map(function(x){return x.n+" de "+textoFaixa(x);}).join(" · ");
+}
 function faixa(v,p){
 
   var c=+p.cheia||0,ca=+p.campanha||0,m=+p.minimo||0;
@@ -8570,7 +8610,10 @@ function faixa(v,p){
      esse milésimo a menos jogava a venda inteira para "abaixo da tabela". Um centavo de diferença
      não é desconto. */
   var eps=0.01;
-  if(v>=c-eps)return{n:"100%",f:1,cls:"p-ok"};
+  /* DECISÃO MINHA, avisada a ele (19/10): passar do teto da 100% NÃO zera nem reduz a comissão
+     e não trava a venda — vender mais caro que a etiqueta não pode punir o vendedor. O teto é
+     dito na tela (`acima`) para ninguém cobrar além do combinado sem perceber. */
+  if(v>=c-eps)return{n:"100%",f:1,cls:"p-ok",acima:(temFaixaPreco(p)&&v>(+p.cheiaMax||0)+eps)};
   if(ca>0&&v>=ca-eps)return{n:"70%",f:.7,cls:"p-acc"};
   if(campOn&&m>0&&v>=m-eps)return{n:"Campanha",f:.5,cls:"p-warn"};
   /* produto sem tabela de 70% (regra dele, 20/09: "a que tiver zerada o cálculo será somente em
@@ -9552,7 +9595,11 @@ function renderProdutos(){
       '<td><div class="t-main">'+esc(p.grupo||"—")+'</div><div class="t-sub">'+esc(p.subgrupo||"sem subgrupo")+"</div></td>"+
       '<td class="num"><span class="pill '+estCls+'">'+est+"</span></td>"+
       '<td class="num">'+(p.custo?BRL(p.custo):"—")+'</td><td class="num">'+(p.frete?BRL(p.frete):"—")+"</td>"+
-      '<td class="num">'+BRL(p.cheia)+'</td><td class="num">'+(p.campanha?BRL(p.campanha):"—")+"</td>"+
+      /* faixa de preço (19/10): a coluna da 100% mostra a faixa inteira quando o produto tem
+         máxima — é o preço de etiqueta que o vendedor procura aqui */
+      '<td class="num">'+(temFaixaPreco(p)
+        ? ('<div class="t-main">'+BRL(+p.cheiaMax||0)+'</div><div class="t-sub">mín. '+BRL(p.cheia)+"</div>")
+        : BRL(p.cheia))+'</td><td class="num">'+(p.campanha?BRL(p.campanha):"—")+"</td>"+
       '<td class="num">'+(p.minimo?(BRL(p.minimo)+(p.campativa==="sim"?' <span class="pill p-warn">ativa</span>':' <span class="pill p-mut">off</span>')):"—")+"</td>"+
       '<td class="num">'+(p.pontos||0)+"</td>"+
       "<td>"+(p.serie==="sim"?'<span class="pill p-acc">sim</span>':'<span class="pill p-mut">não</span>')+"</td>"+
@@ -9565,7 +9612,7 @@ function abrirProduto(p){
   editandoProd=p||null;$("prodLista").hidden=true;$("prodForm").hidden=false;
   $("prodFormTitulo").textContent=p?("Editar produto · "+p.nome):"Novo produto";
   var v=p||{};
-  ["cod","nome","pop","marca","grupo","subgrupo","barras","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){
+  ["cod","nome","pop","marca","grupo","subgrupo","barras","cheiaMax","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){
     var el=$("p_"+k);if(el)el.value=(v[k]!=null?v[k]:"");});
   atualizarListasGrupoProd();
   $("p_un").value=v.un||"UN";$("p_serie").value=v.serie||"nao";
@@ -9671,7 +9718,7 @@ function notaCusto(){
   var imp=v.ipi+v.st+v.federais-v.icms;
   var tot=custoDe(v);
   var cheia=numMF($("p_cheia").value)||0,setenta=numMF($("p_campanha").value)||0,
-      camp=numMF($("p_minimo").value)||0;
+      camp=numMF($("p_minimo").value)||0,maxima=numMF($("p_cheiaMax").value)||0;
   $("p_impostos").value=BRL(imp);
   $("p_custoTotal").value=BRL(tot);
   function marg(preco){return (preco>0&&tot>0)?((preco-tot)/preco*100).toFixed(1).replace(".",",")+"% · "+BRL(preco-tot):"—";}
@@ -9692,8 +9739,12 @@ function notaCusto(){
       (v.federais?" + federais "+BRL(v.federais):"")+
       (v.icms?" − ICMS creditado "+BRL(v.icms):"")+
     (v.custo>0?"<br>Frete "+pctF.toFixed(1).replace(".",",")+"% e impostos "+pctI.toFixed(1).replace(".",",")+"% sobre o valor do produto.":"")+
-    (cheia>0?"<br><br>Na tabela cheia de "+BRL(cheia)+" sobram <b>"+BRL(cheia-tot)+
-      "</b> por unidade antes da taxa de cartão e da comissão.":"")+
+    /* faixa de preço (19/10): é a máxima que entra no pedido, então é dela que sai a margem
+       de quem fecha sem desconto nenhum */
+    (maxima>cheia?"<br><br>Na <b>máxima de "+BRL(maxima)+"</b> (o valor que entra no pedido) sobram <b>"+
+      BRL(maxima-tot)+"</b> por unidade antes da taxa de cartão e da comissão.":"")+
+    (cheia>0?(maxima>cheia?"<br>Na mínima da 100% de ":"<br><br>Na tabela cheia de ")+BRL(cheia)+" sobram <b>"+BRL(cheia-tot)+
+      "</b> por unidade"+(maxima>cheia?".":" antes da taxa de cartão e da comissão."):"")+
     (camp>0?"<br>Na campanha de "+BRL(camp)+" sobram <b>"+BRL(camp-tot)+"</b>.":"")+
     (negativa?"<br><br><b>Atenção: alguma tabela está abaixo do custo.</b> Vender nesse valor dá prejuízo por unidade, antes mesmo de taxa e comissão.":"")+
     (p.custoNF?"<br><br>Última atualização pela <b>NF "+esc(p.custoNF)+"</b> em "+esc(dataBR(p.custoEm||""))+
@@ -9778,7 +9829,8 @@ function notaEstoque(){
 function descontoTrocaDe(p){return p?(+p.troca||0):0;}
 function notaTrocaProduto(){
   var el=$("p_trocaNota");if(!el)return;
-  var v=numMF($("p_troca").value)||0,cheia=numMF($("p_cheia").value)||0;
+  var v=numMF($("p_troca").value)||0,mxT=numMF($("p_cheiaMax").value)||0,cMin=numMF($("p_cheia").value)||0;
+  var cheia=mxT>cMin?mxT:cMin;   /* é o valor que entra no pedido que o cliente vai pagar (19/10) */
   if(!(v>0)){
     el.innerHTML='<p class="help">Em branco, este produto <b>não aceita troca</b>. Preenchido, o pedido oferece o '+
       "desconto ao vendedor e o aparelho usado entra no estoque como Purificador Sucata.</p>";
@@ -9793,12 +9845,23 @@ function notaCampanha(){
   /* tabela de 70% zerada = só vale a cheia (regra dele, 20/09) — a nota não pode prometer
      uma faixa de 70% que este produto não tem */
   var set=numMF($("p_campanha").value)||0;
-  var piso=set>0?("a tabela de 70% ("+BRL(set)+")"):("a tabela cheia ("+BRL(numMF($("p_cheia").value)||0)+")");
-  $("p_campNota").innerHTML = on
+  var cheia=numMF($("p_cheia").value)||0,mx=numMF($("p_cheiaMax").value)||0;
+  var piso=set>0?("a tabela de 70% ("+BRL(set)+")"):("a tabela cheia ("+BRL(cheia)+")");
+  /* faixa de preço (19/10): a tela escreve cada faixa INTEIRA — de quanto a quanto —, para
+     ninguém precisar deduzir onde uma acaba e a outra começa */
+  var fx=faixasDoProduto({cheiaMax:mx,cheia:cheia,campanha:set,minimo:val,campativa:on?"sim":"nao"});
+  var notaFaixa=!fx.length?"":
+    '<div class="note ok"><b>Faixas deste produto:</b> '+
+      fx.map(function(x){return "<b>"+x.n+"</b> de "+textoFaixa(x);}).join(" · ")+". "+
+      (mx>cheia
+        ? "O pedido nasce em <b>"+BRL(mx)+"</b> (a máxima da 100%) e o vendedor negocia para baixo."
+        : "<b>Sem máxima cadastrada</b>: o pedido nasce em "+BRL(cheia)+", como sempre.")+
+    "</div>";
+  $("p_campNota").innerHTML = notaFaixa + (on
     ? '<div class="note warn"><b>Campanha ligada.</b> O vendedor pode fechar em '+(val?BRL(val):"—")+' e a comissão paga 50%. Abaixo disso, zera e exige aprovação do Admin.</div>'
     : '<div class="note"><b>Campanha desligada.</b> '+
       (set>0?"O vendedor tem 100% e 70%.":"<b>Sem tabela de 70%:</b> este produto só tem os 100%.")+
-      " Qualquer valor abaixo d"+piso+" zera a comissão e exige aprovação do Admin.</div>";
+      " Qualquer valor abaixo d"+piso+" zera a comissão e exige aprovação do Admin.</div>");
 }
 
 /* pedido */
@@ -11510,7 +11573,7 @@ function opcoesProduto(){
   /* plano não é escolhido como produto: entra sozinho pela garantia do item;
      produto importado sem preço também fica de fora até o cadastro ser completado (v143) */
   var ativos=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos"&&!ehProdutoSucata(p)&&p.cod!=="OS-CLIENTE"&&!produtoIncompleto(p);});
-  porNomeAZ(ativos).forEach(function(p){var o=document.createElement("option");o.value=p.id;o.textContent=p.nome+"   "+BRL(p.cheia);o.setAttribute("data-cod",p.cod||"");   /* nome na frente: a lista fica visivelmente alfabética (20/09) */s.appendChild(o);});
+  porNomeAZ(ativos).forEach(function(p){var o=document.createElement("option");o.value=p.id;o.textContent=p.nome+"   "+BRL(precoTabela(p));o.setAttribute("data-cod",p.cod||"");   /* nome na frente: a lista fica visivelmente alfabética (20/09) */s.appendChild(o);});
   if(!ativos.length){var o=document.createElement("option");o.textContent="— nenhum produto ativo —";s.appendChild(o);}
   if(atual&&ativos.some(function(p){return p.id===atual;}))s.value=atual;
   sincronizarValor();
@@ -11734,7 +11797,7 @@ function focarSemJurosPendente(){
    o valor à mão perde a marca e o valor digitado é respeitado. */
 function precoAutoItem(p){
   if(!p||!(+p.cheia>0))return false;
-  return Math.abs((numMF($("v_valor").value)||0)-precoPelaForma(p.cheia,qtdDoForm(),tabelaTotalVenda(true)))<0.01;
+  return Math.abs((numMF($("v_valor").value)||0)-precoPelaForma(precoTabela(p),qtdDoForm(),tabelaTotalVenda(true)))<0.01;
 }
 /* ---------- a entrada sem juros é REPARTIDA entre os itens (defeito que ele pegou, 20/09) ------
    Print dele: purificador de tabela R$ 2.200 + Plano Premium I de R$ 600, com R$ 500 de entrada.
@@ -11752,16 +11815,16 @@ function somaTabelaCarrinho(){
   return (itens||[]).reduce(function(a,i){
     if(i.planoCobre)return a;
     var p=prodPorId(i.pid);
-    return a+(((p&&+p.cheia)||0)*(i.qtd||1));},0);
+    return a+(precoTabela(p)*(i.qtd||1));},0);
 }
 /* soma das tabelas do que está sendo montado no formulário e ainda não entrou no carrinho:
    o produto escolhido e, se houver, o plano de garantia que vai junto com ele */
 function tabelaDoFormulario(){
   var t=0,q=Math.max(1,parseInt($("v_qtd")?$("v_qtd").value:"1",10)||1);
   var p=prodPorId(($("v_prod")?$("v_prod").value:""));
-  if(p&&+p.cheia>0)t+=(+p.cheia)*q;
+  if(p&&+p.cheia>0)t+=precoTabela(p)*q;
   var pl=$("v_gar")?planoDaGarantia($("v_gar").value):null;
-  if(pl&&+pl.cheia>0)t+=(+pl.cheia)*q;
+  if(pl&&+pl.cheia>0)t+=precoTabela(pl)*q;
   return t;
 }
 /* T = tabela cheia de TUDO que compõe o pedido; `comFormulario` inclui o que está sendo montado */
@@ -11863,6 +11926,10 @@ window.__htmlFichaOSMF=function(o,p){return htmlFichaOS(o,p);};
 window.__cabDocMF=function(){return cabecalhoEmpresaDoc();};
 window.__linkAssinaturaMF=function(p){return abrirLinkAssinatura(p);};
 window.__cssDocMF=function(){return cssDocumentoVenda();};
+/* faixa de preço da tabela (19/10): o teste precisa ver as faixas montadas e abrir a ficha */
+window.__faixasTextoMF=function(p){return textoFaixasProduto(p);};
+window.__precoTabelaMF=function(p){return precoTabela(p);};
+window.__abrirProdutoMF=function(p){return abrirProduto(p);};
 window.__manutMarcasMF=function(){return aplicarManutMarcas();};
 window.__regraManutMF=function(p){return regraManutDoProduto(p);};
 window.__lojaMF=function(){return lojaAtual;};
@@ -12093,9 +12160,11 @@ function notaPrecoRefOS(idNota,p){
   var el=$(idNota);if(!el)return;
   if(!p||!(+p.cheia>0)){el.innerHTML="";return;}
   var r=formaReferencia();
-  if(!r){el.innerHTML='<div class="note">Tabela cheia '+BRL(+p.cheia||0)+".</div>";return;}
-  el.innerHTML='<div class="note ok">'+textoPrecoReferencia(+p.cheia||0)+
-    ". Tabela cheia "+BRL(+p.cheia||0)+" — dá para alterar o valor.</div>";
+  if(!r){el.innerHTML='<div class="note">Tabela '+BRL(precoTabela(p))+
+    (temFaixaPreco(p)?" · "+esc(textoFaixasProduto(p)):"")+".</div>";return;}
+  el.innerHTML='<div class="note ok">'+textoPrecoReferencia(precoTabela(p))+
+    ". Tabela "+(temFaixaPreco(p)?esc(textoFaixasProduto(p)):"cheia "+BRL(+p.cheia||0))+
+    " — dá para alterar o valor.</div>";
 }
 /* a venda nasce na forma de referência: assim o valor que aparece no item já é o final de 24× */
 function formasIniciais(){
@@ -12148,7 +12217,7 @@ function notaPrecoForma(p){
      na forma de referência, então é esse o valor que aparece; trocando para a forma à vista, cai
      para a tabela. A base da comissão continua a tabela cheia (`baseDoFinal` faz a volta). */
   var cj=formasComJuros()[0],n=cj?Math.max(1,+cj.parc||1):1,r=formaReferencia();
-  var fim=precoPelaForma(+p.cheia||0,qtdDoForm(),tabelaTotalVenda(true));
+  var fim=precoPelaForma(precoTabela(p),qtdDoForm(),tabelaTotalVenda(true));
   var pc=parcelaDe(fim*Math.max(1,qtdDoForm()),n);
   var estimado=!!(r&&r.forma.coefEstimado&&cj&&cj.tipo===r.nome&&n>=13);
   var comp=composicaoDe(p);
@@ -12157,7 +12226,7 @@ function notaPrecoForma(p){
      os números que importam na hora de negociar, e a explicação inteira abre no clique. */
   var linha="<b>"+BRL(fim)+"</b> · "+
     (cj?(n+"× de "+BRL(pc.parc)):"à vista")+
-    " · tabela "+BRL(+p.cheia||0)+
+    " · tabela "+(temFaixaPreco(p)?(BRL(+p.cheia||0)+" a "+BRL(+p.cheiaMax||0)):BRL(+p.cheia||0))+
     (comp.length?" · vem junto: "+esc(textoComposicao(p)):"")+
     (estimado?' · <span class="mini-alerta"><b>coef. estimado</b></span>':"");
   var det="<p><b>"+BRL(fim)+"</b> é o que o cliente paga"+
@@ -12166,8 +12235,14 @@ function notaPrecoForma(p){
     ". Para o valor à vista, troque a forma na etapa <b>5 · Pagamento</b>.</p>"+
     (estimado?'<p class="mini-alerta"><b>O coeficiente de '+n+"× é estimado</b> — confira a tabela "+
       "da operadora em Configurações › Formas de Pagamento.</p>":"")+
-    "<p>Tabela cheia <b>"+BRL(+p.cheia||0)+"</b>"+((+p.campanha>0)?" · tabela 70% "+BRL(+p.campanha||0):"")+
-    " — é ela que forma a comissão, e a comparação é com o valor <b>sem o acréscimo do "+
+    /* faixa de preço (19/10): o campo já nasce no MÁXIMO da 100% e o vendedor negocia para
+       baixo — então ele precisa ver até onde pode descer sem perder a tabela */
+    (temFaixaPreco(p)
+      ? ("<p>Este produto tem <b>faixa de preço</b>: "+esc(textoFaixasProduto(p))+". O campo nasce "+
+         "no <b>máximo da 100% ("+BRL(+p.cheiaMax||0)+")</b>, que é o preço de etiqueta, e dá para "+
+         "negociar até <b>"+BRL(+p.cheia||0)+"</b> ainda pagando 100% de comissão.")
+      : ("<p>Tabela cheia <b>"+BRL(+p.cheia||0)+"</b>"+((+p.campanha>0)?" · tabela 70% "+BRL(+p.campanha||0):"")))+
+    " É a tabela que forma a comissão, e a comparação é com o valor <b>sem o acréscimo do "+
     "parcelamento</b>. Pode negociar o valor acima; abaixo da tabela, a venda vai para "+
     "autorização do Administrador."+
     /* o campo mostra o COBRADO desde a v224: diga o cobrado que corresponde a cada tabela,
@@ -12202,7 +12277,7 @@ function baseDoFinal(finalUnit,qtd,T){
 /* o valor que está no campo, convertido para o comercial. Se o vendedor não mexeu no campo, a
    base é a tabela cheia exata — sem o centavo de ida e volta do arredondamento. */
 function baseDoCampoValor(p,qtd){
-  if(precoAutoItem(p))return +p.cheia||0;
+  if(precoAutoItem(p))return precoTabela(p);
   return baseDoFinal(numMF($("v_valor").value)||0,qtd,tabelaTotalVenda(true));
 }
 /* forma ou parcelamento mudou: refaz o preço do item que está sendo montado.
@@ -12215,7 +12290,7 @@ function atualizarPrecoItemNovo(soProduto){
   var p=prodPorId($("v_prod").value);
   if(!p)return;
   if(vv.__manual)  {notaPrecoForma(p);return;}   /* valor digitado à mão fica como está */
-  vv.value=brMF(precoPelaForma(+p.cheia||0,qtdDoForm(),tabelaTotalVenda(true)));
+  vv.value=brMF(precoPelaForma(precoTabela(p),qtdDoForm(),tabelaTotalVenda(true)));
   notaPrecoForma(p);
   if(!soProduto){try{notaGarantia();}catch(e){}}   /* o plano segue o mesmo preço da forma (20/09) */
   try{calcular();}catch(e){}
@@ -12223,7 +12298,7 @@ function atualizarPrecoItemNovo(soProduto){
 function sincronizarValor(){
   var p=prodPorId($("v_prod").value);
   if($("v_valor"))$("v_valor").__manual=false;
-  if(p){$("v_valor").value=brMF(precoPelaForma(+p.cheia||0,qtdDoForm(),tabelaTotalVenda(true)));notaPrecoForma(p);
+  if(p){$("v_valor").value=brMF(precoPelaForma(precoTabela(p),qtdDoForm(),tabelaTotalVenda(true)));notaPrecoForma(p);
     /* número de série só para os grupos marcados em Configurações › Planos de Garantia › Número de série */
     var sg=temSerieGrupo(p);
     $("v_serie").disabled=!sg;
@@ -12808,7 +12883,7 @@ function notaGarantia(){
     if(pl){
       var lbPl=w.querySelector("label");if(lbPl)lbPl.textContent="Valor do Plano "+pl.garantia;
       /* v206: a garantia entra pelo VALOR COMERCIAL dela; o acréscimo do parcelamento vem depois */
-      var pCheia=+pl.cheia||0;
+      var pCheia=precoTabela(pl);   /* plano com faixa entra pelo máximo, como qualquer produto */
       if(!$("v_planoValor").value||w.__plano!==pl.id||w.__precoPl!==pCheia){
         $("v_planoValor").value=brMF(pCheia);w.__plano=pl.id;w.__precoPl=pCheia;}
       $("v_planoAjuda").innerHTML="<b>Tabela cheia "+BRL(pCheia)+"</b> · tabela baixa "+BRL(+pl.campanha||0)+
@@ -13467,6 +13542,10 @@ function linhaFaixaComissao(l){
         return d>0?("faltam "+BRL(d)+" por unidade · para pagar comissão"+cobradoParaTabela(piso)):"";
       })()
     : (alvo>0?("tabela "+BRL(alvo)+
+        /* faixa de preço (19/10): na 100% o rodapé mostra a faixa inteira, e passar do teto
+           avisa sem punir — vender acima da etiqueta nunca reduz a comissão */
+        ((l.fx.f===1&&temFaixaPreco(l.p))?(" a "+BRL(+l.p.cheiaMax||0)):"")+
+        (l.fx.acima?(" · <b>acima da máxima de "+BRL(+l.p.cheiaMax||0)+"</b> — continua pagando 100%"):"")+
         ((l.fx.f<1&&+l.p.cheia>0)?(" · para a tabela cheia "+BRL(+l.p.cheia)+cobradoParaTabela(+l.p.cheia)):"")):"");
   return '<div class="fx-l"><div class="fx-n">'+esc(l.nome)+(l.qtd>1?" ("+l.qtd+"×)":"")+"</div>"+
     '<div class="fx-v"><b>'+BRL(l.unit)+"</b> depreciado"+(l.qtd>1?" por unidade":"")+
@@ -13592,10 +13671,10 @@ function trocarGarantiaItem(ix,nome){
     i.garantia=pl.garantia;
     if(linha){
       linha.pid=pl.id;linha.nome=pl.nome;linha.cod=pl.cod;linha.qtd=i.qtd||1;
-      linha.valorBase=+pl.cheia||0;linha.valorTabela=+pl.cheia||0;linha.valor=+pl.cheia||0;
+      linha.valorBase=precoTabela(pl);linha.valorTabela=+pl.cheia||0;linha.valor=precoTabela(pl);
     }else{
       itens.push({pid:pl.id,nome:pl.nome,cod:pl.cod,qtd:(i.qtd||1),
-        valorBase:+pl.cheia||0,valorTabela:+pl.cheia||0,valor:+pl.cheia||0,
+        valorBase:precoTabela(pl),valorTabela:+pl.cheia||0,valor:precoTabela(pl),
         serie:"",pontos:+pl.pontos||0,garantia:"",plano:true,planoDe:i.vinculo});
     }
   }
@@ -13628,7 +13707,7 @@ function renderGarantiaEtapa(){
             '<div class="fld"><label>Garantia deste item</label>'+
               '<select data-garit="'+x.ix+'">'+opts+"</select></div>"+
             (pl?'<div class="fld"><label>Valor do plano</label>'+
-              '<input type="text" inputmode="decimal" data-garvl="'+x.ix+'" value="'+brMF(linha?valorBaseItem(linha):(+pl.cheia||0))+'"></div>':"")+
+              '<input type="text" inputmode="decimal" data-garvl="'+x.ix+'" value="'+brMF(linha?valorBaseItem(linha):precoTabela(pl))+'"></div>':"")+
           "</div>"+
           (pl?'<div class="note ok" style="margin-top:8px"><b>'+esc(pl.nome)+"</b> · vigência "+(+pl.vigencia||12)+
             " meses · cobre: "+esc(resumoDireitos(pl))+". Gera o Contrato de Assistência Técnica."+
@@ -31325,25 +31404,26 @@ function reprecificarOrc(){
     if(!i.precoAuto)return;
     var p=prodPorId(i.pid);
     if(!p||!(+p.cheia>0))return;
-    i.valor=precoNaForma(p.cheia,nome,n);
+    i.valor=precoNaForma(precoTabela(p),nome,n);
   });
   sincOrcValor();
 }
 function sincOrcValor(){
   var p=prodPorId($("or_prod").value);
   var vv=$("or_valor");
-  if(p&&!vv.__manual)vv.value=brMF(precoNaForma(p.cheia,$("or_forma").value,$("or_parc").value));
+  if(p&&!vv.__manual)vv.value=brMF(precoNaForma(precoTabela(p),$("or_forma").value,$("or_parc").value));
   notaPrecoOrc(p);
 }
 /* diz na tela de onde vem o valor que apareceu no campo */
 function notaPrecoOrc(p){
   var el=$("or_precoNota");if(!el)return;
   if(!p||!(+p.cheia>0)){el.innerHTML="";return;}
-  var nome=$("or_forma").value,n=+$("or_parc").value||1,fim=precoNaForma(p.cheia,nome,n);
+  var nome=$("or_forma").value,n=+$("or_parc").value||1,fim=precoNaForma(precoTabela(p),nome,n);
   var pc=parcelaDe(fim,n);
   el.innerHTML='<div class="note ok"><b>'+BRL(fim)+"</b> em <b>"+esc(nome)+" "+n+"×</b>"+
     (n>1?" · "+n+"× de "+BRL(pc.parc)+(Math.abs(pc.primeira-pc.parc)>0.004?" (a 1ª de "+BRL(pc.primeira)+")":""):" · à vista")+
-    ". Tabela cheia "+BRL(+p.cheia||0)+". Trocando a forma acima, o valor acompanha.</div>";
+    ". Tabela "+(temFaixaPreco(p)?esc(textoFaixasProduto(p)):"cheia "+BRL(+p.cheia||0))+
+    ". Trocando a forma acima, o valor acompanha.</div>";
 }
 function calcOrc(){
   var soma=orcItens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
@@ -39475,7 +39555,7 @@ function ligar(){
   /* v224: a OS também carrega o valor final da forma de referência (24× Rendimentos) */
   $("os_dprod").onchange=function(){
     var pd=prodPorId($("os_dprod").value);
-    $("os_dvalor").value=pd?brMF(precoReferencia(+pd.cheia||0)):"";
+    $("os_dvalor").value=pd?brMF(precoReferencia(precoTabela(pd))):"";
     notaPrecoRefOS("os_dprecoNota",pd);
   };
   $("os_dadd").onclick=addItemDiagOS;
@@ -39483,7 +39563,7 @@ function ligar(){
   $("os_peca").onchange=function(){
     var pid=$("os_peca").value;
     var p=prodPorId(pid);
-    $("os_pvalor").value=p?brMF(precoReferencia(+p.cheia||0)):"";
+    $("os_pvalor").value=p?brMF(precoReferencia(precoTabela(p))):"";
     notaPrecoRefOS("os_pprecoNota",p);
     try{notaPlanoOS();}catch(e){console.warn(e);}};
   $("os_addPeca").onclick=function(){
@@ -39634,9 +39714,9 @@ function ligar(){
       toast(r.nome+": manutenção periódica de "+r.dias+" dias preenchida — dá para alterar.");
     });
   });
-  ["p_minimo","p_campanha","p_cheia"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaCampanha);});
-  ["p_troca","p_cheia"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaTrocaProduto);});
-  ["p_custo","p_frete","p_ipi","p_st","p_federais","p_icms","p_cheia","p_campanha","p_minimo"].forEach(function(id){$(id).oninput=notaCusto;});
+  ["p_minimo","p_campanha","p_cheia","p_cheiaMax"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaCampanha);});
+  ["p_troca","p_cheia","p_cheiaMax"].forEach(function(id){var e=$(id);if(e)e.addEventListener("input",notaTrocaProduto);});
+  ["p_custo","p_frete","p_ipi","p_st","p_federais","p_icms","p_cheiaMax","p_cheia","p_campanha","p_minimo"].forEach(function(id){$(id).oninput=notaCusto;});
   $("p_estoque").oninput=notaEstoque;$("p_estmin").oninput=notaEstoque;
   $("p_status").onchange=function(){notaStatus(true);};ligarImagemProduto();   /* a explicação aparece ao escolher e some sozinha (20/09) */
   /* produto composto: monta a lista na ficha (v248) */
@@ -39668,6 +39748,24 @@ function ligar(){
         (prodComposto.length?" O que você montou em <b>Produtos que vão junto</b> continua na tela e será salvo junto.":""));
       try{(grupo?$("p_subgrupo"):$("p_grupo")).focus();}catch(e){}
       return;}
+    /* FAIXA DE PREÇO (19/10): o máximo da 100% é o teto da faixa — abaixo do próprio piso ele
+       inverteria a tabela e o pedido nasceria com um valor menor que o mínimo que paga 100%. */
+    var vMax=numMF($("p_cheiaMax").value)||0,vMin=numMF($("p_cheia").value)||0;
+    if(vMax>0&&vMin>0&&vMax<vMin){
+      avisoProduto("<b>A tabela 100% máxima ("+BRL(vMax)+") está abaixo da mínima ("+BRL(vMin)+").</b> "+
+        "A faixa vai do mínimo ao máximo: o máximo é o preço de etiqueta, que é o valor que entra "+
+        "no pedido, e o mínimo é até onde o vendedor pode negociar ainda pagando 100% de comissão. "+
+        "Corrija e clique em Salvar produto de novo."+
+        (prodComposto.length?" O que você montou em <b>Produtos que vão junto</b> continua na tela.":""));
+      try{$("p_cheiaMax").focus();}catch(e){}
+      return;}
+    var vSet=numMF($("p_campanha").value)||0;
+    if(vSet>0&&vMin>0&&vSet>=vMin){
+      avisoProduto("<b>A tabela 70% mínima ("+BRL(vSet)+") não pode ser igual nem maior que a 100% "+
+        "mínima ("+BRL(vMin)+").</b> A faixa de 70% vai de "+BRL(vSet)+" até um centavo abaixo da "+
+        "100%, e do jeito que está as duas se sobrepõem. Corrija e salve de novo.");
+      try{$("p_campanha").focus();}catch(e){}
+      return;}
     /* REGRA DELE (04/10): "toda vez que realizar qualquer outro cadastro de refil, filtro,
        vela ou de qualquer outro purificador o sistema deve solicitar para marcar uma data
        para manutenção periódica". É o intervalo que faz o aparelho entrar na Manutenção
@@ -39695,7 +39793,7 @@ function ligar(){
       await gravarGruposProd();
     }catch(eGC){console.warn("cadastro de grupos",eGC);}
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
-    ["cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
+    ["cheiaMax","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
     /* produtos que vão junto (v248) */
     if(prodComposto.length)p.composto=JSON.parse(JSON.stringify(prodComposto));else delete p.composto;
