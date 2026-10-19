@@ -1061,6 +1061,22 @@
         var s = await adapter.auth.sessao();
         return (s && s.user) || null;
       },
+      /* SESSÃO FRESCA PARA QUEM PRECISA DO TOKEN NA MÃO (19/10, relato dele ao cadastrar o
+         Erico: "Não deu certo: Sessão inválida ou expirada"). `getSession()` devolve o que
+         está guardado SEM renovar: numa aba aberta há horas, o token já venceu, e as Edge
+         Functions (que conferem o token por conta própria) recusam com 401. Aqui a sessão é
+         renovada quando falta pouco para vencer — ou já venceu. */
+      sessaoFresca: async function (margemSeg) {
+        var s = await adapter.auth.sessao();
+        var margem = margemSeg || 120;
+        var agora = Math.floor(Date.now() / 1000);
+        if (s && s.expires_at && (s.expires_at - agora) > margem) return s;
+        try {
+          var r = await sb.auth.refreshSession();
+          if (r && r.data && r.data.session) return r.data.session;
+        } catch (e) { }
+        return s;   /* não deu para renovar: vale o que há, e quem chamou trata a recusa */
+      },
       /* devolve a função para cancelar a escuta */
       aoMudar: function (cb) {
         if (typeof cb !== "function") throw new Error("aoMudar(): informe a função de callback.");
