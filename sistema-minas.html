@@ -1061,6 +1061,20 @@
   .docm.pag2 .assin img{max-height:48px}
   .docm.pag2 .assin .branco{height:48px}
   .docm.pag2 .dupla{margin:4px 0 10px}
+  /* OS TRÊS TERMOS NUMA FOLHA SÓ (pedido dele, 19/10): Garantia Fiduciária + Declaração +
+     Uso de Imagem. Medidos separados eles dão 670 px e 432 px, e a página útil do PDF são
+     1.032 px — junta os dois e sobra quase nada. Esta classe só entra quando os TRÊS estão
+     na mesma folha: aperta margem, entrelinha e assinatura o bastante para sobrar folga,
+     sem passar de 8,5 pt no papel (o texto continua o mesmo, letra por letra). */
+  .docm.pag2.tres{font-size:11.3px;line-height:1.24;padding:28px 42px 30px}
+  .docm.pag2.tres p{margin:0 0 4px;text-align:justify}
+  .docm.pag2.tres ol{margin:0 0 4px;padding-left:22px}
+  .docm.pag2.tres h5{margin:7px 0 4px}
+  .docm.pag2.tres .tit-c{margin-bottom:5px}
+  .docm.pag2.tres .assin{margin:4px 0 2px}
+  .docm.pag2.tres .assin img{max-height:38px}
+  .docm.pag2.tres .assin .branco{height:38px}
+  .docm.pag2.tres .dupla{margin:2px 0 6px}
   .docm .assin .linha{border-top:1.5px solid #2E4DA7;padding-top:6px;font-weight:700}
   .docm p{margin:0 0 9px;text-align:justify}
   .docm ol{margin:0 0 9px 34px;padding:0}
@@ -6469,7 +6483,11 @@ img{max-width:100%}
     <button class="btn ghost" type="button" id="docv_assinar" hidden>Coletar assinatura do cliente</button>
     <button class="btn zap" type="button" id="docv_zap">Enviar Pedido Venda para cliente via WhatsApp</button>
     <button class="btn" type="button" id="docv_link">Link para o cliente assinar</button>
-    <button class="btn" type="button" id="docv_imprimir">Salvar em PDF / imprimir</button>
+    <!-- "Salvar em PDF / imprimir" era UM botão que só abria a janela de impressão do navegador:
+         quem queria o arquivo tinha de escolher "Salvar como PDF" lá dentro. Separado em dois
+         (pedido dele, 19/10), igual ao que a proposta do orçamento já tem desde a v347. -->
+    <button class="btn" type="button" id="docv_baixar">Baixar em PDF</button>
+    <button class="btn" type="button" id="docv_imprimir">Imprimir</button>
     <button class="btn mut" type="button" id="docv_fechar">Fechar</button>
   </div>
   <div class="doc-assina" id="docv_assinaBox" hidden>
@@ -33396,7 +33414,8 @@ function docTermos(p,extra){
   /* venda paga na hora (PIX, dinheiro, débito, transferência) não tem dívida a garantir:
      o bloco da alienação fiduciária sai do documento (regra dele, 03/10) */
   var prazo=vendaAPrazo(p);
-  return '<div class="docm pag2">'+
+  /* os TRÊS na mesma folha (fiduciária + declaração + imagem) pedem a compactação extra */
+  return '<div class="docm pag2'+((prazo&&extra)?" tres":"")+'">'+
     '<div class="tit-c">Termo de condições de Garantia.</div>'+
     (prazo
     ? "<h5>DA GARANTIA FIDUCIÁRIA</h5>"+
@@ -33494,14 +33513,13 @@ function planosDaVenda(p){
 }
 function htmlDocVenda(p){
   var c=cliPorId(p.clienteId)||{};
-  /* Termo de Uso de Imagem logo depois da Declaração (regra dele, 12/09) — mas só quando CABE:
-     com a Garantia Fiduciária na mesma folha ele estourava a página e saía cortado no PDF
-     (defeito que ele pegou no pedido 20813). Nesse caso o termo ganha folha própria. */
+  /* Termo de Uso de Imagem logo depois da Declaração (regra dele, 12/09) e, desde 19/10, SEMPRE
+     na mesma folha dos outros dois: "compactar os três últimos termos do contrato de venda para
+     ficar numa mesma folha". Com a Garantia Fiduciária junto, a folha ganha a classe `tres`, que
+     é o que faz os três caberem na página sem cortar nada (medido folha a folha no teste). */
   var querImagem=p.usoImagem==="sim";
-  var juntos=querImagem&&!vendaAPrazo(p);
-  var imagem=juntos?'<div class="dupla"></div>'+docImagem(p,c):"";
-  var imagemSolta=(querImagem&&!juntos)?'<div class="docm">'+docImagem(p,c)+"</div>":"";
-  return docPedido(p,c)+docTermos(p,imagem)+imagemSolta+
+  var imagem=querImagem?'<div class="dupla"></div>'+docImagem(p,c):"";
+  return docPedido(p,c)+docTermos(p,imagem)+
     planosDaVenda(p).map(function(x){return '<div class="docm">'+docContratoPlano(p,c,x.itens,x.plano)+"</div>";}).join("");
 }
 /* cada tabela dentro de uma moldura: no PDF do Chrome a borda de baixo da tabela sumia,
@@ -38858,6 +38876,19 @@ function ligar(){
   $("ins_fechar").onclick=function(){$("instModal").hidden=true;instAberta=null;render();};
   $("ins_pdf").onclick=function(){if(instAberta)abrirDocVenda(instAberta);};
   $("docv_imprimir").onclick=function(){window.print();};
+  /* baixar o arquivo sem passar pela janela de impressão (pedido dele, 19/10). O PDF é o MESMO
+     documento que está na tela — o gerador fica num lugar só, como no orçamento (v347). */
+  $("docv_baixar").onclick=async function(){
+    var p=docVendaAberta||pedAberto;if(!p)return;
+    var bt=this,rot=bt.textContent;
+    bt.disabled=true;bt.textContent="Gerando o PDF…";
+    try{
+      var f=await gerarPdfVenda(p);
+      baixarArquivo(f);
+      toast("Arquivo baixado: "+f.name);
+    }catch(e){toast("Não deu para gerar o PDF: "+((e&&e.message)||e));}
+    finally{bt.disabled=false;bt.textContent=rot;}
+  };
   $("docv_assinar").onclick=function(){
     ligarAssinaturaDoc();limparAssinaturaDoc();
     $("docv_assinaBox").hidden=false;$("docVenda").scrollTop=0;};
