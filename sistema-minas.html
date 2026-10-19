@@ -12205,6 +12205,7 @@ window.__termoVersaoMF=function(){return TERMO_RASTREIO_VERSAO;};
 /* ganchos para o teste da sessão vencida (19/10) */
 window.__chamarFuncaoMF=function(n,c){return chamarFuncaoBanco(n,c);};
 window.__dbMF=function(novo){if(novo){var a=db;db=novo;return a;}return db;};
+window.__htmlSessaoMF=function(){return htmlSessaoPerdida();};
 window.__conferirVersaoAppMF=function(f){return conferirVersaoApp(f);};
 window.__assinarTesteMF=function(){trSigFeita=true;return true;};
 window.__lerParadasDeMF=async function(quem){
@@ -17749,7 +17750,10 @@ async function desconectarAcessoColaborador(){
       funcao:u.perfil||"Vendedor",loja:u.loja||lojaAtual};
     if(voltar)corpo.reconectar=true;else corpo.desconectar=true;
     r=await chamarFuncaoBanco("criar-acesso",corpo);
-  }catch(e){erro=(e&&e.message)||String(e);}
+  }catch(e){
+    if(ehSessaoPerdida(e)){avisoUsuario(htmlSessaoPerdida());ligarBotaoSessao();return;}
+    erro=(e&&e.message)||String(e);
+  }
   if(erro){
     avisoUsuario('<div class="note crit"><b>O acesso NÃO foi '+(voltar?"reconectado":"desconectado")+":</b> "+esc(erro)+
       (/desconectar|reconectar|Envio inválido/i.test(erro)?" <br>A função <b>criar-acesso</b> publicada ainda é a antiga: publique de novo o arquivo <b>supabase/functions/criar-acesso/index.ts</b> pelo painel do Supabase.":"")+
@@ -34173,6 +34177,7 @@ async function atualizarFuncaoBanco(){
     al.innerHTML='<div class="note ok"><b>Função atualizada para '+esc(u.perfil||"Vendedor")+".</b> Ela vale no próximo login dele.</div>";
     renderUsuarios();ajustarAcessoUsuario();
   }catch(e){
+    if(ehSessaoPerdida(e)){al.innerHTML=htmlSessaoPerdida();ligarBotaoSessao();bt.disabled=false;bt.textContent=rot;return;}
     var m=(e&&e.message)||String(e);
     al.innerHTML='<div class="note crit"><b>Não deu certo:</b> '+esc(m)+
       (/senha/i.test(m)?" <br>A função <b>criar-acesso</b> publicada ainda é a antiga. Publique de novo o arquivo <b>supabase/functions/criar-acesso/index.ts</b>, ou cadastre uma senha nova aqui em cima — isso também grava a função.":"")+"</div>";
@@ -34185,10 +34190,30 @@ async function atualizarFuncaoBanco(){
    função do banco, que confere o token por conta própria, recusava com 401. Agora a sessão é
    RENOVADA antes de chamar, e uma recusa por credencial faz MAIS UMA tentativa com a sessão
    refeita. Só depois disso é que se pede para entrar de novo. */
+/* SESSÃO QUE ACABOU DE VEZ (19/10, segundo print dele): quando nem renovar resolve, o
+   recado não pode ser só uma faixa vermelha dentro do formulário — a pessoa fica tentando
+   de novo, e tentar de novo nunca vai funcionar. Aqui vai o caminho junto, num botão. */
+function htmlSessaoPerdida(){
+  return '<div class="note crit"><b>A sua sessão venceu.</b> Isso acontece quando o sistema '+
+    "fica muitas horas aberto. Entre de novo e repita — o cadastro do colaborador continua "+
+    "gravado como está."+
+    '<div class="actions" style="margin-top:10px">'+
+    '<button class="btn" type="button" id="btSessaoDeNovo">Entrar de novo</button></div></div>';
+}
+function ligarBotaoSessao(){
+  var b=$("btSessaoDeNovo");if(!b)return;
+  b.onclick=function(){
+    /* vai pelo endereço principal: é ele que entrega a versão mais nova do sistema */
+    location.href=location.origin+location.pathname.replace(/[^/]*$/,"");
+  };
+}
+function ehSessaoPerdida(e){
+  return !!(e&&(e.sessaoPerdida||/sess[ãa]o (venceu|expirada|inv[áa]lida)/i.test(String(e.message||""))));
+}
 async function chamarFuncaoBanco(nome,corpo){
   if(!db||!db.sb)throw new Error("Sem conexão com o banco.");
   var s=db.auth.sessaoFresca?await db.auth.sessaoFresca():await db.auth.sessao();
-  if(!s)throw new Error("Sessão expirada — entre no sistema de novo.");
+  if(!s){var ex=new Error("Sessão expirada — entre no sistema de novo.");ex.sessaoPerdida=true;throw ex;}
   async function bater(sessao){
     var r;
     try{
@@ -34214,7 +34239,7 @@ async function chamarFuncaoBanco(nome,corpo){
   }
   if(!v.r.ok||v.dados.erro){
     if(v.r.status===404)throw new Error('A função "criar-acesso" ainda não foi publicada no Supabase (Edge Functions).');
-    if(v.r.status===401)throw new Error("A sua sessão venceu. Recarregue a página (F5), entre de novo e repita — o cadastro do colaborador continua como estava.");
+    if(v.r.status===401){var e4=new Error("A sua sessão venceu.");e4.sessaoPerdida=true;throw e4;}
     throw new Error(v.dados.erro||("O banco respondeu "+v.r.status+"."));
   }
   return v.dados;
@@ -34242,7 +34267,9 @@ async function cadastrarAcessoUsuario(){
     renderUsuarios();ajustarAcessoUsuario();
     toast("Acesso de "+u.nome+" pronto.");
   }catch(e){
-    al.innerHTML='<div class="note crit"><b>Não deu certo:</b> '+esc((e&&e.message)||e)+"</div>";
+    /* sessão acabada tem caminho próprio: botão que leva à entrada (19/10) */
+    if(ehSessaoPerdida(e)){al.innerHTML=htmlSessaoPerdida();ligarBotaoSessao();}
+    else al.innerHTML='<div class="note crit"><b>Não deu certo:</b> '+esc((e&&e.message)||e)+"</div>";
   }
   bt.disabled=false;bt.textContent=rot;
 }
