@@ -26,6 +26,25 @@ object Guardado {
     p(ctx).edit().remove("token").remove("refresh").remove("nome").apply()
   }
 
+  /* CONTA O QUE FOI ENVIADO HOJE (19/10): e o que o aviso fixo mostra e o que o sistema
+     pergunta na tela. Vira o dia, zera. Serve para conferir no celular, sem abrir o banco. */
+  fun contarEnvio(ctx: Context, quando: Long) {
+    val f = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+    val hoje = f.format(java.util.Date(quando))
+    val dia = p(ctx).getString("diaEnvio", "") ?: ""
+    val n = if (dia == hoje) p(ctx).getInt("enviados", 0) else 0
+    p(ctx).edit().putString("diaEnvio", hoje).putInt("enviados", n + 1)
+      .putLong("ultimoEnvio", quando).apply()
+  }
+
+  fun enviadosHoje(ctx: Context): Int {
+    val f = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+    val hoje = f.format(java.util.Date(System.currentTimeMillis()))
+    return if ((p(ctx).getString("diaEnvio", "") ?: "") == hoje) p(ctx).getInt("enviados", 0) else 0
+  }
+
+  fun ultimoEnvio(ctx: Context): Long = p(ctx).getLong("ultimoEnvio", 0L)
+
   fun tem(ctx: Context): Boolean =
     !(p(ctx).getString("token", "") ?: "").isEmpty() &&
     !(p(ctx).getString("nome", "") ?: "").isEmpty()

@@ -75,9 +75,17 @@ class ServicoLocalizacao : Service() {
 
   private fun comecar() {
     cliente = LocationServices.getFusedLocationProviderClient(this)
+    /* DEFEITO CORRIGIDO EM 19/10 (teste real com o Renan, Redmi Note 8): aqui havia
+       `setMinUpdateDistanceMeters(15f)`, ou seja, o Android so entregava uma localizacao
+       nova depois que o aparelho ANDAVA 15 metros. Parado, NENHUMA localizacao chegava,
+       `tratar` nunca rodava e o aplicativo nunca chamava o banco — por isso o aviso fixo
+       ficava na barra o dia todo e `rastro_pontos` continuava com ZERO pontos, sem erro
+       nenhum nos registros do Supabase. E era uma contradicao com a propria regra da casa:
+       o que interessa achar e justamente a PARADA de 10 minutos.
+       Quem controla o ritmo e o `ultimoGravado` la embaixo (1 ponto por minuto andando,
+       1 a cada 5 minutos parado) — a trava por distancia nao tem o que fazer aqui. */
     val req = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, PASSO_ANDANDO)
       .setMinUpdateIntervalMillis(30_000L)
-      .setMinUpdateDistanceMeters(15f)
       .setWaitForAccurateLocation(false)
       .build()
     pedido = object : LocationCallback() {
@@ -87,9 +95,22 @@ class ServicoLocalizacao : Service() {
     }
     try {
       cliente!!.requestLocationUpdates(req, pedido!!, android.os.Looper.getMainLooper())
+      primeiroPonto()
     } catch (e: SecurityException) {
+      atualizarAviso("Sem permissão de localização — fale com a gestão.")
       stopSelf()   /* sem permissao de localizacao nao ha o que registrar */
     }
+  }
+
+  /* PRIMEIRO PONTO NA HORA (19/10): o modo economico pode levar minutos para a primeira
+     entrega, e ate la o vendedor nao tem sinal nenhum de que funcionou. Uma leitura
+     forcada, so no arranque, resolve isso e ja prova que o caminho ate o banco esta de pe. */
+  private fun primeiroPonto() {
+    try {
+      cliente!!.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+        .addOnSuccessListener { l -> if (l != null) tratar(l) }
+        .addOnFailureListener { atualizarAviso("Procurando o sinal de localização…") }
+    } catch (e: SecurityException) { }
   }
 
   private fun tratar(l: Location) {
@@ -154,8 +175,25 @@ class ServicoLocalizacao : Service() {
       .put("parado", parado)
 
     /* tenta gravar; nao conseguiu, guarda no celular e manda depois */
-    if (!Banco.gravarPontos(ctx, JSONArray().put(ponto))) Fila.guardar(ctx, ponto)
-    else Fila.enviarTudo(ctx)
+    if (!Banco.gravarPontos(ctx, JSONArray().put(ponto))) {
+      Fila.guardar(ctx, ponto)
+      atualizarAviso("Sem internet: " + Fila.quantos(ctx) + " ponto(s) esperando para enviar.")
+    } else {
+      Fila.enviarTudo(ctx)
+      /* O AVISO FIXO PASSOU A PRESTAR CONTAS (19/10): antes dizia so "Registrando a
+         localizacao", e foi por isso que ninguem percebeu que nada estava sendo enviado.
+         Agora ele mostra a hora do ultimo ponto e quantos sairam hoje — da para conferir
+         no celular, sem abrir nada e sem olhar o banco. */
+      Guardado.contarEnvio(ctx, agora)
+      atualizarAviso("Último registro às " + hora(agora) + " · " +
+        Guardado.enviadosHoje(ctx) + " hoje" + (if (parado) " · parado" else " · em deslocamento"))
+    }
+  }
+
+  private fun hora(t: Long): String {
+    val f = SimpleDateFormat("HH:mm", Locale.US)
+    f.timeZone = TimeZone.getDefault()
+    return f.format(Date(t))
   }
 
   /* a pagina esta aberta? entao o SISTEMA confere a parada (atendimento, loja, almoco) */

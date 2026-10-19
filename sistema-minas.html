@@ -928,7 +928,10 @@
          sem papel timbrado, com logomarca, endereço, CNPJ, telefones, QR Codes e a caixa
          do documento à direita. A folha útil aqui tem 630 px, menos que a do pedido ---- */
   .folha-orc{padding:44px 64px 150px}
-  .folha-orc .os-cab{display:flex;gap:12px;align-items:center;border-bottom:2px solid #0B3C5D;
+  /* topo alinhado (19/10, print dele): com `align-items:center` a caixa do orçamento, que é
+     mais alta que a logomarca, descia e ultrapassava a linha azul do cabeçalho. Começando
+     todos pelo topo, a linha fecha embaixo de tudo. */
+  .folha-orc .os-cab{display:flex;gap:12px;align-items:flex-start;border-bottom:2px solid #0B3C5D;
     padding-bottom:9px;margin-bottom:16px}
   .folha-orc .fp-logo{width:118px;height:80px;background-size:contain;background-repeat:no-repeat;
     background-position:left center;flex:none}
@@ -1419,6 +1422,13 @@
   .modal .box .big-q{font-size:15.5px;line-height:1.55;margin:18px 0 20px}
   .modal .relogio{font-size:34px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--acc);margin-bottom:2px}
 
+  /* quadro de assinatura do termo: branco de verdade, alto o bastante para o dedo, e
+     imune ao modo escuro do celular (19/10) */
+  .tr-assina{color-scheme:light}
+  .tr-assina canvas{display:block;width:100%;max-width:560px;height:180px;background:#fff;
+    border:2px dashed #8FA3B8;border-radius:10px;touch-action:none;cursor:crosshair;
+    color-scheme:light;forced-color-adjust:none}
+  @media(max-width:820px){ .tr-assina canvas{height:200px} }
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:28px;background:var(--rail);
     /* o toast é AVISO: fica acima de tudo que cobre a tela — documento da venda (400), login
        (200), gaveta do menu (190) e carregando (300). Em 99 ele sumia atrás do documento, e o
@@ -6291,10 +6301,15 @@ img{max-width:100%}
     <h3>Antes de começar: leia e assine</h3>
     <div class="sub">Este celular é da empresa e registra a sua localização. Sem a sua assinatura, o registro não liga.</div>
     <div id="tr_texto" style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0"></div>
-    <div class="fld">
+    <!-- QUADRO DE ASSINATURA (refeito em 19/10, relato do Renan no Redmi): ele aparecia
+         PRETO e espremido, e o traço do dedo não aparecia — o Android, em modo escuro,
+         inverte o branco da página por conta própria. Duas defesas: `color-scheme:light`
+         aqui e o fundo branco pintado DENTRO do desenho (ver `ligarAssinaturaTermo`), que
+         o Android não inverte. A segunda é a que vale para quem ainda está na versão 1.1. -->
+    <div class="fld tr-assina">
       <label for="tr_sig">Assine com o dedo <span class="req">*</span></label>
-      <canvas id="tr_sig" width="560" height="150"
-        style="width:100%;max-width:560px;height:150px;border:1px dashed var(--line);border-radius:10px;background:#fff;touch-action:none"></canvas>
+      <canvas id="tr_sig" width="560" height="180"></canvas>
+      <div class="help" id="tr_sigNota" style="margin:6px 0 0">Passe o dedo no quadro branco acima.</div>
     </div>
     <div id="trm_alerta"></div>
     <div class="actions">
@@ -7714,6 +7729,12 @@ function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(m){return({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[m];});}
 function col(n){return db?db.collection(n):null;}
 function nomeLoja(){var l=LOJAS.filter(function(x){return x.id===lojaAtual;})[0];return l?l.nome:"";}
+/* NOME DA UNIDADE NOS DOCUMENTOS (regra dele, 19/10): no papel que vai ao cliente a loja é
+   chamada pela CIDADE — "Unidade Pará de Minas", "Unidade Nova Serrana". Dentro do sistema
+   (menu, filtros, escolha de loja) continua valendo o nome de sempre. Fica numa função só,
+   usada por todos os documentos, para nunca haver dois nomes para a mesma loja. */
+var UNIDADES={mf:"Unidade Pará de Minas",wf:"Unidade Nova Serrana",dv:"Unidade Divinópolis"};
+function unidadeDoc(id){return UNIDADES[id||lojaAtual]||nomeLoja();}
 
 /* ================== AS LEITURAS DO BOOT SAEM TODAS DE UMA VEZ ==================
    O carregar() lia 47 coisas do banco uma esperando a outra: 28 coleções e 19 configurações.
@@ -31856,7 +31877,7 @@ function verProposta(o){
     '<div class="os-cab">'+cabecalhoEmpresaDoc()+
       '<div class="os-num"><div class="t">ORÇAMENTO</div><div class="g">'+
         '<div><span class="os-rot">Nº DO ORÇAMENTO</span><div class="nm">'+esc(o.numero)+"</div></div>"+
-        '<div><span class="os-rot">LOJA</span><div><b>'+esc(nomeLoja())+"</b></div></div>"+
+        '<div><span class="os-rot">LOJA</span><div><b>'+esc(unidadeDoc())+"</b></div></div>"+
         "<div>Emitido em: <b>"+esc(dataBR(o.data))+"</b></div>"+
         "<div>Válido até: <b>"+esc(o.validade?dataBR(o.validade):"—")+"</b></div>"+
         "<div>Vendedor: <b>"+esc(o.vendedor||usuarioAtual||"—")+"</b></div>"+
@@ -33432,7 +33453,7 @@ function docTabelaForma(f,ix,dataV){
 }
 function docPedido(p,c){
   var dataV=String(p.data||hojeISO()).slice(0,10);
-  var loja=(LOJAS.filter(function(l){return l.id===p.loja;})[0]||{}).nome||nomeLoja();
+  var loja=unidadeDoc(p.loja||lojaAtual);   /* "Unidade Pará de Minas" — regra dele, 19/10 */
   var prods=(p.itens||[]).filter(function(i){return !ehPlano(i);}),planos=(p.itens||[]).filter(ehPlano);
   var totProd=prods.reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0);
   var formas=(p.formas||[]).filter(function(f){return +f.valor>0;});
@@ -33711,7 +33732,7 @@ function htmlFichaOS(o,p){
     '<div class="os-cab">'+cabecalhoEmpresaDoc()+
       '<div class="os-num"><div class="t">ORDEM DE SERVIÇO</div><div class="g">'+
         '<div><span class="os-rot">Nº DA OS</span><div class="nm">'+esc(o.numero)+"</div></div>"+
-        '<div><span class="os-rot">LOJA</span><div><b>'+esc(nomeLoja())+"</b></div></div>"+
+        '<div><span class="os-rot">LOJA</span><div><b>'+esc(unidadeDoc())+"</b></div></div>"+
         "<div>Abertura: <b>"+esc(dataBR(o.abertura||"")||"—")+(o.hora?" "+esc(o.hora):"")+"</b></div>"+
         "<div>Conclusão: <b>"+(fimD?esc(dataBR(fimD)):"em andamento")+"</b></div>"+
         "<div>Abriu a OS: <b>"+esc(o.atendente||o.criadoPor||"—")+"</b></div>"+
@@ -37492,23 +37513,43 @@ function abrirTermoRastreio(){
   $("trm_alerta").innerHTML=termoRastreioDesatualizado(usuarioAtual)
     ? "<div class=\"note\"><b>O texto do termo mudou.</b> A sua assinatura anterior continua guardada no sistema, mas é preciso assinar esta versão nova para o registro de localização continuar.</div>"
     : "";
-  trSigFeita=false;
-  var cv=$("tr_sig");
-  if(cv){try{cv.getContext("2d").clearRect(0,0,cv.width,cv.height);}catch(e){}}
   ligarAssinaturaTermo();
   $("termoModal").hidden=false;
+  /* o quadro é limpo DEPOIS de a janela aparecer: escondido, o navegador ainda não sabe
+     o tamanho dele, e o branco acabava pintado no lugar errado */
+  setTimeout(limparQuadroTermo,30);
+}
+/* o branco PINTADO DENTRO do desenho (19/10): o Android em modo escuro inverte o fundo
+   que vem do CSS, mas não mexe no que está desenhado no quadro. Pintando o branco aqui,
+   o quadro fica branco e o traço escuro aparece — inclusive em quem ainda está na 1.1. */
+function limparQuadroTermo(){
+  var cv=$("tr_sig");if(!cv)return;
+  try{
+    var c=cv.getContext("2d");
+    c.save();c.setTransform(1,0,0,1,0,0);
+    c.fillStyle="#ffffff";c.fillRect(0,0,cv.width,cv.height);
+    c.restore();
+  }catch(e){}
+  trSigFeita=false;
+  var n=$("tr_sigNota");if(n)n.textContent="Passe o dedo no quadro branco acima.";
 }
 function ligarAssinaturaTermo(){
   var cv=$("tr_sig");if(!cv||cv.__ligado)return;
   cv.__ligado=true;
   var ctx=cv.getContext("2d"),desenhando=false;
-  ctx.lineWidth=2.2;ctx.lineCap="round";ctx.strokeStyle="#111";
+  ctx.lineWidth=2.6;ctx.lineCap="round";ctx.lineJoin="round";ctx.strokeStyle="#111";
   function pos(e){
     var r=cv.getBoundingClientRect();
     var t=(e.touches&&e.touches[0])||e;
     return {x:(t.clientX-r.left)*(cv.width/r.width),y:(t.clientY-r.top)*(cv.height/r.height)};
   }
-  function ini(e){desenhando=true;trSigFeita=true;var p=pos(e);ctx.beginPath();ctx.moveTo(p.x,p.y);e.preventDefault();}
+  function ini(e){
+    desenhando=true;trSigFeita=true;var p=pos(e);ctx.beginPath();ctx.moveTo(p.x,p.y);
+    /* um ponto já marca: toque curto sem arrastar também deixa traço visível */
+    ctx.lineTo(p.x+0.1,p.y);ctx.stroke();
+    var n=$("tr_sigNota");if(n)n.textContent="Assinatura no quadro. Se quiser refazer, toque em Limpar a assinatura.";
+    e.preventDefault();
+  }
   function mov(e){if(!desenhando)return;var p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke();e.preventDefault();}
   function fim(){desenhando=false;}
   cv.addEventListener("mousedown",ini);cv.addEventListener("mousemove",mov);
@@ -40251,9 +40292,8 @@ function ligar(){
   };
   $("trm_ok").onclick=function(){assinarTermoRastreio();};
   $("tr_limpar").onclick=function(){
-    var cv=$("tr_sig");
-    if(cv){try{cv.getContext("2d").clearRect(0,0,cv.width,cv.height);}catch(e){}}
-    trSigFeita=false;$("trm_alerta").innerHTML="";
+    limparQuadroTermo();
+    $("trm_alerta").innerHTML="";
   };
   /* ponto pelo endereço para a loja e a casa do colaborador — MESMA ordem do cadastro do cliente:
      1º base de endereços do IBGE (número exato); só sem ela, o mapa aberto (que não tem o número da casa) */

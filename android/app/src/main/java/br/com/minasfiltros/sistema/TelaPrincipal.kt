@@ -52,6 +52,15 @@ class TelaPrincipal : AppCompatActivity() {
       userAgentString = "$userAgentString MinasFiltrosApp/1.0"
     }
     WebView.setWebContentsDebuggingEnabled(false)
+    /* o Android nao inverte as cores do sistema (19/10): com o celular em modo escuro, o
+       quadro branco da assinatura virava preto e o traco do dedo sumia. O tema ja desliga
+       isso (res/values/themes.xml); aqui e a segunda tranca, para a versao do WebView que
+       decide por conta propria. */
+    try {
+      @Suppress("DEPRECATION")
+      if (Build.VERSION.SDK_INT >= 29) web.settings.forceDark = android.webkit.WebSettings.FORCE_DARK_OFF
+    } catch (e: Throwable) { }
+    try { web.setBackgroundColor(android.graphics.Color.WHITE) } catch (e: Exception) { }
     CookieManager.getInstance().setAcceptCookie(true)
 
     /* a ponte: e por ela que o sistema entrega a sessao e pede notificacao */

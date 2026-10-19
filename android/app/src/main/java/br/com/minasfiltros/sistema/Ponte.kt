@@ -62,6 +62,19 @@ class Ponte(private val ctx: Context) {
   @JavascriptInterface
   fun naFila(): Int = Fila.quantos(ctx)
 
+  /* o sistema mostra isto na tela para a conferencia do dia (19/10) */
+  @JavascriptInterface
+  fun pontosHoje(): Int = Guardado.enviadosHoje(ctx)
+
+  @JavascriptInterface
+  fun ultimoPonto(): String {
+    val t = Guardado.ultimoEnvio(ctx)
+    if (t <= 0L) return ""
+    val f = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+    f.timeZone = java.util.TimeZone.getDefault()
+    return f.format(java.util.Date(t))
+  }
+
   /* abre a tela de bateria do proprio celular, para liberar o aplicativo */
   @JavascriptInterface
   fun abrirAjustesBateria() {
