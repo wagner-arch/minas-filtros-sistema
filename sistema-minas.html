@@ -5979,11 +5979,15 @@ img{max-width:100%}
            computador dele é o Business. -->
       <div class="actions" style="justify-content:flex-start">
         <button class="btn zap" type="button" id="zpc_abrirApp">2. Abrir no aplicativo do WhatsApp</button>
-        <button class="btn" type="button" id="zpc_abrir">Abrir no WhatsApp Web</button>
+        <button class="btn" type="button" id="zpc_abrir">Abrir no WhatsApp Web (aba nova)</button>
       </div>
-      <p class="help" id="zpc_ajudaApp">O botão do <b>aplicativo</b> abre o WhatsApp instalado neste
-        computador — WhatsApp ou <b>WhatsApp Business</b>, o que estiver como padrão no Windows.
-        O sistema lembra o que você escolher.</p>
+      <p class="help" id="zpc_ajudaApp"><b>Escolha uma vez só:</b> daqui para a frente o botão de
+        enviar já abre a conversa por esse caminho.<br>
+        <b>Aplicativo</b> — abre o WhatsApp instalado neste computador (WhatsApp ou
+        <b>WhatsApp Business</b>, o que estiver como padrão no Windows) e <b>não mexe nas suas
+        abas</b>.<br>
+        <b>WhatsApp Web</b> — abre uma aba nova. Se você já tem o WhatsApp aberto no navegador,
+        ele vai pedir "Usar nesta janela" e <b>a aba antiga desconecta</b>.</p>
     </div>
     <div class="actions"><button class="btn mut" type="button" id="zpc_fechar">Fechar</button></div>
     <!-- o "compartilhar do Windows" saiu da ajuda (19/10): no computador dele o painel do
@@ -6477,6 +6481,10 @@ img{max-width:100%}
     <p class="help" id="zp_nota"></p>
     <div class="actions">
       <button class="btn mut" type="button" id="zp_fechar">Fechar</button>
+      <!-- quem já usa o WhatsApp Web numa aba do navegador não quer abrir outra: o WhatsApp só
+           aceita UMA janela ativa e a nova derruba a antiga (print dele, 19/10). Copiando, ele
+           cola na conversa que já está aberta. -->
+      <button class="btn ghost" type="button" id="zp_copiar">Copiar a mensagem</button>
       <button class="btn ghost" type="button" id="zp_aba">Abrir em nova aba</button>
       <button class="btn" type="button" id="zp_programar" hidden>Programar a mensagem</button>
       <button class="btn zap" type="button" id="zp_lado">Abrir o WhatsApp ao lado do sistema</button>
@@ -34829,8 +34837,18 @@ function abrirWhatsApp(ctx){
 async function confirmarWhatsApp(modo){
   var ctx=zapCtx;if(!ctx)return;
   var msg=$("zp_msg").value.trim();
-  guardarModoZap(modo);   /* a escolha vale para os próximos envios, inclusive "app" (03/10) */
-  abrirJanelaWhatsApp(ctx.telUsado,msg,modo);
+  /* "copiar" não abre nada (19/10): quem já tem o WhatsApp Web numa aba cola na conversa que
+     está lá, sem a aba nova derrubar a sessão dele */
+  if(modo==="copiar"){
+    var copiou=await copiarTextoMF(msg);
+    toast(copiou
+      ? "Mensagem copiada. Abra a conversa de "+primeiroNome(ctx.nome||((ctx.cliente||{}).nome)||"")+
+        " no WhatsApp que já está aberto e cole (Ctrl+V)."
+      : "Não consegui copiar a mensagem neste navegador — selecione o texto e copie à mão.");
+  }else{
+    guardarModoZap(modo);   /* a escolha vale para os próximos envios, inclusive "app" (03/10) */
+    abrirJanelaWhatsApp(ctx.telUsado,msg,modo);
+  }
   $("zapModal").hidden=true;
   var c=ctx.cliente;
   if(c&&c.id&&$("zp_reg").checked){
@@ -34847,6 +34865,7 @@ function ligarWhatsApp(){
   $("zp_fechar").onclick=function(){$("zapModal").hidden=true;zapCtx=null;};
   $("zp_lado").onclick=function(){confirmarWhatsApp("lado");};
   $("zp_aba").onclick=function(){confirmarWhatsApp("aba");};
+  $("zp_copiar").onclick=function(){confirmarWhatsApp("copiar");};
   $("zp_app").onclick=function(){confirmarWhatsApp("app");};
   /* follow-up programado (04/10) */
   $("zp_prog").onchange=function(){ajustarProgZap();};
@@ -34925,25 +34944,64 @@ async function enviarPdfWhatsApp(cfg,botao){
      porque o toast passou a ficar acima do documento (v356). */
   await enviarPeloComputador(cfg,f,tel,quem);
 }
-/* baixa o PDF e abre a conversa, de uma vez. Falhando qualquer uma das duas pontas — sem
-   telefone no cadastro, ou aba bloqueada pelo navegador —, a janela dos dois passos entra
-   como saída, com o botão que o próprio clique da pessoa dispara. */
-async function enviarPeloComputador(cfg,f,tel,quem){
-  if(!tel){abrirEnvioPcWhatsApp(cfg,f,tel,quem);return;}
-  baixarArquivo(f);
-  if(!abrirJanelaWhatsApp(tel,cfg.msg)){abrirEnvioPcWhatsApp(cfg,f,tel,quem);return;}
-  try{await cfg.registrar("PDF baixado e conversa do WhatsApp aberta");}catch(e){}
-  toast("Conversa de "+quem+" aberta e "+f.name+" baixado. Arraste o arquivo da pasta de "+
-    "downloads para a conversa (ou use o clipe 📎 › Documento).");
+/* NO COMPUTADOR O SISTEMA NÃO ABRE MAIS O WHATSAPP (regra dele, 19/10, com dois prints:
+   "somente baixa o arquivo e não abre a tela do whatsapp que está já conectado").
+   Ele usa o WhatsApp Business numa ABA do Chrome, e o WhatsApp Web só aceita UMA janela ativa:
+   a aba que o sistema abria disputava a sessão e caía no aviso "O WhatsApp está aberto em outra
+   janela · Usar nesta janela" — ou seja, para mandar um pedido ele derrubava a própria conexão.
+   Então o envio agora prepara tudo e sai da frente: baixa o PDF, copia a mensagem e diz o que
+   fazer. A conversa quem abre é ele, na aba que já está conectada. */
+async function copiarTextoMF(t){
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(t);return true;
+    }
+  }catch(e){}
+  try{
+    var a=document.createElement("textarea");
+    a.value=t;a.style.cssText="position:fixed;left:-9999px;top:0";
+    document.body.appendChild(a);a.select();
+    var ok=document.execCommand&&document.execCommand("copy");
+    a.parentNode.removeChild(a);
+    return !!ok;
+  }catch(e){return false;}
 }
-/* janela do envio pelo computador: baixar o PDF e abrir a conversa, nesta ordem */
-function abrirEnvioPcWhatsApp(cfg,f,tel,quem){
+/* o caminho que ele ESCOLHEU uma vez; null enquanto nunca escolheu (aí o sistema pergunta,
+   em vez de abrir o WhatsApp Web e derrubar a aba dele sem avisar) */
+function modoEscolhidoZap(){try{return localStorage.getItem("mf_zap_modo")||null;}catch(e){return null;}}
+async function enviarPeloComputador(cfg,f,tel,quem){
+  /* "baixa o arquivo e abre a tela do whatsapp no número do cliente para enviar" (ele, 19/10).
+     O problema é QUAL WhatsApp: abrir o Web numa aba nova derruba a aba que ele já tem
+     conectada (o WhatsApp Web só aceita uma janela ativa). O aplicativo instalado abre a
+     conversa sem encostar no navegador. Como só ele sabe o que usa, o sistema pergunta UMA vez
+     e guarda a resposta — da segunda em diante o clique vai direto. */
+  try{baixarArquivo(f);}
+  catch(e){toast("Não consegui baixar o PDF: "+((e&&e.message)||e));return;}
+  if(!tel){
+    toast("PDF baixado: "+f.name+". Este cliente está sem telefone no cadastro — abra a conversa "+
+      "no WhatsApp e arraste o arquivo da pasta de downloads.");
+    return;
+  }
+  var modo=modoEscolhidoZap();
+  if(!modo){abrirEnvioPcWhatsApp(cfg,f,tel,quem,true);return;}   /* a primeira vez pergunta */
+  abrirJanelaWhatsApp(tel,cfg.msg,modo);
+  try{await cfg.registrar("PDF baixado e conversa do WhatsApp aberta");}catch(e){}
+  toast("PDF baixado e conversa de "+quem+" aberta"+(modo==="app"?" no aplicativo":" no WhatsApp Web")+
+    ". Arraste "+f.name+" da pasta de downloads para a conversa (ou use o clipe 📎 › Documento).");
+}
+/* Janela do envio pelo computador. Desde 19/10 ela aparece UMA vez: o arquivo já foi baixado e
+   o que falta é ele dizer ONDE abrir a conversa — no aplicativo instalado (não encosta no
+   navegador) ou no WhatsApp Web (que derruba a aba já conectada). A resposta fica guardada. */
+function abrirEnvioPcWhatsApp(cfg,f,tel,quem,jaBaixou){
   var m=$("zapPcModal");if(!m)return;
   $("zpc_sub").innerHTML="<b>"+esc(cfg.titulo)+"</b> para <b>"+esc(cfg.cliente||quem)+"</b>"+
     (tel?" · "+esc(tel):" · <b>sem telefone no cadastro</b>");
   $("zpc_arquivo").textContent=f.name;
-  $("zpc_passo2").hidden=true;
-  $("zpc_baixar").disabled=false;$("zpc_baixar").textContent="1. Baixar o PDF";
+  /* o arquivo já saiu no clique do botão (19/10): o passo 1 abre marcado e a janela existe só
+     para ele dizer onde abrir a conversa */
+  $("zpc_passo2").hidden=!jaBaixou;
+  $("zpc_baixar").disabled=!!jaBaixou;
+  $("zpc_baixar").textContent=jaBaixou?"1. PDF baixado ✓":"1. Baixar o PDF";
   $("zpc_abrir").disabled=!tel;
   $("zpc_baixar").onclick=function(){
     var url=URL.createObjectURL(f),a=document.createElement("a");
