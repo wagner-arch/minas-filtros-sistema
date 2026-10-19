@@ -37,6 +37,9 @@ class ServicoLocalizacao : Service() {
   private var pedido: LocationCallback? = null
   private var ultimoGravado = 0L
   private var paradaId: Long? = null
+  /* LINHA DE TRABALHO PROPRIA (19/10) — ver a explicacao em `comecar()`: gravar o ponto e
+     uma chamada de rede, e o Android PROIBE rede na linha principal. */
+  private var linha: android.os.HandlerThread? = null
 
   private fun iso(t: Long): String {
     val f = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US)
@@ -56,6 +59,8 @@ class ServicoLocalizacao : Service() {
   override fun onDestroy() {
     ligado = false
     try { pedido?.let { cliente?.removeLocationUpdates(it) } } catch (e: Exception) { }
+    try { linha?.quitSafely() } catch (e: Exception) { }
+    linha = null
     super.onDestroy()
   }
 
@@ -93,8 +98,17 @@ class ServicoLocalizacao : Service() {
         r.lastLocation?.let { tratar(it) }
       }
     }
+    /* O DEFEITO QUE SEGUROU O RASTREIO ATE 19/10, E ELE ERA O SEGUNDO DA FILA:
+       a resposta da localizacao chegava na LINHA PRINCIPAL (`Looper.getMainLooper()`), e
+       e nela que `tratar` gravava o ponto — so que gravar o ponto e uma chamada de REDE, e
+       o Android PROIBE rede na linha principal (NetworkOnMainThreadException). O `catch`
+       generico do Banco engolia essa excecao e devolvia "nao consegui", entao o ponto ia
+       para a fila do celular e NUNCA saia — nenhum pedido chegava ao banco, nem com erro,
+       e na tela parecia falta de internet. Agora a resposta chega numa linha de trabalho
+       propria, onde a rede e permitida. */
+    linha = android.os.HandlerThread("mf-localizacao").also { it.start() }
     try {
-      cliente!!.requestLocationUpdates(req, pedido!!, android.os.Looper.getMainLooper())
+      cliente!!.requestLocationUpdates(req, pedido!!, linha!!.looper)
       primeiroPonto()
     } catch (e: SecurityException) {
       atualizarAviso("Sem permissão de localização — fale com a gestão.")
@@ -107,9 +121,11 @@ class ServicoLocalizacao : Service() {
      forcada, so no arranque, resolve isso e ja prova que o caminho ate o banco esta de pe. */
   private fun primeiroPonto() {
     try {
+      /* o resultado tambem e tratado FORA da linha principal, pelo mesmo motivo acima */
+      val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
       cliente!!.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-        .addOnSuccessListener { l -> if (l != null) tratar(l) }
-        .addOnFailureListener { atualizarAviso("Procurando o sinal de localização…") }
+        .addOnSuccessListener(executor) { l -> if (l != null) tratar(l) }
+        .addOnFailureListener(executor) { atualizarAviso("Procurando o sinal de localização…") }
     } catch (e: SecurityException) { }
   }
 
@@ -177,7 +193,9 @@ class ServicoLocalizacao : Service() {
     /* tenta gravar; nao conseguiu, guarda no celular e manda depois */
     if (!Banco.gravarPontos(ctx, JSONArray().put(ponto))) {
       Fila.guardar(ctx, ponto)
-      atualizarAviso("Sem internet: " + Fila.quantos(ctx) + " ponto(s) esperando para enviar.")
+      val motivo = Banco.ultimoErro
+      atualizarAviso(Fila.quantos(ctx).toString() + " ponto(s) esperando" +
+        (if (motivo.isEmpty()) " — sem internet." else " — " + motivo))
     } else {
       Fila.enviarTudo(ctx)
       /* O AVISO FIXO PASSOU A PRESTAR CONTAS (19/10): antes dizia so "Registrando a

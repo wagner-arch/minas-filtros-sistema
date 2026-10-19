@@ -69,11 +69,25 @@ object Banco {
       }
       val cod = c.responseCode
       if (cod in 200..299) {
+        ultimoErro = ""
         val txt = try { c.inputStream.bufferedReader().use(BufferedReader::readText) } catch (e: Exception) { "" }
         txt
-      } else null
-    } catch (e: Exception) { null } finally { try { c?.disconnect() } catch (e: Exception) { } }
+      } else {
+        /* O `catch` GENERICO ESCONDEU UM DEFEITO POR DIAS (19/10): a rede na linha principal
+           lancava NetworkOnMainThreadException, era engolida aqui e virava "nao consegui" —
+           na tela, isso parecia falta de internet. Agora o motivo fica guardado e o aviso
+           fixo do celular o mostra: erro de programacao nao se disfarca de falta de sinal. */
+        ultimoErro = "o banco respondeu " + cod
+        null
+      }
+    } catch (e: Exception) {
+      ultimoErro = (e.javaClass.simpleName ?: "falha") + ": " + (e.message ?: "")
+      null
+    } finally { try { c?.disconnect() } catch (e: Exception) { } }
   }
+
+  /* o motivo da ultima falha, para o aviso fixo dizer a verdade */
+  @Volatile var ultimoErro: String = ""
 
   private fun renovar(ctx: Context): Boolean {
     val rt = Guardado.refresh(ctx)
