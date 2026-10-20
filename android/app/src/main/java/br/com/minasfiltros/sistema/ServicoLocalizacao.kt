@@ -29,14 +29,33 @@ class ServicoLocalizacao : Service() {
     const val AVISO_ID = 4701
     const val RAIO_PARADA = 100.0      /* metros */
     const val MIN_PARADA = 10          /* minutos */
-    const val PASSO_ANDANDO = 60_000L  /* 1 ponto por minuto andando */
+    /* EM DESLOCAMENTO O RITMO MUDOU (20/10, pedido dele depois de ver o trajeto do Thiago
+       cortando quarteirao): era 1 ponto por minuto, e de carro isso pula esquina inteira.
+       Agora e 1 a cada 15 segundos OU a cada 30 metros andados, o que vier primeiro.
+       PARADO continua como estava: 1 a cada 5 minutos, para nao gastar bateria a toa. */
+    const val PASSO_ANDANDO = 15_000L  /* 1 ponto a cada 15 segundos em deslocamento */
     const val PASSO_PARADO = 300_000L  /* 1 a cada 5 minutos parado: economiza banco e bateria */
+    const val METROS_ANDANDO = 30.0    /* ...ou a cada 30 metros, o que vier primeiro */
+    /* O ENVIO VAI EM LOTE (20/10): gravar 4x mais pontos NAO pode custar 4x mais internet.
+       Cada POST sozinho carrega ~1,2 KB de cabecalho (credencial, chave, tipo) para 230
+       bytes de ponto. Juntando um minuto de pontos num envio so, o cabecalho e pago uma
+       vez — a conta fica em ~0,3 MB por dia em vez de 0,8 MB. Parado, manda na hora. */
+    const val LOTE_MS = 60_000L        /* junta os pontos de ate 1 minuto */
+    const val LOTE_MAX = 6             /* ...ou ate 6 pontos, o que vier primeiro */
   }
 
   private var cliente: FusedLocationProviderClient? = null
   private var pedido: LocationCallback? = null
   private var ultimoGravado = 0L
   private var paradaId: Long? = null
+  /* o modo de pedido que esta valendo agora: "andando" (GPS) ou "parado" (economico) */
+  private var modoAtual = ""
+  /* o ultimo ponto GRAVADO, para medir os 30 metros */
+  private var ultLat = 0.0
+  private var ultLng = 0.0
+  /* o lote esperando para ir ao banco */
+  private val lote = ArrayList<JSONObject>()
+  private var loteDesde = 0L
   /* LINHA DE TRABALHO PROPRIA (19/10) — ver a explicacao em `comecar()`: gravar o ponto e
      uma chamada de rede, e o Android PROIBE rede na linha principal. */
   private var linha: android.os.HandlerThread? = null
@@ -58,6 +77,14 @@ class ServicoLocalizacao : Service() {
 
   override fun onDestroy() {
     ligado = false
+    /* O LOTE NAO SE PERDE (20/10): o que estava esperando para ser enviado vai para a fila
+       do celular, que e gravada em disco. Sem isto, o celular que mata o servico levaria
+       junto ate um minuto de trajeto. */
+    try {
+      val ctx = applicationContext
+      lote.forEach { Fila.guardar(ctx, it) }
+      lote.clear(); loteDesde = 0L
+    } catch (e: Exception) { }
     try { pedido?.let { cliente?.removeLocationUpdates(it) } } catch (e: Exception) { }
     try { linha?.quitSafely() } catch (e: Exception) { }
     linha = null
@@ -89,10 +116,6 @@ class ServicoLocalizacao : Service() {
        o que interessa achar e justamente a PARADA de 10 minutos.
        Quem controla o ritmo e o `ultimoGravado` la embaixo (1 ponto por minuto andando,
        1 a cada 5 minutos parado) — a trava por distancia nao tem o que fazer aqui. */
-    val req = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, PASSO_ANDANDO)
-      .setMinUpdateIntervalMillis(30_000L)
-      .setWaitForAccurateLocation(false)
-      .build()
     pedido = object : LocationCallback() {
       override fun onLocationResult(r: LocationResult) {
         r.lastLocation?.let { tratar(it) }
@@ -108,12 +131,42 @@ class ServicoLocalizacao : Service() {
        propria, onde a rede e permitida. */
     linha = android.os.HandlerThread("mf-localizacao").also { it.start() }
     try {
-      cliente!!.requestLocationUpdates(req, pedido!!, linha!!.looper)
+      pedirLocalizacao("andando")
       primeiroPonto()
     } catch (e: SecurityException) {
       atualizarAviso("Sem permissão de localização — fale com a gestão.")
       stopSelf()   /* sem permissao de localizacao nao ha o que registrar */
     }
+  }
+
+  /* O PEDIDO MUDA CONFORME A PESSOA ESTA ANDANDO OU PARADA (20/10).
+     ANDANDO: `PRIORITY_HIGH_ACCURACY`, o GPS de verdade. E ele que da precisao de 5 a 15
+     metros e preenche a VELOCIDADE — com a antena, medido no banco dele em 20/10, a
+     precisao media era de 96 metros no Renan e a velocidade vinha 0,0 em quase todo ponto.
+     PARADO: volta ao modo economico, porque parado nao ha caminho para desenhar.
+     NAO existe `setMinUpdateDistanceMeters` em lugar nenhum: foi ele que, ate a versao
+     1.1, impediu QUALQUER localizacao de chegar com o aparelho parado (v363). Os 30 metros
+     do pedido dele sao conferidos aqui embaixo, no nosso proprio codigo, onde a regra da
+     parada continua valendo. */
+  private fun pedirLocalizacao(modo: String) {
+    if (modo == modoAtual) return
+    val cl = cliente ?: return
+    val lin = linha ?: return
+    val andando = modo == "andando"
+    val req = LocationRequest.Builder(
+        if (andando) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+        if (andando) PASSO_ANDANDO else PASSO_PARADO)
+      .setMinUpdateIntervalMillis(if (andando) 5_000L else 60_000L)
+      .setWaitForAccurateLocation(false)
+      .build()
+    try {
+      pedido?.let { cl.removeLocationUpdates(it) }
+      cl.requestLocationUpdates(req, pedido!!, lin.looper)
+      modoAtual = modo
+    } catch (e: SecurityException) {
+      atualizarAviso("Sem permissão de localização — fale com a gestão.")
+      stopSelf()
+    } catch (e: Exception) { /* um pedido recusado nao pode derrubar o servico */ }
   }
 
   /* PRIMEIRO PONTO NA HORA (19/10): o modo economico pode levar minutos para a primeira
@@ -204,10 +257,20 @@ class ServicoLocalizacao : Service() {
       }
     }
 
-    /* ritmo: 1 ponto por minuto andando, 1 a cada 5 minutos parado */
+    /* o modo do GPS acompanha a situacao: andando pede alta precisao, parado economiza */
+    pedirLocalizacao(if (parado) "parado" else "andando")
+
+    /* RITMO: parado, 1 a cada 5 minutos. Andando, 1 a cada 15 segundos OU a cada 30
+       metros andados, o que vier primeiro — e a regra que ele pediu, conferida aqui e
+       nao por `setMinUpdateDistanceMeters`, que desligaria o caso parado (v363). */
     val passo = if (parado) PASSO_PARADO else PASSO_ANDANDO
-    if (agora - ultimoGravado < passo) return
+    val andou = if (ultLat == 0.0 && ultLng == 0.0) 1e9
+                else distancia(ultLat, ultLng, l.latitude, l.longitude)
+    val naHora = agora - ultimoGravado >= passo
+    val longe = !parado && andou >= METROS_ANDANDO
+    if (!naHora && !longe) return
     ultimoGravado = agora
+    ultLat = l.latitude; ultLng = l.longitude
 
     val ponto = JSONObject()
       .put("vendedor", Guardado.nome(ctx))
@@ -219,13 +282,31 @@ class ServicoLocalizacao : Service() {
       .put("bateria", bateria())
       .put("parado", parado)
 
+    /* O LOTE (20/10): andando, o ponto espera ate 1 minuto (ou ate juntar 6) antes de ir
+       ao banco. PARADO, vai na hora — ali o ritmo ja e de 5 em 5 minutos e segurar o ponto
+       so atrasaria o aviso de parada. E o lote NUNCA fica preso: o que nao for enviado
+       agora vai junto do proximo, e no `onDestroy` ele e despejado na fila do celular. */
+    lote.add(ponto)
+    if (loteDesde == 0L) loteDesde = agora
+    val fechar = parado || lote.size >= LOTE_MAX || (agora - loteDesde) >= LOTE_MS
+    if (!fechar) {
+      atualizarAviso("Último registro às " + hora(agora) + " · " +
+        Guardado.enviadosHoje(ctx) + " hoje · em deslocamento")
+      return
+    }
+    val pacote = JSONArray()
+    val quantos = lote.size
+    lote.forEach { pacote.put(it) }
+    lote.clear(); loteDesde = 0L
+
     /* tenta gravar; nao conseguiu, guarda no celular e manda depois */
-    if (!Banco.gravarPontos(ctx, JSONArray().put(ponto))) {
-      Fila.guardar(ctx, ponto)
+    if (!Banco.gravarPontos(ctx, pacote)) {
+      for (i in 0 until pacote.length()) Fila.guardar(ctx, pacote.getJSONObject(i))
       val motivo = Banco.ultimoErro
       atualizarAviso(Fila.quantos(ctx).toString() + " ponto(s) esperando" +
         (if (motivo.isEmpty()) " — sem internet." else " — " + motivo))
     } else {
+      for (i in 1 until quantos) Guardado.contarEnvio(ctx, agora)
       Fila.enviarTudo(ctx)
       /* O AVISO FIXO PASSOU A PRESTAR CONTAS (19/10): antes dizia so "Registrando a
          localizacao", e foi por isso que ninguem percebeu que nada estava sendo enviado.

@@ -1440,6 +1440,7 @@
     border-radius:999px;z-index:500;pointer-events:none;opacity:0;transition:opacity .18s;
     white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,.25)}
   .rs-dois-dedos.ver{opacity:1}
+  .ok-enc{color:var(--ok);font-weight:600}
   .rs-quem{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;
     cursor:pointer;background:var(--card)}
   .rs-quem:hover{border-color:var(--accent)}
@@ -12255,7 +12256,7 @@ window.__rastroParadasMF=function(){return rastroParadas;};
 /* ganchos do rastreio ao vivo, para os testes (20/10) */
 window.__rastroAgoraMF=function(){return rastroAgora;};
 window.__carregarAgoraMF=function(){return carregarAgora();};
-window.__pontosLinhaMF=function(){return pontosDaLinha();};
+window.__pontosLinhaMF=function(l){return pontosDaLinha(l);};
 window.__seguindoMF=function(){return rsSeguindo;};
 window.__zoomAgoraMF=function(){try{return mapaAgora?mapaAgora.getZoom():0;}catch(e){return 0;}};
 window.__centroAgoraMF=function(){try{var c=mapaAgora.getCenter();return c.lat.toFixed(5)+","+c.lng.toFixed(5);}catch(e){return "";}};
@@ -12264,6 +12265,12 @@ window.__rastroOkMF=function(){return rastroAgoraOk;};
 window.__rastroFalhaMF=function(){return rastroAgoraFalhaEm;};
 window.__rastroLendoMF=function(){return rastroAgoraLendo;};
 window.__rastroPontosMF=function(){return rastroPontos;};
+window.__filtroRotaMF=function(lista){return contagemFiltro(lista);};
+window.__trechosMF=function(pts){return trechosDoDia(pts||pontosDaLinha());};
+window.__perfilTrechoMF=function(pts){return perfilDoTrecho(pts);};
+window.__encaixarMF=function(v,d,p){return encaixarNaFila(v,d,p);};
+window.__cacheRotaMF=function(){return lerCacheRota();};
+window.__limparCacheRotaMF=function(){try{localStorage.removeItem(CACHE_ROTA);}catch(e){}};
 window.__rotasRotaMF=function(){
   return rotasPorVendedor(pontosDaLinha()).map(function(r){
     return r.vendedor+":"+r.pontos.length+":"+r.cor;
@@ -38202,13 +38209,75 @@ function pararAoVivo(){
 
 /* ---------- a ROTA do dia desenhada no mapa ---------- */
 var mapaRota=null;
-/* ponto com precisão ruim não entra na linha: senão o caminho fica "pulando" (regra dele) */
-var PRECISAO_MAX=200;
-function pontosDaLinha(){
-  return rastroPontos.filter(function(p){
+/* PONTO RUIM NÃO ENTRA NA LINHA (20/10, pedido dele depois de ver o trajeto do Thiago
+   cortando quarteirões): o filtro era de 200 m e passava quase tudo. Medido no banco dele
+   naquele dia: o Thiago estava num ponto às 11:27, a 310 metros dali às 11:29 e DE VOLTA
+   às 11:30 — ida e volta impossível a pé, só ruído da localização por antena. */
+var PRECISAO_MAX=50;        /* metros: pior que isto não desenha */
+var VEL_IMPOSSIVEL=150;     /* km/h entre dois pontos: salto que ninguém faz na cidade */
+var VEL_A_PE=12;            /* até esta média (km/h) o trecho é tratado como a pé */
+
+/* distância em metros entre dois pontos (fórmula do semiverseno) */
+function metrosEntre(a,b){
+  var R=6371000,r=Math.PI/180;
+  var d1=(+b.lat-+a.lat)*r, d2=(+b.lng-+a.lng)*r;
+  var x=Math.sin(d1/2)*Math.sin(d1/2)+
+        Math.cos(+a.lat*r)*Math.cos(+b.lat*r)*Math.sin(d2/2)*Math.sin(d2/2);
+  return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+function segundosEntre(a,b){
+  var t1=new Date(a.em).getTime(),t2=new Date(b.em).getTime();
+  return (isFinite(t1)&&isFinite(t2))?Math.abs(t2-t1)/1000:0;
+}
+/* velocidade entre dois pontos, em km/h (0 quando não dá para saber) */
+function kmhEntre(a,b){
+  var s=segundosEntre(a,b);
+  if(s<=0)return 0;
+  return (metrosEntre(a,b)/s)*3.6;
+}
+/* PONTO IMPOSSÍVEL: saltou mais rápido que um carro na estrada. Ele é descartado e o
+   anterior continua valendo como referência — senão um único ponto ruim no meio levaria
+   junto todos os que vêm depois dele.
+   E O BICO, que é o caso REAL que ele mostrou (Thiago, 20/10): 11:27 num ponto, 11:29 a
+   320 metros dali e 11:30 de volta, os três com precisão boa. A velocidade entre eles é
+   de 18 km/h — nenhum filtro de velocidade pega isso. O que denuncia é a GEOMETRIA: ir e
+   voltar 640 metros para avançar 130. Quando o desvio custa mais que o TRIPLO do caminho
+   direto entre os vizinhos, e passa de 150 metros, o ponto do meio é ruído. */
+var BICO_FATOR=3;           /* ida+volta acima deste múltiplo do caminho direto = desvio falso */
+var BICO_MIN=150;           /* metros: desvio menor que isto é curva de rua, não ruído */
+function pontosDaLinha(lista){
+  var brutos=(lista||rastroPontos).filter(function(p){
     return isFinite(+p.lat)&&isFinite(+p.lng)&&(!(+p.precisao)||(+p.precisao)<=PRECISAO_MAX);
   });
+  var saltos=0,bons=[];
+  brutos.forEach(function(p){
+    var ant=bons[bons.length-1];
+    if(ant&&kmhEntre(ant,p)>VEL_IMPOSSIVEL){saltos++;return;}
+    bons.push(p);
+  });
+  var bicos=0,limpos=[];
+  for(var i=0;i<bons.length;i++){
+    var a=limpos[limpos.length-1],b=bons[i],c=bons[i+1];
+    if(a&&c){
+      var ida=metrosEntre(a,b),volta=metrosEntre(b,c),direto=metrosEntre(a,c);
+      if(ida>BICO_MIN&&(ida+volta)>BICO_FATOR*Math.max(direto,1)){bicos++;continue;}
+    }
+    limpos.push(b);
+  }
+  pontosDaLinha.saltos=saltos;
+  pontosDaLinha.bicos=bicos;
+  pontosDaLinha.pulados=saltos+bicos;
+  return limpos;
 }
+/* quantos pontos o filtro deixou de fora, e por quê (a tela explica) */
+function contagemFiltro(lista){
+  var todos=(lista||rastroPontos).filter(function(p){return isFinite(+p.lat)&&isFinite(+p.lng);});
+  var bons=pontosDaLinha(lista);
+  return {total:todos.length,usados:bons.length,
+    precisao:todos.filter(function(p){return (+p.precisao)>PRECISAO_MAX;}).length,
+    salto:pontosDaLinha.saltos||0,bico:pontosDaLinha.bicos||0};
+}
+
 /* UMA LINHA POR VENDEDOR (20/10, junto com os números do topo): em "Todos os vendedores"
    uma linha só ligaria o último ponto de um ao primeiro ponto do outro e desenharia no mapa
    um caminho que ninguém percorreu. Cada pessoa ganha a sua cor, e os pontos dela são
@@ -38227,6 +38296,217 @@ function rotasPorVendedor(bons){
     var l=por[v].slice().sort(function(a,b){return String(a.em).localeCompare(String(b.em));});
     return {vendedor:v,pontos:l,cor:CORES_ROTA[ix%CORES_ROTA.length]};
   });
+}
+
+/* ---------- O CAMINHO ENCAIXADO NAS RUAS (20/10, pedido dele) ----------
+   Ligar os pontos em reta corta quarteirão: o trajeto do Thiago mostrava que ele entrou
+   na Rua Tiradentes e a linha passava por cima das casas. Agora o caminho é "encaixado"
+   nas ruas do OpenStreetMap por um serviço de roteamento.
+   OS DOIS SERVIÇOS SÃO GRATUITOS, SEM CHAVE E SEM CADASTRO, e os dois foram testados aqui
+   com os pontos reais do dia 20/10: OSRM a pé devolveu 1.007 m (plausível), OSRM de CARRO
+   devolveu 4.149 m no mesmo trecho — por isso o perfil é escolhido pela velocidade, e não
+   fixado em carro. O limite publicado é 1 pedido por segundo, sem limite diário; o nosso
+   uso é de uma chamada por TRECHO, só quando alguém abre o trajeto, e guardada depois. */
+var OSRM_BASE="https://routing.openstreetmap.de/";
+var VALHALLA_URL="https://valhalla1.openstreetmap.de/trace_route";
+var ENCAIXE_ESPERA=1200;    /* ms entre chamadas: respeita o 1 por segundo do serviço */
+var ENCAIXE_MIN=4;          /* trecho com menos pontos que isto não vale encaixar */
+var LACUNA_TRECHO=900;      /* segundos sem ponto: daqui para a frente é outro trecho */
+var encaixeIndo=Promise.resolve();
+
+/* O DIA EM TRECHOS. Cada parada longa e cada buraco grande na gravação terminam um trecho:
+   encaixar o dia inteiro de uma vez faria o serviço inventar caminho entre o lugar onde a
+   pessoa ficou parada uma hora e o próximo ponto. */
+function trechosDoDia(pontos){
+  var saida=[],atual=[];
+  (pontos||[]).forEach(function(p){
+    var ant=atual[atual.length-1];
+    if(ant&&segundosEntre(ant,p)>LACUNA_TRECHO){
+      if(atual.length>1)saida.push(atual);   /* trecho de um ponto só não desenha linha */
+      atual=[];
+    }
+    atual.push(p);
+  });
+  if(atual.length>1)saida.push(atual);
+  return saida;
+}
+/* A PÉ OU DE CARRO: decidido pela velocidade do próprio trecho. Com a localização por
+   antena a velocidade vinha quase sempre 0,0; com o GPS do aplicativo 1.5 ela vem de
+   verdade, e aí esta conta fica confiável. Sem velocidade gravada, usa a média medida
+   entre os pontos. */
+function perfilDoTrecho(pts){
+  var comVel=(pts||[]).filter(function(p){return (+p.velocidade)>0;});
+  var kmh=0;
+  if(comVel.length>=2){
+    kmh=comVel.reduce(function(a,p){return a+(+p.velocidade)*3.6;},0)/comVel.length;
+  }else{
+    var m=0,s=0;
+    for(var i=1;i<(pts||[]).length;i++){m+=metrosEntre(pts[i-1],pts[i]);s+=segundosEntre(pts[i-1],pts[i]);}
+    kmh=s>0?(m/s)*3.6:0;
+  }
+  return {kmh:Math.round(kmh*10)/10,perfil:(kmh>VEL_A_PE?"car":"foot")};
+}
+function esperar(ms){return new Promise(function(r){setTimeout(r,ms);});}
+
+/* chamada ao OSRM; devolve a lista de coordenadas já na ordem do Leaflet ([lat,lng]) */
+async function encaixarOSRM(pts,perfil){
+  var coords=pts.map(function(p){return (+p.lng)+","+(+p.lat);}).join(";");
+  var raios=pts.map(function(p){return Math.max(Math.round(+p.precisao||15),12);}).join(";");
+  var horas=pts.map(function(p){return Math.round(new Date(p.em).getTime()/1000);}).join(";");
+  var url=OSRM_BASE+"routed-"+perfil+"/match/v1/driving/"+coords+
+    "?geometries=geojson&overview=full&tidy=true&radiuses="+raios+"&timestamps="+horas;
+  var r=await fetch(url);
+  if(!r.ok)throw new Error("o serviço de rotas respondeu "+r.status);
+  var j=await r.json();
+  if(j.code!=="Ok"||!(j.matchings||[]).length)throw new Error(j.message||"sem caminho");
+  var linha=[],conf=0,metros=0;
+  j.matchings.forEach(function(m){
+    ((m.geometry||{}).coordinates||[]).forEach(function(c){linha.push([c[1],c[0]]);});
+    conf=Math.max(conf,+m.confidence||0);metros+=(+m.distance||0);
+  });
+  if(linha.length<2)throw new Error("caminho curto demais");
+  return {linha:linha,conf:conf,metros:Math.round(metros),servico:"OSRM"};
+}
+/* reserva: o Valhalla aguenta ponto mais ruidoso e devolve a forma codificada (polyline6) */
+function abrirPolilinha(txt,prec){
+  var pontos=[],ix=0,lat=0,lng=0,fator=Math.pow(10,prec||6);
+  while(ix<txt.length){
+    var b,turno=0,res=0;
+    do{b=txt.charCodeAt(ix++)-63;res|=(b&0x1f)<<turno;turno+=5;}while(b>=0x20);
+    lat+=((res&1)?~(res>>1):(res>>1));
+    turno=0;res=0;
+    do{b=txt.charCodeAt(ix++)-63;res|=(b&0x1f)<<turno;turno+=5;}while(b>=0x20);
+    lng+=((res&1)?~(res>>1):(res>>1));
+    pontos.push([lat/fator,lng/fator]);
+  }
+  return pontos;
+}
+async function encaixarValhalla(pts,perfil){
+  var corpo={costing:(perfil==="car"?"auto":"pedestrian"),shape_match:"map_snap",
+    shape:pts.map(function(p){
+      return {lat:+p.lat,lon:+p.lng,radius:Math.max(Math.round(+p.precisao||15),12),
+        time:Math.round(new Date(p.em).getTime()/1000)};
+    })};
+  var r=await fetch(VALHALLA_URL,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(corpo)});
+  if(!r.ok)throw new Error("o serviço de rotas respondeu "+r.status);
+  var j=await r.json();
+  var leg=j&&j.trip&&j.trip.legs&&j.trip.legs[0];
+  if(!leg||!leg.shape)throw new Error((j&&j.error)||"sem caminho");
+  var linha=abrirPolilinha(leg.shape,6);
+  if(linha.length<2)throw new Error("caminho curto demais");
+  return {linha:linha,conf:null,metros:Math.round(((j.trip.summary||{}).length||0)*1000),
+    servico:"Valhalla"};
+}
+
+/* O QUE JÁ FOI ENCAIXADO FICA GUARDADO NO APARELHO (decisão minha, avisada a ele):
+   a rota de um dia passado nunca muda, então o cache vale para sempre; e guardando aqui,
+   em vez de no banco, a localização do vendedor não passa a ser legível por qualquer
+   colaborador logado — a regra de privacidade do rastreio (v345) continua inteira. */
+var CACHE_ROTA="mf_rota_encaixada";
+function chaveEncaixe(vendedor,dia,pts){
+  return vendedor+"|"+dia+"|"+pts.length+"|"+(pts[0]||{}).em+"|"+(pts[pts.length-1]||{}).em;
+}
+function lerCacheRota(){
+  try{return JSON.parse(localStorage.getItem(CACHE_ROTA)||"{}")||{};}catch(e){return {};}
+}
+function guardarCacheRota(ch,v){
+  try{
+    var c=lerCacheRota();
+    c[ch]=v;
+    var ks=Object.keys(c);
+    /* teto simples: guarda as 60 rotas mais recentes */
+    if(ks.length>60)ks.slice(0,ks.length-60).forEach(function(k){delete c[k];});
+    localStorage.setItem(CACHE_ROTA,JSON.stringify(c));
+  }catch(e){}
+}
+/* ENCAIXA O DIA DE UM VENDEDOR. Devolve os trechos com a linha pronta e diz, em cada um,
+   se o caminho é o das ruas ou o aproximado — é isso que a tela escreve. */
+async function encaixarRota(vendedor,dia,pts){
+  var ch=chaveEncaixe(vendedor,dia,pts),guardado=lerCacheRota()[ch];
+  if(guardado)return guardado;
+  var trechos=trechosDoDia(pts),saida=[],servico="",falhou=0;
+  for(var i=0;i<trechos.length;i++){
+    var t=trechos[i],reta=t.map(function(p){return [+p.lat,+p.lng];});
+    if(t.length<ENCAIXE_MIN){saida.push({linha:reta,ruas:false});continue;}
+    var pf=perfilDoTrecho(t),res=null;
+    try{res=await encaixarOSRM(t,pf.perfil);}
+    catch(e){
+      try{await esperar(ENCAIXE_ESPERA);res=await encaixarValhalla(t,pf.perfil);}
+      catch(e2){res=null;}
+    }
+    if(res&&res.linha.length>=2){
+      saida.push({linha:res.linha,ruas:true,conf:res.conf,metros:res.metros,
+        perfil:pf.perfil,kmh:pf.kmh});
+      servico=res.servico;
+    }else{
+      saida.push({linha:reta,ruas:false,perfil:pf.perfil,kmh:pf.kmh});
+      falhou++;
+    }
+    if(i<trechos.length-1)await esperar(ENCAIXE_ESPERA);
+  }
+  var r={trechos:saida,servico:servico,falhou:falhou,quando:Date.now()};
+  if(!falhou||saida.some(function(s){return s.ruas;}))guardarCacheRota(ch,r);
+  return r;
+}
+/* uma fila: nunca mais de um encaixe ao mesmo tempo, e nunca mais de um pedido por segundo */
+function encaixarNaFila(vendedor,dia,pts){
+  var p=encaixeIndo.then(function(){return encaixarRota(vendedor,dia,pts);});
+  encaixeIndo=p.catch(function(){});
+  return p;
+}
+/* TROCA A LINHA RETA PELO CAMINHO DAS RUAS, vendedor por vendedor. Enquanto a busca não
+   volta, a linha fica tracejada; voltando, ela vira linha cheia. Falhando os dois serviços,
+   a tracejada FICA e a tela diz "caminho aproximado" — era o que ele pediu no item 4. */
+async function encaixarNoMapa(L,rotas,dia){
+  if(!mapaRota)return;
+  var meu=mapaRota,resumo=[];
+  for(var i=0;i<rotas.length;i++){
+    var r=rotas[i];
+    if(mapaRota!==meu)return;            /* trocou de dia ou de vendedor: este desenho morreu */
+    var res=null;
+    try{res=await encaixarNaFila(r.vendedor,dia,r.pontos);}catch(e){res=null;}
+    if(mapaRota!==meu)return;
+    if(!res||!res.trechos||!res.trechos.length){
+      resumo.push({vendedor:r.vendedor,ruas:0,total:0});
+      continue;
+    }
+    var comRua=0;
+    try{meu.removeLayer(r.__linha);}catch(e){}
+    res.trechos.forEach(function(t){
+      if(!t.linha||t.linha.length<2)return;
+      if(t.ruas)comRua++;
+      var dist="";
+      if(t.metros)dist=" · "+(t.metros>=1000?((t.metros/1000).toFixed(1)+" km"):(t.metros+" m"));
+      var como=t.ruas?("caminho pelas ruas"+dist):"caminho aproximado";
+      var modo="";
+      if(t.perfil)modo="<br>"+(t.perfil==="car"?"de carro":"a pé")+(t.kmh?(" · "+t.kmh+" km/h"):"");
+      L.polyline(t.linha,{color:r.cor,weight:t.ruas?5:4,opacity:t.ruas?0.9:0.6,
+        dashArray:t.ruas?null:"6 6"}).addTo(meu)
+        .bindPopup("<b>"+esc(r.vendedor)+"</b><br>"+como+modo);
+    });
+    resumo.push({vendedor:r.vendedor,ruas:comRua,total:res.trechos.length,servico:res.servico});
+  }
+  try{notaEncaixe(resumo);}catch(e){}
+}
+/* a linha de texto embaixo do mapa, dizendo o que foi encaixado e o que ficou aproximado */
+function notaEncaixe(resumo){
+  var el=$("rs_encaixeNota");if(!el)return;
+  var tudo=(resumo||[]).reduce(function(a,r){return {ruas:a.ruas+r.ruas,total:a.total+r.total};},
+    {ruas:0,total:0});
+  if(!tudo.total){el.innerHTML="";return;}
+  var serv=(resumo.find(function(r){return r.servico;})||{}).servico||"";
+  if(tudo.ruas>=tudo.total){
+    el.innerHTML='<span class="ok-enc">✓ Caminho encaixado nas ruas</span> · '+
+      esc(serv||"OpenStreetMap")+' · dados © OpenStreetMap';
+  }else if(tudo.ruas){
+    el.innerHTML='<span class="ok-enc">✓ '+tudo.ruas+' de '+tudo.total+
+      ' trecho(s) encaixados nas ruas</span> · nos outros, <b>caminho aproximado</b> '+
+      '(poucos pontos ou o serviço de rotas não respondeu) · dados © OpenStreetMap';
+  }else{
+    el.innerHTML='<b>Caminho aproximado</b> — não deu para encaixar nas ruas agora '+
+      '(o serviço de rotas não respondeu). A linha liga os pontos registrados.';
+  }
 }
 async function desenharRotaDia(){
   var div=$("rs_mapaRota");if(!div)return;
@@ -38250,7 +38530,9 @@ async function desenharRotaDia(){
   rotas.forEach(function(r){
     var linha=r.pontos.map(function(p){return [+p.lat,+p.lng];});
     todos=todos.concat(linha);
-    L.polyline(linha,{color:r.cor,weight:4,opacity:.85}).addTo(mapaRota)
+    /* a linha RETA entra primeiro, para o mapa não ficar vazio enquanto o caminho pelas
+       ruas é buscado; ela é trocada logo em seguida por `encaixarNoMapa` */
+    r.__linha=L.polyline(linha,{color:r.cor,weight:4,opacity:.85,dashArray:"6 6"}).addTo(mapaRota)
       .bindPopup("<b>"+esc(r.vendedor)+"</b><br>"+r.pontos.length+" ponto(s) no dia");
     var qual=varios?(r.vendedor.split(" ")[0]+": "):"";
     L.marker(linha[0],{icon:pino(qual+"Início "+horaDoISO(r.pontos[0].em),
@@ -38260,6 +38542,9 @@ async function desenharRotaDia(){
         r.cor)}).addTo(mapaRota);
   });
   var linha=todos;
+  /* O CAMINHO PELAS RUAS vem depois do mapa aberto, de propósito: a busca leva alguns
+     segundos e ninguém fica olhando tela branca por causa dela. */
+  encaixarNoMapa(L,rotas,rsDia||hojeISO());
   rastroParadas.forEach(function(p){
     if(!isFinite(+p.lat)||!isFinite(+p.lng))return;
     var cor=(p.na_loja||p.no_almoco)?"#8795A5":(p.com_atendimento?"#1E8E3E":"#C62828");
@@ -38392,11 +38677,18 @@ function mapaDoTrajeto(){
       return '<span><i style="background:'+r.cor+'"></i>'+esc(r.vendedor)+
         " ("+r.pontos.length+")</span>";
     }).join("")+"</p>"):"";
+  /* O FILTRO PRESTA CONTAS (20/10): dizer só "N pontos registrados" escondia que vários
+     deles não entravam na linha — e era isso que fazia o caminho cortar quarteirão. */
+  var ct=contagemFiltro(),sobrou=[];
+  if(ct.precisao)sobrou.push(ct.precisao+" com precisão pior que "+PRECISAO_MAX+" m");
+  if(ct.salto)sobrou.push(ct.salto+" com salto impossível (acima de "+VEL_IMPOSSIVEL+" km/h)");
+  if(ct.bico)sobrou.push(ct.bico+" que iam e voltavam no mesmo minuto");
   return '<div class="sect"><p class="sect-t">Trajeto do dia'+
     (varios?(" · "+rotas.length+" vendedores"):"")+"</p>"+
     '<div id="rs_mapaRota" class="rs-mapa"></div>'+quem+
-    '<p class="help">'+rastroPontos.length+" ponto(s) registrados"+
-    (fora?(" · "+fora+" ficaram fora da linha por precisão acima de "+PRECISAO_MAX+" m"):"")+
+    '<p class="help" id="rs_encaixeNota">Buscando o caminho pelas ruas…</p>'+
+    '<p class="help">'+ct.usados+" de "+rastroPontos.length+" ponto(s) na linha"+
+    (sobrou.length?(" · fora: "+sobrou.join(" e ")):"")+
     ". "+(varios?"Uma linha por vendedor, na cor da legenda acima. ":"Linha azul: o caminho. ")+
     "Bolinha <b>vermelha</b>: parada sem atendimento · "+
     "<b>verde</b>: com atendimento · <b>cinza</b>: na loja ou no almoço. "+
