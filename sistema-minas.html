@@ -1432,8 +1432,14 @@
   /* RASTREIO AO VIVO (20/10): "onde esta agora" no topo e a rota desenhada no mapa.
      O mapa e o OpenStreetMap com a biblioteca Leaflet — gratuito, como o resto do sistema. */
   .rs-agora{display:grid;grid-template-columns:1fr 330px;gap:12px;align-items:start}
-  .rs-mapa{height:380px;border:1px solid var(--line);border-radius:12px;background:#e8edf2}
+  .rs-mapa{height:380px;border:1px solid var(--line);border-radius:12px;background:#e8edf2;position:relative}
   .rs-mapa .leaflet-container{border-radius:12px;font:inherit}
+  /* aviso de DOIS DEDOS (20/10): no celular um dedo rola a página e dois movem o mapa */
+  .rs-dois-dedos{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+    background:rgba(17,17,17,.88);color:#fff;font-size:13px;line-height:1.2;padding:8px 13px;
+    border-radius:999px;z-index:500;pointer-events:none;opacity:0;transition:opacity .18s;
+    white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+  .rs-dois-dedos.ver{opacity:1}
   .rs-quem{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;
     cursor:pointer;background:var(--card)}
   .rs-quem:hover{border-color:var(--accent)}
@@ -12258,6 +12264,22 @@ window.__rastroOkMF=function(){return rastroAgoraOk;};
 window.__rastroFalhaMF=function(){return rastroAgoraFalhaEm;};
 window.__rastroLendoMF=function(){return rastroAgoraLendo;};
 window.__rastroPontosMF=function(){return rastroPontos;};
+window.__rotasRotaMF=function(){
+  return rotasPorVendedor(pontosDaLinha()).map(function(r){
+    return r.vendedor+":"+r.pontos.length+":"+r.cor;
+  }).join(" | ");
+};
+window.__rastroLidoMF=function(){return rastroLido;};
+window.__gestosMapaMF=function(){
+  function est(m,d){
+    if(!m||!d)return "sem mapa";
+    return "arrasto:"+(m.dragging&&m.dragging.enabled()?"ligado":"desligado")+
+      " · roda:"+(d.__rodinha?"nossa":"so do leaflet")+
+      " · doisdedos:"+(d.__doisDedos?"ligado":"nao")+
+      " · aviso:"+(d.querySelector(".rs-dois-dedos")?"existe":"nao");
+  }
+  return {agora:est(mapaAgora,$("rs_mapaAgora")),rota:est(mapaRota,$("rs_mapaRota"))};
+};
 window.__rastroDesligadosMF=function(){return rastroDesligados;};
 window.__atualizarAvisosMF=function(){return atualizarAvisosRastreio();};
 window.__conferirDesligadoMF=function(){return conferirRastreioDesligado();};
@@ -34807,7 +34829,11 @@ function ligarArrastoFunil(){
    Um só ouvinte no documento: ao segurar o botão num lugar que não seja campo, botão,
    link ou texto de leitura, o movimento LATERAL rola a caixa rolável mais próxima
    (tabela larga, quadro do funil) e o VERTICAL rola a página. */
-var ARRASTO_FORA="input,textarea,select,button,a,label,option,[contenteditable],.mfil-pop,.sigbox,canvas,img,#fuQuadro,.fu-cartao,.fuh-box";
+/* O QUE NÃO ARRASTA A PÁGINA. `.leaflet-container` e `.rs-mapa` entraram em 20/10 (relato
+   dele): arrastar DENTRO do mapa movia o mapa e rolava a página inteira ao mesmo tempo —
+   porque este arrasto geral (v304) pega o mousedown em qualquer lugar que não esteja nesta
+   lista. Mapa novo em qualquer tela já nasce protegido pelo `.leaflet-container`. */
+var ARRASTO_FORA="input,textarea,select,button,a,label,option,[contenteditable],.mfil-pop,.sigbox,canvas,img,#fuQuadro,.fu-cartao,.fuh-box,.leaflet-container,.rs-mapa,#mapaTela";
 function caixaRolavelDe(el){
   while(el&&el!==document.body&&el.nodeType===1){
     var st=getComputedStyle(el);
@@ -37776,6 +37802,19 @@ function cobrarTermoRastreio(){
 
 /* ---------- a tela Rastreio ---------- */
 var rsQuem="",rsDia="";
+/* A PRIMEIRA LEITURA JÁ FOI FEITA? (20/10, pedido dele) Antes desta marca a tela abria com
+   os cinco números em ZERO — "Pontos do trajeto 0, Paradas 0…" — porque nada tinha sido
+   lido ainda, e isso parecia defeito do sistema. Agora: enquanto não leu, os números saem
+   com "—" e a tela diz o que fazer; e ao ABRIR a tela o dia de TODOS é carregado uma vez
+   (uma leitura só, do dia de hoje; a entrada do sistema continua sem carregar ponto). */
+var rastroLido=false;
+async function abrirRastreioDoDia(){
+  if(rastroLido)return;
+  if(!db||!modoBanco()||!db.rastro)return;
+  if(!recebeAvisoRastreio())return;
+  try{if($("rs_dia")&&!$("rs_dia").value)$("rs_dia").value=hojeISO();}catch(e){}
+  await carregarRastreio();
+}
 async function carregarRastreio(){
   if(!db||!modoBanco()||!db.rastro){rastroErro="sem banco";return;}
   var dia=$("rs_dia").value||hojeISO();
@@ -37787,7 +37826,7 @@ async function carregarRastreio(){
     var de=dia+"T00:00:00",ate=dia+"T23:59:59";
     rastroPontos=await db.rastro.pontos(quem,de,ate);
     rastroParadas=await db.rastro.paradas(quem,de,ate);
-    rastroErro="";
+    rastroErro="";rastroLido=true;
   }catch(e){
     rastroErro=(e&&e.message)||String(e);
     rastroPontos=[];rastroParadas=[];
@@ -37830,6 +37869,55 @@ function carregarLeaflet(){
 function camadaDoMapa(L){
   return L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     {maxZoom:19,attribution:"&copy; OpenStreetMap"});
+}
+
+/* O MAPA NÃO PRENDE MAIS A PÁGINA (20/10, pedido dele). Duas regras, uma para cada aparelho:
+   NO COMPUTADOR — com o cursor em cima do mapa, a rodinha só aproxima e afasta o MAPA, e a
+   página fica parada; arrastar dentro do mapa só move o mapa. Fora dele, a rodinha rola a
+   página como sempre. (A causa do arrasto era o arrasto geral da v304, que não tinha o mapa
+   na lista `ARRASTO_FORA` — então o Leaflet movia o mapa e o sistema rolava a página juntos.)
+   NO CELULAR a regra é a do mapa de rua: UM dedo ROLA A PÁGINA e DOIS DEDOS movem e
+   aproximam o mapa. Sem isso a página fica presa dentro do mapa e não há como passar dele
+   com o dedo. Quem tentar com um dedo lê, no próprio mapa, "use dois dedos para mover". */
+function ligarGestosMapa(L,map,div){
+  if(!map||!div)return;
+  /* RODINHA: o Leaflet já previne por conta dele, mas aqui a conta fica explícita — nenhuma
+     rodinha dada sobre o mapa chega à página, nem no instante em que ele é redesenhado. */
+  if(!div.__rodinha){
+    div.__rodinha=true;
+    div.addEventListener("wheel",function(e){e.preventDefault();},{passive:false});
+  }
+  if(!ehCelularZap())return;
+  if(div.__doisDedos)return;
+  div.__doisDedos=true;
+  try{map.dragging.disable();}catch(e){}    /* um dedo não arrasta o mapa */
+  var aviso=document.createElement("div");
+  aviso.className="rs-dois-dedos";
+  aviso.textContent="Use dois dedos para mover o mapa";
+  div.appendChild(aviso);
+  var somir=null;
+  function mostrar(){
+    aviso.classList.add("ver");
+    clearTimeout(somir);
+    somir=setTimeout(function(){aviso.classList.remove("ver");},2000);
+  }
+  div.addEventListener("touchstart",function(e){
+    var n=(e.touches&&e.touches.length)||0;
+    if(n>=2){
+      try{map.dragging.enable();}catch(x){}
+      aviso.classList.remove("ver");clearTimeout(somir);
+    }else{
+      try{map.dragging.disable();}catch(x){}
+    }
+  },{passive:true});
+  div.addEventListener("touchmove",function(e){
+    if(((e.touches&&e.touches.length)||0)<2)mostrar();
+  },{passive:true});
+  ["touchend","touchcancel"].forEach(function(ev){
+    div.addEventListener(ev,function(){
+      try{map.dragging.disable();}catch(x){}
+    },{passive:true});
+  });
 }
 
 /* Endereço aproximado com memória: só pergunta ao mapa aberto quando o ponto MUDOU
@@ -38053,9 +38141,10 @@ async function desenharAgoraNoMapa(){
   try{L=await carregarLeaflet();}
   catch(e){div.innerHTML='<div class="note" style="margin:10px">Sem internet para carregar o mapa.</div>';return;}
   if(!mapaAgora){
-    mapaAgora=L.map(div,{zoomControl:true});
+    mapaAgora=L.map(div,{zoomControl:true,scrollWheelZoom:true});
     camadaDoMapa(L).addTo(mapaAgora);
   }
+  ligarGestosMapa(L,mapaAgora,div);
   marcasAgora.forEach(function(m){try{mapaAgora.removeLayer(m);}catch(e){}});
   marcasAgora=[];
   var pts=[],alvo=null;
@@ -38120,6 +38209,25 @@ function pontosDaLinha(){
     return isFinite(+p.lat)&&isFinite(+p.lng)&&(!(+p.precisao)||(+p.precisao)<=PRECISAO_MAX);
   });
 }
+/* UMA LINHA POR VENDEDOR (20/10, junto com os números do topo): em "Todos os vendedores"
+   uma linha só ligaria o último ponto de um ao primeiro ponto do outro e desenharia no mapa
+   um caminho que ninguém percorreu. Cada pessoa ganha a sua cor, e os pontos dela são
+   postos em ordem de hora — a leitura do banco vem ordenada, mas misturar vendedores
+   quebraria a ordem de cada um. */
+var CORES_ROTA=["#2E4FD6","#C62828","#1E8E3E","#8E24AA","#EF6C00","#00838F","#5D4037","#AD1457"];
+function rotasPorVendedor(bons){
+  var por={},ordem=[];
+  (bons||[]).forEach(function(p){
+    var v=p.vendedor||"—";
+    if(!por[v]){por[v]=[];ordem.push(v);}
+    por[v].push(p);
+  });
+  ordem.sort(function(a,b){return ordAZ(a,b);});
+  return ordem.map(function(v,ix){
+    var l=por[v].slice().sort(function(a,b){return String(a.em).localeCompare(String(b.em));});
+    return {vendedor:v,pontos:l,cor:CORES_ROTA[ix%CORES_ROTA.length]};
+  });
+}
 async function desenharRotaDia(){
   var div=$("rs_mapaRota");if(!div)return;
   var bons=pontosDaLinha();
@@ -38128,17 +38236,30 @@ async function desenharRotaDia(){
   try{L=await carregarLeaflet();}
   catch(e){div.innerHTML='<div class="note" style="margin:10px">Sem internet para carregar o mapa.</div>';return;}
   if(mapaRota){try{mapaRota.remove();}catch(e){}mapaRota=null;}
-  mapaRota=L.map(div,{zoomControl:true});
+  /* o mapa é refeito a cada busca, então as marcas dos gestos saem com o div antigo:
+     por isso elas são zeradas à mão antes de ligar de novo */
+  div.__rodinha=false;div.__doisDedos=false;
+  mapaRota=L.map(div,{zoomControl:true,scrollWheelZoom:true});
   camadaDoMapa(L).addTo(mapaRota);
-  var linha=bons.map(function(p){return [+p.lat,+p.lng];});
-  L.polyline(linha,{color:"#2E4FD6",weight:4,opacity:.85}).addTo(mapaRota);
+  ligarGestosMapa(L,mapaRota,div);
   function pino(txt,cor){
     return L.divIcon({className:"",iconSize:null,iconAnchor:[0,0],
       html:'<div class="rs-pin" style="border-color:'+cor+'">'+txt+"</div>"});
   }
-  L.marker(linha[0],{icon:pino("Início "+horaDoISO(bons[0].em),"#1E8E3E")}).addTo(mapaRota);
-  if(linha.length>1)
-    L.marker(linha[linha.length-1],{icon:pino("Fim "+horaDoISO(bons[bons.length-1].em),"#2E4FD6")}).addTo(mapaRota);
+  var rotas=rotasPorVendedor(bons),varios=rotas.length>1,todos=[];
+  rotas.forEach(function(r){
+    var linha=r.pontos.map(function(p){return [+p.lat,+p.lng];});
+    todos=todos.concat(linha);
+    L.polyline(linha,{color:r.cor,weight:4,opacity:.85}).addTo(mapaRota)
+      .bindPopup("<b>"+esc(r.vendedor)+"</b><br>"+r.pontos.length+" ponto(s) no dia");
+    var qual=varios?(r.vendedor.split(" ")[0]+": "):"";
+    L.marker(linha[0],{icon:pino(qual+"Início "+horaDoISO(r.pontos[0].em),
+      varios?r.cor:"#1E8E3E")}).addTo(mapaRota);
+    if(linha.length>1)
+      L.marker(linha[linha.length-1],{icon:pino(qual+"Fim "+horaDoISO(r.pontos[r.pontos.length-1].em),
+        r.cor)}).addTo(mapaRota);
+  });
+  var linha=todos;
   rastroParadas.forEach(function(p){
     if(!isFinite(+p.lat)||!isFinite(+p.lng))return;
     var cor=(p.na_loja||p.no_almoco)?"#8795A5":(p.com_atendimento?"#1E8E3E":"#C62828");
@@ -38190,13 +38311,25 @@ function renderRastreio(){
   var almoco=rastroParadas.filter(function(p){return p.no_almoco;});
   var comAt=rastroParadas.filter(function(p){return p.com_atendimento;});
   var minutosParado=rastroParadas.reduce(function(a,p){return a+(+p.minutos||0);},0);
+  /* NÚMERO QUE NINGUÉM LEU AINDA SAI COMO "—", NÃO COMO ZERO (20/10, pedido dele): zero é
+     uma informação ("não houve nenhuma parada") e travesão é outra ("ainda não buscamos").
+     Mostrar zero antes da leitura fazia a tela parecer quebrada. */
+  var n=function(v){return rastroLido?String(v):"—";};
   $("rs_kpis").innerHTML=
-    '<div class="kpi"><div class="l">Pontos do trajeto</div><div class="v">'+rastroPontos.length+"</div></div>"+
-    '<div class="kpi"><div class="l">Paradas no dia</div><div class="v">'+rastroParadas.length+"</div></div>"+
+    '<div class="kpi"><div class="l">Pontos do trajeto</div><div class="v">'+n(rastroPontos.length)+"</div></div>"+
+    '<div class="kpi"><div class="l">Paradas no dia</div><div class="v">'+n(rastroParadas.length)+"</div></div>"+
     '<div class="kpi"><div class="l">Sem atendimento</div><div class="v" style="color:'+
-      (sem.length?"var(--crit)":"inherit")+'">'+sem.length+"</div></div>"+
-    '<div class="kpi"><div class="l">Com atendimento</div><div class="v">'+comAt.length+"</div></div>"+
-    '<div class="kpi"><div class="l">Tempo parado</div><div class="v">'+Math.floor(minutosParado/60)+"h"+(minutosParado%60)+"</div></div>";
+      (rastroLido&&sem.length?"var(--crit)":"inherit")+'">'+n(sem.length)+"</div></div>"+
+    '<div class="kpi"><div class="l">Com atendimento</div><div class="v">'+n(comAt.length)+"</div></div>"+
+    '<div class="kpi"><div class="l">Tempo parado</div><div class="v">'+
+      (rastroLido?(Math.floor(minutosParado/60)+"h"+(minutosParado%60)):"—")+"</div></div>";
+  if(!rastroLido){
+    h.innerHTML='<div class="note"><b>Escolha o vendedor e o dia e toque em Buscar</b> para ver o '+
+      'trajeto desenhado no mapa, as paradas e os minutos de cada uma. Em <b>Todos os vendedores</b> '+
+      'o mapa traz o caminho de cada um numa cor.<div class="t-sub">O quadro de cima, '+
+      '“Onde cada vendedor está agora”, já está atualizando sozinho de minuto em minuto.</div></div>';
+    return;
+  }
 
   var mapa=mapaDoTrajeto();
   var tabela="";
@@ -38252,13 +38385,24 @@ function horaDoISO(s){
 function mapaDoTrajeto(){
   if(!rastroPontos.length)return "";
   var bons=pontosDaLinha(),fora=rastroPontos.length-bons.length;
-  return '<div class="sect"><p class="sect-t">Trajeto do dia</p>'+
-    '<div id="rs_mapaRota" class="rs-mapa"></div>'+
+  var rotas=rotasPorVendedor(bons),varios=rotas.length>1;
+  /* com mais de um vendedor, a legenda diz de quem é cada cor — senão as linhas coloridas
+     não querem dizer nada para quem olha */
+  var quem=varios?('<p class="rs-legenda">'+rotas.map(function(r){
+      return '<span><i style="background:'+r.cor+'"></i>'+esc(r.vendedor)+
+        " ("+r.pontos.length+")</span>";
+    }).join("")+"</p>"):"";
+  return '<div class="sect"><p class="sect-t">Trajeto do dia'+
+    (varios?(" · "+rotas.length+" vendedores"):"")+"</p>"+
+    '<div id="rs_mapaRota" class="rs-mapa"></div>'+quem+
     '<p class="help">'+rastroPontos.length+" ponto(s) registrados"+
     (fora?(" · "+fora+" ficaram fora da linha por precisão acima de "+PRECISAO_MAX+" m"):"")+
-    ". Linha azul: o caminho. Bolinha <b>vermelha</b>: parada sem atendimento · "+
+    ". "+(varios?"Uma linha por vendedor, na cor da legenda acima. ":"Linha azul: o caminho. ")+
+    "Bolinha <b>vermelha</b>: parada sem atendimento · "+
     "<b>verde</b>: com atendimento · <b>cinza</b>: na loja ou no almoço. "+
-    "Toque numa bolinha para ver chegada, saída e minutos parado.</p></div>";
+    "Toque numa bolinha para ver chegada, saída e minutos parado."+
+    (varios?" Para olhar uma pessoa só, escolha o nome no campo acima e toque em Buscar.":"")+
+    "</p></div>";
 }
 
 /* ---------- o que alimenta o sino (roda de 5 em 5 minutos) ----------
@@ -39519,7 +39663,7 @@ function ir(s,doMenu){
     if($("vcBusca"))$("vcBusca").value="";
     try{renderVeiculos();}catch(e){console.warn(e);}}
   /* RASTREIO AO VIVO (20/10): o relogio de 1 minuto so corre com a tela aberta */
-  if(s==="rastreio")try{ligarAoVivo();}catch(e){console.warn(e);}
+  if(s==="rastreio")try{ligarAoVivo();abrirRastreioDoDia();}catch(e){console.warn(e);}
   else try{pararAoVivo();}catch(e){}
   telaAtual=s;
   /* o que a tela escreveu nos campos de valor aparece no padrão brasileiro (v166) */
