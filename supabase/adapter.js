@@ -1494,6 +1494,30 @@
       },
       /* os pontos mais recentes de todos: é por eles que o sistema vê quem
          parou de registrar (saiu do sistema ou o celular matou o aplicativo) */
+      /* ONDE CADA VENDEDOR ESTA AGORA (20/10, pedido dele): le so os pontos dos ULTIMOS
+         MINUTOS, nunca o dia inteiro — e a tela do "agora" repete de minuto em minuto.
+         O indice (em) ja existe no banco, entao a leitura e barata; nada foi criado la. */
+      ondeEstao: async function (minutos) {
+        var desde = new Date(Date.now() - (minutos || 60) * 60000).toISOString();
+        var r = await naFila(function () {
+          return sb.from("rastro_pontos").select("vendedor,em,lat,lng,precisao,bateria,parado,loja")
+            .gte("em", desde).order("em", { ascending: false }).limit(400);
+        });
+        var lista = conferir(r, "ler onde cada vendedor esta").data || [], ult = {};
+        /* a lista vem do mais novo para o mais antigo: o primeiro de cada nome e o ultimo ponto */
+        lista.forEach(function (p) { if (!ult[p.vendedor]) ult[p.vendedor] = p; });
+        return Object.keys(ult).map(function (k) { return ult[k]; });
+      },
+      /* o ultimo ponto de UM vendedor: serve para quem nao apareceu na janela do "agora"
+         (celular desligado, sem internet). Usa o indice (vendedor, em DESC) que ja existe. */
+      ultimoDe: async function (vendedor) {
+        var r = await naFila(function () {
+          return sb.from("rastro_pontos").select("vendedor,em,lat,lng,precisao,bateria,parado")
+            .eq("vendedor", vendedor).order("em", { ascending: false }).limit(1);
+        });
+        var l = conferir(r, "ler o ultimo ponto").data || [];
+        return l[0] || null;
+      },
       ultimosPontos: async function (quantos) {
         var r = await naFila(function () {
           return sb.from("rastro_pontos").select("vendedor,em,lat,lng")

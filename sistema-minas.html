@@ -1429,6 +1429,23 @@
     border:2px dashed #8FA3B8;border-radius:10px;touch-action:none;cursor:crosshair;
     color-scheme:light;forced-color-adjust:none}
   @media(max-width:820px){ .tr-assina canvas{height:200px} }
+  /* RASTREIO AO VIVO (20/10): "onde esta agora" no topo e a rota desenhada no mapa.
+     O mapa e o OpenStreetMap com a biblioteca Leaflet — gratuito, como o resto do sistema. */
+  .rs-agora{display:grid;grid-template-columns:1fr 330px;gap:12px;align-items:start}
+  .rs-mapa{height:380px;border:1px solid var(--line);border-radius:12px;background:#e8edf2}
+  .rs-mapa .leaflet-container{border-radius:12px;font:inherit}
+  .rs-quem{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;
+    cursor:pointer;background:var(--card)}
+  .rs-quem:hover{border-color:var(--accent)}
+  .rs-quem .n{font-weight:700;display:flex;align-items:center;gap:7px}
+  .rs-quem .pt{width:11px;height:11px;border-radius:50%;flex:none}
+  .rs-quem .d{font-size:12.5px;color:var(--mut);line-height:1.5;margin-top:3px}
+  .rs-quem.sem{opacity:.72}
+  .rs-pin{background:#fff;border:2px solid #2E4FD6;border-radius:12px;padding:2px 7px;
+    font:700 12px/1.3 system-ui,sans-serif;color:#16202B;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+  .rs-pin.sem{border-color:#8795A5;color:#5A6875}
+  .rs-pin.parado{border-color:#C8A000}
+  @media(max-width:900px){ .rs-agora{grid-template-columns:1fr} .rs-mapa{height:300px} }
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:28px;background:var(--rail);
     /* o toast é AVISO: fica acima de tudo que cobre a tela — documento da venda (400), login
        (200), gaveta do menu (190) e carregando (300). Em 99 ele sumia atrás do documento, e o
@@ -3923,6 +3940,21 @@ img{max-width:100%}
     <section class="screen" id="s-rastreio" hidden>
       <div class="page-head"><h1>Rastreio dos Vendedores</h1><p>O trajeto do dia, as paradas e as que ficaram <b>sem atendimento registrado</b>. A localização vem do aplicativo instalado no celular da empresa — o navegador não pega com a tela desligada. Parada = <b>10 minutos ou mais no mesmo lugar</b>.</p></div>
       <div class="kpis" id="rs_kpis"></div>
+      <!-- ONDE ESTA AGORA (20/10): atualiza sozinho de 1 em 1 minuto enquanto a tela esta aberta -->
+      <div class="card flush" id="rs_cardAgora">
+        <div class="toolbar">
+          <p class="sect-t" style="margin:0">Onde está agora</p>
+          <span class="count" id="rs_agoraHora"></span>
+          <span class="sp"></span>
+          <button class="btn ghost" type="button" id="rs_agoraJa">Atualizar agora</button>
+        </div>
+        <div style="padding:0 16px 16px">
+          <div class="rs-agora">
+            <div id="rs_mapaAgora" class="rs-mapa"></div>
+            <div id="rs_listaAgora"></div>
+          </div>
+        </div>
+      </div>
       <div class="card flush">
         <div class="toolbar">
           <div class="fld" style="margin:0"><label for="rs_quem">Vendedor</label><select id="rs_quem"></select></div>
@@ -7386,7 +7418,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=364"></script>
+<script src="supabase/adapter.js?v=366"></script>
 <script>
 (function(){
 "use strict";
@@ -12194,6 +12226,11 @@ window.__hojeMF=function(){return hojeISO();};
 window.__pendenciasMF=function(){return pendenciasMF();};
 window.__recebeAvisoMF=function(){return recebeAvisoRastreio();};
 window.__rastroParadasMF=function(){return rastroParadas;};
+/* ganchos do rastreio ao vivo, para os testes (20/10) */
+window.__rastroAgoraMF=function(){return rastroAgora;};
+window.__carregarAgoraMF=function(){return carregarAgora();};
+window.__pontosLinhaMF=function(){return pontosDaLinha();};
+window.__rastroPontosMF=function(){return rastroPontos;};
 window.__rastroDesligadosMF=function(){return rastroDesligados;};
 window.__atualizarAvisosMF=function(){return atualizarAvisosRastreio();};
 window.__conferirDesligadoMF=function(){return conferirRastreioDesligado();};
@@ -37675,6 +37712,264 @@ async function carregarRastreio(){
 function paradaSemAtendimento(p){
   return !p.na_loja&&!p.no_almoco&&!p.com_atendimento&&(+p.minutos||0)>=RASTREIO.minutos;
 }
+/* ======================================================================
+   RASTREIO AO VIVO (20/10, pedido dele): "onde está agora" no topo da tela
+   e a ROTA DESENHADA no mapa do dia.
+   O mapa é o OpenStreetMap com a biblioteca Leaflet — as duas coisas gratuitas,
+   carregadas SÓ quando a tela Rastreio abre (nada entra na abertura do sistema).
+   A leitura do "agora" pede só os pontos dos últimos minutos, nunca o dia inteiro.
+   ====================================================================== */
+var LEAFLET_CSS="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+var LEAFLET_JS="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+function carregarLeaflet(){
+  if(window.L&&window.L.map)return Promise.resolve(window.L);
+  if(window.__leafletProm)return window.__leafletProm;
+  window.__leafletProm=new Promise(function(ok,falha){
+    if(!$("leafletCss")){
+      var c=document.createElement("link");
+      c.id="leafletCss";c.rel="stylesheet";c.href=LEAFLET_CSS;
+      document.head.appendChild(c);
+    }
+    var s=document.createElement("script");
+    s.src=LEAFLET_JS;s.async=true;
+    s.onload=function(){
+      if(window.L&&window.L.map)ok(window.L);
+      else{window.__leafletProm=null;falha(new Error("o mapa nao carregou"));}
+    };
+    s.onerror=function(){window.__leafletProm=null;falha(new Error("sem internet para carregar o mapa"));};
+    document.head.appendChild(s);
+  });
+  return window.__leafletProm;
+}
+function camadaDoMapa(L){
+  return L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    {maxZoom:19,attribution:"&copy; OpenStreetMap"});
+}
+
+/* Endereço aproximado com memória: só pergunta ao mapa aberto quando o ponto MUDOU
+   de lugar (3 casas = ~100 m). Sem isto seria uma consulta por vendedor a cada minuto. */
+var rastroEnd={};
+function chaveEnd(la,lo){return (+la).toFixed(3)+","+(+lo).toFixed(3);}
+async function enderecoCache(la,lo){
+  var k=chaveEnd(la,lo);
+  if(rastroEnd[k]!==undefined)return rastroEnd[k];
+  rastroEnd[k]="";                      /* marca antes de ir: ninguém pergunta duas vezes */
+  var e=await enderecoDoPonto(la,lo);
+  rastroEnd[k]=e;
+  return e;
+}
+
+/* ---------- onde cada vendedor está agora ---------- */
+var rastroAgora=[],rastroAgoraEm=0,rastroAgoraErro="",rastroAgoraLendo=false;
+var mapaAgora=null,marcasAgora=[];
+
+function vendedoresRastreados(){
+  return (USUARIOS||[]).filter(function(u){
+    return u.ativo&&ehVendedorRastreado(u.nome);
+  }).map(function(u){return u.nome;});
+}
+/* A LISTA DO "AGORA" = quem o cadastro diz que e rastreado MAIS quem esta
+   mandando ponto de verdade. Os dois lados importam: o cadastro mostra quem
+   DEVERIA estar registrando (e nao esta), e o banco mostra quem ESTA — se a
+   funcao da pessoa mudou hoje, a posicao dela nao pode sumir da tela. */
+function nomesDoAgora(){
+  var set={},fora=[];
+  vendedoresRastreados().forEach(function(n){set[n]=1;});
+  rastroAgora.forEach(function(p){
+    if(!set[p.vendedor]){set[p.vendedor]=1;fora.push(p.vendedor);}
+  });
+  var l=Object.keys(set).sort(function(a,b){return ordAZ(a,b);});
+  l.__fora=fora;
+  return l;
+}
+function minutosDesde(iso){
+  try{return Math.max(0,Math.round((Date.now()-new Date(iso).getTime())/60000));}catch(e){return 99999;}
+}
+async function carregarAgora(){
+  if(rastroAgoraLendo)return;
+  if(!db||!modoBanco()||!db.rastro||!db.rastro.ondeEstao)return;
+  if(!recebeAvisoRastreio())return;
+  rastroAgoraLendo=true;
+  try{
+    /* uma leitura só traz quem registrou nas últimas 2 horas */
+    var achados=await db.rastro.ondeEstao(120),porNome={};
+    achados.forEach(function(p){porNome[p.vendedor]=p;});
+    /* quem não apareceu pode estar com o celular desligado há mais tempo: o último ponto
+       dele vem numa consulta só, pelo índice (vendedor, em DESC) que já existe no banco */
+    var faltam=vendedoresRastreados().filter(function(n){return !porNome[n];});
+    for(var i=0;i<faltam.length;i++){
+      try{
+        var u=await db.rastro.ultimoDe(faltam[i]);
+        if(u)porNome[u.vendedor]=u;
+      }catch(e){}
+    }
+    rastroAgora=Object.keys(porNome).map(function(k){return porNome[k];});
+    rastroAgoraErro="";
+  }catch(e){
+    rastroAgoraErro=(e&&e.message)||String(e);
+  }
+  rastroAgoraEm=Date.now();
+  rastroAgoraLendo=false;
+  try{renderAgora();}catch(e){console.warn("agora",e);}
+  /* o endereço vem depois, sem segurar a tela */
+  for(var j=0;j<rastroAgora.length;j++){
+    var p=rastroAgora[j];
+    if(rastroEnd[chaveEnd(p.lat,p.lng)]===undefined){
+      await enderecoCache(p.lat,p.lng);
+      try{renderAgora();}catch(e){}
+    }
+  }
+}
+function corDoVendedor(p){
+  if(minutosDesde(p.em)>=RASTRO_SILENCIO)return "sem";   /* cinza: sem sinal */
+  return p.parado?"parado":"andando";
+}
+function horaDoRelogio(ms){
+  var d=new Date(ms);
+  return (d.getHours()<10?"0":"")+d.getHours()+":"+(d.getMinutes()<10?"0":"")+d.getMinutes();
+}
+function renderAgora(){
+  var cx=$("rs_cardAgora");if(!cx)return;
+  var h=$("rs_listaAgora");if(!h)return;
+  if(!recebeAvisoRastreio()||!modoBanco()){cx.hidden=true;return;}
+  cx.hidden=false;
+  var hr=$("rs_agoraHora");
+  if(hr)hr.textContent=rastroAgoraEm?("atualizado às "+horaDoRelogio(rastroAgoraEm)):"buscando…";
+  if(rastroAgoraErro){
+    h.innerHTML='<div class="note crit"><b>Não deu para ler a posição.</b> Confira a internet.'+
+      '<div class="t-sub">'+esc(rastroAgoraErro)+"</div></div>";
+    return;
+  }
+  var nomes=nomesDoAgora();
+  if(!nomes.length){
+    h.innerHTML='<div class="note">Nenhum vendedor rastreado nesta loja. O rastreio liga para a função '+
+      esc(RASTREIO.funcoes.join(", "))+".</div>";
+    return;
+  }
+  var oficiais={};vendedoresRastreados().forEach(function(n){oficiais[n]=1;});
+  var porNome={};rastroAgora.forEach(function(p){porNome[p.vendedor]=p;});
+  h.innerHTML=nomes.map(function(n){
+    var p=porNome[n];
+    if(!p){
+      var falta=termoRastreioAssinado(n)?"nunca registrou nenhum ponto":"ainda não assinou o termo do rastreio";
+      return '<div class="rs-quem sem"><div class="n"><span class="pt" style="background:#8795A5"></span>'+
+        esc(n)+'</div><div class="d">'+falta+"</div></div>";
+    }
+    var m=minutosDesde(p.em),e=rastroEnd[chaveEnd(p.lat,p.lng)];
+    var cor=corDoVendedor(p);
+    var bolinha=cor==="sem"?"#8795A5":(cor==="parado"?"#C8A000":"#1E8E3E");
+    var quando=m<=1?"agora mesmo":("há "+m+" min");
+    var sit=cor==="sem"?('<b style="color:var(--crit)">sem sinal há '+m+" min</b>"):
+      (p.parado?"parado":"em deslocamento");
+    return '<div class="rs-quem'+(cor==="sem"?" sem":"")+'" data-rsq="'+esc(n)+'">'+
+      '<div class="n"><span class="pt" style="background:'+bolinha+'"></span>'+esc(n)+"</div>"+
+      '<div class="d">'+(e?esc(e)+"<br>":"")+
+      "último ponto "+esc(horaDoISO(p.em))+" ("+quando+")<br>"+
+      sit+((+p.bateria)>=0?(" · bateria "+(+p.bateria)+"%"):"")+"<br>"+
+      (oficiais[n]?"":"<b>está registrando, mas a função dele não é de rastreio</b><br>")+
+      '<span style="color:var(--accent)">ver o trajeto do dia</span></div></div>';
+  }).join("")+
+  '<p class="help">A tela se atualiza sozinha a cada 1 minuto. Sem ponto há '+RASTRO_SILENCIO+
+  " minutos o marcador fica cinza: pode ser celular desligado, sem internet ou bateria.</p>";
+  Array.prototype.forEach.call(h.querySelectorAll("[data-rsq]"),function(d){
+    d.onclick=function(){
+      if($("rs_quem"))$("rs_quem").value=d.getAttribute("data-rsq");
+      if($("rs_dia")&&!$("rs_dia").value)$("rs_dia").value=hojeISO();
+      carregarRastreio();
+    };
+  });
+  desenharAgoraNoMapa();
+}
+async function desenharAgoraNoMapa(){
+  var div=$("rs_mapaAgora");if(!div)return;
+  if(!rastroAgora.length)return;
+  var L;
+  try{L=await carregarLeaflet();}
+  catch(e){div.innerHTML='<div class="note" style="margin:10px">Sem internet para carregar o mapa.</div>';return;}
+  if(!mapaAgora){
+    mapaAgora=L.map(div,{zoomControl:true});
+    camadaDoMapa(L).addTo(mapaAgora);
+  }
+  marcasAgora.forEach(function(m){try{mapaAgora.removeLayer(m);}catch(e){}});
+  marcasAgora=[];
+  var pts=[];
+  rastroAgora.forEach(function(p){
+    var cor=corDoVendedor(p),m=minutosDesde(p.em);
+    var cls="rs-pin"+(cor==="sem"?" sem":(cor==="parado"?" parado":""));
+    var mk=L.marker([+p.lat,+p.lng],{icon:L.divIcon({className:"",
+      html:'<div class="'+cls+'">'+esc(p.vendedor)+"</div>",iconSize:null,iconAnchor:[0,0]})});
+    mk.bindPopup("<b>"+esc(p.vendedor)+"</b><br>"+esc(horaDoISO(p.em))+
+      (m<=1?" (agora mesmo)":(" (há "+m+" min)"))+"<br>"+
+      (cor==="sem"?"sem sinal":(p.parado?"parado":"em deslocamento"))+
+      ((+p.bateria)>=0?(" · bateria "+(+p.bateria)+"%"):""));
+    mk.addTo(mapaAgora);marcasAgora.push(mk);
+    pts.push([+p.lat,+p.lng]);
+  });
+  try{
+    if(pts.length===1)mapaAgora.setView(pts[0],15);
+    else mapaAgora.fitBounds(L.latLngBounds(pts).pad(0.25));
+  }catch(e){}
+  setTimeout(function(){try{mapaAgora.invalidateSize();}catch(e){}},80);
+}
+
+/* liga e desliga o relógio de 1 minuto junto com a tela — nada roda fora dela */
+function ligarAoVivo(){
+  if(!recebeAvisoRastreio()||!modoBanco())return;
+  carregarAgora();
+  if(!window.__rastroAgoraTimer)
+    window.__rastroAgoraTimer=setInterval(function(){
+      if(telaAtual==="rastreio"&&!document.hidden)carregarAgora();
+    },60000);
+}
+function pararAoVivo(){
+  if(window.__rastroAgoraTimer){clearInterval(window.__rastroAgoraTimer);window.__rastroAgoraTimer=null;}
+}
+
+/* ---------- a ROTA do dia desenhada no mapa ---------- */
+var mapaRota=null;
+/* ponto com precisão ruim não entra na linha: senão o caminho fica "pulando" (regra dele) */
+var PRECISAO_MAX=200;
+function pontosDaLinha(){
+  return rastroPontos.filter(function(p){
+    return isFinite(+p.lat)&&isFinite(+p.lng)&&(!(+p.precisao)||(+p.precisao)<=PRECISAO_MAX);
+  });
+}
+async function desenharRotaDia(){
+  var div=$("rs_mapaRota");if(!div)return;
+  var bons=pontosDaLinha();
+  if(!bons.length)return;
+  var L;
+  try{L=await carregarLeaflet();}
+  catch(e){div.innerHTML='<div class="note" style="margin:10px">Sem internet para carregar o mapa.</div>';return;}
+  if(mapaRota){try{mapaRota.remove();}catch(e){}mapaRota=null;}
+  mapaRota=L.map(div,{zoomControl:true});
+  camadaDoMapa(L).addTo(mapaRota);
+  var linha=bons.map(function(p){return [+p.lat,+p.lng];});
+  L.polyline(linha,{color:"#2E4FD6",weight:4,opacity:.85}).addTo(mapaRota);
+  function pino(txt,cor){
+    return L.divIcon({className:"",iconSize:null,iconAnchor:[0,0],
+      html:'<div class="rs-pin" style="border-color:'+cor+'">'+txt+"</div>"});
+  }
+  L.marker(linha[0],{icon:pino("Início "+horaDoISO(bons[0].em),"#1E8E3E")}).addTo(mapaRota);
+  if(linha.length>1)
+    L.marker(linha[linha.length-1],{icon:pino("Fim "+horaDoISO(bons[bons.length-1].em),"#2E4FD6")}).addTo(mapaRota);
+  rastroParadas.forEach(function(p){
+    if(!isFinite(+p.lat)||!isFinite(+p.lng))return;
+    var cor=(p.na_loja||p.no_almoco)?"#8795A5":(p.com_atendimento?"#1E8E3E":"#C62828");
+    var sit=p.na_loja?("na loja"+(p.loja_nome?" ("+p.loja_nome+")":"")):
+      (p.no_almoco?"no almoço":(p.com_atendimento?"com atendimento":"SEM atendimento"));
+    if(!p.conferido_em)sit="conferindo…";
+    L.circleMarker([+p.lat,+p.lng],{radius:10,color:"#fff",weight:2,
+      fillColor:cor,fillOpacity:.95}).addTo(mapaRota)
+      .bindPopup("<b>"+esc(p.vendedor||"")+"</b><br>"+
+        "Chegou "+esc(horaDoISO(p.inicio))+" · saiu "+esc(p.fim?horaDoISO(p.fim):"ainda parado")+"<br>"+
+        "<b>"+(+p.minutos||0)+" minutos parado</b><br>"+
+        esc(p.endereco||"")+"<br>"+sit+
+        (p.atendimento?("<br>Atendimento: "+esc(p.atendimento)):""));
+  });
+  try{mapaRota.fitBounds(L.latLngBounds(linha).pad(0.2));}catch(e){}
+  setTimeout(function(){try{mapaRota.invalidateSize();}catch(e){}},80);
+}
 function renderRastreio(){
   var h=$("rs_corpo");if(!h)return;
   /* o campo do vendedor e o dia: enche uma vez, guardando o que já estava escolhido */
@@ -37751,6 +38046,9 @@ function renderRastreio(){
       }).join("")+"</div>";
   }
   h.innerHTML=mapa+tabela+lista;
+  /* o mapa da rota e desenhado DEPOIS de o div existir na tela (20/10) */
+  try{desenharRotaDia();}catch(e){console.warn("rota",e);}
+  try{renderAgora();}catch(e){}
 }
 function horaDoISO(s){
   try{
@@ -37758,25 +38056,23 @@ function horaDoISO(s){
     return (d.getHours()<10?"0":"")+d.getHours()+":"+(d.getMinutes()<10?"0":"")+d.getMinutes();
   }catch(e){return "";}
 }
-/* o trajeto no mapa aberto (OpenStreetMap), o mesmo que o sistema já usa:
-   paradas sem atendimento em vermelho, as outras em cinza/verde */
+/* O TRAJETO DO DIA, COM A LINHA DO CAMINHO DESENHADA (20/10, pedido dele).
+   Antes era um retrato do OpenStreetMap dentro de um iframe: ele mostrava a REGIÃO e
+   marcava só a primeira parada — a rota não aparecia e cada parada abria uma a uma no
+   Google Maps. Agora o desenho é feito com a biblioteca Leaflet sobre o mesmo mapa
+   aberto: a linha liga todos os pontos em ordem de horário, as paradas são bolinhas
+   coloridas pela situação e o início e o fim do dia ficam marcados.
+   Aqui vai só a casca; quem desenha é `desenharRotaDia()`, logo depois do innerHTML. */
 function mapaDoTrajeto(){
   if(!rastroPontos.length)return "";
-  var las=rastroPontos.map(function(p){return +p.lat;});
-  var los=rastroPontos.map(function(p){return +p.lng;});
-  var la1=Math.min.apply(null,las),la2=Math.max.apply(null,las);
-  var lo1=Math.min.apply(null,los),lo2=Math.max.apply(null,los);
-  var folga=0.004;
-  var cx=((la1+la2)/2).toFixed(6),cy=((lo1+lo2)/2).toFixed(6);
-  var caixa=[(lo1-folga).toFixed(5),(la1-folga).toFixed(5),(lo2+folga).toFixed(5),(la2+folga).toFixed(5)].join(",");
-  var marcas=rastroParadas.slice(0,12).map(function(p){return (+p.lat).toFixed(5)+","+(+p.lng).toFixed(5);}).join("|");
+  var bons=pontosDaLinha(),fora=rastroPontos.length-bons.length;
   return '<div class="sect"><p class="sect-t">Trajeto do dia</p>'+
-    '<iframe title="trajeto" style="width:100%;height:340px;border:1px solid var(--line);border-radius:12px" '+
-    'src="https://www.openstreetmap.org/export/embed.html?bbox='+caixa+'&layer=mapnik'+
-    (marcas?"&marker="+encodeURIComponent(rastroParadas.length?((+rastroParadas[0].lat).toFixed(5)+","+(+rastroParadas[0].lng).toFixed(5)):""):"")+'"></iframe>'+
-    '<p class="help">'+rastroPontos.length+" pontos registrados · "+
-    '<a target="_blank" rel="noopener" href="https://www.google.com/maps?q='+cx+","+cy+
-    '">abrir a região no mapa</a>. Cada parada tem o seu link na tabela abaixo.</p></div>';
+    '<div id="rs_mapaRota" class="rs-mapa"></div>'+
+    '<p class="help">'+rastroPontos.length+" ponto(s) registrados"+
+    (fora?(" · "+fora+" ficaram fora da linha por precisão acima de "+PRECISAO_MAX+" m"):"")+
+    ". Linha azul: o caminho. Bolinha <b>vermelha</b>: parada sem atendimento · "+
+    "<b>verde</b>: com atendimento · <b>cinza</b>: na loja ou no almoço. "+
+    "Toque numa bolinha para ver chegada, saída e minutos parado.</p></div>";
 }
 
 /* ---------- o que alimenta o sino (roda de 5 em 5 minutos) ----------
@@ -39036,6 +39332,9 @@ function ir(s,doMenu){
     if($("vcLista"))$("vcLista").hidden=false;
     if($("vcBusca"))$("vcBusca").value="";
     try{renderVeiculos();}catch(e){console.warn(e);}}
+  /* RASTREIO AO VIVO (20/10): o relogio de 1 minuto so corre com a tela aberta */
+  if(s==="rastreio")try{ligarAoVivo();}catch(e){console.warn(e);}
+  else try{pararAoVivo();}catch(e){}
   telaAtual=s;
   /* o que a tela escreveu nos campos de valor aparece no padrão brasileiro (v166) */
   try{formatarValoresVisiveis($("s-"+s)||document);}catch(e){}
@@ -40329,6 +40628,7 @@ function ligar(){
 
   /* ---- rastreio dos vendedores (14/10) ---- */
   $("rs_buscar").onclick=function(){carregarRastreio();};
+  if($("rs_agoraJa"))$("rs_agoraJa").onclick=function(){carregarAgora();};
   $("rs_conferir").onclick=async function(){
     var b=$("rs_conferir");b.disabled=true;b.textContent="Conferindo…";
     var n=0;
