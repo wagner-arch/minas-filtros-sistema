@@ -1445,6 +1445,14 @@
     font:700 12px/1.3 system-ui,sans-serif;color:#16202B;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.25)}
   .rs-pin.sem{border-color:#8795A5;color:#5A6875}
   .rs-pin.parado{border-color:#C8A000}
+  .rs-quem.sel{border-color:var(--accent);box-shadow:0 0 0 2px rgba(46,79,214,.18)}
+  .rs-quem .pill{margin-left:6px}
+  .rs-link{background:none;border:0;padding:0;font:inherit;color:var(--accent);
+    text-decoration:underline;cursor:pointer}
+  .rs-legenda{display:flex;flex-wrap:wrap;gap:14px;margin:8px 2px 0;font-size:12.5px;color:var(--mut)}
+  .rs-legenda span{display:flex;align-items:center;gap:6px}
+  .rs-legenda i{width:11px;height:11px;border-radius:50%;display:inline-block;flex:none}
+  .rs-pin.sel{border-width:3px;border-color:#2E4FD6;font-size:13px;padding:3px 9px}
   @media(max-width:900px){ .rs-agora{grid-template-columns:1fr} .rs-mapa{height:300px} }
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:28px;background:var(--rail);
     /* o toast é AVISO: fica acima de tudo que cobre a tela — documento da venda (400), login
@@ -3946,11 +3954,20 @@ img{max-width:100%}
           <p class="sect-t" style="margin:0">Onde está agora</p>
           <span class="count" id="rs_agoraHora"></span>
           <span class="sp"></span>
+          <button class="btn ghost" type="button" id="rs_verTodos" hidden>Ver todos</button>
           <button class="btn ghost" type="button" id="rs_agoraJa">Atualizar agora</button>
         </div>
         <div style="padding:0 16px 16px">
           <div class="rs-agora">
-            <div id="rs_mapaAgora" class="rs-mapa"></div>
+            <div>
+              <div id="rs_mapaAgora" class="rs-mapa"></div>
+              <!-- legenda das cores, pedido dele (20/10) -->
+              <p class="rs-legenda">
+                <span><i style="background:#C8A000"></i>parado</span>
+                <span><i style="background:#1E8E3E"></i>em deslocamento</span>
+                <span><i style="background:#8795A5"></i>sem sinal ou sem o termo assinado</span>
+              </p>
+            </div>
             <div id="rs_listaAgora"></div>
           </div>
         </div>
@@ -12230,6 +12247,10 @@ window.__rastroParadasMF=function(){return rastroParadas;};
 window.__rastroAgoraMF=function(){return rastroAgora;};
 window.__carregarAgoraMF=function(){return carregarAgora();};
 window.__pontosLinhaMF=function(){return pontosDaLinha();};
+window.__seguindoMF=function(){return rsSeguindo;};
+window.__zoomAgoraMF=function(){try{return mapaAgora?mapaAgora.getZoom():0;}catch(e){return 0;}};
+window.__centroAgoraMF=function(){try{var c=mapaAgora.getCenter();return c.lat.toFixed(5)+","+c.lng.toFixed(5);}catch(e){return "";}};
+window.__telaAtualMF=function(){return telaAtual;};
 window.__rastroPontosMF=function(){return rastroPontos;};
 window.__rastroDesligadosMF=function(){return rastroDesligados;};
 window.__atualizarAvisosMF=function(){return atualizarAvisosRastreio();};
@@ -37435,32 +37456,75 @@ function atendimentoNaParada(nome,inicioISO,fimISO){
 /* ---------- a conferência: roda no sistema, não no celular ----------
    Pega as paradas fechadas que ninguém conferiu e marca na loja / almoço /
    com atendimento. É ela que decide se a parada vira aviso. */
-async function conferirParadas(){
+/* CONFERÊNCIA DAS PARADAS — atendimento, loja e almoço.
+   `tudo` liga a RECONFERÊNCIA (20/10, achado dele no banco): a parada do Guilherme de
+   20/10, a 15 m da loja, foi conferida às 08:43 como SEM atendimento e avisada no sino
+   — porque o ponto da loja só foi salvo em Dados da Empresa às 09:29. Como a leitura
+   automática só traz parada com `conferido_em` vazio, aquele aviso falso ficaria para
+   sempre. Agora o botão "Conferir as paradas agora" refaz a conta de TODAS as paradas
+   do dia, inclusive as já conferidas, e APAGA o aviso do sino quando a parada deixa de
+   ser "sem atendimento". A conferência automática continua barata: só as novas. */
+async function conferirParadas(tudo){
   if(!db||!modoBanco()||!db.rastro)return 0;
-  var lista=[];
-  try{lista=await db.rastro.paradasACoferir(somaDias(hojeISO(),-2)+"T00:00:00");}
+  var desde=somaDias(hojeISO(),-2)+"T00:00:00",lista=[];
+  try{
+    if(tudo){
+      /* todas as do período, menos as que ainda estão abertas (sem fim não há o que conferir) */
+      lista=(await db.rastro.paradas("",desde,hojeISO()+"T23:59:59")).filter(function(p){return !!p.fim;});
+    }else{
+      lista=await db.rastro.paradasACoferir(desde);
+    }
+  }
   catch(e){console.warn("conferir paradas",e);return 0;}
-  var n=0;
+  var n=0,mudou=0;
   for(var i=0;i<lista.length;i++){
     var p=lista[i];
     var naLoja=lojaDaParada(+p.lat,+p.lng);
     var almoco=dentroDoAlmoco(p.vendedor,p.inicio,p.fim);
     var at=atendimentoNaParada(p.vendedor,p.inicio,p.fim);
+    var vira=!naLoja&&!almoco&&!at&&(+p.minutos||0)>=RASTREIO.minutos;
     var campos={conferido_em:new Date().toISOString(),
       na_loja:!!naLoja,loja_nome:naLoja||null,
       no_almoco:!!almoco,com_atendimento:!!at,
       atendimento_id:at?String(at.id):null};
-    /* a parada que vira aviso já sai marcada: é o que o celular da gestão lê */
-    if(!naLoja&&!almoco&&!at&&(+p.minutos||0)>=RASTREIO.minutos)
-      campos.avisado_em=new Date().toISOString();
+    if(vira){
+      /* já avisada continua com a data do primeiro aviso: o sino não repete */
+      if(!p.avisado_em)campos.avisado_em=new Date().toISOString();
+    }else if(p.avisado_em){
+      /* deixou de ser aviso (o ponto da loja entrou, o atendimento foi registrado):
+         o aviso SAI do sino, senão a gestão fica olhando um alarme falso para sempre */
+      campos.avisado_em=null;
+      delete rastroVistos["p"+p.id];
+      mudou++;
+    }
     if(!p.endereco){
       try{campos.endereco=await enderecoDoPonto(+p.lat,+p.lng);}catch(e){}
     }
+    /* na reconferência, não grava o que não mudou — evita escrever à toa no banco */
+    if(tudo&&!mudouAlgo(p,campos)){continue;}
     try{await db.rastro.atualizarParada(p.id,campos);n++;}
     catch(e){console.warn("atualizar a parada",e);}
   }
-  if(n){try{renderSino();}catch(e){}try{renderRastreio();}catch(e){}}
+  if(n){
+    try{rastroAvisos=rastroAvisos.filter(function(a){return !!a.avisado_em;});}catch(e){}
+    try{await atualizarAvisosRastreio();}catch(e){}
+    try{renderSino();}catch(e){}
+    try{if(rsQuem!==undefined)await carregarRastreio();}catch(e){}
+    try{renderRastreio();}catch(e){}
+  }
+  conferirParadas.ultimoMudou=mudou;
   return n;
+}
+/* a parada mudou de situação? (a data da conferência sozinha não conta) */
+function mudouAlgo(p,c){
+  if(!!p.na_loja!==!!c.na_loja)return true;
+  if((p.loja_nome||null)!==(c.loja_nome||null))return true;
+  if(!!p.no_almoco!==!!c.no_almoco)return true;
+  if(!!p.com_atendimento!==!!c.com_atendimento)return true;
+  if((p.atendimento_id||null)!==(c.atendimento_id||null))return true;
+  if(c.endereco&&!p.endereco)return true;
+  if(("avisado_em" in c)&&(c.avisado_em||null)!==(p.avisado_em||null))return true;
+  return false;
 }
 window.__conferirParadasMF=function(){return conferirParadas();};
 
@@ -37785,11 +37849,19 @@ function nomesDoAgora(){
 function minutosDesde(iso){
   try{return Math.max(0,Math.round((Date.now()-new Date(iso).getTime())/60000));}catch(e){return 99999;}
 }
+/* QUEM O MAPA ESTÁ SEGUINDO (20/10, pedido dele): clicar no cartão de alguém trava o
+   mapa nessa pessoa, com zoom de rua, e as atualizações de minuto em minuto CONTINUAM
+   seguindo ela — o zoom escolhido não se perde. "Ver todos" solta. */
+var rsSeguindo="";
+/* o último ponto que cada um tinha na leitura anterior: é assim que o botão
+   "Atualizar agora" sabe dizer quantos trouxeram ponto novo */
+var rastroUltVisto={};
 async function carregarAgora(){
-  if(rastroAgoraLendo)return;
-  if(!db||!modoBanco()||!db.rastro||!db.rastro.ondeEstao)return;
-  if(!recebeAvisoRastreio())return;
+  if(rastroAgoraLendo)return null;
+  if(!db||!modoBanco()||!db.rastro||!db.rastro.ondeEstao)return null;
+  if(!recebeAvisoRastreio())return null;
   rastroAgoraLendo=true;
+  var res={pessoas:0,novos:0,erro:""};
   try{
     /* uma leitura só traz quem registrou nas últimas 2 horas */
     var achados=await db.rastro.ondeEstao(120),porNome={};
@@ -37804,9 +37876,15 @@ async function carregarAgora(){
       }catch(e){}
     }
     rastroAgora=Object.keys(porNome).map(function(k){return porNome[k];});
+    /* quantos trouxeram ponto novo desde a leitura anterior */
+    rastroAgora.forEach(function(p){
+      if(rastroUltVisto[p.vendedor]!==p.em){res.novos++;rastroUltVisto[p.vendedor]=p.em;}
+    });
+    res.pessoas=rastroAgora.length;
     rastroAgoraErro="";
   }catch(e){
     rastroAgoraErro=(e&&e.message)||String(e);
+    res.erro=rastroAgoraErro;
   }
   rastroAgoraEm=Date.now();
   rastroAgoraLendo=false;
@@ -37819,6 +37897,7 @@ async function carregarAgora(){
       try{renderAgora();}catch(e){}
     }
   }
+  return res;
 }
 function corDoVendedor(p){
   if(minutosDesde(p.em)>=RASTRO_SILENCIO)return "sem";   /* cinza: sem sinal */
@@ -37835,6 +37914,8 @@ function renderAgora(){
   cx.hidden=false;
   var hr=$("rs_agoraHora");
   if(hr)hr.textContent=rastroAgoraEm?("atualizado às "+horaDoRelogio(rastroAgoraEm)):"buscando…";
+  var bt=$("rs_verTodos");
+  if(bt)bt.hidden=!rsSeguindo;
   if(rastroAgoraErro){
     h.innerHTML='<div class="note crit"><b>Não deu para ler a posição.</b> Confira a internet.'+
       '<div class="t-sub">'+esc(rastroAgoraErro)+"</div></div>";
@@ -37849,7 +37930,7 @@ function renderAgora(){
   var oficiais={};vendedoresRastreados().forEach(function(n){oficiais[n]=1;});
   var porNome={};rastroAgora.forEach(function(p){porNome[p.vendedor]=p;});
   h.innerHTML=nomes.map(function(n){
-    var p=porNome[n];
+    var p=porNome[n],seg=(rsSeguindo===n)?" sel":"";
     if(!p){
       var falta=termoRastreioAssinado(n)?"nunca registrou nenhum ponto":"ainda não assinou o termo do rastreio";
       return '<div class="rs-quem sem"><div class="n"><span class="pt" style="background:#8795A5"></span>'+
@@ -37861,24 +37942,40 @@ function renderAgora(){
     var quando=m<=1?"agora mesmo":("há "+m+" min");
     var sit=cor==="sem"?('<b style="color:var(--crit)">sem sinal há '+m+" min</b>"):
       (p.parado?"parado":"em deslocamento");
-    return '<div class="rs-quem'+(cor==="sem"?" sem":"")+'" data-rsq="'+esc(n)+'">'+
-      '<div class="n"><span class="pt" style="background:'+bolinha+'"></span>'+esc(n)+"</div>"+
+    return '<div class="rs-quem'+(cor==="sem"?" sem":"")+seg+'" data-rsq="'+esc(n)+'">'+
+      '<div class="n"><span class="pt" style="background:'+bolinha+'"></span>'+esc(n)+
+      (seg?'<span class="pill p-ok">no mapa</span>':"")+"</div>"+
       '<div class="d">'+(e?esc(e)+"<br>":"")+
       "último ponto "+esc(horaDoISO(p.em))+" ("+quando+")<br>"+
       sit+((+p.bateria)>=0?(" · bateria "+(+p.bateria)+"%"):"")+"<br>"+
       (oficiais[n]?"":"<b>está registrando, mas a função dele não é de rastreio</b><br>")+
-      '<span style="color:var(--accent)">ver o trajeto do dia</span></div></div>';
+      '<button type="button" class="rs-link" data-rstraj="'+esc(n)+'">ver o trajeto do dia</button>'+
+      "</div></div>";
   }).join("")+
   '<p class="help">A tela se atualiza sozinha a cada 1 minuto. Sem ponto há '+RASTRO_SILENCIO+
   " minutos o marcador fica cinza: pode ser celular desligado, sem internet ou bateria.</p>";
+  /* clicar no cartão leva o MAPA até a pessoa (e trava nela); o trajeto do dia tem link próprio */
   Array.prototype.forEach.call(h.querySelectorAll("[data-rsq]"),function(d){
-    d.onclick=function(){
-      if($("rs_quem"))$("rs_quem").value=d.getAttribute("data-rsq");
+    d.onclick=function(){seguirNoMapa(d.getAttribute("data-rsq"));};
+  });
+  Array.prototype.forEach.call(h.querySelectorAll("[data-rstraj]"),function(b){
+    b.onclick=function(ev){
+      ev.stopPropagation();
+      if($("rs_quem"))$("rs_quem").value=b.getAttribute("data-rstraj");
       if($("rs_dia")&&!$("rs_dia").value)$("rs_dia").value=hojeISO();
       carregarRastreio();
     };
   });
   desenharAgoraNoMapa();
+}
+/* o mapa passa a seguir uma pessoa só, com zoom de rua */
+function seguirNoMapa(nome){
+  rsSeguindo=(rsSeguindo===nome)?"":nome;   /* clicar de novo no mesmo solta */
+  try{renderAgora();}catch(e){}
+}
+function verTodosNoMapa(){
+  rsSeguindo="";
+  try{renderAgora();}catch(e){}
 }
 async function desenharAgoraNoMapa(){
   var div=$("rs_mapaAgora");if(!div)return;
@@ -37892,21 +37989,27 @@ async function desenharAgoraNoMapa(){
   }
   marcasAgora.forEach(function(m){try{mapaAgora.removeLayer(m);}catch(e){}});
   marcasAgora=[];
-  var pts=[];
+  var pts=[],alvo=null;
   rastroAgora.forEach(function(p){
-    var cor=corDoVendedor(p),m=minutosDesde(p.em);
-    var cls="rs-pin"+(cor==="sem"?" sem":(cor==="parado"?" parado":""));
+    var cor=corDoVendedor(p),m=minutosDesde(p.em),seg=(rsSeguindo===p.vendedor);
+    var cls="rs-pin"+(cor==="sem"?" sem":(cor==="parado"?" parado":""))+(seg?" sel":"");
     var mk=L.marker([+p.lat,+p.lng],{icon:L.divIcon({className:"",
-      html:'<div class="'+cls+'">'+esc(p.vendedor)+"</div>",iconSize:null,iconAnchor:[0,0]})});
+      html:'<div class="'+cls+'">'+esc(p.vendedor)+"</div>",iconSize:null,iconAnchor:[0,0]}),
+      zIndexOffset:seg?1000:0});
     mk.bindPopup("<b>"+esc(p.vendedor)+"</b><br>"+esc(horaDoISO(p.em))+
       (m<=1?" (agora mesmo)":(" (há "+m+" min)"))+"<br>"+
       (cor==="sem"?"sem sinal":(p.parado?"parado":"em deslocamento"))+
       ((+p.bateria)>=0?(" · bateria "+(+p.bateria)+"%"):""));
     mk.addTo(mapaAgora);marcasAgora.push(mk);
     pts.push([+p.lat,+p.lng]);
+    if(seg)alvo=[+p.lat,+p.lng];
   });
   try{
-    if(pts.length===1)mapaAgora.setView(pts[0],15);
+    /* SEGUINDO ALGUÉM: o mapa fica nela, com zoom de rua, e as atualizações de minuto em
+       minuto continuam acompanhando — o zoom escolhido não se perde (regra dele, 20/10).
+       Sem ninguém escolhido, enquadra todos. */
+    if(alvo)mapaAgora.setView(alvo,Math.max(mapaAgora.getZoom()||0,16));
+    else if(pts.length===1)mapaAgora.setView(pts[0],15);
     else mapaAgora.fitBounds(L.latLngBounds(pts).pad(0.25));
   }catch(e){}
   setTimeout(function(){try{mapaAgora.invalidateSize();}catch(e){}},80);
@@ -40628,13 +40731,35 @@ function ligar(){
 
   /* ---- rastreio dos vendedores (14/10) ---- */
   $("rs_buscar").onclick=function(){carregarRastreio();};
-  if($("rs_agoraJa"))$("rs_agoraJa").onclick=function(){carregarAgora();};
+  /* O BOTAO PRECISA DIZER QUE FEZ ALGUMA COISA (20/10, pedido dele): antes ele
+     atualizava em silencio e parecia que o clique nao tinha pegado. */
+  if($("rs_agoraJa"))$("rs_agoraJa").onclick=async function(){
+    var b=$("rs_agoraJa"),rot=b.textContent;
+    b.disabled=true;b.textContent="Atualizando…";
+    var r=null;
+    try{r=await carregarAgora();}catch(e){r={erro:(e&&e.message)||String(e)};}
+    b.disabled=false;b.textContent=rot;
+    if(!r){toast("Nada a atualizar aqui.");return;}
+    if(r.erro){toast("Não deu para atualizar. Confira a internet.");return;}
+    var q=r.pessoas+(r.pessoas===1?" vendedor":" vendedores");
+    toast("Atualizado às "+horaDoRelogio(Date.now())+" · "+q+" · "+
+      (r.novos?(r.novos+(r.novos===1?" com ponto novo":" com ponto novo")):"sem novidades desde a última vez"));
+  };
+  if($("rs_verTodos"))$("rs_verTodos").onclick=function(){verTodosNoMapa();};
   $("rs_conferir").onclick=async function(){
     var b=$("rs_conferir");b.disabled=true;b.textContent="Conferindo…";
-    var n=0;
-    try{n=await conferirParadas();await atualizarAvisosRastreio();}catch(e){}
+    var n=0,erro="";
+    /* o botao RECONFERE tudo do dia (regra dele, 20/10): e assim que o aviso falso sai
+       do sino quando o ponto da loja entra depois */
+    try{n=await conferirParadas(true);await atualizarAvisosRastreio();}
+    catch(e){erro=(e&&e.message)||String(e);}
     b.disabled=false;b.textContent="Conferir as paradas agora";
-    toast(n?(n+" parada(s) conferida(s)."):"Nenhuma parada nova para conferir.");
+    if(erro)toast("Não deu para conferir. Confira a internet.");
+    else{
+      var saiu=conferirParadas.ultimoMudou||0;
+      toast(n?(n+" parada(s) atualizada(s)"+(saiu?(" · "+saiu+" deixou de ser aviso"):"")+"."):
+        "Tudo conferido: nada mudou.");
+    }
     carregarRastreio();
   };
   $("trm_ok").onclick=function(){assinarTermoRastreio();};

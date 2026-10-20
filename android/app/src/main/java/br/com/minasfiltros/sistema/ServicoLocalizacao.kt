@@ -121,21 +121,50 @@ class ServicoLocalizacao : Service() {
      forcada, so no arranque, resolve isso e ja prova que o caminho ate o banco esta de pe. */
   private fun primeiroPonto() {
     try {
-      /* o resultado tambem e tratado FORA da linha principal, pelo mesmo motivo acima */
-      val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+      /* O RESULTADO VEM NA MESMA LINHA DE TRABALHO, e isto conserta um defeito que a
+         propria correcao de 19/10 criou: aqui havia um executor PROPRIO, separado do
+         HandlerThread. Eram duas linhas chamando `tratar` ao mesmo tempo — e as duas
+         achavam a parada local ainda SEM id, entao as duas abriam a parada no banco.
+         Foi assim que o Renan ficou com DUAS paradas iguais, criadas no mesmo segundo
+         (19/10 16:43:12), e uma delas nunca mais seria fechada: o celular so guarda o
+         id da ultima. Uma linha so, e o `tratar` sincronizado, fecham esse caminho. */
+      val exec = java.util.concurrent.Executor { r -> android.os.Handler(linha!!.looper).post(r) }
       cliente!!.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-        .addOnSuccessListener(executor) { l -> if (l != null) tratar(l) }
-        .addOnFailureListener(executor) { atualizarAviso("Procurando o sinal de localização…") }
+        .addOnSuccessListener(exec) { l -> if (l != null) tratar(l) }
+        .addOnFailureListener(exec) { atualizarAviso("Procurando o sinal de localização…") }
     } catch (e: SecurityException) { }
   }
 
-  private fun tratar(l: Location) {
+  /* SINCRONIZADO (20/10): duas localizacoes que chegam no mesmo instante nao podem
+     abrir a parada duas vezes. Com uma linha de trabalho so isto ja nao aconteceria,
+     mas a trava fica como segunda garantia — abrir parada em dobro deixa registro
+     orfao no banco, e orfao nunca fecha. */
+  @Synchronized private fun tratar(l: Location) {
     val ctx = applicationContext
     if (!Guardado.tem(ctx)) { stopSelf(); return }   /* ninguem logado: nao registra */
 
     val agora = System.currentTimeMillis()
     val p = Guardado.paradaSalva(ctx)
     var parado = false
+    /* PARADA QUE ATRAVESSA O DIA (20/10): o celular que fica na mesa a noite inteira
+       mantinha a MESMA parada aberta — a do Renan comecou 19/10 as 16:00 e nunca
+       fechou, porque so fecha quando o aparelho SAI do raio. Parada de mais de 12
+       horas e fechada aqui e outra comeca no lugar: assim a gestao ve "parado desde
+       ontem" como um registro fechado, e nao como uma parada eterna no banco. */
+    if (p != null && agora - p.getLong("desde") > 12L * 3600_000L) {
+      if (!p.isNull("id")) {
+        Banco.fecharParada(ctx, p.getLong("id"), iso(agora),
+          ((agora - p.getLong("desde")) / 60000L).toInt())
+        pedirConferenciaAoSistema()
+      }
+      paradaId = null
+      Guardado.salvarParada(ctx, JSONObject()
+        .put("lat", l.latitude).put("lng", l.longitude)
+        .put("desde", agora).put("id", JSONObject.NULL))
+      atualizarAviso("Parada longa encerrada — começando outra.")
+      return
+    }
+
 
     if (p == null) {
       /* comeca a acompanhar um lugar */
