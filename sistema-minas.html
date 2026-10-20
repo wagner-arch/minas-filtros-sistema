@@ -7442,7 +7442,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=366"></script>
+<script src="supabase/adapter.js?v=371"></script>
 <script>
 (function(){
 "use strict";
@@ -12271,6 +12271,9 @@ window.__perfilTrechoMF=function(pts){return perfilDoTrecho(pts);};
 window.__encaixarMF=function(v,d,p){return encaixarNaFila(v,d,p);};
 window.__cacheRotaMF=function(){return lerCacheRota();};
 window.__limparCacheRotaMF=function(){try{localStorage.removeItem(CACHE_ROTA);}catch(e){}};
+window.__nomesFiltroMF=function(){return nomesDoFiltroRastreio();};
+window.__escolherVendMF=function(n){escolherVendedorRastreio(n);return ($("rs_quem")||{}).value;};
+window.__localISOMF=function(s){return localDoISO(s);};
 window.__rotasRotaMF=function(){
   return rotasPorVendedor(pontosDaLinha()).map(function(r){
     return r.vendedor+":"+r.pontos.length+":"+r.cor;
@@ -37963,6 +37966,28 @@ function nomesDoAgora(){
   l.__fora=fora;
   return l;
 }
+/* QUEM PODE SER ESCOLHIDO NO FILTRO DO TRAJETO: o cadastro MAIS quem está mandando ponto
+   de verdade. Só o cadastro esconde quem tem a função divergente — e aí o nome não existe
+   no <select>, `value` fica VAZIO, e vazio quer dizer "todos os vendedores": clicar em
+   "ver o trajeto do dia" de uma pessoa trazia o trajeto de todo mundo, sem avisar. */
+function nomesDoFiltroRastreio(){
+  var set={};
+  vendedoresRastreados().forEach(function(n){set[n]=1;});
+  [rastroAgora,rastroPontos,rastroParadas].forEach(function(l){
+    (l||[]).forEach(function(p){if(p&&p.vendedor)set[p.vendedor]=1;});
+  });
+  return Object.keys(set).sort(function(a,b){return ordAZ(a,b);});
+}
+/* põe o nome no filtro mesmo que ele ainda não esteja na lista — sem isto o <select>
+   deixa o value vazio e o trajeto de uma pessoa vira o de todos, em silêncio. */
+function escolherVendedorRastreio(nome){
+  var sel=$("rs_quem");if(!sel)return;
+  nome=nome||"";
+  if(nome&&!Array.prototype.some.call(sel.options,function(o){return o.value===nome;})){
+    var o=document.createElement("option");o.value=nome;o.textContent=nome;sel.appendChild(o);
+  }
+  sel.value=nome;
+}
 function minutosDesde(iso){
   try{return Math.max(0,Math.round((Date.now()-new Date(iso).getTime())/60000));}catch(e){return 99999;}
 }
@@ -38125,7 +38150,7 @@ function renderAgora(){
   Array.prototype.forEach.call(h.querySelectorAll("[data-rstraj]"),function(b){
     b.onclick=function(ev){
       ev.stopPropagation();
-      if($("rs_quem"))$("rs_quem").value=b.getAttribute("data-rstraj");
+      escolherVendedorRastreio(b.getAttribute("data-rstraj"));
       if($("rs_dia")&&!$("rs_dia").value)$("rs_dia").value=hojeISO();
       carregarRastreio();
     };
@@ -38245,12 +38270,39 @@ function kmhEntre(a,b){
    direto entre os vizinhos, e passa de 150 metros, o ponto do meio é ruído. */
 var BICO_FATOR=3;           /* ida+volta acima deste múltiplo do caminho direto = desvio falso */
 var BICO_MIN=150;           /* metros: desvio menor que isto é curva de rua, não ruído */
+/* O SALTO E O BICO SÃO CONFERIDOS POR VENDEDOR, NUNCA NA LISTA MISTURADA (20/10, achado
+   na validação ao vivo): em "Todos os vendedores" a leitura vem ordenada por HORA, com as
+   pessoas embaralhadas. Comparar o ponto de quem está em Pitangui com o de quem está em
+   Pará de Minas dá 150 km/h, e o filtro jogava fora o ponto BOM. Medido no dia 20/10 com
+   os dados reais: 68 pontos na linha misturado contra 109 separando por pessoa — 41 pontos
+   descartados à toa, e nenhum vendedor sozinho tinha um único salto. */
 function pontosDaLinha(lista){
   var brutos=(lista||rastroPontos).filter(function(p){
     return isFinite(+p.lat)&&isFinite(+p.lng)&&(!(+p.precisao)||(+p.precisao)<=PRECISAO_MAX);
   });
-  var saltos=0,bons=[];
+  var por={},ordem=[];
   brutos.forEach(function(p){
+    var v=p.vendedor||"—";
+    if(!por[v]){por[v]=[];ordem.push(v);}
+    por[v].push(p);
+  });
+  var saltos=0,bicos=0,limpos=[];
+  ordem.forEach(function(v){
+    var r=limparTrajetoDeUm(por[v]);
+    saltos+=r.saltos;bicos+=r.bicos;
+    limpos=limpos.concat(r.pontos);
+  });
+  /* devolve na ordem de hora, como antes — quem desenha separa por pessoa depois */
+  limpos.sort(function(a,b){return String(a.em).localeCompare(String(b.em));});
+  pontosDaLinha.saltos=saltos;
+  pontosDaLinha.bicos=bicos;
+  pontosDaLinha.pulados=saltos+bicos;
+  return limpos;
+}
+/* o salto impossível e o bico do trajeto de UMA pessoa, em ordem de hora */
+function limparTrajetoDeUm(lista){
+  var saltos=0,bons=[];
+  (lista||[]).forEach(function(p){
     var ant=bons[bons.length-1];
     if(ant&&kmhEntre(ant,p)>VEL_IMPOSSIVEL){saltos++;return;}
     bons.push(p);
@@ -38264,10 +38316,7 @@ function pontosDaLinha(lista){
     }
     limpos.push(b);
   }
-  pontosDaLinha.saltos=saltos;
-  pontosDaLinha.bicos=bicos;
-  pontosDaLinha.pulados=saltos+bicos;
-  return limpos;
+  return {pontos:limpos,saltos:saltos,bicos:bicos};
 }
 /* quantos pontos o filtro deixou de fora, e por quê (a tela explica) */
 function contagemFiltro(lista){
@@ -38564,16 +38613,20 @@ async function desenharRotaDia(){
 }
 function renderRastreio(){
   var h=$("rs_corpo");if(!h)return;
-  /* o campo do vendedor e o dia: enche uma vez, guardando o que já estava escolhido */
+  /* o campo do vendedor e o dia, guardando o que já estava escolhido */
   try{
     var sel=$("rs_quem");
-    if(sel&&!sel.__cheio){
-      sel.__cheio=true;
+    /* A LISTA É REFEITA SEMPRE QUE OS NOMES MUDAM (20/10, achado na validação ao vivo):
+       antes ela era montada UMA vez e travava (`__cheio`). Quem abrisse a tela antes de os
+       colaboradores carregarem ficava com a lista de exemplo do código pelo resto da sessão —
+       e Renan, Thiago e Guilherme, que são os rastreados, não apareciam nela. */
+    var nomesF=nomesDoFiltroRastreio(),chaveF=nomesF.join("|");
+    if(sel&&sel.__chaveNomes!==chaveF){
+      sel.__chaveNomes=chaveF;
       var guarda=sel.value;
       sel.innerHTML='<option value="">Todos os vendedores</option>'+
-        (USUARIOS||[]).filter(function(u){return u.ativo&&ehVendedorRastreado(u.nome);})
-          .map(function(u){return '<option value="'+esc(u.nome)+'">'+esc(u.nome)+"</option>";}).join("");
-      if(guarda)sel.value=guarda;
+        nomesF.map(function(n){return '<option value="'+esc(n)+'">'+esc(n)+"</option>";}).join("");
+      if(guarda)escolherVendedorRastreio(guarda);
     }
     if($("rs_dia")&&!$("rs_dia").value)$("rs_dia").value=hojeISO();
   }catch(e){}
@@ -38659,6 +38712,20 @@ function horaDoISO(s){
     var d=new Date(s);
     return (d.getHours()<10?"0":"")+d.getHours()+":"+(d.getMinutes()<10?"0":"")+d.getMinutes();
   }catch(e){return "";}
+}
+/* "2026-10-20T17:38:00+00:00" (como o banco devolve) vira "2026-10-20 17:38" se a gente
+   só cortar o texto — três horas adiantado. O sino mostrava, na MESMA linha, o horário
+   certo da parada ("saiu 14:38") e a hora do aviso em UTC ("20/10/2026 17:38"). Texto
+   que já vem em hora local (sem fuso no fim) passa sem ser tocado. */
+function localDoISO(s){
+  var t=String(s||"");
+  if(!/(Z|[+-]\d\d:?\d\d)$/.test(t))return t.slice(0,16);
+  try{
+    var d=new Date(t);if(isNaN(d.getTime()))return t.slice(0,16);
+    var p=function(n){return (n<10?"0":"")+n;};
+    return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+
+      " "+p(d.getHours())+":"+p(d.getMinutes());
+  }catch(e){return t.slice(0,16);}
 }
 /* O TRAJETO DO DIA, COM A LINHA DO CAMINHO DESENHADA (20/10, pedido dele).
    Antes era um retrato do OpenStreetMap dentro de um iframe: ele mostrava a REGIÃO e
@@ -38937,7 +39004,7 @@ function pendenciasMF(){
           quando:p.fim||p.inicio||"",
           ir:function(){
             ir("rastreio");
-            try{$("rs_quem").value=p.vendedor||"";$("rs_dia").value=String(p.inicio||"").slice(0,10);
+            try{escolherVendedorRastreio(p.vendedor||"");$("rs_dia").value=String(p.inicio||"").slice(0,10);
               carregarRastreio();}catch(e){}
           }});
       });
@@ -38979,7 +39046,7 @@ function desenharSino(){
     return '<button class="sino-it" type="button" data-pend="'+ix+'">'+
       '<span class="sino-ic">'+it.icone+"</span>"+
       '<span class="sino-tx"><b>'+esc(it.titulo)+"</b><span>"+esc(it.texto||"")+
-        (it.quando?" · "+esc(dataBR(String(it.quando).slice(0,16))):"")+"</span></span></button>";
+        (it.quando?" · "+esc(dataBR(localDoISO(it.quando))):"")+"</span></span></button>";
   }).join("");
   Array.prototype.forEach.call(w.querySelectorAll("[data-pend]"),function(b){
     b.onclick=function(){

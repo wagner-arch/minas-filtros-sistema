@@ -417,12 +417,15 @@
       avaliarEstado(e);
     }
     /* registra o erro e devolve ele mesmo, para usar como `throw anotar(e)` */
-    function anotar(e) {
+    function anotar(e, ehEscrita) {
       adapter.ultimoErro = { quando: new Date().toISOString(), contexto: e.contexto || "", mensagem: e.message, erro: e };
-      /* rede e sessão derrubam o estado do servidor. RLS não é queda de servidor,
-         mas também não pode passar calado: vira falha pendente (banner aceso). */
+      /* rede e sessão derrubam o estado do servidor. RLS não é queda de servidor, mas
+         também não pode passar calada: vira falha pendente (banner aceso) — SÓ QUANDO
+         É GRAVAÇÃO. O banner diz "o último registro NÃO foi gravado no banco", e numa
+         LEITURA recusada isso é mentira que assusta: o vendedor lê que perdeu uma venda
+         quando o que falhou foi ler o trajeto. Achado na validação ao vivo de 20/10. */
       if (e.ehRede || e.ehSessao) definirOnline(false, e);
-      else if (e.ehRLS) marcarFalha(e);
+      else if (e.ehRLS && ehEscrita) marcarFalha(e);
       return e;
     }
     /* gravação que não entrou: fica pendurada até dar certo ou ser reconhecida */
@@ -459,7 +462,7 @@
        apaga uma gravação perdida. */
     function conferir(resp, contexto, ehEscrita) {
       if (resp && resp.error) {
-        var e = anotar(traduzir(resp.error, contexto, ehEscrita));
+        var e = anotar(traduzir(resp.error, contexto, ehEscrita), ehEscrita);
         if (ehEscrita) marcarFalha(e);
         throw e;
       }
