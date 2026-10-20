@@ -12100,6 +12100,9 @@ window.__dupCliMF=function(){return gruposClientesRepetidos();};
 window.__iguaisMF=function(d,t,n){return clientesIguaisA(d,t,n,null);};
 window.__comOrigemMF=function(a){pedOrigemAtiv=a||atendimentos[0]||{id:"teste",cliente:"",motivos:[]};return origemDaVenda();};
 window.__telaAtualMF=function(){return telaAtual;};
+window.__rastroOkMF=function(){return rastroAgoraOk;};
+window.__rastroFalhaMF=function(){return rastroAgoraFalhaEm;};
+window.__rastroLendoMF=function(){return rastroAgoraLendo;};
 window.__renderMotivosMF=function(){return renderMotivos();};
 window.__emoldurarMF=function(raiz){emoldurarTabelas(raiz);numerarListasPdf(raiz);};
 window.__pedAbertoMF=function(){return pedAberto;};
@@ -12251,6 +12254,9 @@ window.__seguindoMF=function(){return rsSeguindo;};
 window.__zoomAgoraMF=function(){try{return mapaAgora?mapaAgora.getZoom():0;}catch(e){return 0;}};
 window.__centroAgoraMF=function(){try{var c=mapaAgora.getCenter();return c.lat.toFixed(5)+","+c.lng.toFixed(5);}catch(e){return "";}};
 window.__telaAtualMF=function(){return telaAtual;};
+window.__rastroOkMF=function(){return rastroAgoraOk;};
+window.__rastroFalhaMF=function(){return rastroAgoraFalhaEm;};
+window.__rastroLendoMF=function(){return rastroAgoraLendo;};
 window.__rastroPontosMF=function(){return rastroPontos;};
 window.__rastroDesligadosMF=function(){return rastroDesligados;};
 window.__atualizarAvisosMF=function(){return atualizarAvisosRastreio();};
@@ -37464,6 +37470,19 @@ function atendimentoNaParada(nome,inicioISO,fimISO){
    sempre. Agora o botão "Conferir as paradas agora" refaz a conta de TODAS as paradas
    do dia, inclusive as já conferidas, e APAGA o aviso do sino quando a parada deixa de
    ser "sem atendimento". A conferência automática continua barata: só as novas. */
+/* O PONTO DAS LOJAS VEM DO BANCO NA HORA DE CONFERIR (20/10 — e este foi o defeito
+   que gerou DOIS avisos falsos). A conferência decide "está na loja?" com o `EMPRESA`
+   que está na MEMÓRIA do navegador, carregado no login. O celular do vendedor fica com
+   a página aberta o dia todo: o do Renan estava aberta desde ontem, e lá dentro o ponto
+   das lojas ainda era vazio — então a parada dele, a 14 metros da loja, foi conferida
+   como "sem atendimento" e virou aviso. Uma leitura só, antes de conferir, resolve. */
+async function atualizarPontosDasLojas(){
+  if(!db||!modoBanco())return;
+  try{
+    var d=await db.doc("config/empresa").get();
+    if(d&&d.exists&&d.data()&&d.data().geoLojas)EMPRESA.geoLojas=d.data().geoLojas;
+  }catch(e){console.warn("ler o ponto das lojas",e);}
+}
 async function conferirParadas(tudo){
   if(!db||!modoBanco()||!db.rastro)return 0;
   var desde=somaDias(hojeISO(),-2)+"T00:00:00",lista=[];
@@ -37476,6 +37495,9 @@ async function conferirParadas(tudo){
     }
   }
   catch(e){console.warn("conferir paradas",e);return 0;}
+  if(!lista.length)return 0;
+  /* o ponto das lojas pode ter sido cadastrado DEPOIS de esta aba abrir */
+  await atualizarPontosDasLojas();
   var n=0,mudou=0;
   for(var i=0;i<lista.length;i++){
     var p=lista[i];
@@ -37856,22 +37878,53 @@ var rsSeguindo="";
 /* o último ponto que cada um tinha na leitura anterior: é assim que o botão
    "Atualizar agora" sabe dizer quantos trouxeram ponto novo */
 var rastroUltVisto={};
+/* a HORA DA ÚLTIMA BUSCA QUE DEU CERTO e a da última que falhou (20/10): o "atualizado
+   às" do topo mostra a boa; a falha aparece com todas as letras, em vez de a tela ficar
+   parada fingindo que está em dia. */
+var rastroAgoraOk=0,rastroAgoraFalhaEm=0;
+var rastroAgoraLendoDesde=0;
+var LIMITE_BUSCA=15000;    /* nenhuma leitura do rastreio pode esperar mais que isto */
+var TRAVA_PRESA=90000;     /* "lendo" há mais que isto é leitura perdida: começa outra */
+
+/* PROMESSA COM TEMPO LIMITE — foi a falta disto que matou a atualização automática:
+   uma leitura que NUNCA responde (rede pendurada, 4G que cai no meio) deixava o
+   `rastroAgoraLendo` preso em "lendo", e TODAS as buscas seguintes eram puladas. A tela
+   ficava parada para sempre e só voltava com F5. Medido no teste: depois de uma leitura
+   travada o relógio não buscava mais nenhuma vez. */
+function comLimite(p,ms,oque){
+  return new Promise(function(ok,falha){
+    var pronto=false;
+    var t=setTimeout(function(){
+      if(pronto)return;pronto=true;
+      falha(new Error("o banco não respondeu em "+Math.round((ms||LIMITE_BUSCA)/1000)+"s ("+(oque||"leitura")+")"));
+    },ms||LIMITE_BUSCA);
+    Promise.resolve(p).then(function(v){
+      if(pronto)return;pronto=true;clearTimeout(t);ok(v);
+    },function(e){
+      if(pronto)return;pronto=true;clearTimeout(t);falha(e);
+    });
+  });
+}
 async function carregarAgora(){
-  if(rastroAgoraLendo)return null;
+  /* trava presa há muito tempo = a leitura anterior se perdeu: não espera por ela */
+  if(rastroAgoraLendo){
+    if(Date.now()-rastroAgoraLendoDesde<TRAVA_PRESA)return null;
+    console.warn("rastreio: a leitura anterior ficou presa, começando outra");
+  }
   if(!db||!modoBanco()||!db.rastro||!db.rastro.ondeEstao)return null;
   if(!recebeAvisoRastreio())return null;
-  rastroAgoraLendo=true;
+  rastroAgoraLendo=true;rastroAgoraLendoDesde=Date.now();
   var res={pessoas:0,novos:0,erro:""};
   try{
     /* uma leitura só traz quem registrou nas últimas 2 horas */
-    var achados=await db.rastro.ondeEstao(120),porNome={};
+    var achados=await comLimite(db.rastro.ondeEstao(120),LIMITE_BUSCA,"onde cada um está"),porNome={};
     achados.forEach(function(p){porNome[p.vendedor]=p;});
     /* quem não apareceu pode estar com o celular desligado há mais tempo: o último ponto
        dele vem numa consulta só, pelo índice (vendedor, em DESC) que já existe no banco */
     var faltam=vendedoresRastreados().filter(function(n){return !porNome[n];});
     for(var i=0;i<faltam.length;i++){
       try{
-        var u=await db.rastro.ultimoDe(faltam[i]);
+        var u=await comLimite(db.rastro.ultimoDe(faltam[i]),LIMITE_BUSCA,"último ponto");
         if(u)porNome[u.vendedor]=u;
       }catch(e){}
     }
@@ -37881,19 +37934,23 @@ async function carregarAgora(){
       if(rastroUltVisto[p.vendedor]!==p.em){res.novos++;rastroUltVisto[p.vendedor]=p.em;}
     });
     res.pessoas=rastroAgora.length;
-    rastroAgoraErro="";
+    rastroAgoraErro="";rastroAgoraOk=Date.now();rastroAgoraFalhaEm=0;
   }catch(e){
     rastroAgoraErro=(e&&e.message)||String(e);
+    rastroAgoraFalhaEm=Date.now();
     res.erro=rastroAgoraErro;
+  }finally{
+    /* a trava SEMPRE solta: é isso que impede a tela de morrer depois de uma falha */
+    rastroAgoraLendo=false;rastroAgoraLendoDesde=0;
   }
   rastroAgoraEm=Date.now();
-  rastroAgoraLendo=false;
   try{renderAgora();}catch(e){console.warn("agora",e);}
-  /* o endereço vem depois, sem segurar a tela */
+  /* o endereço vem depois, sem segurar a tela — e também com tempo limite, senão sobra
+     uma consulta pendurada por vendedor a cada minuto */
   for(var j=0;j<rastroAgora.length;j++){
     var p=rastroAgora[j];
     if(rastroEnd[chaveEnd(p.lat,p.lng)]===undefined){
-      await enderecoCache(p.lat,p.lng);
+      try{await comLimite(enderecoCache(p.lat,p.lng),LIMITE_BUSCA,"endereço");}catch(e){}
       try{renderAgora();}catch(e){}
     }
   }
@@ -37913,10 +37970,22 @@ function renderAgora(){
   if(!recebeAvisoRastreio()||!modoBanco()){cx.hidden=true;return;}
   cx.hidden=false;
   var hr=$("rs_agoraHora");
-  if(hr)hr.textContent=rastroAgoraEm?("atualizado às "+horaDoRelogio(rastroAgoraEm)):"buscando…";
+  /* O TOPO MOSTRA A ÚLTIMA BUSCA QUE DEU CERTO (20/10, regra dele). Falhando a última,
+     a tela DIZ isso em vermelho, em vez de ficar com uma hora antiga que parece atual. */
+  if(hr){
+    if(rastroAgoraFalhaEm&&rastroAgoraFalhaEm>rastroAgoraOk){
+      hr.innerHTML='<b style="color:var(--crit)">não foi possível atualizar às '+
+        horaDoRelogio(rastroAgoraFalhaEm)+", tentando de novo</b>"+
+        (rastroAgoraOk?(" · última boa às "+horaDoRelogio(rastroAgoraOk)):"");
+    }else{
+      hr.textContent=rastroAgoraOk?("atualizado às "+horaDoRelogio(rastroAgoraOk)):"buscando…";
+    }
+  }
   var bt=$("rs_verTodos");
   if(bt)bt.hidden=!rsSeguindo;
-  if(rastroAgoraErro){
+  /* falha passageira NÃO apaga o que já estava na tela: o aviso fica no topo e os
+     cartões continuam, com a hora de cada um dizendo o quanto já envelheceram */
+  if(rastroAgoraErro&&!rastroAgora.length){
     h.innerHTML='<div class="note crit"><b>Não deu para ler a posição.</b> Confira a internet.'+
       '<div class="t-sub">'+esc(rastroAgoraErro)+"</div></div>";
     return;
@@ -38016,6 +38085,12 @@ async function desenharAgoraNoMapa(){
 }
 
 /* liga e desliga o relógio de 1 minuto junto com a tela — nada roda fora dela */
+/* O RELÓGIO DA TELA (20/10 — ele pegou a falha no dia a dia: o Guilherme saiu de
+   Pitangui às 10:47 e a tela só mostrou depois do F5).
+   Três coisas garantem que ela ande sozinha:
+   · o tique de 1 minuto, enquanto a tela estiver aberta;
+   · a volta para a aba (ou para a tela) busca NA HORA, sem esperar o minuto;
+   · a leitura tem tempo limite e a trava sempre solta — era o que faltava. */
 function ligarAoVivo(){
   if(!recebeAvisoRastreio()||!modoBanco())return;
   carregarAgora();
@@ -38023,6 +38098,14 @@ function ligarAoVivo(){
     window.__rastroAgoraTimer=setInterval(function(){
       if(telaAtual==="rastreio"&&!document.hidden)carregarAgora();
     },60000);
+  /* uma vez só: a aba que volta do fundo busca na hora */
+  if(!window.__rastroAgoraVolta){
+    window.__rastroAgoraVolta=function(){
+      if(!document.hidden&&telaAtual==="rastreio")carregarAgora();
+    };
+    document.addEventListener("visibilitychange",window.__rastroAgoraVolta);
+    window.addEventListener("focus",window.__rastroAgoraVolta);
+  }
 }
 function pararAoVivo(){
   if(window.__rastroAgoraTimer){clearInterval(window.__rastroAgoraTimer);window.__rastroAgoraTimer=null;}
