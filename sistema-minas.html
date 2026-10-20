@@ -12257,6 +12257,7 @@ window.__rastroParadasMF=function(){return rastroParadas;};
 window.__rastroAgoraMF=function(){return rastroAgora;};
 window.__carregarAgoraMF=function(){return carregarAgora();};
 window.__pontosLinhaMF=function(l){return pontosDaLinha(l);};
+window.__pontosEncaixeMF=function(l){return pontosParaEncaixe(l);};
 window.__seguindoMF=function(){return rsSeguindo;};
 window.__zoomAgoraMF=function(){try{return mapaAgora?mapaAgora.getZoom():0;}catch(e){return 0;}};
 window.__centroAgoraMF=function(){try{var c=mapaAgora.getCenter();return c.lat.toFixed(5)+","+c.lng.toFixed(5);}catch(e){return "";}};
@@ -38270,15 +38271,34 @@ function kmhEntre(a,b){
    direto entre os vizinhos, e passa de 150 metros, o ponto do meio é ruído. */
 var BICO_FATOR=3;           /* ida+volta acima deste múltiplo do caminho direto = desvio falso */
 var BICO_MIN=150;           /* metros: desvio menor que isto é curva de rua, não ruído */
+/* O PONTO IMPRECISO NÃO É LIXO — ELE AINDA ACHA A RUA (20/10, pedido dele: "traçar a rota
+   de forma que fique certinho mesmo que o GPS não seja preciso"). O caso que mostrou isso
+   foi o Guilherme, que viaja Pará de Minas ↔ Pitangui: na estrada o celular dele registra
+   com 100 a 2.248 metros de erro, e o filtro de 50 m DESCARTAVA A ESTRADA INTEIRA — sobravam
+   só os lugares onde ele ficou parado, ligados por uma reta que cortava tudo.
+   E a ironia é que o serviço de encaixe JÁ SABE lidar com isso: o sistema manda a imprecisão
+   de cada ponto como RAIO DE TOLERÂNCIA, e é com ele que o OSRM e o Valhalla decidem em que
+   rua colar o ponto. Um erro de 100 m numa estrada não atrapalha (só existe uma estrada ali);
+   atrapalha no centro, onde cabem dez ruas em 100 metros. O ponto é que ele nunca chegava lá.
+   ENTÃO SÃO DOIS USOS, com limites diferentes:
+     · ACHAR O CAMINHO (encaixe nas ruas): até PRECISAO_ENCAIXE, com o raio informado;
+     · DESENHAR A RETA DE RESERVA (quando o encaixe falha): só até PRECISAO_MAX, para o
+       desenho de emergência não piorar.
+   Medido com os 116 pontos reais do Guilherme em 20/10: de 7 trechos partidos (6 encaixados)
+   para 4 trechos contínuos, TODOS encaixados, e 14,4 km → 16,5 km de caminho de verdade.
+   E afrouxar a precisão é seguro porque ela NÃO é a única proteção: o ponto dele das 13:39,
+   com 2.248 m de erro, pularia 5 km em 63 segundos — 292 km/h — e o filtro de salto o
+   descarta sozinho, qualquer que seja o limite de precisão. */
+var PRECISAO_ENCAIXE=300;   /* metros: até aqui o ponto ainda serve para ACHAR a rua */
 /* O SALTO E O BICO SÃO CONFERIDOS POR VENDEDOR, NUNCA NA LISTA MISTURADA (20/10, achado
    na validação ao vivo): em "Todos os vendedores" a leitura vem ordenada por HORA, com as
    pessoas embaralhadas. Comparar o ponto de quem está em Pitangui com o de quem está em
    Pará de Minas dá 150 km/h, e o filtro jogava fora o ponto BOM. Medido no dia 20/10 com
    os dados reais: 68 pontos na linha misturado contra 109 separando por pessoa — 41 pontos
    descartados à toa, e nenhum vendedor sozinho tinha um único salto. */
-function pontosDaLinha(lista){
+function filtrarPontos(lista,maxPrec){
   var brutos=(lista||rastroPontos).filter(function(p){
-    return isFinite(+p.lat)&&isFinite(+p.lng)&&(!(+p.precisao)||(+p.precisao)<=PRECISAO_MAX);
+    return isFinite(+p.lat)&&isFinite(+p.lng)&&(!(+p.precisao)||(+p.precisao)<=maxPrec);
   });
   var por={},ordem=[];
   brutos.forEach(function(p){
@@ -38292,12 +38312,21 @@ function pontosDaLinha(lista){
     saltos+=r.saltos;bicos+=r.bicos;
     limpos=limpos.concat(r.pontos);
   });
-  /* devolve na ordem de hora, como antes — quem desenha separa por pessoa depois */
+  /* devolve na ordem de hora — quem desenha separa por pessoa depois */
   limpos.sort(function(a,b){return String(a.em).localeCompare(String(b.em));});
-  pontosDaLinha.saltos=saltos;
-  pontosDaLinha.bicos=bicos;
-  pontosDaLinha.pulados=saltos+bicos;
-  return limpos;
+  return {pontos:limpos,saltos:saltos,bicos:bicos};
+}
+/* os pontos da LINHA RETA de reserva: só os de precisão boa */
+function pontosDaLinha(lista){
+  var r=filtrarPontos(lista,PRECISAO_MAX);
+  pontosDaLinha.saltos=r.saltos;
+  pontosDaLinha.bicos=r.bicos;
+  pontosDaLinha.pulados=r.saltos+r.bicos;
+  return r.pontos;
+}
+/* os pontos que vão ao serviço de ruas: a imprecisão vira tolerância, não motivo de descarte */
+function pontosParaEncaixe(lista){
+  return filtrarPontos(lista,PRECISAO_ENCAIXE).pontos;
 }
 /* o salto impossível e o bico do trajeto de UMA pessoa, em ordem de hora */
 function limparTrajetoDeUm(lista){
@@ -38318,15 +38347,18 @@ function limparTrajetoDeUm(lista){
   }
   return {pontos:limpos,saltos:saltos,bicos:bicos};
 }
-/* quantos pontos o filtro deixou de fora, e por quê (a tela explica) */
+/* quantos pontos o filtro deixou de fora, e por quê (a tela explica).
+   `usados` = os da linha reta (precisão boa); `encaixe` = os que vão ao serviço de ruas,
+   que é sempre um número maior — e é ele que o rodapé mostra primeiro. */
 function contagemFiltro(lista){
   var todos=(lista||rastroPontos).filter(function(p){return isFinite(+p.lat)&&isFinite(+p.lng);});
   var bons=pontosDaLinha(lista);
-  return {total:todos.length,usados:bons.length,
+  var largos=pontosParaEncaixe(lista);
+  return {total:todos.length,usados:bons.length,encaixe:largos.length,
     precisao:todos.filter(function(p){return (+p.precisao)>PRECISAO_MAX;}).length,
+    foraEncaixe:todos.filter(function(p){return (+p.precisao)>PRECISAO_ENCAIXE;}).length,
     salto:pontosDaLinha.saltos||0,bico:pontosDaLinha.bicos||0};
 }
-
 /* UMA LINHA POR VENDEDOR (20/10, junto com os números do topo): em "Todos os vendedores"
    uma linha só ligaria o último ponto de um ao primeiro ponto do outro e desenharia no mapa
    um caminho que ninguém percorreu. Cada pessoa ganha a sua cor, e os pontos dela são
@@ -38507,14 +38539,20 @@ function encaixarNaFila(vendedor,dia,pts){
 /* TROCA A LINHA RETA PELO CAMINHO DAS RUAS, vendedor por vendedor. Enquanto a busca não
    volta, a linha fica tracejada; voltando, ela vira linha cheia. Falhando os dois serviços,
    a tracejada FICA e a tela diz "caminho aproximado" — era o que ele pediu no item 4. */
-async function encaixarNoMapa(L,rotas,dia){
+async function encaixarNoMapa(L,rotas,dia,largos){
+  /* `largos` = os pontos de cada vendedor pelo limite do ENCAIXE (até 300 m). Sem eles o
+     serviço recebia só a lista da reta, e a estrada — onde a precisão é pior — sumia do
+     pedido. Foi o caso do Guilherme em 20/10. */
+  var porV={};
+  (largos||[]).forEach(function(x){porV[x.vendedor]=x.pontos;});
   if(!mapaRota)return;
   var meu=mapaRota,resumo=[];
   for(var i=0;i<rotas.length;i++){
     var r=rotas[i];
     if(mapaRota!==meu)return;            /* trocou de dia ou de vendedor: este desenho morreu */
     var res=null;
-    try{res=await encaixarNaFila(r.vendedor,dia,r.pontos);}catch(e){res=null;}
+    var pEnc=porV[r.vendedor]||r.pontos;
+    try{res=await encaixarNaFila(r.vendedor,dia,pEnc);}catch(e){res=null;}
     if(mapaRota!==meu)return;
     if(!res||!res.trechos||!res.trechos.length){
       resumo.push({vendedor:r.vendedor,ruas:0,total:0});
@@ -38580,9 +38618,13 @@ async function desenharRotaDia(){
     var linha=r.pontos.map(function(p){return [+p.lat,+p.lng];});
     todos=todos.concat(linha);
     /* a linha RETA entra primeiro, para o mapa não ficar vazio enquanto o caminho pelas
-       ruas é buscado; ela é trocada logo em seguida por `encaixarNoMapa` */
-    r.__linha=L.polyline(linha,{color:r.cor,weight:4,opacity:.85,dashArray:"6 6"}).addTo(mapaRota)
-      .bindPopup("<b>"+esc(r.vendedor)+"</b><br>"+r.pontos.length+" ponto(s) no dia");
+       ruas é buscado; ela é trocada logo em seguida por `encaixarNoMapa`.
+       BEM APAGADA DE PROPÓSITO (20/10): com opacidade de gente grande ela parecia o
+       resultado pronto, e foi assim que ele leu um print tirado no meio da busca —
+       o encaixe leva de 8 a 11 segundos, e até lá o que se vê é esta reta. */
+    r.__linha=L.polyline(linha,{color:r.cor,weight:3,opacity:.35,dashArray:"4 8"}).addTo(mapaRota)
+      .bindPopup("<b>"+esc(r.vendedor)+"</b><br>"+r.pontos.length+
+        " ponto(s) no dia<br><i>procurando o caminho pelas ruas…</i>");
     var qual=varios?(r.vendedor.split(" ")[0]+": "):"";
     L.marker(linha[0],{icon:pino(qual+"Início "+horaDoISO(r.pontos[0].em),
       varios?r.cor:"#1E8E3E")}).addTo(mapaRota);
@@ -38593,7 +38635,7 @@ async function desenharRotaDia(){
   var linha=todos;
   /* O CAMINHO PELAS RUAS vem depois do mapa aberto, de propósito: a busca leva alguns
      segundos e ninguém fica olhando tela branca por causa dela. */
-  encaixarNoMapa(L,rotas,rsDia||hojeISO());
+  encaixarNoMapa(L,rotas,rsDia||hojeISO(),rotasPorVendedor(pontosParaEncaixe()));
   rastroParadas.forEach(function(p){
     if(!isFinite(+p.lat)||!isFinite(+p.lng))return;
     var cor=(p.na_loja||p.no_almoco)?"#8795A5":(p.com_atendimento?"#1E8E3E":"#C62828");
@@ -38745,18 +38787,26 @@ function mapaDoTrajeto(){
         " ("+r.pontos.length+")</span>";
     }).join("")+"</p>"):"";
   /* O FILTRO PRESTA CONTAS (20/10): dizer só "N pontos registrados" escondia que vários
-     deles não entravam na linha — e era isso que fazia o caminho cortar quarteirão. */
+     deles não entravam na linha — e era isso que fazia o caminho cortar quarteirão.
+     Agora são DOIS números, porque são dois usos: quantos pontos acharam o caminho pelas
+     ruas (o limite largo, com a imprecisão virando tolerância) e quantos têm precisão boa
+     o bastante para a linha reta de reserva. */
   var ct=contagemFiltro(),sobrou=[];
-  if(ct.precisao)sobrou.push(ct.precisao+" com precisão pior que "+PRECISAO_MAX+" m");
+  if(ct.foraEncaixe)sobrou.push(ct.foraEncaixe+" com precisão pior que "+PRECISAO_ENCAIXE+" m");
   if(ct.salto)sobrou.push(ct.salto+" com salto impossível (acima de "+VEL_IMPOSSIVEL+" km/h)");
   if(ct.bico)sobrou.push(ct.bico+" que iam e voltavam no mesmo minuto");
   return '<div class="sect"><p class="sect-t">Trajeto do dia'+
     (varios?(" · "+rotas.length+" vendedores"):"")+"</p>"+
     '<div id="rs_mapaRota" class="rs-mapa"></div>'+quem+
     '<p class="help" id="rs_encaixeNota">Buscando o caminho pelas ruas…</p>'+
-    '<p class="help">'+ct.usados+" de "+rastroPontos.length+" ponto(s) na linha"+
+    '<p class="help">'+ct.encaixe+" de "+rastroPontos.length+
+    " ponto(s) usados para achar o caminho"+
     (sobrou.length?(" · fora: "+sobrou.join(" e ")):"")+
-    ". "+(varios?"Uma linha por vendedor, na cor da legenda acima. ":"Linha azul: o caminho. ")+
+    ". Ponto com GPS ruim <b>não é jogado fora</b>: a imprecisão dele vai junto ao "+
+    "serviço de ruas como margem de erro, e é assim que a estrada entra no mapa. "+
+    (ct.usados<ct.encaixe?("Se o serviço não responder, a linha de reserva usa os "+
+      ct.usados+" ponto(s) de precisão melhor que "+PRECISAO_MAX+" m. "):"")+
+    (varios?"Uma linha por vendedor, na cor da legenda acima. ":"Linha azul: o caminho. ")+
     "Bolinha <b>vermelha</b>: parada sem atendimento · "+
     "<b>verde</b>: com atendimento · <b>cinza</b>: na loja ou no almoço. "+
     "Toque numa bolinha para ver chegada, saída e minutos parado."+
