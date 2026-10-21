@@ -1441,6 +1441,11 @@
     white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,.25)}
   .rs-dois-dedos.ver{opacity:1}
   .ok-enc{color:var(--ok);font-weight:600}
+  /* o desconto de cada item, na linha de baixo do nome (21/10) */
+  .it-desc{white-space:nowrap}
+  .it-desc input.v-dsc{width:62px;padding:3px 6px;font-size:12.5px;text-align:right;display:inline-block}
+  .it-desc select.v-dtp{width:54px;padding:3px 4px;font-size:12.5px;display:inline-block}
+  .it-dsc-v{color:var(--crit)}
   .rs-quem{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;
     cursor:pointer;background:var(--card)}
   .rs-quem:hover{border-color:var(--accent)}
@@ -2474,6 +2479,17 @@ img{max-width:100%}
               <label for="v_equip">Esta venda é manutenção de qual aparelho? <span class="req">*</span></label>
               <select id="v_equip"></select>
               <p class="help" id="v_equipAjuda"></p>
+              <!-- ONDE O APARELHO ESTÁ HOJE (21/10, regra dele): "o aparelho pode ter mudado de
+                   lugar — o cliente deu o purificador para a mãe, mas continua comprando o refil
+                   para ela". Pergunta depois de escolher o aparelho, já marcada em Sim. -->
+              <div id="v_eqEndWrap" hidden style="margin-top:12px">
+                <label>Este aparelho continua instalado em:</label>
+                <div class="note" id="v_eqEndAtual"></div>
+                <div class="chips" id="v_eqEndChips">
+                  <button type="button" data-vee="sim" aria-pressed="true">Sim, continua lá</button>
+                  <button type="button" data-vee="nao" aria-pressed="false">Não, mudou de endereço</button>
+                </div>
+              </div>
             </div>
             <div class="grid g4">
               <div class="fld" style="justify-content:flex-end"><button class="btn ghost" type="button" id="v_add">Adicionar</button></div>
@@ -2488,9 +2504,13 @@ img{max-width:100%}
               <div class="r"><span>Produtos</span><span id="o_cProd">—</span></div>
               <div class="r"><span>Garantia</span><span id="o_cGar">—</span></div>
               <div class="r" id="o_cFreteR" hidden><span>Frete</span><span id="o_cFrete">—</span></div>
-              <!-- Desconto Especial (pedido dele, 25/09): última linha antes do total, opcional.
-                   Preenchido, é lançado na venda e o total final sai já com ele descontado. -->
-              <div class="r"><span>Desconto Especial</span>
+              <!-- desconto dado item a item (21/10): a soma do que foi tirado de cada linha -->
+              <div class="r" id="o_cDescItR" hidden><span>Descontos nos itens</span><span id="o_cDescIt">—</span></div>
+              <!-- Desconto Especial no TOTAL: aposentado em 21/10, quando o desconto passou a
+                   ser de cada item. A linha continua no HTML e some da venda nova; ela volta a
+                   aparecer num pedido ANTIGO que tenha desconto no total, para ele continuar
+                   mostrando o que sempre mostrou (nada se apaga, nada se renomeia). -->
+              <div class="r" id="v_descGeralR" hidden><span>Desconto Especial (no total)</span>
                 <span><input id="v_descGeral" class="v-unit v-desc" type="text" inputmode="decimal" placeholder="0,00" aria-label="Desconto Especial"></span></div>
               <div class="r sep big"><span>Total da venda</span><span id="o_cBase">—</span></div>
             </div>
@@ -3319,10 +3339,13 @@ img{max-width:100%}
             <thead><tr><th>Produto</th><th class="num">Qtd</th><th class="num">Unitário</th><th class="num">Subtotal</th><th class="num">Depreciado</th><th>Faixa</th><th class="num">Entra como</th><th></th></tr></thead>
             <tbody id="or_itens"></tbody>
           </table></div>
-          <!-- Desconto Especial (pedido dele, 25/09): opcional; o total sai já com ele descontado -->
+          <!-- Desconto Especial no TOTAL: aposentado em 21/10, quando o desconto passou a ser
+               de cada item. A linha continua no HTML e volta a aparecer num orçamento ANTIGO
+               que já o tinha, para ele continuar mostrando o que sempre mostrou. -->
           <div class="calc" style="margin-top:20px">
             <div class="r"><span>Produtos</span><span id="or_cProd">—</span></div>
-            <div class="r"><span>Desconto Especial</span>
+            <div class="r" id="or_descItR" hidden><span>Descontos nos itens</span><span id="or_descIt">—</span></div>
+            <div class="r" id="or_descEspR" hidden><span>Desconto Especial (no total)</span>
               <span><input id="or_descEsp" class="v-unit v-desc" type="text" inputmode="decimal" placeholder="0,00" aria-label="Desconto Especial"></span></div>
             <div class="r sep big"><span>Total do orçamento</span><span id="or_cTotal">—</span></div>
           </div>
@@ -6322,6 +6345,82 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- ONDE ESTE APARELHO FICA INSTALADO (21/10, regra dele). A mesma janela serve à venda de
+     purificador, à venda de refil e ao botão da ficha do cliente — uma só, para o sistema
+     nunca ter duas telas pedindo a mesma coisa de jeitos diferentes. -->
+<!-- A REVISÃO DO PEDIDO (21/10, regra dele): "antes de finalizar, o vendedor vê uma tela de
+     resumo com tudo junto e só então clica em Confirmar pedido". É uma JANELA e não uma
+     etapa nova de propósito: "Voltar e corrigir" é só fechar, então nada se perde por
+     construção — não há estado para salvar e restaurar. -->
+<div class="modal" id="revModal" hidden>
+  <div class="box" style="width:min(980px,100%)">
+    <h3>Revisão do pedido</h3>
+    <div class="sub" id="rv_sub">Confira tudo antes de confirmar.</div>
+    <div id="rv_corpo"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="rv_ok">Confirmar pedido</button>
+      <button class="btn mut" type="button" id="rv_voltar">Voltar e corrigir</button>
+    </div>
+  </div>
+</div>
+<div class="modal" id="endApModal" hidden>
+  <div class="box" style="width:min(760px,100%)">
+    <h3 id="ea_titulo">Onde este aparelho fica instalado</h3>
+    <div class="sub" id="ea_sub"></div>
+    <div id="ea_alerta"></div>
+
+    <div class="fld" style="margin-bottom:14px">
+      <label>Este aparelho será instalado no endereço do cadastro?</label>
+      <div class="chips" id="ea_mesmo">
+        <button type="button" data-ea="sim" aria-pressed="true">Sim, o do cadastro</button>
+        <button type="button" data-ea="nao" aria-pressed="false">Não, é outro endereço</button>
+      </div>
+      <p class="help" id="ea_doCadastro"></p>
+    </div>
+
+    <div id="ea_outro" hidden>
+      <div id="ea_usados"></div>
+      <p class="sect-t" style="margin-top:14px">Cadastrar outro endereço</p>
+      <div class="grid g3">
+        <div class="fld"><label for="ea_cep">CEP</label>
+          <input id="ea_cep" inputmode="numeric" placeholder="35660-000"></div>
+        <div class="fld" style="grid-column:span 2"><label for="ea_rua">Rua</label><input id="ea_rua"></div>
+      </div>
+      <div class="grid g3">
+        <div class="fld"><label for="ea_num">Número</label><input id="ea_num"></div>
+        <div class="fld"><label for="ea_comp">Complemento</label><input id="ea_comp"></div>
+        <div class="fld"><label for="ea_bairro">Bairro</label><input id="ea_bairro"></div>
+      </div>
+      <div class="grid g3">
+        <div class="fld" style="grid-column:span 2"><label for="ea_cidade">Cidade</label><input id="ea_cidade"></div>
+        <div class="fld"><label for="ea_uf">Estado</label><input id="ea_uf" maxlength="2"></div>
+      </div>
+      <div class="fld"><label for="ea_ref">Ponto de referência / como chegar</label><input id="ea_ref"></div>
+      <div class="grid g3">
+        <div class="fld" style="grid-column:span 2"><label for="ea_geo">Geolocalização</label>
+          <input id="ea_geo" placeholder="cole a localização ou toque em Marcar onde estou"></div>
+        <div class="fld"><label>&nbsp;</label>
+          <button class="btn ghost" type="button" id="ea_geoAqui">Marcar onde estou</button></div>
+      </div>
+      <p class="help">A geolocalização deste endereço ajuda o técnico a chegar — e o rastreio
+        a reconhecer que o vendedor chegou num cliente.</p>
+
+      <p class="sect-t" style="margin-top:14px">Quem recebe no local</p>
+      <div class="grid g3">
+        <div class="fld"><label for="ea_cnome">Nome de quem recebe</label><input id="ea_cnome"></div>
+        <div class="fld"><label for="ea_ctel">Telefone</label><input id="ea_ctel" inputmode="tel"></div>
+        <div class="fld"><label for="ea_hor">Horário de funcionamento</label>
+          <input id="ea_hor" placeholder="seg a sex, 8h às 17h"></div>
+      </div>
+      <p class="help">Os três são opcionais, mas ajudam quem vai instalar e quem vai fazer a manutenção.</p>
+    </div>
+
+    <div class="actions">
+      <button class="btn" type="button" id="ea_ok">Usar este endereço</button>
+      <button class="btn mut" type="button" id="ea_fechar">Cancelar</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="anxModal" hidden>
   <div class="box" style="width:min(900px,100%)">
     <h3 id="ax_titulo">Anexo</h3>
@@ -12258,6 +12357,22 @@ window.__rastroAgoraMF=function(){return rastroAgora;};
 window.__carregarAgoraMF=function(){return carregarAgora();};
 window.__pontosLinhaMF=function(l){return pontosDaLinha(l);};
 window.__pontosEncaixeMF=function(l){return pontosParaEncaixe(l);};
+window.__descontoItemMF=function(i){return descontoItemRS(i);};
+window.__valorBaseItemMF=function(i){return valorBaseItem(i);};
+window.__abrirRevisaoMF=function(){return abrirRevisaoPedido();};
+window.__revEnderecosMF=function(){return revEnderecos;};
+window.__porEndMF=function(ch,x){revEnderecos[ch]=x;};
+window.__endApMF=function(e,c){return enderecoDoAparelho(e,c);};
+window.__temEndProprioMF=function(e){return temEndProprio(e);};
+window.__gravarEndApMF=function(e,x,m){return gravarEndAparelho(e,x,m);};
+window.__enderecosUsadosMF=function(cid){return enderecosUsados(cid);};
+window.__orcItensMF=function(){return orcItens;};
+window.__calcOrcMF=function(){return calcOrc();};
+window.__virarVendaMF=function(o){return virarVenda(o);};
+window.__chaveEndItemMF=function(i,ix){return chaveEndItem(i,ix);};
+window.__calcularMF=function(){return calcular();};
+window.__escolherClienteVendaMF=function(c){return escolherClienteVenda(c);};
+window.__sincEquipMF=function(){return sincronizarEquipamentos();};
 window.__jornadaDiaMF=function(q,d,p){return jornadaDoDia(q,d,p);};
 window.__jornadasMF=function(){return rastroJornadas;};
 window.__foraExpMF=function(q,j){return foraDoExpediente(q,j);};
@@ -12483,6 +12598,7 @@ function sincronizarValor(){
   else{$("v_valor").value="";$("v_serie").value="";$("v_serie").disabled=true;$("v_serie").placeholder="escolha o produto";
     try{$("v_precoNota").innerHTML="";mostrarValorFinal(null);}catch(e){}}
   ajustarEquipItem();
+  try{renderEndDoEquipVenda();}catch(e){}
   opcoesGarantia();
   notaGarantia();
   try{notaPlanoVenda();}catch(e){console.warn(e);}
@@ -12960,6 +13076,54 @@ function equipDaOSPedido(){
     return semAcento(String(e.produto||e.equipamento||"").toLowerCase()).trim()===nomeOS;})[0];
   return porNome?{e:porNome,firme:false}:null;
 }
+/* ONDE O APARELHO ESTÁ HOJE (21/10): depois de escolher o aparelho na venda de refil, peça
+   ou serviço, o sistema mostra onde ele está e pergunta se continua lá. Marcando "não", abre
+   a mesma janela de endereço da venda de purificador, e o APARELHO É ATUALIZADO NA HORA —
+   a próxima manutenção já vai para o endereço novo. O cliente não muda: quem paga e quem
+   recebe o aviso de troca continuam os mesmos. */
+function renderEndDoEquipVenda(){
+  var w=$("v_eqEndWrap");if(!w)return;
+  var sel=$("v_equip"),id=sel?sel.value:"";
+  var e=id?equipPorId(id):null;
+  if(!e||$("v_equipWrap").hidden){w.hidden=true;return;}
+  var c=clienteDaVenda();
+  var a=enderecoDoAparelho(e,c);
+  w.hidden=false;
+  $("v_eqEndAtual").innerHTML=(a.proprio?'<span class="pill p-warn">endereço do aparelho</span> '
+    :'<span class="pill p-mut">endereço do cadastro</span> ')+esc(a.texto||"sem endereço")+
+    (a.contatoNome?("<br>Quem recebe: <b>"+esc(a.contatoNome)+"</b>"+
+      (a.contatoTel?(" · "+esc(a.contatoTel)):"")):"")+
+    (a.horario?("<br>Horário: "+esc(a.horario)):"");
+  marcarEqEnd("sim");
+}
+function marcarEqEnd(v){
+  var g=$("v_eqEndChips");if(!g)return;
+  Array.prototype.forEach.call(g.querySelectorAll("[data-vee]"),function(b){
+    b.setAttribute("aria-pressed",String(b.getAttribute("data-vee")===v));
+  });
+}
+function ligarEndDoEquipVenda(){
+  var g=$("v_eqEndChips");if(!g)return;
+  Array.prototype.forEach.call(g.querySelectorAll("[data-vee]"),function(b){
+    b.onclick=function(){
+      var v=b.getAttribute("data-vee");
+      if(v==="sim"){marcarEqEnd("sim");return;}
+      var e=equipPorId(($("v_equip")||{}).value||"");
+      if(!e){marcarEqEnd("sim");return;}
+      var c=clienteDaVenda();
+      abrirEndAparelho({cliente:c,atual:e.endInst||null,
+        titulo:"Para onde este aparelho mudou?",
+        sub:rotuloEquip(e),
+        aoEscolher:async function(x){
+          var ok=await gravarEndAparelho(e,x,"Aparelho mudou de endereço (informado na venda)");
+          if(ok)toast(x?("Endereço do aparelho atualizado. A próxima manutenção vai para "+
+            enderecoDoAparelho({endInst:x}).texto):"O aparelho voltou para o endereço do cadastro.");
+          renderEndDoEquipVenda();
+          try{renderManut();}catch(er){}
+        }});
+    };
+  });
+}
 function ajustarEquipItem(){
   var p=prodPorId($("v_prod").value);
   var w=$("v_equipWrap"),sel=$("v_equip"),ajuda=$("v_equipAjuda");
@@ -13221,6 +13385,7 @@ function addItem(){
   $("v_serie").value="";$("v_local").value="";render();
   limparInclusao("v_prod","v_qtd",["v_valor"]);
   ajustarEquipItem();
+  try{renderEndDoEquipVenda();}catch(e){}
   if(nomesJuntos.length)toast(p.nome+" vem com "+nomesJuntos.join(" e ")+
     " — já estão na lista. Se o cliente não quiser, é só remover.");
   else if(msgPlano)toast(msgPlano);
@@ -13918,7 +14083,31 @@ function renderGarantiaEtapa(){
    é o valor cobrado, derivado da forma de pagamento. Como o depreciado de cada forma
    é `(bruto/n)/coef = base`, o depreciado do pedido volta a ser o total base — e a
    comissão, os títulos, a conciliação e a antecipação seguem com a regra de sempre. */
-function valorBaseItem(i){return +i.valorBase||0;}
+/* ======================================================================
+   DESCONTO POR ITEM (21/10, regra dele): "hoje o desconto é no total; passa a ser em cada
+   item, em R$ ou %, por exemplo 10% no purificador e nada no refil".
+   O desconto incide sobre o VALOR COMERCIAL do item (`valorBase`) — que é quem decide a
+   faixa de preço, forma a comissão e alimenta a depreciação e as parcelas. Entrando aqui,
+   dentro de `valorBaseItem`, TODA a conta do pedido o respeita sozinha: composição, faixa,
+   comissão, valor cobrado e rateio das formas já passam por esta função.
+   E isso deixa a comissão MAIS certa que o desconto no total, que era espalhado entre os
+   itens por rateio — agora o desconto fica onde foi dado (é o princípio da v171). */
+function descontoItemRS(i){
+  var v=+i.valorBase||0,d=+i.desconto||0;
+  if(!(d>0)||!(v>0))return 0;
+  if(i.descontoTipo==="pct")return centavos(v*Math.min(100,d)/100);
+  return Math.min(centavos(d),v);
+}
+/* o desconto do item em reais sobre o valor FINAL (o que o cliente enxerga na proposta) */
+function descontoItemFinal(i,T){
+  var d=descontoItemRS(i);
+  if(!d)return 0;
+  var cheio=precoPelaForma(+i.valorBase||0,1,T),comD=precoPelaForma(valorBaseItem(i),1,T);
+  return Math.max(0,centavos(cheio-comD));
+}
+function valorBaseItem(i){
+  return Math.max(0,centavos((+i.valorBase||0)-descontoItemRS(i)));
+}
 function baseDoItem(i){return i.planoCobre?0:centavos(valorBaseItem(i)*(i.qtd||1));}
 /* O VALOR FINAL DIGITADO CONTINUA O MESMO (v282), mas a DEPRECIAÇÃO acompanha o parcelamento
    (regra dele, 05/10: "quando for alterado o número de parcelas o cálculo da depreciação seja
@@ -14003,7 +14192,10 @@ function aplicarCobradoNosItens(lista,fs,totalBase,totalBruto){
   (lista||[]).forEach(function(i){
     if(i.planoCobre){i.valor=0;return;}
     /* valor que o vendedor digitou vale como está (03/10) — o recálculo não mexe mais nele */
-    if(+i.valorFinal>0){i.valor=+i.valorFinal;return;}
+    /* valor digitado vale como esta — MENOS quando o item tem desconto proprio: ai o preco
+       final e refeito do comercial com desconto, senao a tela mostraria um valor e a
+       comissao sairia de outro (21/10) */
+    if(+i.valorFinal>0&&!(+i.desconto>0)){i.valor=+i.valorFinal;return;}
     i.valor=precoPelaForma(valorBaseItem(i),i.qtd||1,T);
   });
   return centavos((lista||[]).reduce(function(a,i){return a+centavos((+i.valor||0)*(i.qtd||1));},0));
@@ -14070,6 +14262,17 @@ function calcular(){
   $("o_cProd").textContent=BRL(prodF);
   $("o_cGar").textContent=BRL(garF);
   $("o_cFreteR").hidden=!(freteF>0);$("o_cFrete").textContent=BRL(freteF);
+  /* a linha do Desconto Especial no TOTAL só aparece quando ela existe — ou seja, num
+     pedido ANTIGO que já a tinha. Venda nova usa o desconto de cada item (21/10). */
+  var descAntigo=numMF(($("v_descGeral")||{}).value||0)||0;
+  if($("v_descGeralR"))$("v_descGeralR").hidden=!(descAntigo>0);
+  /* e os descontos dados item a item ganham linha própria, somados */
+  var descItens=centavos(itens.reduce(function(a,i){
+    return i.planoCobre?a:a+descontoItemFinal(i,somaTabelaCarrinho())*(i.qtd||1);},0));
+  if($("o_cDescItR")){
+    $("o_cDescItR").hidden=!(descItens>0);
+    $("o_cDescIt").textContent="− "+BRL(descItens);
+  }
   $("o_cBase").textContent=BRL(totalVenda);
   if($("o_cNota"))$("o_cNota").innerHTML='<p class="help">É este o valor que o cliente paga — o mesmo da proposta. '+
     "Valor comercial da venda, que forma a comissão: <b>"+BRL(totalBase)+"</b>"+
@@ -14156,7 +14359,18 @@ function calcular(){
         (i.planoCobre?' · <span class="pill p-ok">coberto pelo plano '+esc(i.planoCobre.garantia)+"</span>":"")+
         (i.retirada?' · <span class="pill p-warn">'+i.retirada.qtd+" com retirada do "+esc(i.retirada.geral?"estoque geral":"estoque da loja "+i.retirada.lojaNome)+"</span>":"")+
         /* produto composto (v248): diz de onde a linha veio, para o vendedor saber o que pode tirar */
-        (i.vemCom?' · <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+"</div></td>"+
+        (i.vemCom?' · <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+
+        /* DESCONTO DESTE ITEM (21/10): em R$ ou %, na linha de baixo para não apertar as
+           colunas nem quebrar o cartão do celular. Ele incide sobre o valor comercial,
+           que é quem decide a faixa de preço e forma a comissão. */
+        (cobPl?"":'<span class="it-desc"> · desconto <input class="v-dsc" type="text" '+
+          'inputmode="decimal" data-vd="'+idx+'" value="'+(i.desconto?brMF(+i.desconto):"")+
+          '" placeholder="0" aria-label="Desconto de '+esc(i.nome)+'">'+
+          '<select class="v-dtp" data-vdt="'+idx+'" aria-label="Tipo do desconto de '+esc(i.nome)+'">'+
+          '<option value="rs"'+((i.descontoTipo!=="pct")?" selected":"")+">R$</option>"+
+          '<option value="pct"'+((i.descontoTipo==="pct")?" selected":"")+">%</option>"+
+          "</select>"+(descontoItemRS(i)?('<b class="it-dsc-v"> −'+BRL(descontoItemRS(i))+"</b>"):"")+
+          "</span>")+"</div></td>"+
       /* v224: quantidade editável na lista — "mesmo depois que o produto foi incluído o usuário
          consegue alterar o valor e a quantidade" (regra dele, 25/09) */
       /* o `data-r` é o rótulo que aparece quando a linha vira cartão em coluna estreita (v252) */
@@ -14204,6 +14418,25 @@ function calcular(){
   });
   /* alterar a QUANTIDADE de um item já incluído (regra dele, 25/09). O valor final por unidade
      fica como está; total, depreciado, faixa e comissão são refeitos pelo `calcular()` de sempre. */
+  /* DESCONTO POR ITEM (21/10): o valor e o tipo (R$ ou %). Mexer num deles refaz a venda
+     inteira — faixa, comissão, parcelas e total acompanham sozinhos, porque o desconto
+     entra dentro de `valorBaseItem`. */
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-vd]"),function(inp){
+    inp.onchange=function(){
+      var it=itens[+inp.getAttribute("data-vd")];if(!it)return;
+      it.desconto=Math.max(0,numMF(inp.value)||0);
+      if(it.desconto&&it.descontoTipo==="pct")it.desconto=Math.min(100,it.desconto);
+      calcular();
+    };
+  });
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-vdt]"),function(sel){
+    sel.onchange=function(){
+      var it=itens[+sel.getAttribute("data-vdt")];if(!it)return;
+      it.descontoTipo=(sel.value==="pct")?"pct":"rs";
+      if(it.descontoTipo==="pct")it.desconto=Math.min(100,+it.desconto||0);
+      calcular();
+    };
+  });
   Array.prototype.forEach.call(tb.querySelectorAll("[data-vq]"),function(inp){
     inp.onchange=function(){
       var it=itens[+inp.getAttribute("data-vq")];if(!it)return;
@@ -14422,6 +14655,126 @@ function abrirUsados(quem,obrigatorio){
   $("usadoModal").__obrig=!!obrigatorio;
   $("usadoModal").hidden=false;
 }
+/* ---------- A REVISÃO DO PEDIDO (21/10, regra dele) ----------
+   Clicar em "Finalizar pedido" abre esta janela com tudo junto; só o "Confirmar pedido"
+   grava. "Voltar e corrigir" apenas fecha — a venda continua montada na tela, então nada
+   se perde por construção.
+   Aqui também é onde cada purificador recebe o seu endereço de instalação: é o último
+   momento em que o vendedor ainda está com o cliente e sabe onde o aparelho vai ficar. */
+var revEnderecos={};      /* vinculo do item -> endereço escolhido para aquele purificador */
+function abrirRevisaoPedido(){
+  var c=clienteDaVenda();
+  var r=calcular();
+  var T=somaTabelaCarrinho();
+  var totalFinal=centavos(formas.reduce(function(a,f){return a+(+f.valor||0);},0));
+  /* ---- cliente ---- */
+  var h='<div class="sect"><p class="sect-t">Cliente</p><div class="note">'+
+    "<b>"+esc(c?c.nome:"—")+"</b>"+(c&&c.codigo?(" · "+esc(c.codigo)):"")+
+    (c&&c.doc?("<br>CPF/CNPJ: "+esc(c.doc)):"")+
+    (c&&c.tel?("<br>Telefone: "+esc(c.tel)):"")+
+    "<br>"+esc(enderecoCadastroCli(c)||"sem endereço no cadastro")+"</div></div>";
+  /* ---- itens ---- */
+  var linhas=itens.map(function(i,ix){
+    if(i.planoCobre)
+      return "<tr><td>"+esc(i.nome)+'</td><td class="num">'+(i.qtd||1)+
+        '</td><td class="num">—</td><td class="num">—</td><td class="num">'+BRL(0)+
+        '</td><td><span class="pill p-ok">coberto pelo plano</span></td></tr>';
+    var p=produtoPor(i.pid)||{};
+    var tabela=precoTabela(p)||(+i.valorTabela||0);
+    var dRS=descontoItemFinal(i,T);
+    var fx=faixa(valorBaseItem(i),p);
+    return "<tr><td>"+esc(i.nome)+
+      (i.serie?('<div class="t-sub">série '+esc(i.serie)+"</div>"):"")+
+      '</td><td class="num">'+(i.qtd||1)+
+      '</td><td class="num">'+BRL(precoPelaForma(tabela,1,T))+
+      '</td><td class="num">'+(dRS?("− "+BRL(dRS)+
+        (i.descontoTipo==="pct"?('<div class="t-sub">'+brMF(+i.desconto||0)+"%</div>"):"")):"—")+
+      '</td><td class="num"><b>'+BRL(+i.valor||0)+"</b>"+
+      ((i.qtd||1)>1?('<div class="t-sub">total '+BRL(centavos((+i.valor||0)*(i.qtd||1)))+"</div>"):"")+
+      '</td><td><span class="pill '+fx.cls+'">'+fx.n+"</span></td></tr>";
+  }).join("");
+  h+='<div class="sect"><p class="sect-t">Itens</p><div class="tw"><table><thead><tr>'+
+    '<th>Produto</th><th class="num">Qtd</th><th class="num">Tabela</th>'+
+    '<th class="num">Desconto</th><th class="num">Preço final</th><th>Faixa</th>'+
+    "</tr></thead><tbody>"+linhas+"</tbody></table></div></div>";
+  /* ---- pagamento ---- */
+  var fh=formas.map(function(f){
+    return "<tr><td>"+esc(f.tipo||"—")+"</td><td>"+esc(textoParcelaForma(f))+
+      '</td><td class="num">'+BRL(+f.valor||0)+"</td></tr>";
+  }).join("");
+  h+='<div class="sect"><p class="sect-t">Pagamento</p><div class="tw"><table><thead><tr>'+
+    '<th>Forma</th><th>Parcelas</th><th class="num">Valor</th></tr></thead><tbody>'+fh+
+    "</tbody></table></div>"+
+    '<div class="calc" style="margin-top:10px"><div class="r sep big"><span>Total final</span>'+
+    "<span>"+BRL(totalFinal)+"</span></div></div></div>";
+  /* ---- aprovação, se algum item ficou abaixo da faixa ---- */
+  if(r&&r.abaixo){
+    h+='<div class="note crit"><b>Este pedido precisa de autorização.</b> Algum item ficou '+
+      "abaixo da faixa de preço dele. Ao confirmar, o sistema abre o pedido de autorização "+
+      "para o Administrador, como já fazia.</div>";
+  }
+  /* ---- endereço de instalação de cada purificador ---- */
+  h+=htmlEndRevisao(c);
+  $("rv_corpo").innerHTML=h;
+  ligarEndRevisao(c);
+  $("revModal").hidden=false;
+}
+/* os purificadores da venda, cada um com a pergunta do endereço */
+function purificadoresDaVenda(){
+  return itens.map(function(i,ix){return {i:i,ix:ix};}).filter(function(x){
+    if(x.i.planoCobre||ehPlano(x.i))return false;
+    var p=produtoPor(x.i.pid)||{};
+    return ehPurificador({nome:x.i.nome,grupo:p.grupo});
+  });
+}
+function htmlEndRevisao(c){
+  var l=purificadoresDaVenda();
+  if(!l.length)return "";
+  var cad=enderecoCadastroCli(c)||"sem endereço no cadastro";
+  return '<div class="sect"><p class="sect-t">Onde cada aparelho será instalado</p>'+
+    l.map(function(x){
+      var ch=chaveEndItem(x.i,x.ix),esc0=revEnderecos[ch];
+      var q=(x.i.qtd||1);
+      return '<div class="note" style="margin-bottom:8px"><b>'+esc(x.i.nome)+"</b>"+
+        (q>1?(" · "+q+" unidades, todas neste endereço"):"")+"<br>"+
+        (esc0?('<span class="pill p-warn">outro endereço</span> '+
+          esc(enderecoDoAparelho({endInst:esc0}).texto)+
+          (esc0.contatoNome?("<br>Quem recebe: <b>"+esc(esc0.contatoNome)+"</b>"+
+            (esc0.contatoTel?(" · "+esc(esc0.contatoTel)):"")):"")+
+          (esc0.horario?("<br>Horário: "+esc(esc0.horario)):""))
+          :('<span class="pill p-ok">endereço do cadastro</span> '+esc(cad)))+
+        '<div style="margin-top:8px"><button class="btn ghost sm" type="button" data-rvend="'+
+        ch+'">'+(esc0?"Trocar o endereço":"Instalar em outro endereço")+"</button>"+
+        (esc0?(' <button class="btn mut sm" type="button" data-rvendx="'+ch+
+          '">Usar o do cadastro</button>'):"")+"</div></div>";
+    }).join("")+
+    '<p class="help">A pergunta começa em <b>o endereço do cadastro</b>. Dois purificadores '+
+    "no mesmo pedido podem ir para endereços diferentes — um para a casa e outro para a "+
+    "empresa, por exemplo. O endereço escolhido fica <b>no aparelho</b>, e é para ele que a "+
+    "manutenção, a agenda e a ordem de serviço vão daqui para a frente.</p></div>";
+}
+/* a chave que liga a escolha ao item (o vínculo, que é estável, ou a posição) */
+function chaveEndItem(i,ix){return String(i.vinculo||("ix"+ix));}
+function ligarEndRevisao(c){
+  Array.prototype.forEach.call($("rv_corpo").querySelectorAll("[data-rvend]"),function(b){
+    b.onclick=function(){
+      var ch=b.getAttribute("data-rvend");
+      abrirEndAparelho({cliente:c,atual:revEnderecos[ch]||null,
+        titulo:"Onde este aparelho será instalado",
+        sub:"A escolha vale para este purificador do pedido.",
+        aoEscolher:function(x){
+          if(x)revEnderecos[ch]=x;else delete revEnderecos[ch];
+          abrirRevisaoPedido();     /* redesenha a revisão com a escolha nova */
+        }});
+    };
+  });
+  Array.prototype.forEach.call($("rv_corpo").querySelectorAll("[data-rvendx]"),function(b){
+    b.onclick=function(){
+      delete revEnderecos[b.getAttribute("data-rvendx")];
+      abrirRevisaoPedido();
+    };
+  });
+}
 async function salvarPedido(){
   /* segunda barreira da regra de 03/10: nem forçando pela tela a venda fecha sem contato de origem */
   if(vendaSemOrigem()){
@@ -14433,6 +14786,13 @@ async function salvarPedido(){
   if(!avisoCadastroVenda()){toast("Complete o cadastro de "+cliSel.nome+" antes de tirar o pedido.");irEtapa(1);return;}
   if(!itens.length){toast("Adicione ao menos um produto, com a quantidade.");irEtapa(2);return;}
   var r=calcular();
+  /* o endereço escolhido na revisão vai para o ITEM, e de lá a aprovação financeira o copia
+     para o aparelho criado (21/10). Fica no item e não numa lista à parte para o pedido
+     salvo carregar a informação por conta própria. */
+  itens.forEach(function(i,ix){
+    var x=revEnderecos[chaveEndItem(i,ix)];
+    if(x)i.endInst=x;else if(i.endInst)delete i.endInst;
+  });
   if(formas.some(function(f){return (+f.valor||0)>0&&!f.tipo;})){toast("Escolha a forma de pagamento de cada valor.");irEtapa(2);return;}
   if(r.dif!==0){toast("O que está repartido nas formas não fecha com o total base da venda.");irEtapa(2);return;}
   /* NEGOCIAÇÃO COM TROCA (regra dele, 25/09): marcou "Desconto de troca", então o valor da troca
@@ -15460,6 +15820,7 @@ function retomarRascunho(r){
   toast("Pedido de "+(r.cliente||"cliente")+" retomado na etapa "+(r.etapa||1)+". Finalize quando quiser.");
 }
 function limparPedido(){
+  revEnderecos={};   /* a venda nova nao herda os enderecos escolhidos na anterior (21/10) */
   rascunhoAberto=null;   /* venda nova não continua o rascunho anterior */
   itens=[];formas=formasIniciais();
   pedOrigemOrc=null;   /* venda nova não herda o orçamento da anterior (26/09) */
@@ -27656,7 +28017,12 @@ async function sincronizarEquipamentos(){
           tecnico:p.instalador||p.vendedor||"",local:(ordem===1?(it.local||""):""),obs:"",
           pedidoId:p.id,pedidoNumero:p.numero,itemId:it.id||"",
           unidade:(qtdTotalProd>1?ordem:0),unidadesDoItem:(qtdTotalProd>1?qtdTotalProd:0),
-          historico:[],ativo:true,demo:!!p.demo,criadoEm:hojeISO()};
+          /* o endereco de instalacao escolhido na revisao do pedido viaja no item (21/10) */
+          endInst:(it.endInst?JSON.parse(JSON.stringify(it.endInst)):null),
+          historico:(it.endInst?[{por:(p.vendedor||usuarioAtual),data:hojeISO(),
+            texto:"Endereco de instalacao informado na venda: "+
+              enderecoDoAparelho({endInst:it.endInst}).texto}]:[]),
+          ativo:true,demo:!!p.demo,criadoEm:hojeISO()};
         equipamentos.push(e);await grava("equipamentos",e);criados++;
         /* o item guarda o aparelho que ele gerou: é isto que impede a próxima abertura de criar
            outro. Com quantidade maior que 1, o item aponta para a primeira unidade. */
@@ -27922,6 +28288,15 @@ function renderManutCli(c,rotAba){
           (e.pedidoNumero?" · pedido "+esc(String(e.pedidoNumero)):"")+
           (planoAtivoEquip(e)?' <span class="pill p-plano">&#128167; Plano '+esc(e.plano)+" · ativo</span>":"")+
           (x.via?' <span class="pill p-mut" title="Este aparelho está em outro cadastro com os mesmos dados">'+esc(x.via)+"</span>":"")+
+        /* O ENDEREÇO DESTE APARELHO (21/10): a ficha do cliente é onde ele vai corrigir
+           os casos que já deram problema, por isso o botão fica aqui. */
+        '<div class="t-sub">'+(temEndProprio(e)
+          ?('<span class="pill p-warn">outro endereço</span> '+esc(enderecoDoAparelho(e,c).texto)+
+            ((e.endInst&&e.endInst.contatoNome)?(" · recebe: "+esc(e.endInst.contatoNome)):"")+
+            ((e.endInst&&e.endInst.horario)?(" · "+esc(e.endInst.horario)):""))
+          :'<span class="pill p-mut">endereço do cadastro</span>')+
+        ' <button class="btn ghost sm" type="button" data-mcend="'+esc(e.id)+
+        '">Alterar endereço deste aparelho</button></div>'+
         "</div></td>"+
       "<td>"+esc(ult?dataCurta(ult):"—")+"</td>"+
       "<td><b>"+esc(x.px?dataCurta(x.px):"—")+'</b> <span class="pill '+x.s.cls+'">'+esc(x.s.n)+"</span></td>"+
@@ -27930,9 +28305,28 @@ function renderManutCli(c,rotAba){
         '<button class="btn ghost sm" type="button" data-mcok="'+esc(e.id)+'" title="Marcar a troca como feita e reagendar a próxima">Troca feita</button> '+
         '<button class="btn mut sm" type="button" data-mca="'+esc(e.id)+'">Agendar</button></td>';
     tr.onclick=function(ev){
-      if(ev.target.getAttribute("data-mca")||ev.target.getAttribute("data-zapeq")||ev.target.getAttribute("data-mcok"))return;
+      if(ev.target.getAttribute("data-mca")||ev.target.getAttribute("data-zapeq")||
+         ev.target.getAttribute("data-mcend")||ev.target.getAttribute("data-mcok"))return;
       ir("manut");abrirEquip(e);};
     b.appendChild(tr);
+  });
+  /* "Alterar endereço deste aparelho" (21/10): a mesma janela da venda, e o endereço antigo
+     vai para o histórico do aparelho — nada se apaga. */
+  Array.prototype.forEach.call(b.querySelectorAll("[data-mcend]"),function(bt){
+    bt.onclick=function(ev){
+      ev.stopPropagation();
+      var e=equipPorId(bt.getAttribute("data-mcend"));if(!e)return;
+      abrirEndAparelho({cliente:c,atual:e.endInst||null,
+        titulo:"Endereço deste aparelho",sub:rotuloEquip(e),
+        aoEscolher:async function(x){
+          var ok=await gravarEndAparelho(e,x,"Endereço alterado na ficha do cliente");
+          if(ok){
+            toast(x?"Endereço do aparelho atualizado.":"O aparelho voltou para o endereço do cadastro.");
+            try{renderManutCli(c,rotAba);}catch(er){}
+            try{renderManut();}catch(er){}
+          }
+        }});
+    };
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-mca]"),function(bt){
     bt.onclick=function(ev){
@@ -28168,7 +28562,11 @@ function renderManut(){
             return antes+((hj>=inf.ini&&hj<=inf.fim)
               ?'<span class="pill p-plano">💧 Plano '+esc(e.plano)+" · ativo</span>"
               :'<span class="pill p-mut">Plano '+esc(e.plano)+" · vencido</span>");})():"")+
-          "</div>":"")+"</td>"+
+          "</div>":"")+
+        /* o endereço do APARELHO (21/10): quando ele não está no endereço do cadastro, a
+           lista diz isso na cara — é este o caso em que o técnico ia ao lugar errado */
+        (temEndProprio(e)?('<div class="t-sub"><span class="pill p-warn">outro endereço</span> '+
+          esc(enderecoDoAparelho(e).texto)+"</div>"):"")+"</td>"+
       "<td><b>"+esc(px?dataCurta(px):"—")+"</b> <span class=\"pill "+pil.cls+'">'+pil.n+"</span>"+
         '<div class="t-sub">'+(e.ultimaManut?"última troca "+esc(dataCurta(e.ultimaManut)):"sem troca registrada")+
         (ativAberta?' <span class="pill p-acc">Atividade aberta'+
@@ -30196,6 +30594,160 @@ function enderecoCadastroCli(c){
   if(!c)return "";
   return [[c.rua,c.num].filter(Boolean).join(", "),c.comp,c.bairro,[c.cidade,c.uf].filter(Boolean).join("/"),c.cep?"CEP "+c.cep:""].filter(Boolean).join(" · ");
 }
+/* ======================================================================
+   O ENDEREÇO É DO APARELHO, NÃO SÓ DO CLIENTE (21/10, regra dele): "o vendedor faz o pedido
+   num endereço, mas o aparelho é instalado em outro (por exemplo, na empresa do cliente), e
+   toda manutenção o técnico vai à casa do cadastro, e não onde o aparelho está".
+   Assim como a garantia e o plano, o endereço passa a ser de cada aparelho. Ele mora no
+   campo NOVO `endInst` do próprio aparelho — nenhum campo existente foi tocado, e CUIDADO:
+   o aparelho já tem um campo `local`, mas ele é a localização DENTRO da casa ("cozinha",
+   "escritório"), em 16.386 registros; não dá para reaproveitá-lo.
+   Aparelho sem `endInst` usa o endereço do cadastro, como sempre.
+   ====================================================================== */
+function temEndProprio(e){
+  var x=e&&e.endInst;
+  return !!(x&&(x.rua||x.cidade||x.geo));
+}
+/* o endereço daquele aparelho, já resolvido: o dele, ou o do cadastro do cliente */
+function enderecoDoAparelho(e,c){
+  c=c||(e?cliPorId(e.clienteId):null);
+  if(temEndProprio(e)){
+    var x=e.endInst;
+    return {proprio:true,
+      texto:[[x.rua,x.num].filter(Boolean).join(", "),x.comp,x.bairro,
+        [x.cidade,x.uf].filter(Boolean).join("/"),x.cep?("CEP "+x.cep):""].filter(Boolean).join(" · "),
+      geo:x.geo||"",ref:x.ref||"",
+      contatoNome:x.contatoNome||"",contatoTel:x.contatoTel||"",horario:x.horario||""};
+  }
+  return {proprio:false,texto:enderecoCadastroCli(c),geo:(c&&c.geo)||"",
+    ref:(c&&c.ref)||"",contatoNome:"",contatoTel:"",horario:""};
+}
+/* o aviso que a tela mostra quando o aparelho NÃO está no endereço do cadastro */
+function avisoEndAparelho(e,c){
+  var a=enderecoDoAparelho(e,c);
+  if(!a.proprio)return "";
+  return '<div class="note warn" style="margin:6px 0"><b>Instalado em outro endereço</b><br>'+
+    esc(a.texto)+
+    (a.contatoNome?("<br>Quem recebe: <b>"+esc(a.contatoNome)+"</b>"+
+      (a.contatoTel?(" · "+esc(a.contatoTel)):"")):"")+
+    (a.horario?("<br>Horário: "+esc(a.horario)):"")+
+    (a.geo?(" · "+mapaLink(a.geo)):"")+"</div>";
+}
+/* a linha curta, para tabela e lista */
+function linhaEndAparelho(e,c){
+  var a=enderecoDoAparelho(e,c);
+  if(!a.proprio)return "";
+  return '<span class="pill p-warn">outro endereço</span> '+esc(a.texto);
+}
+/* os endereços que este cliente já usou nos aparelhos dele — para escolher sem redigitar */
+function enderecosUsados(clienteId){
+  var vistos={},saida=[];
+  (equipamentos||[]).forEach(function(e){
+    if(e.clienteId!==clienteId||!temEndProprio(e))return;
+    var x=e.endInst,ch=[x.cep,x.rua,x.num,x.cidade].join("|").toLowerCase();
+    if(vistos[ch])return;
+    vistos[ch]=1;saida.push(x);
+  });
+  return saida;
+}
+/* ---------- a janela do endereço do aparelho (21/10) ----------
+   Uma só para os três caminhos: a venda do purificador (na revisão), a venda do refil para
+   um aparelho que mudou de lugar, e o botão "Alterar endereço deste aparelho" da ficha do
+   cliente. Ela devolve o endereço escolhido pela função que recebeu em `aoEscolher`. */
+var endApCtx=null;
+function abrirEndAparelho(ops){
+  endApCtx=ops||{};
+  var c=endApCtx.cliente||null;
+  $("ea_titulo").textContent=endApCtx.titulo||"Onde este aparelho fica instalado";
+  $("ea_sub").textContent=endApCtx.sub||"";
+  $("ea_alerta").innerHTML="";
+  $("ea_doCadastro").innerHTML="Endereço do cadastro: <b>"+
+    esc(enderecoCadastroCli(c)||"sem endereço no cadastro")+"</b>";
+  /* começa marcado em Sim, como ele pediu — a não ser que o aparelho já tenha endereço */
+  var jaTem=endApCtx.atual&&(endApCtx.atual.rua||endApCtx.atual.cidade);
+  marcarEndMesmo(jaTem?"nao":"sim");
+  encherEndUsados(c?c.id:"");
+  preencherEndForm(jaTem?endApCtx.atual:null);
+  $("endApModal").hidden=false;
+}
+function marcarEndMesmo(v){
+  Array.prototype.forEach.call($("ea_mesmo").querySelectorAll("[data-ea]"),function(b){
+    b.setAttribute("aria-pressed",String(b.getAttribute("data-ea")===v));
+  });
+  $("ea_outro").hidden=(v!=="nao");
+}
+function endMesmoEscolhido(){
+  var b=$("ea_mesmo").querySelector('[aria-pressed="true"]');
+  return b?b.getAttribute("data-ea"):"sim";
+}
+/* os endereços que o cliente já usou em outros aparelhos: escolher sem redigitar */
+function encherEndUsados(cid){
+  var l=enderecosUsados(cid),el=$("ea_usados");
+  if(!l.length){el.innerHTML='<p class="help">Este cliente ainda não tem outro endereço cadastrado em nenhum aparelho.</p>';return;}
+  el.innerHTML='<p class="sect-t">Endereços que este cliente já usa</p>'+
+    l.map(function(x,ix){
+      return '<button class="btn ghost" type="button" data-eau="'+ix+'" style="display:block;width:100%;text-align:left;margin-bottom:6px">'+
+        esc([[x.rua,x.num].filter(Boolean).join(", "),x.bairro,x.cidade].filter(Boolean).join(" · "))+
+        (x.contatoNome?('<br><span class="t-sub">quem recebe: '+esc(x.contatoNome)+"</span>"):"")+
+        "</button>";
+    }).join("");
+  Array.prototype.forEach.call(el.querySelectorAll("[data-eau]"),function(b){
+    b.onclick=function(){preencherEndForm(l[+b.getAttribute("data-eau")]);};
+  });
+}
+function preencherEndForm(x){
+  x=x||{};
+  [["ea_cep","cep"],["ea_rua","rua"],["ea_num","num"],["ea_comp","comp"],["ea_bairro","bairro"],
+   ["ea_cidade","cidade"],["ea_uf","uf"],["ea_ref","ref"],["ea_geo","geo"],
+   ["ea_cnome","contatoNome"],["ea_ctel","contatoTel"],["ea_hor","horario"]].forEach(function(p){
+    if($(p[0]))$(p[0]).value=x[p[1]]||"";
+  });
+}
+function lerEndForm(){
+  return {cep:($("ea_cep").value||"").trim(),rua:($("ea_rua").value||"").trim(),
+    num:($("ea_num").value||"").trim(),comp:($("ea_comp").value||"").trim(),
+    bairro:($("ea_bairro").value||"").trim(),cidade:($("ea_cidade").value||"").trim(),
+    uf:($("ea_uf").value||"").trim().toUpperCase(),ref:($("ea_ref").value||"").trim(),
+    geo:($("ea_geo").value||"").trim(),
+    contatoNome:($("ea_cnome").value||"").trim(),contatoTel:($("ea_ctel").value||"").trim(),
+    horario:($("ea_hor").value||"").trim()};
+}
+function confirmarEndAparelho(){
+  var ctx=endApCtx||{};
+  if(endMesmoEscolhido()==="sim"){
+    $("endApModal").hidden=true;
+    if(ctx.aoEscolher)ctx.aoEscolher(null);   /* null = usa o do cadastro */
+    return;
+  }
+  var x=lerEndForm();
+  if(!x.cidade||(!x.rua&&!x.geo)){
+    $("ea_alerta").innerHTML='<div class="note crit"><b>Falta o endereço.</b> Informe pelo menos a cidade e a rua (ou marque a localização no mapa).</div>';
+    return;
+  }
+  x.desde=hojeISO()+" "+agoraHM();x.por=usuarioAtual;
+  $("endApModal").hidden=true;
+  if(ctx.aoEscolher)ctx.aoEscolher(x);
+}
+/* grava o endereço NO APARELHO, com conferência do banco (regra da v327) e o endereço
+   antigo guardado no histórico — nada se apaga. */
+async function gravarEndAparelho(e,x,motivo){
+  if(!e)return false;
+  var antes=e.endInst?JSON.parse(JSON.stringify(e.endInst)):null;
+  var antesTxt=antes?enderecoDoAparelho({endInst:antes}).texto:"endereço do cadastro";
+  var histAntes=(e.historico||[]).slice();
+  e.endInst=x||null;
+  var novoTxt=x?enderecoDoAparelho({endInst:x}).texto:"endereço do cadastro";
+  e.historico=(e.historico||[]).concat([{por:usuarioAtual,data:hojeISO()+" "+agoraHM(),
+    texto:(motivo||"Endereço de instalação alterado")+": de "+antesTxt+" para "+novoTxt}]);
+  try{
+    await gravaConf("equipamentos",e);
+    return true;
+  }catch(err){
+    e.endInst=antes;e.historico=histAntes;     /* o banco recusou: nada muda na memória */
+    toast("O banco não aceitou gravar o endereço: "+((err&&err.message)||err));
+    return false;
+  }
+}
 function faltaEnderecoVisita(c){
   var f=[];if(!c)return ["cadastro do cliente"];
   if(!c.cidade)f.push("cidade");
@@ -31712,20 +32264,36 @@ function notaPrecoOrc(p){
     ". Tabela "+(temFaixaPreco(p)?esc(textoFaixasProduto(p)):"cheia "+BRL(+p.cheia||0))+
     ". Trocando a forma acima, o valor acompanha.</div>";
 }
+/* DESCONTO POR ITEM NO ORÇAMENTO (21/10, regra dele: "faça igual"). Aqui o item guarda o
+   valor FINAL (é o que o cliente lê na proposta), então o desconto incide sobre ele. */
+function descontoOrcRS(i){
+  var v=+i.valor||0,d=+i.desconto||0;
+  if(!(d>0)||!(v>0))return 0;
+  if(i.descontoTipo==="pct")return centavos(v*Math.min(100,d)/100);
+  return Math.min(centavos(d),v);
+}
+function valorOrcItem(i){return Math.max(0,centavos((+i.valor||0)-descontoOrcRS(i)));}
 function calcOrc(){
-  var soma=orcItens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
-  /* Desconto Especial (regra dele, 25/09): opcional, abatido do total do orçamento. Nunca passa
-     do valor dos produtos — desconto maior que a venda deixaria o total negativo. */
+  var soma=orcItens.reduce(function(a,i){return a+(valorOrcItem(i)*(i.qtd||1));},0);
+  /* Desconto Especial no TOTAL: aposentado em 21/10 junto com o do pedido. Continua gravado
+     e continua aparecendo em orçamento ANTIGO que já o tinha — nada se apaga. */
   var descEsp=Math.min(Math.max(0,numMF(($("or_descEsp")||{}).value||0)||0),soma);
+  if($("or_descEspR"))$("or_descEspR").hidden=!(descEsp>0);
+  var descItens=centavos(orcItens.reduce(function(a,i){
+    return a+descontoOrcRS(i)*(i.qtd||1);},0));
+  if($("or_descItR")){
+    $("or_descItR").hidden=!(descItens>0);
+    $("or_descIt").textContent="− "+BRL(descItens);
+  }
   var total=centavos(soma-descEsp);
   var n=+$("or_parc").value||1,coef=coefDe($("or_forma").value,n)||1;
   var parcela=total/n,dep=coef?parcela/coef:0,desc=total-dep;
   /* rateio do depreciado pelo VALOR VENDIDO de cada item — mesma conta do pedido (20/09) */
-  var somaVend=orcItens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
+  var somaVend=orcItens.reduce(function(a,i){return a+(valorOrcItem(i)*(i.qtd||1));},0);
   var tb=$("or_itens");tb.innerHTML="";
   if(!orcItens.length)tb.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Nenhum item</div>Escolha um produto acima e clique em Adicionar.</div></td></tr>';
   var partesO=repartirDep(dep,orcItens.map(function(i){
-    return somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(orcItens.length?1/orcItens.length:0);
+    return somaVend>0?((valorOrcItem(i)*(i.qtd||1))/somaVend):(orcItens.length?1/orcItens.length:0);
   }));
   var base=0,pontos=0,abaixo=false;
   orcItens.forEach(function(i,idx){
@@ -31734,17 +32302,42 @@ function calcOrc(){
     base+=depI*fx.f;pontos+=(+i.pontos||0)*(i.qtd||1)*fx.f;if(fx.f===0)abaixo=true;
     tb.innerHTML+='<tr><td><div class="t-main"><button class="lixo" type="button" data-orm="'+idx+'" title="Remover este item">&#128465;</button>'+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+
         "</code> · cheia "+BRL(+p.cheia||0)+
-        (i.vemCom?' · <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+"</div></td>"+
+        (i.vemCom?' · <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+
+        /* o desconto deste item, em R$ ou % (21/10) */
+        '<span class="it-desc"> · desconto <input class="v-dsc" type="text" inputmode="decimal" data-ord="'+idx+
+        '" value="'+(i.desconto?brMF(+i.desconto):"")+'" placeholder="0" aria-label="Desconto de '+esc(i.nome)+'">'+
+        '<select class="v-dtp" data-ordt="'+idx+'" aria-label="Tipo do desconto">'+
+        '<option value="rs"'+((i.descontoTipo!=="pct")?" selected":"")+">R$</option>"+
+        '<option value="pct"'+((i.descontoTipo==="pct")?" selected":"")+">%</option>"+
+        "</select>"+(descontoOrcRS(i)?('<b class="it-dsc-v"> −'+BRL(descontoOrcRS(i))+"</b>"):"")+
+        "</span></div></td>"+
       /* v224: quantidade e valor editáveis depois de incluído, como no pedido (regra dele, 25/09) */
       '<td class="num"><input class="v-qtd" type="number" min="1" step="1" data-orq="'+idx+
         '" value="'+(i.qtd||1)+'" aria-label="Quantidade de '+esc(i.nome)+'"></td>'+
       '<td class="num"><input class="v-unit" type="text" inputmode="decimal" data-orv="'+idx+
         '" value="'+brMF(+i.valor||0)+'" aria-label="Valor de '+esc(i.nome)+'"></td>'+
-      '<td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
+      '<td class="num">'+BRL(valorOrcItem(i)*(i.qtd||1))+"</td>"+
       '<td class="num">'+BRL(depI)+'<div class="t-sub">'+BRL(unit)+"/un</div></td>"+
       '<td><span class="pill '+fx.cls+'">'+fx.n+"</span></td>"+
       '<td class="num">'+BRL(depI*fx.f)+"</td>"+
       '<td class="num"><button class="btn mut sm" type="button" data-orm="'+idx+'">Remover</button></td></tr>';
+  });
+  /* o desconto de cada item (21/10) */
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-ord]"),function(inp){
+    inp.onchange=function(){
+      var it=orcItens[+inp.getAttribute("data-ord")];if(!it)return;
+      it.desconto=Math.max(0,numMF(inp.value)||0);
+      if(it.descontoTipo==="pct")it.desconto=Math.min(100,it.desconto);
+      calcOrc();
+    };
+  });
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-ordt]"),function(sel){
+    sel.onchange=function(){
+      var it=orcItens[+sel.getAttribute("data-ordt")];if(!it)return;
+      it.descontoTipo=(sel.value==="pct")?"pct":"rs";
+      if(it.descontoTipo==="pct")it.desconto=Math.min(100,+it.desconto||0);
+      calcOrc();
+    };
   });
   Array.prototype.forEach.call(tb.querySelectorAll("[data-orm]"),function(b){
     b.onclick=function(){
@@ -32448,10 +33041,23 @@ async function virarVenda(o){
   itens=(o.itens||[]).map(function(i){
     var fin=+i.valor||0,q=i.qtd||1;
     var pr=prodPorId(i.pid)||{};
-    return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:q,
+    var n={pid:i.pid,nome:i.nome,cod:i.cod,qtd:q,
       /* o valor do orçamento é o COBRADO; o comercial é ele dividido pelo acréscimo da forma */
       valorBase:baseDoFinal(fin,q,0),valorTabela:+pr.cheia||fin,valor:fin,
-      serie:"",pontos:+i.pontos||0,garantia:"Bronze",vinculo:uid()};});
+      serie:"",pontos:+i.pontos||0,garantia:"Bronze",vinculo:uid()};
+    /* O DESCONTO DE CADA ITEM PASSA IGUAL, E O PREÇO FINAL NÃO MUDA (21/10, regra dele).
+       No orçamento o desconto é sobre o valor FINAL; no pedido, sobre o COMERCIAL. Em
+       porcentagem ele é o mesmo nos dois (a conta é linear). Em reais, o valor é convertido
+       pela diferença dos comerciais — assim o cliente paga exatamente o mesmo. */
+    if(+i.desconto>0){
+      if(i.descontoTipo==="pct"){n.desconto=+i.desconto;n.descontoTipo="pct";}
+      else{
+        var dF=Math.min(+i.desconto,fin);
+        n.desconto=Math.max(0,centavos(baseDoFinal(fin,q,0)-baseDoFinal(fin-dF,q,0)));
+        n.descontoTipo="rs";
+      }
+    }
+    return n;});
   /* Desconto Especial: no orçamento ele abate o valor final; no pedido, o valor comercial.
      Vem dividido pelo mesmo acréscimo, para o cliente pagar exatamente o mesmo total. */
   var dOrc=+o.descontoEspecial||0;
@@ -37936,6 +38542,18 @@ function paradaEmCliente(p){
     if(metrosEntre({lat:+p.lat,lng:+p.lng},{lat:g.la,lng:g.lo})<=RAIO_CLIENTE_GEO){achou=true;return true;}
     return false;
   });
+  if(achou)return true;
+  /* o PONTO DO APARELHO também conta (21/10): o endereço de instalação tem geolocalização
+     própria, e é por ele que o rastreio reconhece a chegada num cliente em lugares que o
+     cadastro não tem. O ganho vem com o tempo — só os aparelhos que receberem endereço
+     daqui para a frente terão ponto no mapa. */
+  (typeof equipamentos!=="undefined"?equipamentos:[]).some(function(e){
+    if(!e.endInst||!e.endInst.geo)return false;
+    var g2=coordDe(e.endInst.geo);
+    if(!g2)return false;
+    if(metrosEntre({lat:+p.lat,lng:+p.lng},{lat:g2.la,lng:g2.lo})<=RAIO_CLIENTE_GEO){achou=true;return true;}
+    return false;
+  });
   return achou;
 }
 /* a parada dá início ao dia? só loja ou cliente */
@@ -40501,6 +41119,41 @@ function ligar(){
     if(t){e.preventDefault();e.stopPropagation();verAnexo(t.getAttribute("data-anxver"));}
   },true);
   $("ax_fechar").onclick=function(){$("anxModal").hidden=true;$("ax_corpo").innerHTML="";};
+  /* a janela do endereço do aparelho (21/10) */
+  if($("ea_fechar"))$("ea_fechar").onclick=function(){$("endApModal").hidden=true;endApCtx=null;};
+  if($("ea_ok"))$("ea_ok").onclick=function(){confirmarEndAparelho();};
+  if($("ea_mesmo"))Array.prototype.forEach.call($("ea_mesmo").querySelectorAll("[data-ea]"),function(b){
+    b.onclick=function(){marcarEndMesmo(b.getAttribute("data-ea"));};
+  });
+  /* o CEP usa a MESMA busca dos Correios do cadastro do cliente (v81) */
+  if($("ea_cep"))$("ea_cep").onchange=async function(){
+    var cep=(($("ea_cep").value||"").replace(/\D/g,""));
+    if(cep.length!==8)return;
+    $("ea_alerta").innerHTML='<div class="note">Procurando o CEP…</div>';
+    try{
+      var d=await window.cepMF(cep);
+      if(d){
+        if(d.rua&&!$("ea_rua").value)$("ea_rua").value=d.rua;
+        if(d.bairro&&!$("ea_bairro").value)$("ea_bairro").value=d.bairro;
+        if(d.cidade)$("ea_cidade").value=d.cidade;
+        if(d.uf)$("ea_uf").value=d.uf;
+        $("ea_alerta").innerHTML="";
+        try{$("ea_num").focus();}catch(e){}
+      }else $("ea_alerta").innerHTML='<div class="note warn">CEP não encontrado — preencha à mão.</div>';
+    }catch(e){
+      $("ea_alerta").innerHTML='<div class="note warn">Não consegui falar com a base dos Correios. Preencha à mão.</div>';
+    }
+  };
+  if($("ea_geoAqui"))$("ea_geoAqui").onclick=function(){
+    if(!navigator.geolocation){toast("Este aparelho não informa a localização.");return;}
+    $("ea_alerta").innerHTML='<div class="note">Procurando onde você está…</div>';
+    navigator.geolocation.getCurrentPosition(function(p){
+      $("ea_geo").value=p.coords.latitude.toFixed(6)+", "+p.coords.longitude.toFixed(6);
+      $("ea_alerta").innerHTML='<div class="note ok">Localização marcada.</div>';
+    },function(){
+      $("ea_alerta").innerHTML='<div class="note warn">Não consegui pegar a localização. Cole o ponto no campo.</div>';
+    },{enableHighAccuracy:true,timeout:12000});
+  };
   $("ax_abrir").onclick=function(){if(anxAtual)window.open(urlDoAnexo(anxAtual),"_blank");};
   $("cx_anexarBt").onclick=function(){$("cx_anexar").click();};
   $("cx_anexar").onchange=function(){
@@ -41595,7 +42248,9 @@ function ligar(){
     opcoesProduto();render();
   };
   $("v_prod").onchange=sincronizarValor;$("v_add").onclick=addItem;
-  $("v_equip").onchange=function(){ajustarLocalItem();try{notaPlanoVenda();}catch(e){}};
+  $("v_equip").onchange=function(){ajustarLocalItem();try{notaPlanoVenda();}catch(e){}
+    try{renderEndDoEquipVenda();}catch(e){}};
+  try{ligarEndDoEquipVenda();}catch(e){}
   /* série digitada ou lida pela câmera: a localização passa a opcional na hora */
   $("v_serie").addEventListener("input",ajustarLocalItem);
   $("v_gar").onchange=notaGarantia;$("v_imagem").onchange=calcular;
@@ -41637,7 +42292,15 @@ function ligar(){
   };
   ["v_vend","v_idata","v_inst"].forEach(function(id){$(id).addEventListener("change",function(){ajustarInstalador();calcular();});});
   $("v_idata").addEventListener("input",ajustarInstalador);
-  $("v_salvar").onclick=salvarPedido;$("v_limpar").onclick=function(){limparPedido();render();};
+  /* O FINALIZAR ABRE A REVISÃO (21/10): o vendedor confere tudo junto e só então confirma.
+     Editando um pedido já salvo, a revisão não entra no caminho — ali o fluxo é outro. */
+  $("v_salvar").onclick=function(){
+    if(pedEditando){salvarPedido();return;}
+    abrirRevisaoPedido();
+  };
+  if($("rv_voltar"))$("rv_voltar").onclick=function(){$("revModal").hidden=true;};
+  if($("rv_ok"))$("rv_ok").onclick=function(){$("revModal").hidden=true;salvarPedido();};
+  $("v_limpar").onclick=function(){limparPedido();render();};
   ligarAssinatura();renderFormas();renderAnexos();notaGarantia();
   /* regra do Wagner (12/09): da etapa Itens só se avança com item incluído */
   function podeIrEtapa(n){
@@ -43204,6 +43867,9 @@ function erro(msg){
     }
     return tenta().then(function(e){cacheCEP[d]=e;return e;});
   }
+  /* a busca de CEP fica aqui no módulo, mas o script principal também precisa dela —
+     a janela do endereço do aparelho usa a MESMA base dos Correios do cadastro (21/10) */
+  window.cepMF=function(d){return porCEP(String(d||"").replace(/\D/g,""));};
 
   function preencher(id,valor,semEvento){
     if(!id||!valor)return false;
