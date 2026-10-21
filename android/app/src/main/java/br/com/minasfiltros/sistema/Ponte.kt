@@ -41,6 +41,15 @@ class Ponte(private val ctx: Context) {
   }
 
   /* o sistema pergunta se esta registrando, para mostrar na tela */
+
+  /* LEMBRETE DE PONTO (21/10, regra dele): o sistema sabe se a batida de entrada saiu;
+     o servico sabe quando a pessoa comeca a andar. O sistema avisa aqui, e o servico
+     escolhe a hora. Batido o ponto, o sistema chama com `false` e o lembrete some. */
+  @JavascriptInterface
+  fun cobrarPonto(falta: Boolean) {
+    Guardado.cobrarPonto(ctx, falta)
+    if (!falta) Avisos.tirarLembretePonto(ctx)
+  }
   @JavascriptInterface
   fun rastreando(): Boolean = ServicoLocalizacao.ligado
 

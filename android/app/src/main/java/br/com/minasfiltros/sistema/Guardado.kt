@@ -71,4 +71,17 @@ object Guardado {
     if (o == null) p(ctx).edit().remove("parada").apply()
     else p(ctx).edit().putString("parada", o.toString()).apply()
   }
+
+  /* LEMBRETE DE BATER O PONTO (21/10, pedido dele): quem sabe se o ponto foi batido e o
+     sistema, que le a folha; quem sabe se a pessoa esta andando e o servico. Entao o
+     sistema avisa aqui, e o servico decide a hora de mostrar. */
+  fun cobrarPonto(ctx: Context, falta: Boolean) {
+    p(ctx).edit().putBoolean("faltaPonto", falta).apply()
+  }
+  fun precisaBaterPonto(ctx: Context): Boolean = p(ctx).getBoolean("faltaPonto", false)
+  /* o dia em que o lembrete ja foi mostrado: UM por dia, e se ele ignorar nao volta */
+  fun lembrouPontoEm(ctx: Context): String = p(ctx).getString("lembrouPonto", "") ?: ""
+  fun marcarLembrouPonto(ctx: Context, dia: String) {
+    p(ctx).edit().putString("lembrouPonto", dia).apply()
+  }
 }

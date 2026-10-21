@@ -12258,6 +12258,16 @@ window.__rastroAgoraMF=function(){return rastroAgora;};
 window.__carregarAgoraMF=function(){return carregarAgora();};
 window.__pontosLinhaMF=function(l){return pontosDaLinha(l);};
 window.__pontosEncaixeMF=function(l){return pontosParaEncaixe(l);};
+window.__jornadaDiaMF=function(q,d,p){return jornadaDoDia(q,d,p);};
+window.__jornadasMF=function(){return rastroJornadas;};
+window.__foraExpMF=function(q,j){return foraDoExpediente(q,j);};
+window.__movForaMF=function(pt,pa,d){return movimentosForaDoExpediente(pt,pa,d);};
+window.__periodosMovMF=function(p){return periodosDeMovimento(p);};
+window.__paradaForaMF=function(p){return paradaForaDoExpediente(p);};
+window.__iniDiaMF=function(d){return iniDia(d);};
+window.__fimDiaMF=function(d){return fimDia(d);};
+window.__diaDoISOMF=function(s){return diaDoISO(s);};
+window.__pontosBaterMF=function(){return pontos;};
 window.__seguindoMF=function(){return rsSeguindo;};
 window.__zoomAgoraMF=function(){try{return mapaAgora?mapaAgora.getZoom():0;}catch(e){return 0;}};
 window.__centroAgoraMF=function(){try{var c=mapaAgora.getCenter();return c.lat.toFixed(5)+","+c.lng.toFixed(5);}catch(e){return "";}};
@@ -12306,7 +12316,7 @@ window.__htmlSessaoMF=function(){return htmlSessaoPerdida();};
 window.__conferirVersaoAppMF=function(f){return conferirVersaoApp(f);};
 window.__assinarTesteMF=function(){trSigFeita=true;return true;};
 window.__lerParadasDeMF=async function(quem){
-  try{var l=await db.rastro.paradas(quem,hojeISO()+"T00:00:00",hojeISO()+"T23:59:59");return l.length;}
+  try{var l=await db.rastro.paradas(quem,iniDia(),fimDia());return l.length;}
   catch(e){return -1;}
 };
 /* o teste põe um banco de mentira no lugar do de verdade: o roteiro não fala com o Supabase */
@@ -24314,6 +24324,8 @@ function gravarBatida(u,k,m,j,p,hoje,quem,foto,sig){
       parecenca:par,conferirFace:conferir,semFotoRef:!rfB.foto,semFoto:!foto,
       em:new Date().toISOString()};
     if(!p)pontos.push(reg);
+    /* batido o ponto, o lembrete do celular some na hora (regra dele de 21/10) */
+    try{avisarPontoAoApp();}catch(e){}
     await grava("pontos",reg);
     var prev=j[m.campo],d=minutos(hora)-minutos(prev);
     var atrasado=(m.cobraAtraso&&d>j.tolerancia);
@@ -37522,11 +37534,11 @@ async function atualizarPontosDasLojas(){
 }
 async function conferirParadas(tudo){
   if(!db||!modoBanco()||!db.rastro)return 0;
-  var desde=somaDias(hojeISO(),-2)+"T00:00:00",lista=[];
+  var desde=iniDia(somaDias(hojeISO(),-2)),lista=[];
   try{
     if(tudo){
       /* todas as do período, menos as que ainda estão abertas (sem fim não há o que conferir) */
-      lista=(await db.rastro.paradas("",desde,hojeISO()+"T23:59:59")).filter(function(p){return !!p.fim;});
+      lista=(await db.rastro.paradas("",desde,fimDia())).filter(function(p){return !!p.fim;});
     }else{
       lista=await db.rastro.paradasACoferir(desde);
     }
@@ -37535,13 +37547,33 @@ async function conferirParadas(tudo){
   if(!lista.length)return 0;
   /* o ponto das lojas pode ter sido cadastrado DEPOIS de esta aba abrir */
   await atualizarPontosDasLojas();
+  /* A JORNADA DE CADA DIA DA LISTA (21/10): a conferência varre até dois dias atrás, e o
+     `rastroJornadas` é só do dia aberto na tela — então o início e o fim de cada dia são
+     montados aqui, a partir das paradas que já vieram nesta mesma leitura.
+     O `na_loja` é calculado ANTES, porque parada ainda não conferida vem com ele vazio e
+     a jornada precisa dele para saber se a pessoa chegou na loja. */
+  var porDia={};
+  lista.forEach(function(p){
+    if(p.na_loja===null||p.na_loja===undefined){
+      var l=lojaDaParada(+p.lat,+p.lng);
+      p.na_loja=!!l;p.loja_nome=l||null;
+    }
+    var d=diaDoISO(p.inicio);(porDia[d]=porDia[d]||[]).push(p);
+  });
+  var jorDia={};
+  Object.keys(porDia).forEach(function(d){jorDia[d]=jornadasDoDia(d,porDia[d],[]);});
   var n=0,mudou=0;
   for(var i=0;i<lista.length;i++){
     var p=lista[i];
     var naLoja=lojaDaParada(+p.lat,+p.lng);
     var almoco=dentroDoAlmoco(p.vendedor,p.inicio,p.fim);
     var at=atendimentoNaParada(p.vendedor,p.inicio,p.fim);
-    var vira=!naLoja&&!almoco&&!at&&(+p.minutos||0)>=RASTREIO.minutos;
+    /* fora do expediente a parada é gravada, mas NÃO vira aviso (regra dele de 21/10) */
+    var dP=diaDoISO(p.inicio);
+    var jP=(jorDia[dP]||{})[p.vendedor]||null;
+    var foraExp=diaSemTrabalho(dP)?"fim de semana":
+      ((jP&&jP.folga)?"folga":foraDoExpediente(p.inicio,jP));
+    var vira=!foraExp&&!naLoja&&!almoco&&!at&&(+p.minutos||0)>=RASTREIO.minutos;
     var campos={conferido_em:new Date().toISOString(),
       na_loja:!!naLoja,loja_nome:naLoja||null,
       no_almoco:!!almoco,com_atendimento:!!at,
@@ -37678,7 +37710,7 @@ function renderAvisoVersaoApp(){
    ou trocar de celular NÃO faz o vendedor assinar de novo — a assinatura está
    no sistema, não no aparelho. Só se pede assinatura nova quando o TEXTO do
    termo muda, e é a versão abaixo que diz isso. Mudou o texto, muda a data. */
-var TERMO_RASTREIO_VERSAO="2026-10-14";
+var TERMO_RASTREIO_VERSAO="2026-10-21";
 function termoRastreioAssinado(nome){
   var d=facialDoc(nome||usuarioAtual);
   var t=(d&&d.termoRastreio&&d.termoRastreio.assinadoEm)?d.termoRastreio:null;
@@ -37707,7 +37739,7 @@ function textoTermoRastreio(nome){
     "<li><b>Fica visível na tela:</b> enquanto está registrando, aparece um aviso fixo na barra do celular — <i>“Minas Filtros: localização ativa”</i>. Assim eu sei, a qualquer momento, que o registro está ligado.</li>"+
     "<li><b>Quem vê:</b> apenas o Administrador e o Gerente. Nenhum outro colaborador vê a minha localização.</li>"+
     "<li><b>Por quanto tempo fica guardado:</b> os pontos do trajeto são apagados automaticamente depois de <b>90 dias</b>. Só o registro das paradas fica guardado como histórico de trabalho.</li>"+
-    "<li><b>Fora do expediente:</b> o celular é da empresa e deve ficar na loja depois do expediente. Não devo usá-lo para assuntos pessoais.</li>"+
+    "<li><b>Fora do expediente:</b> o celular e o veículo da empresa <b>não podem ser usados fora do expediente</b>. O celular deve ficar na loja depois do expediente e não devo usá-lo para assuntos pessoais. <b>O registro de localização continua ativo nesse período, para controle dos equipamentos da empresa.</b></li>"+
     "<li><b>Esta assinatura fica guardada no sistema</b>, ligada ao meu usuário: se o aplicativo for reinstalado ou o celular for trocado, <b>não preciso assinar de novo</b>. Assino outra vez apenas se o texto deste termo mudar.</li>"+
     "<li><b>Meus direitos:</b> posso pedir a qualquer momento para ver os meus próprios registros, e posso falar com a empresa sobre eles.</li>"+
     "</ol>"+
@@ -37804,6 +37836,21 @@ async function assinarTermoRastreio(){
   entregarSessaoAoApp();
 }
 /* o vendedor entrou e ainda não assinou: o termo aparece e o rastreio não liga */
+/* AVISA O APLICATIVO SE FALTA BATER O PONTO (21/10, regra dele). Quem sabe da batida é o
+   sistema, que lê a folha; quem sabe quando a pessoa começa a andar é o serviço do celular.
+   Então o sistema só informa, e o aplicativo escolhe a hora — UMA vez por dia, mudo, e
+   sumindo sozinho quando o ponto é batido. Sem o aplicativo (no computador), não faz nada. */
+function avisarPontoAoApp(){
+  try{
+    if(!temAppMF()||!window.MFApp.cobrarPonto)return;
+    if(!ehVendedorRastreado(usuarioAtual))return;   /* o lembrete é de quem vai para a rua */
+    var j=jornadaDe(usuarioAtual);
+    if(j&&j.bate===false)return;                    /* quem não bate ponto não é cobrado */
+    var hoje=hojeISO();
+    var falta=diaUtil(hoje)&&!(batidaRastreio(usuarioAtual,hoje)||{}).entrada;
+    window.MFApp.cobrarPonto(!!falta);
+  }catch(e){}
+}
 function cobrarTermoRastreio(){
   if(!modoBanco()||!temAppMF())return;
   if(!ehVendedorRastreado(usuarioAtual))return;
@@ -37834,10 +37881,15 @@ async function carregarRastreio(){
   rastroCarregando=true;rastroErro="";
   try{renderRastreio();}catch(e){}
   try{
-    var de=dia+"T00:00:00",ate=dia+"T23:59:59";
+    var de=iniDia(dia),ate=fimDia(dia);
     rastroPontos=await db.rastro.pontos(quem,de,ate);
     rastroParadas=await db.rastro.paradas(quem,de,ate);
     rastroErro="";rastroLido=true;
+    /* a jornada e o movimento fora do expediente saem dos pontos que ACABARAM de ser lidos:
+       nenhuma leitura a mais no banco por causa disso */
+    try{rastroJornadas=jornadasDoDia(dia,rastroParadas,rastroPontos);}catch(e){rastroJornadas={};}
+    try{rastroForaExp=movimentosForaDoExpediente(rastroPontos,rastroParadas,dia);}catch(e){rastroForaExp=[];}
+    try{renderSino();}catch(e){}
   }catch(e){
     rastroErro=(e&&e.message)||String(e);
     rastroPontos=[];rastroParadas=[];
@@ -37845,7 +37897,191 @@ async function carregarRastreio(){
   rastroCarregando=false;
   try{renderRastreio();}catch(e){}
 }
+/* ======================================================================
+   O INÍCIO E O FIM DO DIA DE TRABALHO (21/10, regra dele)
+   O vendedor pode sair de casa direto para um cliente ou passar antes na loja. A BATIDA DO
+   PONTO manda; as outras regras são reserva para quando ele esquecer de bater.
+   INÍCIO: (1) batida de entrada; (2) sem batida, a primeira parada na LOJA (150 m) ou num
+   CLIENTE. Qualquer parada antes disso (padaria, posto, farmácia) NÃO começa o dia — fica
+   gravada e aparece no mapa como "antes do início".
+   FIM: (1) batida de saída; (2) sem batida, a ÚLTIMA saída de loja ou de cliente do dia —
+   nunca a primeira saída depois das 17h, porque passar na loja e sair de novo para um
+   cliente às 18h é trabalho e tem de contar.
+   CLIENTE é reconhecido pelo ATENDIMENTO registrado durante a parada ou até 60 minutos
+   depois (a regra que já existia). A distância de 100 m de um cliente com geolocalização
+   no cadastro entra só como reforço — e vale pouco hoje: medido em 21/10, só 27 dos 22.339
+   cadastros têm ponto no mapa.
+   ====================================================================== */
+var RAIO_CLIENTE_GEO=100;   /* metros do endereço de um cliente com geolocalização */
+/* a batida do dia daquela pessoa (sem travar na loja aberta: o rastreio é por pessoa) */
+function batidaRastreio(quem,dia){
+  var p=(typeof pontos!=="undefined"?pontos:[]).filter(function(x){
+    return x.colaborador===quem&&x.data===dia;})[0]||null;
+  if(!p)return null;
+  return {entrada:(p.checkin&&p.checkin.hora)||"",
+    saida:(p.checkout&&p.checkout.hora)||"",
+    folga:(p.tipo==="folga"||p.tipo==="ferias")};
+}
+/* a parada aconteceu num cliente? Vale, nesta ordem: o campo `com_atendimento`, que a
+   conferência já gravou; o atendimento registrado durante a parada ou até 60 min depois
+   (a regra que já existia); e, por último, a distância de um cliente com geolocalização —
+   que hoje ajuda pouco: medido em 21/10, só 27 dos 22.339 cadastros têm ponto no mapa. */
+function paradaEmCliente(p){
+  if(p.com_atendimento)return true;
+  if(atendimentoNaParada(p.vendedor,p.inicio,p.fim))return true;
+  var achou=false;
+  (typeof clientes!=="undefined"?clientes:[]).some(function(c){
+    var g=coordDe(c.geo);
+    if(!g)return false;
+    if(metrosEntre({lat:+p.lat,lng:+p.lng},{lat:g.la,lng:g.lo})<=RAIO_CLIENTE_GEO){achou=true;return true;}
+    return false;
+  });
+  return achou;
+}
+/* a parada dá início ao dia? só loja ou cliente */
+function paradaDeTrabalho(p){
+  return !!p.na_loja||paradaEmCliente(p);
+}
+/* INÍCIO E FIM do dia de trabalho de UMA pessoa, com a regra que deu cada um */
+function jornadaDoDia(quem,dia,paradas){
+  var r={inicio:null,fim:null,regraIni:"",regraFim:"",semBatida:false,folga:false};
+  var b=batidaRastreio(quem,dia);
+  if(b&&b.folga)r.folga=true;
+  var minhas=(paradas||[]).filter(function(p){return p.vendedor===quem;})
+    .sort(function(a,b2){return String(a.inicio).localeCompare(String(b2.inicio));});
+  if(b&&b.entrada){
+    r.inicio=dia+"T"+b.entrada+":00"+FUSO_BR;
+    r.regraIni="batida de entrada";
+  }else{
+    r.semBatida=true;
+    for(var i=0;i<minhas.length;i++){
+      if(paradaDeTrabalho(minhas[i])){
+        r.inicio=minhas[i].inicio;
+        r.regraIni=minhas[i].na_loja?"chegada na loja":"chegada num cliente";
+        break;
+      }
+    }
+  }
+  if(b&&b.saida){
+    r.fim=dia+"T"+b.saida+":00"+FUSO_BR;
+    r.regraFim="batida de saída";
+  }else{
+    /* a ÚLTIMA saída de loja ou de cliente, não a primeira depois das 17h */
+    for(var j=minhas.length-1;j>=0;j--){
+      if(minhas[j].fim&&paradaDeTrabalho(minhas[j])){
+        r.fim=minhas[j].fim;
+        r.regraFim=minhas[j].na_loja?"última saída da loja":"última saída de cliente";
+        break;
+      }
+    }
+    if(r.fim&&dia===hojeISO())r.regraFim+=" (o dia ainda não acabou)";
+  }
+  return r;
+}
+/* o carimbo está antes do início, dentro do dia de trabalho, ou depois do fim?
+   CUIDADO QUE DECIDIU O DESENHO (21/10): quando o dia NÃO tem início reconhecido — ninguém
+   bateu o ponto e a pessoa não foi vista em loja nem em cliente — o sistema NÃO esconde
+   nada. Tratar o dia inteiro como "antes do início" deixaria o rastreio cego justamente
+   onde a batida ainda não é hábito: nenhuma parada viraria aviso e o trajeto todo sairia
+   apagado. Sem início conhecido, vale o comportamento de sempre, e a tela diz que faltou
+   a batida. */
+function foraDoExpediente(quando,j){
+  if(!j)return "";
+  if(j.folga)return "folga";
+  if(!j.inicio)return "";                         /* dia sem início reconhecido */
+  if(String(quando)<String(j.inicio))return "antes do início";
+  if(j.fim&&String(quando)>String(j.fim))return "depois do fim";
+  return "";
+}
+/* fim de semana e folga valem como fora do expediente (feriado ainda não é cadastrado) */
+function diaSemTrabalho(dia){
+  var d=new Date(dia+"T12:00:00").getDay();
+  return d===0||d===6;
+}
+/* ======================================================================
+   MOVIMENTO FORA DO EXPEDIENTE (21/10, regra dele): o celular e o veículo da empresa não
+   podem ser usados fora do expediente, e o rastreio serve para conferir isso.
+   O aviso é UM POR PERÍODO DE MOVIMENTO, não um por ponto — senão uma volta de 20 minutos
+   encheria o sino. O período começa de onde a pessoa SAIU (regra que ele escolheu: "conta
+   de quando ele começou a andar") e termina onde ela parou; ficar MOV_FORA_PAUSA minutos
+   sem sair do lugar fecha o período.
+   ====================================================================== */
+var MOV_FORA_MIN=500;      /* metros somados no período para virar aviso */
+var MOV_FORA_PAUSA=30;     /* minutos sem andar que fecham o período */
+var MOV_FORA_RAIO=100;     /* metros: andar menos que isto é ficar no mesmo lugar */
+var rastroForaExp=[];      /* os períodos achados, que o sino mostra */
+/* os períodos de movimento de uma lista de pontos já em ordem de hora */
+var rastroJornadas={};     /* o início e o fim do dia de cada pessoa, do dia carregado */
+/* a jornada de TODA gente que aparece no dia (paradas ou pontos) */
+function jornadasDoDia(dia,paradas,pontosDia){
+  var nomes={},r={};
+  (paradas||[]).forEach(function(p){if(p.vendedor)nomes[p.vendedor]=1;});
+  (pontosDia||[]).forEach(function(p){if(p.vendedor)nomes[p.vendedor]=1;});
+  Object.keys(nomes).forEach(function(n){r[n]=jornadaDoDia(n,dia,paradas);});
+  return r;
+}
+/* a jornada de quem fez esta parada, do dia já carregado */
+function jornadaDaParada(p){
+  return rastroJornadas[p.vendedor]||null;
+}
+function periodosDeMovimento(pts){
+  var per=[],atual=null;
+  for(var i=1;i<pts.length;i++){
+    var a=pts[i-1],b=pts[i];
+    var d=metrosEntre(a,b);
+    var min=Math.abs(new Date(b.em)-new Date(a.em))/60000;
+    if(d>MOV_FORA_RAIO){
+      /* começou a andar: o período nasce de ONDE ELE SAIU */
+      if(!atual)atual={de:a.em,ate:b.em,metros:0,pausa:0};
+      atual.metros+=d;atual.ate=b.em;atual.chegou=false;atual.pausa=0;
+    }else if(atual){
+      /* o primeiro ponto parado depois de andar é ONDE ELE CHEGOU */
+      if(!atual.chegou){atual.ate=b.em;atual.chegou=true;}
+      atual.pausa+=min;
+      if(atual.pausa>=MOV_FORA_PAUSA){per.push(atual);atual=null;}
+    }
+  }
+  if(atual)per.push(atual);
+  return per;
+}
+/* os movimentos que aconteceram FORA do expediente, por pessoa */
+function movimentosForaDoExpediente(pontosDia,paradasDia,dia){
+  var saida=[],porV={};
+  (pontosDia||[]).forEach(function(p){
+    if(!isFinite(+p.lat)||!isFinite(+p.lng))return;
+    (porV[p.vendedor]=porV[p.vendedor]||[]).push(p);
+  });
+  Object.keys(porV).forEach(function(quem){
+    var pts=porV[quem].slice().sort(function(a,b){return String(a.em).localeCompare(String(b.em));});
+    var j=jornadaDoDia(quem,dia,paradasDia);
+    var semTrabalho=diaSemTrabalho(dia)||j.folga;
+    /* no fim de semana e na folga o dia inteiro é fora do expediente */
+    var fora=pts.filter(function(p){
+      return semTrabalho?true:!!foraDoExpediente(p.em,j);
+    });
+    periodosDeMovimento(fora).forEach(function(x){
+      if(x.metros<MOV_FORA_MIN)return;
+      saida.push({vendedor:quem,dia:dia,de:x.de,ate:x.ate,
+        metros:Math.round(x.metros),
+        motivo:semTrabalho?(j.folga?"folga":"fim de semana"):
+          (String(x.de)<String(j.inicio||"")?"antes do início":"depois do fim")});
+    });
+  });
+  return saida;
+}
+/* PARADA FORA DO EXPEDIENTE NÃO VIRA AVISO (21/10, regra dele): antes do início do dia de
+   trabalho, depois do fim, no fim de semana ou na folga, a parada continua GRAVADA (nada
+   se apaga), mas não acusa "sem atendimento" e não entra nos cinco números do topo —
+   padaria, posto e farmácia a caminho não são falta de atendimento. */
+function paradaForaDoExpediente(p){
+  var dia=diaDoISO(p.inicio);
+  if(diaSemTrabalho(dia))return "fim de semana";
+  var j=jornadaDaParada(p);
+  if(j&&j.folga)return "folga";
+  return foraDoExpediente(p.inicio,j);
+}
 function paradaSemAtendimento(p){
+  if(paradaForaDoExpediente(p))return false;
   return !p.na_loja&&!p.no_almoco&&!p.com_atendimento&&(+p.minutos||0)>=RASTREIO.minutos;
 }
 /* ======================================================================
@@ -38503,18 +38739,31 @@ function guardarCacheRota(ch,v){
 }
 /* ENCAIXA O DIA DE UM VENDEDOR. Devolve os trechos com a linha pronta e diz, em cada um,
    se o caminho é o das ruas ou o aproximado — é isso que a tela escreve. */
+var ENCAIXE_RETENTAR=4000;  /* ms de espera antes da segunda tentativa de um trecho */
 async function encaixarRota(vendedor,dia,pts){
   var ch=chaveEncaixe(vendedor,dia,pts),guardado=lerCacheRota()[ch];
   if(guardado)return guardado;
   var trechos=trechosDoDia(pts),saida=[],servico="",falhou=0;
+  /* uma tentativa = OSRM e, falhando ele, o Valhalla */
+  async function tentar(t,perfil){
+    try{return await encaixarOSRM(t,perfil);}
+    catch(e){
+      try{await esperar(ENCAIXE_ESPERA);return await encaixarValhalla(t,perfil);}
+      catch(e2){return null;}
+    }
+  }
   for(var i=0;i<trechos.length;i++){
     var t=trechos[i],reta=t.map(function(p){return [+p.lat,+p.lng];});
     if(t.length<ENCAIXE_MIN){saida.push({linha:reta,ruas:false});continue;}
-    var pf=perfilDoTrecho(t),res=null;
-    try{res=await encaixarOSRM(t,pf.perfil);}
-    catch(e){
-      try{await esperar(ENCAIXE_ESPERA);res=await encaixarValhalla(t,pf.perfil);}
-      catch(e2){res=null;}
+    var pf=perfilDoTrecho(t);
+    var res=await tentar(t,pf.perfil);
+    /* SEGUNDA TENTATIVA (21/10, pedido dele): os dois serviços são de uso justo e recusam
+       pedido demais por um instante. Antes de dar o trecho por perdido e deixar "caminho
+       aproximado", espera alguns segundos e tenta mais uma vez — uma só, para não virar
+       uma fila de pedidos em cima de um serviço que já disse não. */
+    if(!res||!(res.linha||[]).length){
+      await esperar(ENCAIXE_RETENTAR);
+      res=await tentar(t,pf.perfil);
     }
     if(res&&res.linha.length>=2){
       saida.push({linha:res.linha,ruas:true,conf:res.conf,metros:res.metros,
@@ -38595,6 +38844,18 @@ function notaEncaixe(resumo){
       '(o serviço de rotas não respondeu). A linha liga os pontos registrados.';
   }
 }
+/* o ponto do trajeto mais perto de um horário: é nele que a marca do início ou do fim do
+   trabalho é pregada no mapa (a batida do ponto não tem lugar, só hora) */
+function pontoMaisPerto(pts,quando){
+  var alvo=new Date(quando).getTime();
+  if(!isFinite(alvo))return null;
+  var melhor=null,dist=Infinity;
+  (pts||[]).forEach(function(p){
+    var d=Math.abs(new Date(p.em).getTime()-alvo);
+    if(d<dist){dist=d;melhor=p;}
+  });
+  return melhor;
+}
 async function desenharRotaDia(){
   var div=$("rs_mapaRota");if(!div)return;
   var bons=pontosDaLinha();
@@ -38614,9 +38875,38 @@ async function desenharRotaDia(){
       html:'<div class="rs-pin" style="border-color:'+cor+'">'+txt+"</div>"});
   }
   var rotas=rotasPorVendedor(bons),varios=rotas.length>1,todos=[];
+  /* FAIXAS DO DIA (21/10, regra dele): o que vem ANTES do início do trabalho e DEPOIS do
+     fim aparece apagado e com o nome da faixa; o miolo é o trajeto de trabalho. O trecho
+     que termina na chegada à loja se chama "a caminho da loja". */
+  function faixasDaRota(r){
+    var j=rastroJornadas[r.vendedor]||null;
+    var dia=rsDia||hojeISO();
+    var semTrab=diaSemTrabalho(dia)||(j&&j.folga);
+    var saida=[],atual=null;
+    r.pontos.forEach(function(p){
+      var f=semTrab?(j&&j.folga?"folga":"fim de semana"):foraDoExpediente(p.em,j);
+      if(!atual||atual.faixa!==f){atual={faixa:f,pontos:[]};saida.push(atual);}
+      atual.pontos.push(p);
+    });
+    /* o trecho de "antes do início" que termina na loja é o caminho de casa até ela */
+    if(j&&j.regraIni==="chegada na loja"&&saida.length&&saida[0].faixa==="antes do início")
+      saida[0].faixa="a caminho da loja";
+    return {faixas:saida,jornada:j};
+  }
   rotas.forEach(function(r){
     var linha=r.pontos.map(function(p){return [+p.lat,+p.lng];});
     todos=todos.concat(linha);
+    var ff=faixasDaRota(r),j=ff.jornada;
+    r.__faixas=ff.faixas;
+    /* as faixas de FORA do expediente entram apagadas e ficam — elas não vão ao encaixe */
+    ff.faixas.forEach(function(f){
+      if(!f.faixa||f.pontos.length<2)return;
+      L.polyline(f.pontos.map(function(p){return [+p.lat,+p.lng];}),
+        {color:r.cor,weight:3,opacity:.25,dashArray:"2 7"}).addTo(mapaRota)
+        .bindPopup("<b>"+esc(r.vendedor)+"</b><br><b>"+esc(f.faixa)+"</b><br>"+
+          horaDoISO(f.pontos[0].em)+" às "+horaDoISO(f.pontos[f.pontos.length-1].em)+
+          "<br>fora do dia de trabalho — não conta como parada sem atendimento");
+    });
     /* a linha RETA entra primeiro, para o mapa não ficar vazio enquanto o caminho pelas
        ruas é buscado; ela é trocada logo em seguida por `encaixarNoMapa`.
        BEM APAGADA DE PROPÓSITO (20/10): com opacidade de gente grande ela parecia o
@@ -38631,6 +38921,19 @@ async function desenharRotaDia(){
     if(linha.length>1)
       L.marker(linha[linha.length-1],{icon:pino(qual+"Fim "+horaDoISO(r.pontos[r.pontos.length-1].em),
         r.cor)}).addTo(mapaRota);
+    /* O INÍCIO E O FIM DO TRABALHO, dizendo qual regra deu cada um */
+    if(j&&j.inicio){
+      var pi=pontoMaisPerto(r.pontos,j.inicio);
+      if(pi)L.marker([+pi.lat,+pi.lng],{icon:pino(qual+"Início do trabalho "+
+        horaDoISO(j.inicio),"#1E8E3E")}).addTo(mapaRota)
+        .bindPopup("<b>Início do trabalho</b><br>"+horaDoISO(j.inicio)+"<br>"+esc(j.regraIni));
+    }
+    if(j&&j.fim){
+      var pf=pontoMaisPerto(r.pontos,j.fim);
+      if(pf)L.marker([+pf.lat,+pf.lng],{icon:pino(qual+"Fim do trabalho "+
+        horaDoISO(j.fim),"#C62828")}).addTo(mapaRota)
+        .bindPopup("<b>Fim do trabalho</b><br>"+horaDoISO(j.fim)+"<br>"+esc(j.regraFim));
+    }
   });
   var linha=todos;
   /* O CAMINHO PELAS RUAS vem depois do mapa aberto, de propósito: a busca leva alguns
@@ -38711,7 +39014,7 @@ function renderRastreio(){
     return;
   }
 
-  var mapa=mapaDoTrajeto();
+  var mapa=quadroJornada()+mapaDoTrajeto();
   var tabela="";
   if(!rastroParadas.length){
     tabela='<div class="empty"><div class="big">Nenhuma parada neste dia</div>'+
@@ -38720,11 +39023,15 @@ function renderRastreio(){
     tabela='<div class="tw"><table><thead><tr><th>Vendedor</th><th>Chegada</th><th>Saída</th>'+
       '<th class="num">Parado</th><th>Onde</th><th>Situação</th><th></th></tr></thead><tbody>'+
       rastroParadas.map(function(p){
-        var cls=p.na_loja?"p-mut":(p.no_almoco?"p-mut":(p.com_atendimento?"p-ok":"p-crit"));
+        var foraExp=paradaForaDoExpediente(p);
+        var cls=foraExp?"p-mut":(p.na_loja?"p-mut":(p.no_almoco?"p-mut":(p.com_atendimento?"p-ok":"p-crit")));
         var sit=p.na_loja?("na loja"+(p.loja_nome?" ("+esc(p.loja_nome)+")":"")):
           (p.no_almoco?"no almoço":(p.com_atendimento?"com atendimento":"SEM atendimento"));
         if(!p.conferido_em)sit="conferindo…";
-        return "<tr><td>"+esc(p.vendedor)+"</td>"+
+        /* fora do expediente a parada aparece em cinza, com o nome da faixa — ela continua
+           gravada e some dos avisos e dos números do topo (regra dele de 21/10) */
+        if(foraExp)sit=esc(foraExp);
+        return '<tr'+(foraExp?' style="opacity:.6"':"")+"><td>"+esc(p.vendedor)+"</td>"+
           "<td>"+esc(horaDoISO(p.inicio))+"</td><td>"+esc(p.fim?horaDoISO(p.fim):"ainda parado")+"</td>"+
           '<td class="num"><b>'+(+p.minutos||0)+" min</b></td>"+
           "<td>"+esc(p.endereco||((+p.lat).toFixed(5)+", "+(+p.lng).toFixed(5)))+"</td>"+
@@ -38748,6 +39055,28 @@ function renderRastreio(){
   /* o mapa da rota e desenhado DEPOIS de o div existir na tela (20/10) */
   try{desenharRotaDia();}catch(e){console.warn("rota",e);}
   try{renderAgora();}catch(e){}
+}
+/* ======================================================================
+   O DIA VAI DE 00:00 A 23:59 NO HORÁRIO DE BRASÍLIA (21/10, defeito que ele pegou com o
+   trajeto do Guilherme: o dia 21 abria com "Início 21:30", e aquele ponto era de 20/10
+   às 21:30 daqui — 21/10 00:30 em UTC).
+   A CAUSA: a coluna `em` do banco é timestamptz, e o Postgres lê texto SEM fuso no fuso da
+   sessão, que no Supabase é UTC. Então "2026-10-21T00:00:00" virava 20/10 às 21:00 daqui:
+   o dia começava três horas antes e PERDIA as três últimas horas dele.
+   A correção é escrever o fuso no texto. O Brasil não tem mais horário de verão desde 2019,
+   então -03:00 é fixo para Minas — e fixo é melhor que o fuso do aparelho, senão o mesmo
+   dia mudaria de tamanho conforme onde a pessoa abrisse o sistema.
+   ====================================================================== */
+var FUSO_BR="-03:00";
+function iniDia(d){return (d||hojeISO())+"T00:00:00.000"+FUSO_BR;}
+function fimDia(d){return (d||hojeISO())+"T23:59:59.999"+FUSO_BR;}
+/* a DATA de um carimbo do banco, já no horário daqui (slice(0,10) devolveria a data UTC) */
+function diaDoISO(s){
+  try{
+    var d=new Date(s);if(isNaN(d.getTime()))return String(s||"").slice(0,10);
+    var p=function(n){return (n<10?"0":"")+n;};
+    return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
+  }catch(e){return String(s||"").slice(0,10);}
 }
 function horaDoISO(s){
   try{
@@ -38776,6 +39105,31 @@ function localDoISO(s){
    aberto: a linha liga todos os pontos em ordem de horário, as paradas são bolinhas
    coloridas pela situação e o início e o fim do dia ficam marcados.
    Aqui vai só a casca; quem desenha é `desenharRotaDia()`, logo depois do innerHTML. */
+/* O QUADRO DA JORNADA (21/10, regra dele): o início e o fim do dia de cada pessoa, dizendo
+   qual regra deu cada um — e marcando em amarelo quem não bateu o ponto de entrada. */
+function quadroJornada(){
+  var nomes=Object.keys(rastroJornadas||{});
+  if(!nomes.length)return "";
+  var dia=rsDia||hojeISO();
+  var linhas=nomes.sort(function(a,b){return ordAZ(a,b);}).map(function(n){
+    var j=rastroJornadas[n];
+    var ini=j.inicio?(horaDoISO(j.inicio)+' <span class="t-sub">'+esc(j.regraIni)+"</span>"):
+      '<span class="pill p-warn">sem início reconhecido</span>';
+    var fim=j.fim?(horaDoISO(j.fim)+' <span class="t-sub">'+esc(j.regraFim)+"</span>"):"—";
+    var selo=j.folga?'<span class="pill p-mut">folga</span>':
+      (j.semBatida?'<span class="pill p-warn">sem batida de entrada</span>':
+        '<span class="pill p-ok">bateu o ponto</span>');
+    return "<tr><td>"+esc(n)+"</td><td>"+ini+"</td><td>"+fim+"</td><td>"+selo+"</td></tr>";
+  }).join("");
+  return '<div class="sect"><p class="sect-t">Dia de trabalho</p>'+
+    '<div class="tw"><table><thead><tr><th>Vendedor</th><th>Início</th><th>Fim</th>'+
+    "<th>Ponto</th></tr></thead><tbody>"+linhas+"</tbody></table></div>"+
+    '<p class="help">O que acontece <b>antes do início</b> e <b>depois do fim</b> fica '+
+    "gravado, mas não vira aviso de parada sem atendimento e não entra nos números do topo. "+
+    (diaSemTrabalho(dia)?"<b>Este dia é fim de semana:</b> o dia inteiro conta como fora do expediente. ":"")+
+    "Sem batida de entrada o sistema usa a primeira chegada na loja ou num cliente; não "+
+    "achando nenhuma, ele não esconde nada e confere o dia como sempre.</p></div>";
+}
 function mapaDoTrajeto(){
   if(!rastroPontos.length)return "";
   var bons=pontosDaLinha(),fora=rastroPontos.length-bons.length;
@@ -38819,7 +39173,7 @@ function mapaDoTrajeto(){
 async function atualizarAvisosRastreio(){
   if(!recebeAvisoRastreio()||!db||!modoBanco()||!db.rastro)return;
   try{
-    var lista=await db.rastro.avisos(hojeISO()+"T00:00:00");
+    var lista=await db.rastro.avisos(iniDia());
     var novos=lista.filter(function(p){return !rastroVistos["p"+p.id];});
     rastroAvisos=lista;
     /* aviso novo toca no celular de quem recebe (o aplicativo da gestão) */
@@ -38874,7 +39228,7 @@ async function resumoDoDiaRastreio(){
   if(horaAgoraHM()<"18:30")return null;
   if(rastroResumoFeito===hojeISO())return null;
   var lista=[];
-  try{lista=await db.rastro.paradas("",hojeISO()+"T00:00:00",hojeISO()+"T23:59:59");}
+  try{lista=await db.rastro.paradas("",iniDia(),fimDia());}
   catch(e){return null;}
   var sem=lista.filter(paradaSemAtendimento);
   rastroResumoFeito=hojeISO();
@@ -38892,6 +39246,7 @@ function ligarRastreio(){
   /* o vendedor: entrega a sessão ao aplicativo e cobra o termo */
   entregarSessaoAoApp();
   cobrarTermoRastreio();
+  avisarPontoAoApp();
   /* versão nova do aplicativo: confere ao entrar, de 30 em 30 min e quando a aba volta */
   conferirVersaoApp(true);
   if(!window.__relogioVersaoApp){
@@ -39054,7 +39409,22 @@ function pendenciasMF(){
           quando:p.fim||p.inicio||"",
           ir:function(){
             ir("rastreio");
-            try{escolherVendedorRastreio(p.vendedor||"");$("rs_dia").value=String(p.inicio||"").slice(0,10);
+            try{escolherVendedorRastreio(p.vendedor||"");$("rs_dia").value=diaDoISO(p.inicio);
+              carregarRastreio();}catch(e){}
+          }});
+      });
+      /* CELULAR DA EMPRESA EM MOVIMENTO FORA DO EXPEDIENTE (21/10, regra dele): o celular
+         e o veículo não podem ser usados fora do expediente, e um aviso sai por PERÍODO de
+         movimento — nunca um por ponto. */
+      (rastroForaExp||[]).forEach(function(m){
+        var km=m.metros>=1000?((m.metros/1000).toFixed(1)+" km"):(m.metros+" m");
+        põe({chave:"movfora:"+m.vendedor+":"+m.de,icone:"🚗",
+          titulo:"Celular da empresa em movimento fora do expediente · "+m.vendedor,
+          texto:horaDoISO(m.de)+" às "+horaDoISO(m.ate)+" · "+km+" ("+m.motivo+")",
+          quando:localDoISO(m.ate),
+          ir:function(){
+            ir("rastreio");
+            try{escolherVendedorRastreio(m.vendedor);$("rs_dia").value=m.dia;
               carregarRastreio();}catch(e){}
           }});
       });

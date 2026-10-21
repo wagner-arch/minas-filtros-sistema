@@ -148,6 +148,23 @@ class ServicoLocalizacao : Service() {
      1.1, impediu QUALQUER localizacao de chegar com o aparelho parado (v363). Os 30 metros
      do pedido dele sao conferidos aqui embaixo, no nosso proprio codigo, onde a regra da
      parada continua valendo. */
+
+  /* o lembrete de ponto: so em dia util, so quando o sistema disse que falta a batida,
+     e UMA vez por dia (se ele ignorar, nao volta). */
+  private fun lembrarPontoSePrecisar() {
+    try {
+      val c0 = applicationContext
+      if (!Guardado.precisaBaterPonto(c0)) return
+      val c = java.util.Calendar.getInstance()
+      val s = c.get(java.util.Calendar.DAY_OF_WEEK)
+      if (s == java.util.Calendar.SATURDAY || s == java.util.Calendar.SUNDAY) return
+      val f = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+      val hoje = f.format(java.util.Date())
+      if (Guardado.lembrouPontoEm(c0) == hoje) return
+      Guardado.marcarLembrouPonto(c0, hoje)
+      Avisos.lembrarPonto(c0)
+    } catch (e: Exception) { }
+  }
   private fun pedirLocalizacao(modo: String) {
     if (modo == modoAtual) return
     val cl = cliente ?: return
@@ -259,6 +276,12 @@ class ServicoLocalizacao : Service() {
 
     /* o modo do GPS acompanha a situacao: andando pede alta precisao, parado economiza */
     pedirLocalizacao(if (parado) "parado" else "andando")
+
+    /* LEMBRETE DE BATER O PONTO (21/10, regra dele): UMA vez por dia, quando a pessoa
+       COMECA A SE MOVIMENTAR num dia util sem ter batido a entrada. E mudo (canal
+       IMPORTANCE_LOW), some sozinho quando o ponto e batido e, se ela ignorar, nao
+       volta naquele dia — nao pode atrapalhar quem esta trabalhando. */
+    if (!parado) lembrarPontoSePrecisar()
 
     /* RITMO: parado, 1 a cada 5 minutos. Andando, 1 a cada 15 segundos OU a cada 30
        metros andados, o que vier primeiro — e a regra que ele pediu, conferida aqui e
