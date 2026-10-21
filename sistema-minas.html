@@ -1030,6 +1030,14 @@
   .docm{background:#fff;color:#111;width:794px;max-width:none;margin:0 auto 18px;box-sizing:border-box;padding:38px 42px 46px;
     font-family:"Times New Roman",Times,serif;font-size:12.5px;line-height:1.35;
     -webkit-box-decoration-break:clone;box-decoration-break:clone}
+  /* CLIENTE DE TESTE (21/10): a palavra TESTE atravessada na folha, para ninguém mandar um
+     documento de treinamento ao cliente por engano. `position:relative` fica só na folha
+     marcada — mexer nele em TODA .docm deslocaria o layout já conferido do PDF. */
+  .docm.doc-teste,.folha-os.doc-teste,.folha-pg.doc-teste{position:relative;overflow:hidden}
+  .doc-teste::after{content:"TESTE";position:absolute;left:50%;top:50%;
+    transform:translate(-50%,-50%) rotate(-32deg);font-family:Arial,Helvetica,sans-serif;
+    font-size:150px;font-weight:800;letter-spacing:12px;color:rgba(220,38,38,.17);
+    white-space:nowrap;pointer-events:none;z-index:3}
   /* bordas separadas: com border-collapse o Chrome perdia a última linha e a borda da direita na impressão */
   .docm table{width:100%;border-collapse:separate;border-spacing:0;border-top:1px solid #4A6CB0;border-left:1px solid #4A6CB0;
     margin:0 0 14px}
@@ -2009,6 +2017,8 @@ img{max-width:100%}
           <span class="count" id="cliCount"></span>
           <button class="btn ghost" type="button" id="cliRepetidos">Cadastros repetidos</button>
           <button class="btn ghost" type="button" id="cliImportar">Importar clientes</button>
+          <!-- a ÚNICA exceção à regra de não apagar nada: lixo de treinamento (21/10) -->
+          <button class="btn ghost" type="button" id="cliLimparTeste" hidden>Apagar os registros de teste</button>
         </div>
         <!-- três colunas (pedido dele, 13/10): mídia de origem, indicações e o "faltam N dados"
              saíram da lista. As duas últimas custavam caro de desenhar — contavam indicação
@@ -2145,6 +2155,14 @@ img{max-width:100%}
             <div class="fld"><label for="c_origem">Origem do contato <span class="req" id="c_reqOrigem">*</span></label><select id="c_origem"></select>
               <div class="help" id="c_origemAjuda"></div></div>
             <div class="fld" id="c_tipoAtWrap" hidden><label for="c_tipoAt">Tipo do 1º atendimento <span class="req">*</span></label><select id="c_tipoAt"></select></div>
+          </div>
+          <!-- CLIENTE DE TESTE (21/10): só o Administrador marca, e só em cadastro que nunca teve
+               venda aprovada. Pedido, OS, orçamento e atendimento deste cadastro nascem marcados
+               e NÃO mexem em estoque, comissão nem financeiro. -->
+          <div id="c_testeWrap" hidden style="margin-top:12px">
+            <label class="chk"><input type="checkbox" id="c_teste">
+              <span>Cliente de teste (treinamento)</span></label>
+            <div class="ajuda" id="c_testeAjuda"></div>
           </div>
         </div>
 
@@ -2996,6 +3014,8 @@ img{max-width:100%}
         </div>
 
         <div id="os_origem"></div>
+        <!-- faixa fixa do cliente de teste (21/10) -->
+        <div id="os_testeFaixa"></div>
         <!-- faixa fixa do que falta fazer (pedido dele, 07/10) -->
         <div id="os_proximo"></div>
         <!-- os cartões de etapa; montarCartoesOS() move as seções abaixo para dentro deles -->
@@ -3440,6 +3460,8 @@ img{max-width:100%}
           <span class="sp"></span>
           <button class="btn mut" type="button" id="pd_voltar">Voltar</button>
         </div>
+        <!-- faixa fixa do cliente de teste (21/10) -->
+        <div id="pd_testeFaixa"></div>
 
         <!-- remuneração: só aparece enquanto o pedido está sendo EDITADO (regra dele, 24/09).
              Na consulta do pedido em aprovação ou fechado fica escondida — o lugar dela é
@@ -9262,6 +9284,7 @@ function renderClientes(){
   lista=lista.slice(ini,ini+porPag);
   /* enquanto o resto não chega, a conta diz que ela ainda vai crescer — senão a pessoa lê
      "1.000 cadastros" e acha que perdeu a base (foi o susto da v309/v310) */
+  try{renderBotaoLimparTeste();}catch(eT){}   /* v376 */
   $("cliCount").textContent=total+(total===1?" cadastro":" cadastros")+
     (nLead?" · "+nLead+" lead"+(nLead===1?"":"s"):"")+
     ((clientesCarregando&&clientesTotal>base.length)
@@ -9494,6 +9517,7 @@ function abrirCliente(c){
   opcoesTipoAt("c_tipoAt");$("c_tipoAt").value="";
   $("c_tipoAtWrap").hidden=!!(c||voltaAtend);
   CAMPOS_CLI.forEach(function(k){var el=$("c_"+k);if(el)el.value=v[k]||"";});
+  try{renderCaixaTeste(c);}catch(eT){}   /* a caixa do cliente de teste (v376) */
   /* cadastro antigo gravado com "Outro" ou "Prefere não informar": a opção não existe mais
      (20/09), então o valor entra na lista só para este cadastro — assim ninguém apaga o que
      está gravado sem perceber, e quem salvar escolhe Feminino ou Masculino */
@@ -9743,7 +9767,176 @@ function lerForm(){
   var c={tipo:$("c_tipo").value,origem:$("c_origem").value,
     tipoAt:$("c_tipoAt").value,__pedeTipoAt:!$("c_tipoAtWrap").hidden};
   CAMPOS_CLI.forEach(function(k){var el=$("c_"+k);if(el)c[k]=el.value.trim();});
+  /* a caixa do cliente de teste não é campo de texto: é lida à parte (v376) */
+  if($("c_teste"))c.__teste=!!$("c_teste").checked;
   return c;
+}
+/* ----- a caixa "Cliente de teste (treinamento)" (21/10, regra dele) -----
+   Só o Administrador vê e marca. Marcar só é permitido em cadastro que NUNCA teve venda
+   aprovada — senão a venda já lançada, a comissão e o estoque dela deixariam de contar de
+   um dia para o outro. Desmarcar só quando não há registro de treinamento pendurado nele. */
+function vendasAprovadasDoCliente(cid){
+  if(!cid)return 0;
+  return pedidos.filter(function(p){return p.clienteId===cid&&pedidoAprovado(p);}).length;
+}
+function registrosTesteDoCliente(cid){
+  if(!cid)return 0;
+  /* aqui vale só a marca GRAVADA: `ehTeste` olharia o cadastro e nunca deixaria desmarcar */
+  function n(l){return (l||[]).filter(function(r){return r.clienteId===cid&&temMarcaTeste(r);}).length;}
+  return n(pedidos)+n(ordens)+n(orcamentos)+n(atendimentos);
+}
+/* a faixa amarela que fica fixa no pedido e na OS de treinamento (21/10) */
+function faixaTeste(id,reg,oque){
+  var el=$(id);if(!el)return;
+  if(!ehTeste(reg)){el.innerHTML="";return;}
+  el.innerHTML='<div class="note crit" style="border-color:var(--warn);background:rgba(245,158,11,.12)">'+
+    '<b>⚠️ CLIENTE DE TESTE — '+esc(oque||"este registro")+' não conta.</b> '+
+    "Serve para treinamento: não mexe no estoque, não gera comissão, não vai para o financeiro "+
+    "e não entra em meta, faturamento nem funil. O documento sai com a marca <b>TESTE</b> atravessada.</div>";
+}
+function renderCaixaTeste(c){
+  var w=$("c_testeWrap");if(!w)return;
+  var adm=ehAdministrador();
+  /* quem não é Administrador nem vê a caixa; mas o cadastro JÁ marcado aparece com o aviso,
+     para ninguém vender de verdade para o cliente de teste sem perceber */
+  w.hidden=!adm&&!ehClienteTeste(c);
+  var cx=$("c_teste");if(!cx)return;
+  cx.checked=ehClienteTeste(c);
+  ajudaCaixaTeste(c);
+}
+/* só o texto de apoio e a trava — chamada também no onchange, onde o `checked` é o que a
+   pessoa acabou de escolher e NÃO pode ser sobrescrito pelo valor gravado */
+function ajudaCaixaTeste(c){
+  var cx=$("c_teste");if(!cx)return;
+  var adm=ehAdministrador(),era=ehClienteTeste(c);
+  var aprov=c?vendasAprovadasDoCliente(c.id):0;
+  var regs=c?registrosTesteDoCliente(c.id):0;
+  /* travas: sem permissão, ou com venda aprovada (para marcar), ou com registro de
+     treinamento pendurado (para desmarcar) */
+  var motivo="";
+  if(!adm)motivo="Só o Administrador marca ou desmarca esta caixa.";
+  else if(!era&&aprov>0)motivo="Este cadastro já tem "+aprov+" venda(s) aprovada(s) — não dá para transformá-lo em cliente de teste.";
+  else if(era&&regs>0)motivo="Há "+regs+" registro(s) de treinamento neste cadastro. Apague-os antes de desmarcar (Clientes › Apagar os registros de teste).";
+  cx.disabled=!!motivo;
+  if(motivo)cx.checked=era;   /* travado: a caixa volta ao que está gravado */
+  $("c_testeAjuda").innerHTML=cx.checked
+    ? '<b style="color:var(--warn)">Cadastro de treinamento.</b> Pedido, OS e orçamento dele não mexem no estoque, na comissão nem no financeiro, não entram no funil e não contam como atendimento. O documento sai com a marca TESTE.'+(motivo?" "+esc(motivo):"")
+    : (motivo?esc(motivo):"Marque para treinar o sistema com este cadastro: o que for lançado nele não vira venda de verdade.");
+}
+/* ============================================================
+   CLIENTE DE TESTE PRONTO EM CADA LOJA (21/10, regra dele)
+   Para quem está treinando não precisar cadastrar nada, e ninguém marcar um cliente real
+   por engano. Nasce com os obrigatórios de VENDA preenchidos (`CO_CLI`) — senão o pedido
+   não fecharia e o fluxo não daria para treinar —, com telefone que não existe e o endereço
+   da própria loja. Roda UMA vez, no login do Administrador (marcador em config/importacoes).
+   ============================================================ */
+var LOJAS_CLI_TESTE=["mf","wf"];
+/* endereço da loja; o da matriz é o cadastrado, o das outras vem pela cidade da unidade */
+function enderecoLojaTeste(lojaId){
+  if(lojaId==="mf")return {cep:"35660-032",rua:"Rua do Rosário",num:"41",bairro:"Centro",
+    cidade:"Pará de Minas",uf:"MG"};
+  if(lojaId==="wf")return {cep:"35519-000",rua:"Centro",num:"1",bairro:"Centro",
+    cidade:"Nova Serrana",uf:"MG"};
+  return {cep:"35500-000",rua:"Centro",num:"1",bairro:"Centro",cidade:"Divinópolis",uf:"MG"};
+}
+function clienteTesteDaLoja(lojaId){
+  return clientes.filter(function(c){
+    return c.loja===lojaId&&(c.codigo===COD_CLI_TESTE||(ehClienteTeste(c)&&c.nome===NOME_CLI_TESTE));})[0]||null;
+}
+async function garantirClientesTeste(){
+  if(!db||!ehAdministrador())return 0;
+  var doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.clientesTeste)return 0;}
+  var n=0;
+  for(var i=0;i<LOJAS_CLI_TESTE.length;i++){
+    var L=LOJAS_CLI_TESTE[i];
+    if(clienteTesteDaLoja(L))continue;
+    var e=enderecoLojaTeste(L);
+    var c={id:uid(),loja:L,codigo:COD_CLI_TESTE,teste:true,testePor:usuarioAtual,testeEm:hojeISO(),
+      tipo:"Pessoa Física",nome:NOME_CLI_TESTE,
+      doc:"000.000.001-91",     /* CPF de teste: dígito verificador válido e de ninguém */
+      rg:"MG-00.000.001",nasc:"1990-01-01",sexo:"Masculino",
+      tel:(L==="mf"?"(37) 90000-0001":"(37) 90000-0002"),   /* número que não existe */
+      email:"",origem:(ORIGENS[0]&&nomeOrigem(ORIGENS[0]))||"Loja Pará de Minas",
+      origemEm:iso(new Date()),
+      cep:e.cep,rua:e.rua,num:e.num,comp:"Loja",bairro:e.bairro,cidade:e.cidade,uf:e.uf,
+      tipoend:"urbano",ref:"Endereço da própria loja",geo:"",
+      criadoEm:iso(new Date()),criadoPor:usuarioAtual,
+      notas:[{quando:hojeISO()+" "+agoraHM(),por:usuarioAtual,
+        texto:"Cadastro de TREINAMENTO criado pelo sistema. Pedido, OS e orçamento dele não mexem no estoque, na comissão nem no financeiro."}]};
+    clientes.push(c);
+    try{await gravaConf("clientes",c);n++;}
+    catch(eg){clientes=clientes.filter(function(x){return x!==c;});console.warn("cliente de teste",eg);}
+  }
+  antes.clientesTeste={quando:hojeISO(),por:usuarioAtual,criados:n};
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador do cliente de teste",e);}
+  if(n)toast(n+" cadastro(s) de treinamento criado(s): "+NOME_CLI_TESTE+".");
+  return n;
+}
+/* ---------- APAGAR OS REGISTROS DE TESTE (a única exceção à regra de não apagar) ----------
+   Só o Administrador, só o que é de cliente de teste, com a lista na tela antes de confirmar.
+   O CADASTRO do cliente de teste fica — é ele que serve para o treinamento seguinte. */
+function clientesTesteDaLoja(){
+  return clientes.filter(function(c){return c.loja===lojaAtual&&ehClienteTeste(c);});
+}
+function registrosDeTeste(){
+  var ids={};clientesTesteDaLoja().forEach(function(c){ids[c.id]=c.nome||"";});
+  function meus(lista){
+    return (lista||[]).filter(function(r){
+      return r.loja===lojaAtual&&((r.clienteId&&ids[r.clienteId])||temMarcaTeste(r));});
+  }
+  return {clientes:Object.keys(ids).length,
+    pedidos:meus(pedidos),ordens:meus(ordens),orcamentos:meus(orcamentos),
+    atendimentos:meus(atendimentos),rascunhos:meus(rascunhos)};
+}
+function renderBotaoLimparTeste(){
+  var bt=$("cliLimparTeste");if(!bt)return;
+  if(!ehAdministrador()){bt.hidden=true;return;}
+  var r;try{r=registrosDeTeste();}catch(e){bt.hidden=true;return;}
+  var n=r.pedidos.length+r.ordens.length+r.orcamentos.length+r.atendimentos.length+r.rascunhos.length;
+  bt.hidden=!n;
+  bt.textContent="Apagar os registros de teste ("+n+")";
+}
+async function apagarRegistrosTeste(){
+  if(!ehAdministrador()){toast("Só o Administrador faz esta limpeza.");return;}
+  var r=registrosDeTeste();
+  var n=r.pedidos.length+r.ordens.length+r.orcamentos.length+r.atendimentos.length+r.rascunhos.length;
+  if(!n){toast("Não há registro de teste nesta loja.");return;}
+  /* a lista ANTES de confirmar: ele vê exatamente o que vai sair */
+  function lin(t,l,f){
+    if(!l.length)return "";
+    return "<b>"+t+" ("+l.length+")</b><br>"+l.slice(0,12).map(f).join("<br>")+
+      (l.length>12?"<br>… e mais "+(l.length-12):"")+"<br><br>";
+  }
+  var html=lin("Pedidos",r.pedidos,function(p){return "· "+p.numero+" · "+esc(p.cliente||"")+" · "+BRL(+p.total||0)+" · "+esc(p.status||"");})+
+    lin("Ordens de serviço",r.ordens,function(o){return "· OS "+o.numero+" · "+esc(o.cliente||"")+" · "+esc(o.equipamento||"");})+
+    lin("Orçamentos",r.orcamentos,function(o){return "· "+o.numero+" · "+esc(o.cliente||"")+" · "+BRL(+o.total||0);})+
+    lin("Atendimentos e atividades",r.atendimentos,function(a){return "· "+dataBR(a.data||"")+" · "+esc(a.cliente||"")+" · "+esc(a.tipo||a.natureza||"");})+
+    lin("Pedidos incompletos",r.rascunhos,function(x){return "· "+esc(x.cliente||"(sem cliente)")+" · "+BRL(+x.total||0);});
+  $("cliFalta").innerHTML='<div class="note crit"><b>Vai ser APAGADO de verdade ('+n+" registro(s)):</b><br><br>"+html+
+    "<b>O cadastro do cliente de teste FICA</b> ("+r.clientes+" cadastro(s)) — é ele que serve para o treinamento seguinte.</div>";
+  try{$("cliFalta").scrollIntoView({block:"center",behavior:"smooth"});}catch(e){}
+  if(!confirm("Apagar "+n+" registro(s) de teste desta loja?\n\nIsto não tem volta. O cadastro do cliente de teste continua."))return;
+  var fora=0,erro=0;
+  async function tira(nome,lista,arr){
+    for(var i=0;i<lista.length;i++){
+      var r2=lista[i];
+      try{if(db)await col(nome).doc(r2.id).delete();
+        var k=arr.indexOf(r2);if(k>=0)arr.splice(k,1);
+        fora++;
+      }catch(e){erro++;console.warn("apagar "+nome,e);}
+    }
+  }
+  await tira("pedidos",r.pedidos,pedidos);
+  await tira("ordens",r.ordens,ordens);
+  await tira("orcamentos",r.orcamentos,orcamentos);
+  await tira("atendimentos",r.atendimentos,atendimentos);
+  await tira("rascunhos",r.rascunhos,rascunhos);
+  $("cliFalta").innerHTML='<div class="note ok"><b>'+fora+" registro(s) de teste apagado(s).</b>"+
+    (erro?" "+erro+" o banco recusou — tente de novo.":"")+" O cadastro do cliente de teste continua aqui.</div>";
+  toast(fora+" registro(s) de teste apagado(s)."+(erro?" "+erro+" recusado(s) pelo banco.":""));
+  try{render();}catch(e){}
 }
 /* campo obrigatório faltando: diz qual é, marca em vermelho e leva até o primeiro (pedido do Wagner, 12/09) */
 function marcarFaltantes(falta,rolar){
@@ -11718,6 +11911,10 @@ function ligarImportClientes(){
     $("dc_ok").onclick=juntarTodosDupCli;
     $("dc_busca").oninput=renderDupCli;
   }
+  /* apagar os registros de teste (21/10) — a única exceção à regra de não apagar */
+  if($("cliLimparTeste"))$("cliLimparTeste").onclick=apagarRegistrosTeste;
+  /* a caixa do cliente de teste redesenha a ajuda quando é marcada */
+  if($("c_teste"))$("c_teste").onchange=function(){try{ajudaCaixaTeste(editandoCli);}catch(e){}};
   var bt=$("cliImportar");if(!bt)return;
   bt.onclick=abrirImportClientes;
   $("ic_fechar").onclick=function(){$("impcModal").hidden=true;};
@@ -12218,6 +12415,33 @@ window.__pedAbertoMF=function(){return pedAberto;};
 window.__pedidosMF=function(){return pedidos;};
 /* ganchos de teste da importação de manutenções (v256) */
 window.__clientesMF=function(){return clientes;};
+/* ganchos do CLIENTE DE TESTE (v376) */
+window.__abrirClienteMF=function(c){return abrirCliente(c);};
+window.__abrirPedidoMF=function(p){return abrirPedido(p);};
+window.__marcarInstalacaoMF=function(v){return marcarInstalacao(v);};
+window.__assinarMF=function(){assinaturaFeita=true;return assinaturaFeita;};
+window.__dadosDashMF=function(q){return dadosDash(q);};
+window.__reservasDeMF=function(l){return reservasDe(l);};
+window.__usuarioMF=function(){return usuarioAtual;};
+window.__ehClienteTesteMF=function(c){return ehClienteTeste(c);};
+window.__ehTesteMF=function(r){return ehTeste(r);};
+window.__pedidoAprovadoMF=function(p){return pedidoAprovado(p);};
+window.__vendaPendenteMF=function(p){return vendaPendente(p);};
+window.__compComissaoMF=function(p){return compComissao(p);};
+window.__valorDepPedMF=function(p){return valorDepreciadoPedido(p);};
+window.__clienteTesteLojaMF=function(l){return clienteTesteDaLoja(l);};
+window.__endLojaTesteMF=function(l){return enderecoLojaTeste(l);};
+window.__preencherClienteOSMF=function(c){return preencherClienteOS(c);};
+window.__osLocalMF=function(v){osLocalSel=v;return marcarLocalOS();};
+window.__salvarOSMF=function(){return salvarOS();};
+/* a OS nasce de um contato (v276): o teste informa a origem como o atendimento faria */
+window.__osComOrigemMF=function(id){osOrigemAtiv=id||"at-origem-teste";return osOrigemAtiv;};
+window.__abrirOrcMF=function(o){return abrirOrc(o);};
+window.__escolherClienteOrcMF=function(c){
+  orcCli=c;$("or_nome").value=c.nome||"";$("or_tel").value=c.tel||"";
+  $("or_doc").value=c.doc||"";$("or_cidade").value=c.cidade||"";return orcCli;};
+window.__salvarOrcMF=function(){return salvarOrc();};
+window.__realizadoMetasMF=function(q,d,a){return realizadoMetas(q,d,a);};
 window.__temposMF=function(){return TEMPOS_BOOT;};
 /* ganchos da tela de preparo, para os testes */
 window.__etapasCargaMF=function(){return ETAPAS_CARGA;};
@@ -14917,7 +15141,10 @@ async function salvarPedido(){
     frete:(r.comp?r.comp.frete:0),descontoGeral:(r.comp?r.comp.desc:0),
     descontoEspecial:(r.comp?r.comp.descFinal:0),   /* o desconto como o cliente vê (v234) */
     obs:$("v_obs").value.trim(),usoImagem:$("v_imagem").value,anexos:anexados,arquivos:arquivos,assinado:true,assinaturaImg:assinaturaParaDoc(),
-    abaixoTabela:!!r.abaixo,status:etapaVenda({abaixoTabela:!!r.abaixo,instalacao:$("v_idata").value}),
+    /* cliente de teste: a marca é COPIADA para dentro do pedido agora, e é ela que vale
+       daqui para a frente (v376) */
+    teste:marcaTeste(cli)||undefined,
+    abaixoTabela:!!r.abaixo,status:etapaVenda({teste:marcaTeste(cli),abaixoTabela:!!r.abaixo,instalacao:$("v_idata").value}),
     instalacao:$("v_idata").value?($("v_idata").value+" "+($("v_ihora").value||"")):"",
     troca:trocaResp||null,solicitacaoDesconto:solDesc,
     /* instalação de PRESTADOR: o campo "Quem vai instalar" guarda "prest:<id>" (05/10).
@@ -16145,7 +16372,8 @@ function renderPedidos(){
     tr.innerHTML='<td><div class="t-main">'+p.numero+'</div><div class="t-sub">'+esc(dataBR(p.data))+"</div></td>"+
       "<td>"+esc(p.cliente)+"</td><td>"+((p.formas||[]).filter(function(f){return +f.valor>0;}).map(function(f){return f.parc+"× "+f.tipo.split(" ")[0];}).join(" + ")||"—")+"</td>"+
       '<td class="num">'+BRL(p.total)+'</td><td class="num">'+BRL(p.depreciado)+'</td><td class="num"><b>'+BRL(p.base)+"</b></td>"+
-      '<td><span class="pill '+cls+'">'+esc(p.status)+"</span>"+
+      '<td><span class="pill '+(ehTeste(p)?"p-warn":cls)+'">'+esc(p.status)+"</span>"+
+      (ehTeste(p)?' <span class="pill p-warn">TESTE</span>':"")+
       (pend?' <span class="pill p-warn">autorização pendente</span>':"")+
       htmlLixeira("pedido",p.id)+"</td>";
     tr.onclick=function(){abrirPedido(p);};
@@ -17110,8 +17338,12 @@ function localDaVenda(p){
   var n=responsavelVenda(p);return n?locColab(n):LOC_EMPRESA;
 }
 /* ainda não aprovada (venda antiga encerrada antes da aprovação existir conta como aprovada) */
-function vendaPendente(p){return p.status!=="Cancelada"&&!p.aprovado&&!(p.aprovado===undefined&&p.encerrada);}
+/* venda de treinamento NÃO é venda pendente: não reserva estoque e não entra na fila do
+   financeiro (v376) */
+function vendaPendente(p){return !ehTeste(p)&&p.status!=="Cancelada"&&!p.aprovado&&!(p.aprovado===undefined&&p.encerrada);}
 function etapaVenda(p){
+  /* cliente de teste: a venda para aqui, com o status dizendo o que ela é (v376) */
+  if(ehTeste(p))return STATUS_TESTE;
   if(p.abaixoTabela&&!p.descontoAutorizado)return p.descontoRecusado?"Venda com desconto recusado":"Aguardando aprovação de desconto";
   if(p.instalacao&&!p.instaladoEm)return "Aguardando instalação";
   return "Aguardando aprovação financeira";
@@ -21390,6 +21622,7 @@ function relOrigens(P){
   function mesDe(d){return d?String(d).slice(5,7)+"/"+String(d).slice(0,4):"—";}
   var cli=clientes.filter(function(c){
     if(c.loja&&c.loja!==lojaAtual)return false;
+    if(ehClienteTeste(c))return false;              /* cliente de treinamento fora (v376) */
     if(origem&&origemDe(c)!==origem)return false;
     if(!multiCasa("rg_cidade",c.cidade))return false;
     if(!multiCasa("rg_uf",c.uf))return false;
@@ -21402,7 +21635,7 @@ function relOrigens(P){
   });
   var porId={};cli.forEach(function(c){porId[c.id]=c;});
   var peds=pedidos.filter(function(p){
-    if(p.loja!==lojaAtual||!porId[p.clienteId])return false;
+    if(p.loja!==lojaAtual||!porId[p.clienteId]||ehTeste(p))return false;   /* v376 */
     if(p.status==="Cancelada"||p.cancelada)return false;
     if(!p.data||p.data<P.de||p.data>P.ate)return false;
     if(vend&&p.vendedor!==vend)return false;
@@ -21502,7 +21735,7 @@ function relVendas(P){
   var origem=$("rv_origem").value,vmin=valorNum("rv_vmin"),vmax=valorNum("rv_vmax"),agrupa=$("rv_agrupa").value,modo=$("rv_modo").value;
   function prodDe(i){return prodPorId(i.pid)||{};}
   var ls=pedidos.filter(function(p){
-    if(p.loja!==lojaAtual)return false;
+    if(p.loja!==lojaAtual||ehTeste(p))return false;   /* treinamento fora do relatório (v376) */
     var d=base==="aprovacao"?String(p.aprovadoEm||"").slice(0,10):p.data;
     if(!d||d<P.de||d>P.ate)return false;
     var canc=p.status==="Cancelada"||!!p.cancelada,apr=pedidoAprovado(p)&&!canc;
@@ -21947,7 +22180,7 @@ function renderFaturamento(){
   var j=janelaFb();
   $("fbRel").textContent=j.rot;
   if(!$("fbData").value)$("fbData").value=fbRef;
-  var vs=pedidos.filter(function(p){return p.loja===lojaAtual&&p.data>=j.de&&p.data<=j.ate&&p.status!=="Cancelada";});
+  var vs=pedidos.filter(function(p){return !ehTeste(p)&&p.loja===lojaAtual&&p.data>=j.de&&p.data<=j.ate&&p.status!=="Cancelada";});
   var bruto=vs.reduce(function(a,p){return a+(+p.total||0);},0);
   var dep=vs.reduce(function(a,p){return a+(+p.depreciado||0);},0);
   var itensN=vs.reduce(function(a,p){return a+(p.itens||[]).reduce(function(s,i){return s+(i.qtd||1);},0);},0);
@@ -24072,6 +24305,7 @@ function abaRemuneracao(k){
 }
 /* ================= REMUNERAÇÃO DO COLABORADOR (extrato do mês, regras do Wagner, 12/09) ================= */
 function valorDepreciadoPedido(p){
+  if(ehTeste(p))return 0;       /* treinamento não soma em meta nem em faturamento (v376) */
   var d=+(p.depreciado!=null?p.depreciado:p.base)||0,a=p.descontoAutorizado;
   /* venda abaixo da tabela: o depreciado dos itens abaixo entra pela tabela que o Administrador escolheu
      ao autorizar (100%, 70%, campanha 50% ou sem comissão) — regra do Wagner, 16/09 */
@@ -24974,14 +25208,15 @@ function diasUteis(de,ate){
 }
 function realizadoMetas(quem,de,ate){
   function meu(n){return !quem||n===quem;}
+  /* treinamento fica fora das metas (v376) */
   var ats=atendimentos.filter(function(a){
-    return a.loja===lojaAtual&&a.natureza==="atendimento"&&a.data>=de&&a.data<=ate&&meu(a.colaborador);});
+    return !ehTeste(a)&&a.loja===lojaAtual&&a.natureza==="atendimento"&&a.data>=de&&a.data<=ate&&meu(a.colaborador);});
   var criadas=atendimentos.filter(function(a){
-    return a.loja===lojaAtual&&meu(a.colaborador)&&
+    return !ehTeste(a)&&a.loja===lojaAtual&&meu(a.colaborador)&&
       (a.criadoEm||a.data)>=de&&(a.criadoEm||a.data)<=ate&&
       (a.natureza==="atividade"||a.eraAtividade);});
   var vds=pedidos.filter(function(p){
-    return p.loja===lojaAtual&&p.data>=de&&p.data<=ate&&p.status!=="Cancelada"&&
+    return !ehTeste(p)&&p.loja===lojaAtual&&p.data>=de&&p.data<=ate&&p.status!=="Cancelada"&&
       (!quem||p.vendedor===quem||p.prospector===quem||p.instalador===quem);});
   return {
     aniversario:ats.filter(function(a){return temTipo(a,metaTipos.aniversario||[]);}).length,
@@ -25392,14 +25627,15 @@ function noPeriodo(data,j){return data&&data>=j.de&&data<=j.ate;}
 function dadosDash(quem){
   var j=janela();
   function meu(n){return !quem||n===quem;}
+  /* treinamento fica fora da produção do Dashboard (v376) */
   var ats=atendimentos.filter(function(a){
-    return a.loja===lojaAtual&&a.natureza==="atendimento"&&noPeriodo(a.data,j)&&meu(a.colaborador);});
+    return !ehTeste(a)&&a.loja===lojaAtual&&a.natureza==="atendimento"&&noPeriodo(a.data,j)&&meu(a.colaborador);});
   var criadas=atendimentos.filter(function(a){
-    return a.loja===lojaAtual&&meu(a.colaborador)&&noPeriodo(a.criadoEm||a.data,j)&&
+    return !ehTeste(a)&&a.loja===lojaAtual&&meu(a.colaborador)&&noPeriodo(a.criadoEm||a.data,j)&&
       (a.natureza==="atividade"||a.eraAtividade);});
   var feitas=ats.filter(function(a){return a.eraAtividade;});
   var vds=pedidos.filter(function(p){
-    return p.loja===lojaAtual&&noPeriodo(p.data,j)&&p.status!=="Cancelada"&&
+    return !ehTeste(p)&&p.loja===lojaAtual&&noPeriodo(p.data,j)&&p.status!=="Cancelada"&&
       (!quem||p.vendedor===quem||p.prospector===quem||p.instalador===quem);});
   function porCanal(lista){
     var m={mensagem:0,ligacao:0,abordagem:0,outro:0};
@@ -27426,6 +27662,7 @@ function compAtual(){return iso(new Date()).slice(0,7);}
    seja reaberta depois); sem aprovação não entra. Venda antiga encerrada antes da
    aprovação existir fica no mês da venda. */
 function compComissao(p){
+  if(ehTeste(p))return "";      /* treinamento não entra em comissão nem na folha (v376) */
   if(p.aprovado&&p.aprovadoEm)return comp(p.aprovadoEm);
   if(p.aprovado===undefined&&p.encerrada)return comp(p.data);
   return "";
@@ -27616,7 +27853,39 @@ function vendaMaisRecenteDe(e){
    venda sem instalação futura é instalada na hora, então vale a data da venda */
 /* regra do Wagner (14/09): a venda só vale para a manutenção periódica depois da APROVAÇÃO FINANCEIRA
    (aparelho novo, prazo, plano e baixa); venda antiga encerrada, de antes da aprovação existir, vale */
+/* ============================================================
+   CLIENTE DE TESTE (21/10, pedido dele) — treinamento sem mexer no que é de verdade.
+   A marca mora no CLIENTE (`c.teste`) e é COPIADA para dentro do pedido, da OS, do
+   orçamento e do atendimento no instante em que eles nascem. Daí para a frente vale a
+   marca GRAVADA no registro: desmarcar o cliente depois não transforma um pedido de
+   treinamento em venda de verdade, nem o contrário.
+   O que segura tudo é esta dupla logo abaixo: `pedidoAprovado` e `vendaPendente` dizem
+   NÃO para o teste, e com isso caem de uma vez a reserva de estoque, a fila do
+   financeiro, a baixa, o título, a comissão e o aparelho na Manutenção Periódica —
+   porque as quatro últimas nascem DENTRO da aprovação financeira.
+   ============================================================ */
+var COD_CLI_TESTE="TESTE-TREINAMENTO";
+var NOME_CLI_TESTE="CLIENTE DE TESTE (TREINAMENTO)";
+var STATUS_TESTE="Teste — não contabilizada";
+function ehClienteTeste(c){return !!(c&&c.teste);}
+/* a marca GRAVADA dentro do registro (é ela que o pedido e a OS copiam ao nascer) */
+function temMarcaTeste(r){return !!(r&&r.teste);}
+/* registro de treinamento: a marca gravada nele OU o cadastro do cliente estar marcado.
+   A segunda metade existe para cobrir de uma vez os sete caminhos que criam ATIVIDADE —
+   assim nenhum caminho novo precisa se lembrar de copiar a marca. O efeito prático: desmarcar
+   o cadastro devolve as atividades dele à contagem, mas NÃO transforma o pedido nem a OS de
+   treinamento em venda de verdade, porque esses dois carregam a marca por dentro. */
+function ehTeste(r){
+  if(!r)return false;
+  if(r.teste)return true;
+  return !!(r.clienteId&&ehClienteTeste(cliPorId(r.clienteId)));
+}
+/* tira os de treinamento de qualquer lista que vá somar dinheiro ou contar produção */
+function semTeste(lista){return (lista||[]).filter(function(r){return !ehTeste(r);});}
+/* a marca para copiar quando um registro nasce para um cliente */
+function marcaTeste(cli){return ehClienteTeste(cli)?true:false;}
 function pedidoAprovado(p){
+  if(ehTeste(p))return false;   /* venda de treinamento nunca vale */
   return !!(p&&p.status!=="Cancelada"&&(p.aprovado||(p.aprovado===undefined&&p.encerrada)));
 }
 function dataInstalacaoPedido(p){
@@ -27801,7 +28070,7 @@ function statusManut(e){
     sub:"para "+dataCurta(pend.data)+(pend.inicio?" às "+pend.inicio:"")+(pend.colaborador?" · "+pend.colaborador:"")};
   /* pedido ligado ao aparelho ainda sem aprovação (a instalação é a atividade futura) também é visita agendada */
   var pedPend=pedidos.filter(function(p){
-    return p.status!=="Cancelada"&&!pedidoAprovado(p)&&p.clienteId===e.clienteId&&
+    return !ehTeste(p)&&p.status!=="Cancelada"&&!pedidoAprovado(p)&&p.clienteId===e.clienteId&&
       (p.itens||[]).some(function(it){return it.equipId===e.id;});})[0];
   if(pedPend){
     var ins=(pedPend.instalacao&&!pedPend.instaladoEm)?String(pedPend.instalacao).split(" "):null;
@@ -29853,6 +30122,7 @@ async function osaAbrirOS(){
     var o={id:uid(),loja:lojaAtual,numero:num,
       clienteId:c.id,cliente:c.nome||"",tel:c.tel||"",doc:c.doc||"",cidade:c.cidade||"",
       equipId:equipId,equipamento:eqNome,serie:serie,marca:OSA.marca||"",modelo:OSA.modelo||"",
+      teste:marcaTeste(c)||undefined,   /* OS de treinamento (v376) */
       tipoOS:OSA.tipoOS,defeito:OSA.alegacao,acessorios:OSA.acessorios,avarias:OSA.avarias,
       fotosAvarias:(OSA.fotos||[]).slice(),
       local:OSA.local==="externo"?"externo":"loja",localEscolha:OSA.local,
@@ -29930,7 +30200,8 @@ async function registrarAtendimentoAberturaOS(o,c){
       obs:"Abertura da OS "+o.numero+" · "+(o.equipamento||"")+(o.serie?" · série "+o.serie:"")+
         "\nAlegação: "+(o.defeito||""),
       osId:o.id,equipId:o.equipId||"",situacao:"concluida",status:"fechado",
-      motivos:[],criadoEm:hojeISO(),criadoPor:usuarioAtual,aberturaOS:true};
+      motivos:[],criadoEm:hojeISO(),criadoPor:usuarioAtual,aberturaOS:true,
+      teste:marcaTeste(c)||undefined};   /* v376 */
     atendimentos.push(a);
     await grava("atendimentos",a);
     o.atendimentoAberturaId=a.id;
@@ -30431,6 +30702,8 @@ async function salvarOS(){
   var novo=!editandoOS;
   var statusAntes=o.status;
   o.cliente=nome;o.clienteId=osCli?osCli.id:(o.clienteId||"");
+  /* OS nova para cliente de teste nasce marcada; OS que já existe não muda de natureza (v376) */
+  if(novo&&marcaTeste(osCli||cliPorId(o.clienteId)))o.teste=true;
   o.tel=tel;o.doc=$("os_doc").value.trim();o.email=$("os_email").value.trim();
   o.endereco=$("os_end").value.trim();o.cidade=$("os_cidade").value.trim();
   o.produtoId=$("os_prod").value;
@@ -30952,7 +31225,8 @@ async function criarOSDaAcao(a,c){
     endereco:[c.rua,c.num,c.comp,c.bairro].filter(Boolean).join(", "),cidade:[c.cidade||a.cidade,c.uf].filter(Boolean).join("/"),
     produtoId:"",equipamento:"",serie:"",marca:"",compra:"",tipo:"orcamento",abertura:hojeISO(),hora:agoraHM(),local:"",fotosAvarias:[],
     prazo:"",tecnico:"",defeito:a.obs||"",acessorios:"",avarias:"",laudo:"",reparo:"",pecasNec:"",infoTec:"",
-    pecas:[],mao:0,taxa:0,desconto:0,status:"aberta",entrega:"",retiradoPor:"",pagto:"",total:0,origemAtiv:a.id};
+    pecas:[],mao:0,taxa:0,desconto:0,status:"aberta",entrega:"",retiradoPor:"",pagto:"",total:0,origemAtiv:a.id,
+    teste:marcaTeste(c)||undefined};   /* OS de treinamento (v376) */
   o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"OS aberta às "+o.hora+" a partir "+(a.natureza==="atividade"?"da atividade":"do atendimento")+
     " de "+dataCurta(a.data||"")+" · atendente "+usuarioAtual});
   ordens.push(o);await grava("ordens",o);
@@ -31512,6 +31786,7 @@ function ligarCartoesOS(){
 }
 function ajustarEtapasOS(){
   var o=editandoOS,tec=podeTecnicoOS(o);
+  try{faixaTeste("os_testeFaixa",o,"esta OS");}catch(eT){}   /* v376 */
   var lojaE=!!(o&&(o.local==="loja"||o.local==="externo")),extE=!!(o&&o.local==="externo");
   var diag=!!(o&&o.diagnosticoEm),orc=!!(o&&(lojaE?(extE?o.pedidoId:(o.atividadeContatoId||o.pedidoId)):o.orcamentoEm)),fim=!!(o&&["concluida","entregue"].indexOf(o.status)>=0);
   /* A barra de passos (Abertura / Itens-Pagamento / Concluída) SAIU (07/10): quem conta a história
@@ -32518,6 +32793,8 @@ async function salvarOrc(){
     numero:(await numeroNovo("orcamento",orcamentos,1001)),
     data:iso(new Date())};
   o.cliente=nome;o.clienteId=orcCli?orcCli.id:"";
+  /* orçamento novo de cliente de teste nasce marcado (v376) */
+  if(!editandoOrc&&marcaTeste(orcCli))o.teste=true;
   o.tel=$("or_tel").value.trim();o.email=$("or_email").value.trim();o.cidade=$("or_cidade").value.trim();o.doc=$("or_doc").value.trim();
   o.vendedor=$("or_vend").value||usuarioAtual;o.validade=$("or_validade").value;o.obs=$("or_obs").value.trim();
   o.forma=$("or_forma").value;o.parc=+$("or_parc").value||1;
@@ -32605,6 +32882,8 @@ function empresaNoPadrao(){
 }
 function verProposta(o){
   esquecerPdf("orc:"+o.id);
+  /* orçamento de treinamento sai com a marca TESTE atravessada (v376) */
+  try{$("op_folha").classList.toggle("doc-teste",ehTeste(o));}catch(eT){}
   var zo=$("opZap");if(zo){zo.disabled=false;if(zo.__rotulo)zo.textContent=zo.__rotulo;}
   var parcela=o.total/(o.parc||1);
   $("op_folha").innerHTML=
@@ -33195,6 +33474,7 @@ function abrirPedido(p){
 }
 function renderPedDet(){
   var p=pedAberto;if(!p)return;
+  try{faixaTeste("pd_testeFaixa",p,"esta venda");}catch(eT){}   /* v376 */
   var ed=editavel(p),r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0);
   /* regra dele (22/09): a ficha do pedido salvo é SÓ LEITURA. Quem quer mudar toca em
      "Editar o pedido" e o pedido volta às sete etapas, com tudo preenchido. O ajuste solto
@@ -34444,8 +34724,15 @@ function htmlDocVenda(p){
      é o que faz os três caberem na página sem cortar nada (medido folha a folha no teste). */
   var querImagem=p.usoImagem==="sim";
   var imagem=querImagem?'<div class="dupla"></div>'+docImagem(p,c):"";
-  return docPedido(p,c)+docTermos(p,imagem)+
-    planosDaVenda(p).map(function(x){return '<div class="docm">'+docContratoPlano(p,c,x.itens,x.plano)+"</div>";}).join("");
+  return htmlComMarcaTeste(docPedido(p,c)+docTermos(p,imagem)+
+    planosDaVenda(p).map(function(x){return '<div class="docm">'+docContratoPlano(p,c,x.itens,x.plano)+"</div>";}).join(""),p);
+}
+/* CLIENTE DE TESTE (21/10): a palavra TESTE atravessada em TODA folha do documento.
+   A marca é posta aqui, na montagem do HTML, e não em cada caminho que abre ou gera o PDF —
+   assim a tela, o PDF, a impressão e o link de assinatura herdam de uma vez. */
+function htmlComMarcaTeste(html,reg){
+  if(!ehTeste(reg))return html;
+  return String(html).replace(/class="(docm|folha-os|folha-pg|folha)\b/g,'class="$1 doc-teste');
 }
 /* cada tabela dentro de uma moldura: no PDF do Chrome a borda de baixo da tabela sumia,
    a borda de uma div (como o cabeçalho) sai sempre */
@@ -34498,7 +34785,7 @@ function htmlFichaOS(o,p){
   var garantia=((c&&c.id)?planosVigentesCliente(c.id):[]).filter(function(x){
       return o.serie?String(x.e.serie||"")===String(o.serie):true;})
     .map(function(x){return esc(x.e.plano)+" · vigente até "+esc(dataBR(x.info.fim));})[0]||"";
-  return '<div class="folha-pg os-pg">'+
+  return '<div class="folha-pg os-pg'+(ehTeste(o)||ehTeste(p)?" doc-teste":"")+'">'+   /* v376 */
     '<div class="os-cab">'+cabecalhoEmpresaDoc()+
       '<div class="os-num"><div class="t">ORDEM DE SERVIÇO</div><div class="g">'+
         '<div><span class="os-rot">Nº DA OS</span><div class="nm">'+esc(o.numero)+"</div></div>"+
@@ -35123,6 +35410,7 @@ function negocioNovo(c,etapa,via,desde){
 async function atualizarFunilCliente(cid,motivo){
   if(!cid)return null;
   var c=cliPorId(cid);if(!c)return null;
+  if(ehClienteTeste(c))return null;   /* cliente de treinamento não entra no funil (v376) */
   var n=negocioAberto(cid),mudou=false;
   if(!n){
     var ult=ultimoNegocio(cid);
@@ -37503,6 +37791,8 @@ async function salvarAtend(){
   /* atendimento aberto pela aba Aniversariantes: guarda de qual aniversário é o contato */
   if(atendAniv&&!veioDeAtividade)a.aniversario=atendAniv;
   if(!a.criadoEm)a.criadoEm=iso(new Date());
+  /* cliente de teste: o atendimento nasce marcado e não conta como produção (v376) */
+  if(!editandoAt&&marcaTeste(clienteVinc))a.teste=true;
   var atNovo=!editandoAt;
   if(atNovo)atendimentos.push(a);
   /* banco recusando, o atendimento NÃO fica como salvo e a tela não é limpa (09/10) */
@@ -40033,7 +40323,7 @@ function pendenciasMF(){
   try{
     if(pode("aprovarDesconto")){
       pedidos.filter(function(p){
-        return p.loja===lojaAtual&&!p.encerrada&&p.status!=="Cancelada"&&p.abaixoTabela&&
+        return !ehTeste(p)&&p.loja===lojaAtual&&!p.encerrada&&p.status!=="Cancelada"&&p.abaixoTabela&&
           !p.descontoAutorizado&&!p.descontoRecusado;
       }).forEach(function(p){
         põe({chave:"desc:"+p.id,icone:"🏷️",titulo:"Venda abaixo da tabela para autorizar",
@@ -40046,7 +40336,7 @@ function pendenciasMF(){
   /* 4. resposta do desconto para quem vendeu */
   try{
     pedidos.filter(function(p){
-      if(p.loja!==lojaAtual||p.vendedor!==usuarioAtual)return false;
+      if(p.loja!==lojaAtual||p.vendedor!==usuarioAtual||ehTeste(p))return false;   /* v376 */
       var x=p.descontoRecusado||(p.descontoAutorizado&&p.descontoAutorizado.fator!=null?p.descontoAutorizado:null);
       return x&&!x.vistoVendedor&&x.por!==usuarioAtual;
     }).forEach(function(p){
@@ -42167,6 +42457,25 @@ function ligar(){
       });
     }
     c.uf=$("c_uf").value.trim().toUpperCase();c.temconj=$("c_temconj").value;
+    /* cliente de teste: só o Administrador muda, e a trava é conferida DE NOVO aqui — esconder
+       ou desabilitar a caixa não protege nada (regra da v321) */
+    if(ehAdministrador()&&dados.__teste!==undefined){
+      var queria=!!dados.__teste,era=ehClienteTeste(c);
+      if(queria!==era){
+        if(queria&&vendasAprovadasDoCliente(c.id)>0){
+          avisarRecusaBanco("c_alerta",{message:"Este cadastro já tem venda aprovada."},
+            "Cliente com venda aprovada não vira cliente de teste. O cadastro continua como estava.");
+          return;
+        }
+        if(!queria&&registrosTesteDoCliente(c.id)>0){
+          avisarRecusaBanco("c_alerta",{message:"Há registros de treinamento neste cadastro."},
+            "Apague os registros de teste antes de desmarcar (Clientes › Apagar os registros de teste).");
+          return;
+        }
+        if(queria){c.teste=true;c.testePor=usuarioAtual;c.testeEm=hojeISO();}
+        else{delete c.teste;c.testePor="";c.testeEm="";}
+      }
+    }
     var cliNovo=!editandoCli;
     if(cliNovo)clientes.push(c);
     /* banco recusando, o cadastro NÃO se perde: a ficha continua aberta, com tudo preenchido,
@@ -43365,6 +43674,8 @@ async function continuarBoot(){
   await passoBoot("versões de troca",limparVersoesTroca);
   await passoBoot("variações do produto",limparVariacoesProduto);
   await passoBoot("manutenção por marca",ajustarManutencaoMarcas);
+  /* um cadastro de treinamento pronto em cada loja (pedido dele, 21/10) */
+  await passoBoot("cliente de teste",garantirClientesTeste);
   /* a aba Ordens de Serviço liberada para Vendedor, Prospector e Estoquista (decisão dele, 05/10):
      as funções já estão gravadas no banco, então o código novo só vale depois de regravar uma vez */
   await passoBoot("liberar a tela de OS",liberarTelaOS);
