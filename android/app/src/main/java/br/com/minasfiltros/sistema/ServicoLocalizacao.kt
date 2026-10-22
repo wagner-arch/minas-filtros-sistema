@@ -58,6 +58,8 @@ class ServicoLocalizacao : Service() {
   private var loteDesde = 0L
   /* a hora marcada para o lote partir, mesmo que nao chegue ponto novo (22/10) */
   private var tarefaLote: Runnable? = null
+  /* a tentativa extra de mandar a fila depois de um envio que falhou (22/10) */
+  private var tarefaFila: Runnable? = null
   /* LINHA DE TRABALHO PROPRIA (19/10) — ver a explicacao em `comecar()`: gravar o ponto e
      uma chamada de rede, e o Android PROIBE rede na linha principal. */
   private var linha: android.os.HandlerThread? = null
@@ -391,6 +393,33 @@ class ServicoLocalizacao : Service() {
     enviarLote(false, System.currentTimeMillis())
   }
 
+  /* O ENVIO QUE FALHOU TENTA DE NOVO EM 1 MINUTO (22/10). Medido no banco dele entre
+     20 e 22/10: 58 dos 489 pontos do Guilherme chegaram atrasados, um deles 20 MINUTOS
+     depois de ter sido medido — ele viaja para Pitangui e o sinal cai na estrada. O
+     motivo e que a fila so era mandada junto do PROXIMO envio que der certo, e parado
+     o proximo ponto leva 5 minutos. Uma tentativa a mais, um minuto depois, fecha quase
+     todos esses casos; falhando tambem ela, o proximo ponto ou o vigia resolvem — nao
+     ha laco de tentativas aqui de proposito. */
+  private fun tentarFilaDepois() {
+    val lin = linha ?: return
+    try {
+      val h = android.os.Handler(lin.looper)
+      tarefaFila?.let { h.removeCallbacks(it) }
+      val r = Runnable {
+        try {
+          if (Fila.quantos(applicationContext) > 0) {
+            Fila.enviarTudo(applicationContext)
+            val faltam = Fila.quantos(applicationContext)
+            if (faltam == 0) atualizarAviso("Último registro às " + hora(System.currentTimeMillis()) +
+              " · " + Guardado.enviadosHoje(applicationContext) + " hoje")
+          }
+        } catch (e: Exception) { }
+      }
+      tarefaFila = r
+      h.postDelayed(r, 60_000L)
+    } catch (e: Exception) { }
+  }
+
   /* manda o lote ao banco. Nao conseguiu, guarda no celular e manda depois. */
   @Synchronized private fun enviarLote(parado: Boolean, agora: Long) {
     if (lote.isEmpty()) return
@@ -410,6 +439,7 @@ class ServicoLocalizacao : Service() {
       val motivo = Banco.ultimoErro
       atualizarAviso(Fila.quantos(ctx).toString() + " ponto(s) esperando" +
         (if (motivo.isEmpty()) " — sem internet." else " — " + motivo))
+      tentarFilaDepois()
     } else {
       for (i in 1 until quantos) Guardado.contarEnvio(ctx, agora)
       Fila.enviarTudo(ctx)
