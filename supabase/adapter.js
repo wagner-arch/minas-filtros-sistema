@@ -120,6 +120,9 @@
     remunprest: "loja",
     recibosprest: "loja",
     custodia: "loja",
+    /* FERRAMENTAS (22/10): a ferramenta é da EMPRESA, e o cadastro do colaborador também não
+       é de loja — então ela é global, como produtos e prestadores. */
+    ferramentas: null,
     config: null,
     rh: null,
     facial: null,
