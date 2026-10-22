@@ -84,4 +84,12 @@ object Guardado {
   fun marcarLembrouPonto(ctx: Context, dia: String) {
     p(ctx).edit().putString("lembrouPonto", dia).apply()
   }
+
+  /* ISENCAO DE BATERIA (22/10): a tela principal pede uma vez por dia, no maximo,
+     enquanto o Android ainda puder encerrar o aplicativo. Guardar o dia evita
+     perguntar a cada abertura — pergunta repetida vira pergunta ignorada. */
+  fun pediuBateriaEm(ctx: Context): String = p(ctx).getString("pediuBateria", "") ?: ""
+  fun marcarPediuBateria(ctx: Context, dia: String) {
+    p(ctx).edit().putString("pediuBateria", dia).apply()
+  }
 }

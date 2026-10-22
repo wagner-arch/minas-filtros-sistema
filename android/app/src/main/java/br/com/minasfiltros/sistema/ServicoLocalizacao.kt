@@ -56,6 +56,8 @@ class ServicoLocalizacao : Service() {
   /* o lote esperando para ir ao banco */
   private val lote = ArrayList<JSONObject>()
   private var loteDesde = 0L
+  /* a hora marcada para o lote partir, mesmo que nao chegue ponto novo (22/10) */
+  private var tarefaLote: Runnable? = null
   /* LINHA DE TRABALHO PROPRIA (19/10) — ver a explicacao em `comecar()`: gravar o ponto e
      uma chamada de rede, e o Android PROIBE rede na linha principal. */
   private var linha: android.os.HandlerThread? = null
@@ -68,15 +70,47 @@ class ServicoLocalizacao : Service() {
 
   override fun onCreate() {
     super.onCreate()
-    startForeground(AVISO_ID, aviso("Registrando a localização para a Minas Filtros."))
+    /* O AVISO FIXO PODE SER RECUSADO (22/10): do Android 12 em diante o sistema nao
+       deixa abrir servico em primeiro plano vindo do fundo sem uma isencao, e no
+       Android 14 ele lanca excecao em vez de so ignorar. Sem este try o aplicativo
+       quebraria a cada tentativa do vigia. Recusado, o servico desiste por ora,
+       manda o que esta guardado e deixa o proximo alarme tentar de novo. */
+    try {
+      startForeground(AVISO_ID, aviso("Registrando a localização para a Minas Filtros."))
+    } catch (e: Throwable) {
+      Vigia.agendar(applicationContext)
+      Vigia.esvaziarFila(applicationContext)
+      stopSelf(); return
+    }
+    /* quem nao tem login, funcao de Vendedor e termo assinado nao registra nada */
+    if (!Vigia.deveRastrear(applicationContext)) { stopSelf(); return }
     ligado = true
+    /* O VIGIA E MARCADO AQUI, e nao so no boot: assim o despertador existe desde o
+       primeiro minuto em que o rastreio esta de pe, e nao depende de o celular ser
+       reiniciado para nascer. */
+    Vigia.agendar(applicationContext)
     comecar()
   }
 
   override fun onStartCommand(i: Intent?, f: Int, id: Int): Int = START_STICKY
 
+  /* O APLICATIVO FOI ARRASTADO PARA FORA DA TELA DE RECENTES (22/10): em varios
+     aparelhos — Xiaomi em primeiro lugar — isso mata o servico E cancela o religar
+     automatico do START_STICKY. O vigia fica marcado, e em 15 minutos o rastreio
+     volta sozinho. */
+  override fun onTaskRemoved(raiz: Intent?) {
+    try { if (Vigia.deveRastrear(applicationContext)) Vigia.agendar(applicationContext) }
+    catch (e: Exception) { }
+    super.onTaskRemoved(raiz)
+  }
+
   override fun onDestroy() {
     ligado = false
+    /* MORREU, MAS VOLTA (22/10): seja o Android encerrando o aplicativo, seja a
+       bateria acabando, o despertador fica marcado e religa o rastreio. So nao
+       religa quem nao deve ser rastreado — ai o proprio vigia se cancela. */
+    try { if (Vigia.deveRastrear(applicationContext)) Vigia.agendar(applicationContext) }
+    catch (e: Exception) { }
     /* O LOTE NAO SE PERDE (20/10): o que estava esperando para ser enviado vai para a fila
        do celular, que e gravada em disco. Sem isto, o celular que mata o servico levaria
        junto ate um minuto de trajeto. */
@@ -129,7 +163,15 @@ class ServicoLocalizacao : Service() {
        para a fila do celular e NUNCA saia — nenhum pedido chegava ao banco, nem com erro,
        e na tela parecia falta de internet. Agora a resposta chega numa linha de trabalho
        propria, onde a rede e permitida. */
-    linha = android.os.HandlerThread("mf-localizacao").also { it.start() }
+    val lin = android.os.HandlerThread("mf-localizacao").also { it.start() }
+    linha = lin
+    /* A FILA SAI NO ARRANQUE (22/10): o ponto guardado num dia em que o servico morreu
+       ficava preso ate um lote FUTURO dar certo — e, se o servico nao voltava, para
+       sempre. Agora ele sai no primeiro minuto em que o rastreio volta, com o horario
+       em que foi MEDIDO, que vai gravado dentro do proprio ponto. */
+    android.os.Handler(lin.looper).post {
+      try { Fila.enviarTudo(applicationContext) } catch (e: Exception) { }
+    }
     try {
       pedirLocalizacao("andando")
       primeiroPonto()
@@ -307,22 +349,62 @@ class ServicoLocalizacao : Service() {
 
     /* O LOTE (20/10): andando, o ponto espera ate 1 minuto (ou ate juntar 6) antes de ir
        ao banco. PARADO, vai na hora — ali o ritmo ja e de 5 em 5 minutos e segurar o ponto
-       so atrasaria o aviso de parada. E o lote NUNCA fica preso: o que nao for enviado
-       agora vai junto do proximo, e no `onDestroy` ele e despejado na fila do celular. */
+       so atrasaria o aviso de parada. E o lote tem HORA MARCADA para partir (22/10, ver
+       `marcarDespejo`): passado o minuto ele vai sozinho, mesmo que nao chegue ponto novo;
+       e no `onDestroy` o que sobrar e despejado na fila do celular. */
     lote.add(ponto)
     if (loteDesde == 0L) loteDesde = agora
     val fechar = parado || lote.size >= LOTE_MAX || (agora - loteDesde) >= LOTE_MS
     if (!fechar) {
+      marcarDespejo()
       atualizarAviso("Último registro às " + hora(agora) + " · " +
         Guardado.enviadosHoje(ctx) + " hoje · em deslocamento")
       return
     }
+    enviarLote(parado, agora)
+  }
+
+  /* O RELOGIO DO LOTE (22/10) — e este o defeito que atrasou o primeiro ponto do
+     Thiago em CINCO MINUTOS: ele registrou as 08:56:54 e o ponto so chegou ao banco
+     as 09:02:12. O lote da 1.5 nao tinha hora para ir; ele era despejado apenas
+     quando CHEGAVA o proximo ponto gravado. O Thiago parou logo depois de comecar,
+     o modo virou "parado" (1 ponto a cada 5 minutos) e o ponto das 08:56 ficou
+     esperando o ponto das 09:02 para pegar carona.
+     Agora o proprio lote marca a hora de partir: passado LOTE_MS, ele vai, tenha
+     chegado ponto novo ou nao. O ponto continua carregando dentro de si o horario
+     em que foi MEDIDO (`em`), entao atraso nenhum muda o trajeto desenhado — o que
+     ele muda e a hora em que a gestao ve a pessoa no mapa. */
+  private fun marcarDespejo() {
+    val lin = linha ?: return
+    try {
+      val h = android.os.Handler(lin.looper)
+      tarefaLote?.let { h.removeCallbacks(it) }
+      val falta = LOTE_MS - (System.currentTimeMillis() - loteDesde)
+      val r = Runnable { despejarPorTempo() }
+      tarefaLote = r
+      h.postDelayed(r, if (falta < 1000L) 1000L else falta)
+    } catch (e: Exception) { }
+  }
+
+  @Synchronized private fun despejarPorTempo() {
+    if (lote.isEmpty()) return
+    enviarLote(false, System.currentTimeMillis())
+  }
+
+  /* manda o lote ao banco. Nao conseguiu, guarda no celular e manda depois. */
+  @Synchronized private fun enviarLote(parado: Boolean, agora: Long) {
+    if (lote.isEmpty()) return
+    val ctx = applicationContext
+    linha?.let { lin ->
+      try { tarefaLote?.let { android.os.Handler(lin.looper).removeCallbacks(it) } }
+      catch (e: Exception) { }
+    }
+    tarefaLote = null
     val pacote = JSONArray()
     val quantos = lote.size
     lote.forEach { pacote.put(it) }
     lote.clear(); loteDesde = 0L
 
-    /* tenta gravar; nao conseguiu, guarda no celular e manda depois */
     if (!Banco.gravarPontos(ctx, pacote)) {
       for (i in 0 until pacote.length()) Fila.guardar(ctx, pacote.getJSONObject(i))
       val motivo = Banco.ultimoErro

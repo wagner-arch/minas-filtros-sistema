@@ -40183,12 +40183,20 @@ async function conferirRastreioDesligado(){
   }catch(e){return;}
   (USUARIOS||[]).forEach(function(u){
     if(!u.ativo||!ehVendedorRastreado(u.nome))return;
-    if(!termoRastreioAssinado(u.nome))return;    /* quem não assinou ainda não é rastreado */
+    /* O PONTO CEGO QUE CUSTOU DOIS DIAS (22/10): aqui o sistema PULAVA quem não tinha o
+       termo assinado — e, quando o texto do termo muda de versão (foi o que a v373 fez em
+       21/10), a assinatura de TODOS fica desatualizada de uma vez. Ou seja: o aviso
+       emudecia justamente no dia em que o rastreio tinha mais chance de parar, e foi por
+       isso que o silêncio do Thiago e do Renan só apareceu quando ele olhou o banco à mão.
+       Agora quem assinou uma versão ANTERIOR gera aviso, com o motivo escrito; só quem
+       nunca assinou continua de fora, porque aí nunca houve rastreio para parar. */
+    var velho=termoRastreioDesatualizado(u.nome);
+    if(!termoRastreioAssinado(u.nome)&&!velho)return;
     var q=ult[u.nome];
     if(!q)return;                                /* nunca registrou: não dá para dizer que desligou */
     var mins=Math.round((Date.now()-new Date(q).getTime())/60000);
     if(mins>=RASTRO_SILENCIO)
-      rastroDesligados[u.nome]={dia:hojeISO(),hora:horaDoISO(q),minutos:mins};
+      rastroDesligados[u.nome]={dia:hojeISO(),hora:horaDoISO(q),minutos:mins,termoVelho:velho};
   });
 }
 function diaUtil(iso){
@@ -40408,9 +40416,17 @@ function pendenciasMF(){
       });
       Object.keys(rastroDesligados).forEach(function(nome){
         var d=rastroDesligados[nome];
+        /* O TEMPO DO SILÊNCIO ENTRA NO TÍTULO (22/10): "desligado às 15:48" não diz nada
+           quando o último ponto é de dois dias atrás — e era esse o caso do Thiago. */
+        var hs=Math.floor((d.minutos||0)/60);
+        var fa=hs>=24?("há "+Math.floor(hs/24)+" dia(s)"):(hs>=1?("há "+hs+" h"):("há "+(d.minutos||0)+" min"));
         põe({chave:"rastrooff:"+nome+":"+d.dia,icone:"⚠️",
-          titulo:"Rastreio de "+nome+" desligado às "+d.hora,
-          texto:"O vendedor saiu do sistema no horário de expediente. Sem o usuário conectado, o celular não registra a localização.",
+          titulo:"Rastreio de "+nome+" desligado às "+d.hora+" · "+fa,
+          texto:d.termoVelho
+            ?("O texto do termo de rastreio mudou e "+nome+" ainda não assinou a versão nova. "+
+              "Até a assinatura, o celular não registra a localização: peça para abrir o aplicativo e assinar.")
+            :("Nenhum ponto chegou desde então. Pode ser o vendedor fora do sistema, o celular "+
+              "sem internet ou o Android tendo encerrado o aplicativo."),
           quando:d.dia+" "+d.hora,
           ir:function(){ir("rastreio");}});
       });

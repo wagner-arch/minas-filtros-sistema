@@ -92,8 +92,55 @@ class TelaPrincipal : AppCompatActivity() {
 
     web.loadUrl(ENDERECO)
     pedirPermissoes()
+    /* O RASTREIO NAO ESPERA MAIS A PAGINA (22/10): ate a 1.6 quem ligava o servico era
+       a propria pagina, depois do login (MFApp.sessao). Sem internet, ou com a pagina
+       demorando, o aplicativo ficava aberto e NADA era registrado. O vigia decide pelo
+       que esta guardado no aparelho — login, funcao de Vendedor e termo assinado —,
+       entao o registro volta no mesmo instante em que o aplicativo abre. */
+    try { Vigia.conferir(this) } catch (e: Exception) { }
     /* confere se ha versao nova do aplicativo (nao atrapalha a abertura: espera 4 s) */
     web.postDelayed({ conferirAtualizacao(false) }, 4000)
+    web.postDelayed({ pedirIsencaoBateria() }, 9000)
+  }
+
+  /* LIBERAR O APLICATIVO DA ECONOMIA DE BATERIA (22/10) — e a trava que mais pesa no
+     mundo real. Samsung e Xiaomi encerram o aplicativo que fica horas sem ninguem
+     tocar nele, e foi assim que o Thiago ficou de 20/10 a 22/10 sem mandar um ponto.
+     Com a isencao ligada o Android para de fazer isso E o aplicativo ganha o direito
+     de religar o servico vindo do fundo, que e justamente o que o vigia precisa.
+     Pergunta no maximo UMA vez por dia, e so a quem e rastreado: pergunta repetida
+     vira pergunta ignorada. */
+  private fun pedirIsencaoBateria() {
+    try {
+      if (isFinishing || isDestroyed) return
+      if (!Vigia.deveRastrear(this)) return
+      val pm = getSystemService(android.os.PowerManager::class.java) ?: return
+      if (pm.isIgnoringBatteryOptimizations(packageName)) return
+      val f = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+      val hoje = f.format(java.util.Date())
+      if (Guardado.pediuBateriaEm(this) == hoje) return
+      Guardado.marcarPediuBateria(this, hoje)
+      AlertDialog.Builder(this)
+        .setTitle("Liberar o aplicativo da economia de bateria")
+        .setMessage("O Android ainda pode fechar este aplicativo quando a tela fica " +
+          "apagada — e aí a localização para de ser registrada sem ninguém perceber.\n\n" +
+          "Na tela que vai abrir, escolha PERMITIR. Isso não gasta bateria a mais: o " +
+          "que gasta é o GPS, e ele só liga quando você está em deslocamento.")
+        .setPositiveButton("Liberar agora") { _, _ -> abrirIsencaoBateria() }
+        .setNegativeButton("Depois", null)
+        .show()
+    } catch (e: Exception) { }
+  }
+
+  private fun abrirIsencaoBateria() {
+    try {
+      startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+        .setData(Uri.parse("package:$packageName")))
+    } catch (e: Exception) {
+      try {
+        startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+      } catch (e2: Exception) { }
+    }
   }
 
   /* Android pede a localizacao em duas etapas: primeiro durante o uso, depois
