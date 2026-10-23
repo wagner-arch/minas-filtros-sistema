@@ -8304,7 +8304,12 @@ var SEED=[
  {cod:"OS-CLIENTE",nome:"Equipamento de Cliente em Análise",pop:"Equipamento do cliente",marca:"Diversas",grupo:"Equipamentos de cliente",subgrupo:"Em análise",un:"UN",cheia:0,campanha:0,minimo:0,campativa:"nao",custo:0,pontos:0,manut:0,gar:0,serie:"nao",estoque:0},
 ];
 
-function toast(m){var t=$("toast");t.textContent=m;t.hidden=false;setTimeout(function(){t.hidden=true;},2800);}
+var toastRelogio=null;
+function toast(m){var t=$("toast");t.textContent=m;t.hidden=false;
+  clearTimeout(toastRelogio);
+  toastRelogio=setTimeout(function(){t.hidden=true;},2800);}
+/* o módulo de celular é outro bloco de código e não alcança esta função: o gancho é o caminho dele */
+window.__toastMF=function(m){try{toast(m);}catch(e){}};
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(m){return({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[m];});}
 function col(n){return db?db.collection(n):null;}
@@ -36229,6 +36234,19 @@ function docPedido(p,c){
             return "<tr><td>"+docMaiusc(i.nome)+'</td><td class="n" style="width:20%">'+BRL((+i.valor||0)*(i.qtd||1))+"</td></tr>";
           }).join("")+"</table>")
       : "")+
+    (function(){
+      /* FRETE E DESCONTO (23/10): sem estas duas linhas a conta do papel não fecha */
+      var totPlanos=planos.reduce(function(a,i){return a+(+i.valor||0)*(i.qtd||1);},0);
+      var desc=Math.round(((+p.descontoEspecial||+p.descontoGeral||0))*100)/100;
+      /* o frete que o cliente paga é o que falta para o total fechar */
+      var frete=Math.round(((+p.total||0)-totProd-totPlanos+desc)*100)/100;
+      if(!(+p.frete>0))frete=0;            /* pedido sem frete não mostra a linha */
+      if(frete<=0.009&&desc<=0.009)return "";
+      var linhas="";
+      if(frete>0.009)linhas+='<tr><td>Frete</td><td class="n" style="width:24%">'+BRL(frete)+"</td></tr>";
+      if(desc>0.009)linhas+='<tr><td>Desconto</td><td class="n" style="width:24%">− '+BRL(desc)+"</td></tr>";
+      return cx("FRETE E DESCONTO","<table>"+linhas+"</table>");
+    })()+
     '<div class="os-tot"><span>TOTAL DO PEDIDO</span><b>'+BRL(p.total)+"</b></div>"+
     formas.map(function(f,ix){return docTabelaForma(f,ix,dataV);}).join("")+
     (p.instalacao
@@ -47742,7 +47760,7 @@ function erro(msg){
            escolhe direto */
         if(digitos.length>=8&&exatos.length===1){
           escolher({o:exatos[0]});
-          try{toast("Produto pelo código de barras: "+exatos[0].textContent.replace(/\s+/g," ").trim());}catch(e){}
+          try{toastMF("Produto pelo código de barras: "+exatos[0].textContent.replace(/\s+/g," ").trim());}catch(e){}
           return;
         }
         lista.sort(function(a,b){return a.nota-b.nota;});
@@ -48215,10 +48233,25 @@ function erro(msg){
   }
   window.enderecoLivreMF=enderecoLivre;
 
-  function avisoGeo(texto,tipo,p){
+  /* o aviso do alto da tela: usa o do sistema, pelo gancho (o módulo é outro script e não
+     alcança a função direto). Sem o gancho, escreve no elemento — e aí o relógio é o daqui. */
+  function toastMF(m){
+    if(typeof window.__toastMF==="function"){window.__toastMF(m);return;}
+    var el=document.getElementById("toast");
+    if(!el)return;
+    el.textContent=String(m||"");
+    el.hidden=false;
+    clearTimeout(toastMF.__t);
+    toastMF.__t=setTimeout(function(){el.hidden=true;},4200);
+  }
+  function avisoGeo(texto,tipo,p,noToast){
     var d=document.getElementById((p||"c")+"_geoAviso");
     if(!d)return;
     d.innerHTML=texto?'<div class="note '+(tipo==="erro"?"crit":(tipo==="ok"?"ok":"warn"))+'">'+escT(texto)+"</div>":"";
+    if(!texto||noToast)return;
+    /* o aviso mora no fim de uma ficha longa: sem isto a pessoa clica e não vê resposta */
+    try{toastMF(texto);}catch(e){}
+    try{d.scrollIntoView({block:"center",behavior:"smooth"});}catch(e){}
   }
 
 
@@ -48620,7 +48653,11 @@ function erro(msg){
   /* P = prefixo do formulário: "c" (cadastro do cliente/lead) ou "at" (atendimento) */
   function ligarGeo(P){
     P=P||"c";
-    function aviso(t,k){avisoGeo(t,k,P);}
+    /* clique da pessoa: o resultado vai para o toast e a tela rola até ele.
+       Busca automática (o endereço mudou): só o aviso no lugar, sem toast.
+       A marca viaja com CADA busca — com uma variável só, a busca automática que começasse
+       no meio tiraria o toast da resposta do clique. */
+    function aviso(t,k,semToast){avisoGeo(t,k,P,!!semToast);}
     /* endereço (rua, número, bairro, cidade) com que o ponto exato foi marcado:
        saber se o endereço foi alterado depois */
     function assinaturaEnd(){return [P+"_rua",P+"_num",P+"_bairro",P+"_cidade"].map(valorDe).join("|").toLowerCase();}
@@ -48808,9 +48845,17 @@ function erro(msg){
         .then(function(j){cb(j&&j.length?j[0]:null,false);},function(){cb(null,true);});
     }
     function geoPeloEndereco(automatico){
+      /* o aviso DESTA busca: sai no toast quando a pessoa clicou */
+      function aviso(t,k){avisoGeo(t,k,P,!!automatico);}
       var rua=valorDe(P+"_rua"),num=valorDe(P+"_num"),bairro=valorDe(P+"_bairro"),
           cidade=valorDe(P+"_cidade"),uf=valorDe(P+"_uf")||UF_PADRAO;
-      if(!cidade){if(!automatico)aviso("Escolha a cidade primeiro.","erro");return;}
+      if(!cidade){
+        if(!automatico)aviso("Escolha a cidade do cliente primeiro — sem ela o sistema não tem onde procurar o endereço.","erro");
+        return;}
+      /* sem rua não há o que procurar: antes o clique simplesmente não fazia nada */
+      if(!rua){
+        if(!automatico)aviso("Falta a rua no cadastro. Preencha o CEP ou escolha a rua, e clique de novo.","erro");
+        return;}
       if(automatico){
         if(tipo&&tipo.value==="rural")return;
         if(!rua)return;
@@ -48894,8 +48939,9 @@ function erro(msg){
           campo.__geoNivel="mapa-aberto";
           campo.__geoEnd=assinaturaEnd();
           atualizarLink();
-          aviso(obsGoogle+"Geolocalização atualizada pelo endereço"+(rua&&num&&i===0?", com o número":"")+": "+
-            String(res.display_name||"").slice(0,80)+". É aproximada — confira no mapa.",
+          aviso(obsGoogle+"Localização atualizada"+(rua&&num&&i===0?" pelo número":" pela rua")+": "+
+            String(res.display_name||"").split(",").slice(0,3).join(",").trim()+
+            ((rua&&num&&i===0)?"":". Sem o número, o ponto é o da rua — confira no mapa."),
             (rua&&num&&i===0)?"ok":"");
         });
       }
