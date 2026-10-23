@@ -13230,6 +13230,7 @@ window.__funilClienteMF=function(cid,m,q){return atualizarFunilCliente(cid,m,q);
 window.__funilCobertoMF=function(c,u){return funilJaCoberto(c,u);};
 window.__conflitosMF=function(cid,quem){return conflitosComerciais(cid,quem);};
 window.__respMovMF=function(c,d){return respPeloMovimento(c,d);};
+window.__vendCliMF=function(c){return vendedorDoCliente(c);};
 window.__sincFunilMF=function(){return sincronizarFunil();};
 window.__ehLeadMF=function(c){return ehLead(c);};
 window.__clienteVincMF=function(){return clienteVinc;};
@@ -29255,21 +29256,21 @@ function dataDoRegistro(r){
    são a hora da criação, e isso vale para todo registro que já existe. */
 function instanteDoRegistro(r){
   if(!r)return 0;
-  /* 1) carimbo gravado com hora, quando houver */
-  var c=String(r.criadoEm||"");
-  if(/^d{4}-d{2}-d{2}[ T]d{2}:d{2}/.test(c)){
-    var t0=new Date(c.replace(" ","T")).getTime();
-    if(t0)return t0;
-  }
-  /* 2) o id guarda o instante da criação */
+  /* 1) o id guarda o instante da criação, ao milissegundo, e ninguém o edita */
   var id=String(r.id||"");
   if(/^[0-9a-z]{12,14}$/.test(id)){
     var t1=parseInt(id.slice(0,8),36);
     if(t1>1500000000000&&t1<4000000000000)return t1;   /* entre 2017 e 2096 */
   }
+  /* 2) sem id no padrão (registro importado), o carimbo gravado com hora */
+  var c=String(r.criadoEm||"");
+  if(/^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}/.test(c)){
+    var t0=new Date(c.replace(" ","T")).getTime();
+    if(t0)return t0;
+  }
   /* 3) sem nada disso, a data do próprio registro (meio-dia, para não brigar com fuso) */
   var d=(c||String(r.data||"")).slice(0,10);
-  return /^d{4}-d{2}-d{2}$/.test(d)?new Date(d+"T12:00:00").getTime():0;
+  return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d)?new Date(d+"T12:00:00").getTime():0;
 }
 /* "22/10 23:28" — vazio quando o registro foi lançado no mesmo dia a que ele se refere */
 function lancadoEmTexto(r){
@@ -37353,7 +37354,10 @@ function respPeloMovimento(c,desde){
   if(ped)return ped.vendedor||ped.prospector||ped.criadoPor||"";
   var orc=maisNovo(orcamentos.filter(function(x){return x.clienteId===c.id&&x.loja===lojaAtual&&x.situacao!=="perdido"&&String(x.data||"")>=d;}));
   if(orc)return orc.vendedor||orc.colaborador||orc.criadoPor||"";
-  var at=maisNovo(atendimentos.filter(function(x){return x.clienteId===c.id&&String(x.data||x.criadoEm||"").slice(0,10)>=d;}));
+  var at=maisNovo(atendimentos.filter(function(x){
+    if(x.clienteId!==c.id||(x.loja&&x.loja!==lojaAtual))return false;
+    if(x.natureza==="atividade"&&x.status!=="finalizado")return false;   /* compromisso futuro não conta */
+    return String(x.data||x.criadoEm||"").slice(0,10)>=d;}));
   if(at)return at.colaborador||at.criadoPor||"";
   return "";
 }
@@ -37382,7 +37386,7 @@ function funilJaCoberto(c,ult){
   if(orcNovo)return false;
   /* contato de verdade: atendimento, ou atividade já realizada (o mesmo critério do
      etapaPelosDados — um critério só para a mesma coisa, lição da v326) */
-  var contato=atendimentos.some(function(x){return x.clienteId===c.id&&
+  var contato=atendimentos.some(function(x){return x.clienteId===c.id&&(!x.loja||x.loja===lojaAtual)&&
     (x.natureza!=="atividade"||x.status==="finalizado")&&depois(x);});
   return !contato;
 }
@@ -43101,10 +43105,15 @@ function aniversarioNoAno(nasc,ano){
   return {data:iso(d),mes:mes,dia:d.getDate(),anoNasc:+m[1]};
 }
 function vendedorDoCliente(c){
-  var vs=vendasDe(c.id).filter(function(p){return p.status!=="Cancelada";})
-    .sort(function(a,b){return String(b.data||"").localeCompare(String(a.data||""));});
-  if(vs[0])return vs[0].vendedor||"";
-  var at=atendsDe(c.id).sort(function(a,b){return String(b.data||"").localeCompare(String(a.data||""));})[0];
+  function recente(l){return l.sort(function(a,b){
+    return (String(b.data||"").localeCompare(String(a.data||"")))||(instanteDoRegistro(b)-instanteDoRegistro(a));})[0];}
+  var vs=recente(vendasDe(c.id).filter(function(p){
+    return p.status!=="Cancelada"&&!p.cancelada&&(!p.loja||p.loja===lojaAtual);}));
+  if(vs)return vs.vendedor||"";
+  var at=recente(atendsDe(c.id).filter(function(a){
+    if(a.loja&&a.loja!==lojaAtual)return false;
+    return !(a.natureza==="atividade"&&a.status!=="finalizado");   /* compromisso futuro não conta */
+  }));
   return (at&&at.colaborador)||c.criadoPor||"";
 }
 /* ---------- ciclo do aniversariante (regra do Wagner, 14/09) ----------
