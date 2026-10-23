@@ -3676,7 +3676,7 @@ img{max-width:100%}
 
     <!-- EM CONSTRUÇÃO -->
     <section class="screen" id="s-atend" hidden>
-      <div class="page-head"><h1>Atendimentos e Atividades</h1><p><b>Atividade</b> é o contato a fazer. <b>Atendimento</b> é o contato já feito — presencial, telefone, WhatsApp ou Instagram.</p></div>
+      <div class="page-head"><h1>Atendimentos e Atividades</h1><p><b>Atividade</b> é o contato a fazer. <b>Atendimento</b> é o contato já feito — presencial, telefone, WhatsApp ou Instagram. A lista abre pelo <b>último que foi lançado</b>.</p></div>
 
       <div class="card flush" id="atendLista">
         <div class="toolbar">
@@ -6322,6 +6322,28 @@ img{max-width:100%}
 
 <!-- EDITAR CENTRO DE CUSTO (pedido do Wagner, 03/10): acerta nome, grupo, código e classificação
      sem mexer no histórico — os lançamentos apontam para o centro pelo id, não pelo nome -->
+<!-- EXCLUIR GRUPO OU SUBGRUPO QUE TEM PRODUTO (23/10, pedido dele: "quando excluir e tiver
+     alguns produtos vinculados perguntar, migrar esses produtos vinculados para qual grupo").
+     Antes o sistema simplesmente RECUSAVA: o grupo "Serviço" dele tem 1 produto e o "Serviços"
+     tem 74, então nenhum dos dois podia ser excluído e os dois ficavam no cadastro para sempre. -->
+<div class="modal" id="gpMigModal" hidden>
+  <div class="box" style="width:min(620px,100%)">
+    <h3 id="gpm_titulo">Excluir o grupo</h3>
+    <div class="sub" id="gpm_texto"></div>
+    <div id="gpm_gWrap" class="fld" style="margin-top:12px"><label for="gpm_grupo" id="gpm_gLab">Os produtos vão para o grupo *</label>
+      <select id="gpm_grupo"></select></div>
+    <div id="gpm_sgWrap" class="fld"><label for="gpm_subg" id="gpm_sLab">Subgrupo lá dentro</label>
+      <select id="gpm_subg"></select></div>
+    <div id="gpm_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="gpm_ok">Mover e excluir</button>
+      <button class="btn mut" type="button" id="gpm_fechar">Cancelar</button>
+    </div>
+    <p class="help">Nenhum produto fica sem grupo: cada um é movido para o destino escolhido antes de o grupo sair do
+      cadastro. O que foi movido fica gravado no produto (<b>grupo anterior</b>), então dá para voltar atrás.</p>
+  </div>
+</div>
+
 <div class="modal" id="ccEdModal" hidden>
   <div class="box" style="width:min(620px,100%)">
     <h3 id="cce_titulo">Editar centro de custo</h3>
@@ -11154,6 +11176,9 @@ function pedeManutProduto(p){
 window.__pedeManutMF=pedeManutProduto;
 window.__followupMF=function(){return followupsPendentes();};
 window.__atendsMF=function(){return atendimentos;};
+window.__instanteMF=function(r){return instanteDoRegistro(r);};
+window.__gruposProdMF=function(){return GRUPOS_PROD;};
+window.__abrirMigrarMF=function(g,s){return abrirMigrarGrupo(g,s||"");};
 window.__detalhesMF=function(a){return abrirDetalhes(a);};
 window.__avisarAgMF=function(){return checarAgenda();};
 window.__alertaAgMF=function(a,min){return abrirAlerta(a,min||6);};
@@ -20206,6 +20231,93 @@ function renderGruposProd(){
   }).join("");
   ligarGruposProd();
 }
+/* ===== MIGRAR OS PRODUTOS E ENTÃO EXCLUIR (23/10) =====
+   Grupo (ou subgrupo) vazio continua saindo com um confirm simples, como sempre. Tendo produto
+   dentro, o sistema pergunta o destino: é a única forma de o cadastro ficar limpo sem deixar
+   produto órfão — e resolve o caso dele, de "Serviço" (1 produto) convivendo com "Serviços" (74). */
+var gpMig={grupo:"",sub:""};
+function avMig(txt,cls){var e=$("gpm_alerta");if(e)e.innerHTML=txt?'<div class="note '+(cls||"")+'">'+txt+"</div>":"";}
+function encherSubgDestino(){
+  var s=$("gpm_subg");if(!s)return;
+  var destino=$("gpm_grupo").value,subs=subgruposCad(destino);
+  s.innerHTML='<option value="__manter">Manter o subgrupo de cada produto</option>'+
+    subs.map(function(x){return '<option value="'+esc(x)+'">'+esc(x)+"</option>";}).join("")+
+    '<option value="">(sem subgrupo)</option>';
+  s.value="__manter";
+}
+function abrirMigrarGrupo(gn,sn){
+  gpMig={grupo:gn,sub:sn||""};
+  var usados=usoGrupoProd(gn,sn||null);
+  $("gpm_titulo").textContent=sn?("Excluir o subgrupo "+sn):("Excluir o grupo "+gn);
+  $("gpm_texto").innerHTML=usados+(usados===1?" produto está":" produtos estão")+
+    (sn?(" em <b>"+esc(gn)+" › "+esc(sn)+"</b>."):(" em <b>"+esc(gn)+"</b>."))+
+    " Escolha para onde eles vão — nenhum produto fica sem grupo.";
+  if(sn){
+    /* subgrupo: o destino é outro subgrupo do MESMO grupo */
+    $("gpm_gWrap").hidden=true;$("gpm_sgWrap").hidden=false;
+    $("gpm_sLab").textContent="Os produtos vão para o subgrupo *";
+    var outros=subgruposCad(gn).filter(function(x){return ordAZ(x,sn)!==0;});
+    $("gpm_subg").innerHTML=outros.map(function(x){return '<option value="'+esc(x)+'">'+esc(x)+"</option>";}).join("")+
+      '<option value="">(sem subgrupo)</option>';
+  }else{
+    $("gpm_gWrap").hidden=false;$("gpm_sgWrap").hidden=false;
+    $("gpm_sLab").textContent="Subgrupo lá dentro";
+    var gs=nomesGruposCad().filter(function(x){return ordAZ(x,gn)!==0;});
+    $("gpm_grupo").innerHTML=gs.map(function(x){
+      var u=usoGrupoProd(x);
+      return '<option value="'+esc(x)+'">'+esc(x)+" ("+u+(u===1?" produto":" produtos")+")</option>";}).join("");
+    encherSubgDestino();
+  }
+  avMig("");
+  $("gpMigModal").hidden=false;
+}
+async function confirmarMigrarGrupo(){
+  var gn=gpMig.grupo,sn=gpMig.sub;
+  if(!gn)return;
+  var g=grupoCad(gn);if(!g){$("gpMigModal").hidden=true;return;}
+  var destG=sn?gn:$("gpm_grupo").value;
+  var destS=$("gpm_subg").value;
+  if(!sn&&!destG){avMig("<b>Escolha o grupo de destino.</b>","warn");return;}
+  if(sn&&destS==="__manter")destS="";
+  var alvos=produtos.filter(function(x){
+    if(ordAZ(x.grupo,gn)!==0)return false;
+    return sn?(ordAZ(x.subgrupo,sn)===0):true;});
+  var ondeVai=sn?(gn+" › "+(destS||"sem subgrupo")):(destG+(destS==="__manter"?"":" › "+(destS||"sem subgrupo")));
+  var texto=alvos.length+(alvos.length===1?" produto vai":" produtos vão")+" para "+ondeVai;
+  if(!confirm(texto+".\n\nDepois disso o "+(sn?("subgrupo "+sn):("grupo "+gn))+" sai do cadastro.\n\nConfirma?"))return;
+  var subsNovos=[];
+  alvos.forEach(function(x){
+    x.grupoAnterior=x.grupo;x.subgrupoAnterior=x.subgrupo||"";
+    x.grupo=destG;
+    if(destS!=="__manter")x.subgrupo=destS;
+    var sg=String(x.subgrupo||"").trim();
+    if(sg&&!subgruposCad(destG).some(function(y){return ordAZ(y,sg)===0;})&&
+       !subsNovos.some(function(y){return ordAZ(y,sg)===0;}))subsNovos.push(sg);
+  });
+  /* o subgrupo que veio junto precisa existir no destino, senão some do cadastro */
+  if(subsNovos.length){
+    var gd=grupoCad(destG);
+    if(gd)gd.subgrupos=(gd.subgrupos||[]).concat(subsNovos);
+  }
+  if(sn)g.subgrupos=(g.subgrupos||[]).filter(function(x){return ordAZ(x,sn)!==0;});
+  else GRUPOS_PROD=GRUPOS_PROD.filter(function(x){return ordAZ(x.nome,gn)!==0;});
+  /* gravação conferida (regra da v327): recusada pelo banco, nada fica dito como salvo */
+  try{
+    if(db){
+      if(typeof db.gravarVarios==="function"&&alvos.length>1)await db.gravarVarios("produtos",alvos,{bloco:100});
+      else for(var i=0;i<alvos.length;i++)await db.doc("produtos/"+alvos[i].id).set(alvos[i]);
+      await db.doc("config/grupos_produtos").set({lista:GRUPOS_PROD});
+    }
+  }catch(e){
+    avMig("<b>Não foi salvo.</b> Confira a internet e tente de novo.<br><span class=\"help\">"+esc(e.message||e)+"</span>","crit");
+    return;
+  }
+  $("gpMigModal").hidden=true;
+  $("gpAlerta").innerHTML='<div class="note ok">'+(sn?("Subgrupo <b>"+esc(sn)+"</b>"):("Grupo <b>"+esc(gn)+"</b>"))+
+    " excluído. "+alvos.length+(alvos.length===1?" produto foi movido":" produtos foram movidos")+
+    " para <b>"+esc(ondeVai)+"</b>.</div>";
+  renderGruposProd();atualizarListasGrupoProd();try{renderProdutos();}catch(e){}
+}
 function ligarGruposProd(){
   var w=$("gpLista");
   function av(t,cls){$("gpAlerta").innerHTML=t?'<div class="note '+(cls||"")+'">'+t+"</div>":"";}
@@ -20256,7 +20368,11 @@ function ligarGruposProd(){
   Array.prototype.forEach.call(w.querySelectorAll("[data-gpdel]"),function(b){
     b.onclick=async function(){
       var gn=b.getAttribute("data-gpdel"),n=usoGrupoProd(gn);
-      if(n){av("<b>"+esc(gn)+"</b> não pode ser excluído: "+n+" produto(s) estão nele. Troque o grupo desses produtos primeiro, ou renomeie este.","crit");return;}
+      /* tendo produto dentro, o sistema PERGUNTA o destino em vez de recusar (23/10) */
+      if(n){
+        if(nomesGruposCad().filter(function(x){return ordAZ(x,gn)!==0;}).length)return abrirMigrarGrupo(gn,"");
+        av("<b>"+esc(gn)+"</b> tem "+n+" produto(s) e é o único grupo do cadastro. Crie outro grupo antes, para os produtos terem para onde ir.","crit");return;
+      }
       if(!confirm("Excluir o grupo "+gn+"?"))return;
       GRUPOS_PROD=GRUPOS_PROD.filter(function(g){return ordAZ(g.nome,gn)!==0;});
       await gravarGruposProd();av("Grupo <b>"+esc(gn)+"</b> excluído.","ok");
@@ -20265,7 +20381,7 @@ function ligarGruposProd(){
   Array.prototype.forEach.call(w.querySelectorAll("[data-gpsdel]"),function(b){
     b.onclick=async function(){
       var p=b.getAttribute("data-gpsdel").split("|"),gn=p[0],sn=p[1],n=usoGrupoProd(gn,sn);
-      if(n){av("<b>"+esc(sn)+"</b> não pode ser excluído: "+n+" produto(s) estão nele.","crit");return;}
+      if(n)return abrirMigrarGrupo(gn,sn);   /* pergunta o subgrupo de destino (23/10) */
       if(!confirm("Excluir o subgrupo "+sn+" de "+gn+"?"))return;
       var g=grupoCad(gn);if(!g)return;
       g.subgrupos=(g.subgrupos||[]).filter(function(x){return ordAZ(x,sn)!==0;});
@@ -28205,6 +28321,40 @@ function abaCliente(k){
 function dataDoRegistro(r){
   if(!r)return "";
   return String(r.data||r.abertura||r.criadoEm||r.quando||"").slice(0,10);
+}
+/* ===== QUANDO O REGISTRO ENTROU NO SISTEMA (23/10, pedido dele) =====
+   Ele abriu Atendimentos e Atividades e viu no TOPO a atividade que tinha lançado PRIMEIRO
+   (22/10 às 14:37, marcada para 06/11) e, quase no FIM, o atendimento que lançou POR ÚLTIMO
+   (22/10 às 23:28, de um contato do dia 21). A lista obedecia a data do compromisso, não a
+   ordem em que as coisas foram lançadas — e é por isso que ele leu como "os mais antigos
+   primeiro", mesmo com as datas em ordem decrescente.
+   O instante do lançamento NÃO precisou de campo novo nem de migração no banco: o próprio id
+   já é ele. `uid()` é Date.now() em base 36 mais 5 letras, então os 8 primeiros caracteres
+   são a hora da criação, e isso vale para todo registro que já existe. */
+function instanteDoRegistro(r){
+  if(!r)return 0;
+  /* 1) carimbo gravado com hora, quando houver */
+  var c=String(r.criadoEm||"");
+  if(/^d{4}-d{2}-d{2}[ T]d{2}:d{2}/.test(c)){
+    var t0=new Date(c.replace(" ","T")).getTime();
+    if(t0)return t0;
+  }
+  /* 2) o id guarda o instante da criação */
+  var id=String(r.id||"");
+  if(/^[0-9a-z]{12,14}$/.test(id)){
+    var t1=parseInt(id.slice(0,8),36);
+    if(t1>1500000000000&&t1<4000000000000)return t1;   /* entre 2017 e 2096 */
+  }
+  /* 3) sem nada disso, a data do próprio registro (meio-dia, para não brigar com fuso) */
+  var d=(c||String(r.data||"")).slice(0,10);
+  return /^d{4}-d{2}-d{2}$/.test(d)?new Date(d+"T12:00:00").getTime():0;
+}
+/* "22/10 23:28" — vazio quando o registro foi lançado no mesmo dia a que ele se refere */
+function lancadoEmTexto(r){
+  var t=instanteDoRegistro(r);if(!t)return "";
+  var d=new Date(t),dd=String(d.getDate()).padStart(2,"0"),mm=String(d.getMonth()+1).padStart(2,"0");
+  if(d.getFullYear()+"-"+mm+"-"+dd===String(r.data||"").slice(0,10))return "";
+  return dd+"/"+mm+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
 }
 function maisNovoPrimeiro(a,b){
   var da=dataDoRegistro(a), db=dataDoRegistro(b);
@@ -38458,7 +38608,14 @@ function renderAtend(){
   var lista=visiveis(atendimentos.filter(function(a){return a.loja===lojaAtual;}))
     .filter(function(a){return !f||a.natureza===f;})
     .filter(function(a){return !q||(a.cliente||"").toLowerCase().indexOf(q)>=0;})
-    .sort(function(a,b){return (b.data+(b.inicio||"")).localeCompare(a.data+(a.inicio||""));});
+    /* O QUE FOI LANÇADO POR ÚLTIMO FICA EM CIMA (23/10, escolha dele).
+       Antes mandava a data do compromisso, e com isso a atividade marcada para daqui a duas
+       semanas ocupava o topo enquanto o atendimento registrado ontem à noite ficava no fim.
+       A data do compromisso só desempata dois registros lançados no mesmo instante. */
+    .sort(function(a,b){
+      var ta=instanteDoRegistro(a),tb=instanteDoRegistro(b);
+      if(ta!==tb)return tb-ta;
+      return (b.data+(b.inicio||"")).localeCompare(a.data+(a.inicio||""));});
   $("atendCount").textContent=lista.length+(lista.length===1?" registro":" registros");
   var b=$("atendBody");b.innerHTML="";
   if(!lista.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nada registrado ainda</div>Clique em <b>Registrar</b> para lançar o primeiro.</div></td></tr>';return;}
@@ -38474,7 +38631,11 @@ function renderAtend(){
         ? '<span class="pill p-ok">'+(a.situacao==="reagendada"?"Reagendada":"Concluída")+"</span>"+
           (a.motivos&&a.motivos.length?'<div class="t-sub">'+esc(a.motivos.join(", "))+"</div>":"")
         : (atrasou?'<span class="pill p-crit">Atrasada</span>':'<span class="pill '+sO2.cls+'">'+sO2.n+"</span>"));
-    tr.innerHTML='<td><div class="t-main">'+esc(dataBR(a.data))+'</div><div class="t-sub">'+esc(a.inicio||"")+(a.fim?" – "+esc(a.fim):"")+"</div></td>"+
+    /* com a lista ordenada pelo lançamento, a data do compromisso sozinha faria a lista
+       parecer embaralhada — então quem foi lançado em outro dia diz em qual */
+    var lanc=lancadoEmTexto(a);
+    tr.innerHTML='<td><div class="t-main">'+esc(dataBR(a.data))+'</div><div class="t-sub">'+esc(a.inicio||"")+(a.fim?" – "+esc(a.fim):"")+"</div>"+
+      (lanc?'<div class="t-sub">lançado '+esc(lanc)+"</div>":"")+"</td>"+
       "<td>"+esc(a.cliente||"—")+"</td>"+
       "<td>"+((a.tipos||[]).map(function(t){return '<span class="pill p-mut" style="margin-right:4px">'+esc(t)+"</span>";}).join("")||"—")+"</td>"+
       "<td>"+esc(a.colaborador||"—")+"</td>"+
@@ -43695,6 +43856,12 @@ function ligar(){
     $("cce_fechar").onclick=function(){ccEditando=null;$("ccEdModal").hidden=true;};
     $("cce_nome").onkeydown=function(e){if(e.key==="Enter")salvarCentro();};
     $("cce_codigo").onkeydown=function(e){if(e.key==="Enter")salvarCentro();};
+  }
+  /* a janela que migra os produtos antes de excluir o grupo (23/10) */
+  if($("gpm_ok")){
+    $("gpm_ok").onclick=confirmarMigrarGrupo;
+    $("gpm_fechar").onclick=function(){$("gpMigModal").hidden=true;};
+    $("gpm_grupo").onchange=encherSubgDestino;
   }
 
   /* Configurações › Grupos de Produtos (v180) */
