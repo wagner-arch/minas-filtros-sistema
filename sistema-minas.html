@@ -9174,6 +9174,7 @@ async function carregar(){
     }catch(ePz){console.warn("prestadores",ePz);}
     var ng=await jaPedido("col:negocios",function(){return col("negocios").limit(1000).get();});
     negocios=ng.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    negociosLidos=true;   /* a varredura do funil só roda depois desta linha (23/10) */
     var sl=await jaPedido("col:solicitacoes",function(){return col("solicitacoes").limit(1000).get();});
     solicitacoes=sl.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var os=await jaPedido("col:orcamentos",function(){return col("orcamentos").limit(500).get();});
@@ -13225,7 +13226,10 @@ window.__hojeMF=function(){return hojeISO();};
 window.__abrirOSMF=function(o){ir("os");return abrirOS(o);};
 window.__negociosMF=function(){return negocios;};
 window.__renderFunilMF=function(){return renderFunil();};
-window.__funilClienteMF=function(cid,m){return atualizarFunilCliente(cid,m);};
+window.__funilClienteMF=function(cid,m,q){return atualizarFunilCliente(cid,m,q);};
+window.__funilCobertoMF=function(c,u){return funilJaCoberto(c,u);};
+window.__conflitosMF=function(cid,quem){return conflitosComerciais(cid,quem);};
+window.__respMovMF=function(c,d){return respPeloMovimento(c,d);};
 window.__sincFunilMF=function(){return sincronizarFunil();};
 window.__ehLeadMF=function(c){return ehLead(c);};
 window.__clienteVincMF=function(){return clienteVinc;};
@@ -16329,7 +16333,7 @@ async function salvarPedido(){
   /* autorização de cliente em atendimento: vale para ESTE pedido e acaba aqui (22/09) */
   try{await consumirAutorizacao(ped.clienteId,"pedido "+ped.numero);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: pedido lançado fecha o cartão como Venda */
-  try{await atualizarFunilCliente(ped.clienteId,"pedido");}catch(eF){console.warn("funil",eF);}
+  try{await atualizarFunilCliente(ped.clienteId,"pedido",ped.vendedor||usuarioAtual);}catch(eF){console.warn("funil",eF);}
   if(solDesc){
     registrarEvento(ped,"Autorização de desconto solicitada: "+solDesc.motivo);
     setTimeout(function(){toast("Venda abaixo da tabela: a solicitação de autorização do pedido "+ped.numero+" foi enviada ao Administrador.");
@@ -34710,7 +34714,7 @@ async function salvarOrc(){
   }
   try{await consumirAutorizacao(o.clienteId,"orçamento "+o.numero);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: cartão vai para Orçamento enviado, com o valor */
-  try{await atualizarFunilCliente(o.clienteId,"orçamento");}catch(eF){console.warn("funil",eF);}
+  try{await atualizarFunilCliente(o.clienteId,"orçamento",o.vendedor||usuarioAtual);}catch(eF){console.warn("funil",eF);}
   /* lembrete do vencimento: nasce com o orçamento, na data da validade (regra dele, 02/10) */
   try{o.__ativVenc=await agendarRetornoOrcamento(o);}catch(eV){console.warn("retorno do orçamento",eV);}
   /* salvo: o botão de excluir já vale para este orçamento (25/09) */
@@ -37298,13 +37302,17 @@ function etapaIdx(k){for(var i=0;i<FUNIL_ETAPAS.length;i++)if(FUNIL_ETAPAS[i].k=
 function etapaNome(k){return (FUNIL_ETAPAS[etapaIdx(k)]||{}).n||k;}
 function etapaFechada(k){return k==="venda"||k==="perdido";}
 function agoraCarimbo(){return hojeISO()+" "+agoraHM();}
+function ordemNegocio(a,b){
+  var d=instanteDoRegistro(b)-instanteDoRegistro(a);
+  return d||String(b.id||"").localeCompare(String(a.id||""));
+}
 function negocioAberto(cid){
   return negocios.filter(function(n){return n.clienteId===cid&&n.loja===lojaAtual&&!etapaFechada(n.etapa);})
-    .sort(function(a,b){return String(b.criadoEm).localeCompare(String(a.criadoEm));})[0]||null;
+    .sort(ordemNegocio)[0]||null;
 }
 function ultimoNegocio(cid){
   return negocios.filter(function(n){return n.clienteId===cid&&n.loja===lojaAtual;})
-    .sort(function(a,b){return String(b.criadoEm).localeCompare(String(a.criadoEm));})[0]||null;
+    .sort(ordemNegocio)[0]||null;
 }
 async function gravarNegocio(n){n.atualizadoEm=agoraCarimbo();await grava("negocios",n);}
 function moverNegocio(n,para,auto,extra){
@@ -37333,15 +37341,61 @@ function etapaPelosDados(n,c){
   if(contatos.length>=2||contatos.some(function(a){return a.natureza==="atividade";}))return {k:"atendimento"};
   return {k:"novo"};
 }
-function negocioNovo(c,etapa,via,desde){
-  var n={id:uid(),desde:desde||String(c.criadoEm||"").slice(0,10)||hojeISO(),loja:lojaAtual,clienteId:c.id,cliente:c.nome||"",tel:c.tel||"",cidade:c.cidade||"",origem:c.origem||"",
-    responsavel:vendedorDoCliente(c)||c.criadoPor||usuarioAtual,etapa:etapa,etapaEm:agoraCarimbo(),valor:0,produto:"",obs:"",
+/* QUEM RESPONDE PELO CARTÃO é a pessoa que fez o registro que o originou (23/10).
+   Antes saía de vendedorDoCliente(c), que devolve o vendedor da ÚLTIMA VENDA do cliente —
+   ou seja, o histórico antigo. Resultado medido: a Franciele fez o orçamento 1014 e o cartão
+   nasceu com "Wagner", e aí a trava de cliente em atendimento recusou a própria vendedora. */
+function respPeloMovimento(c,desde){
+  if(!c)return "";
+  var d=String(desde||"").slice(0,10)||"0000-00-00";
+  function maisNovo(l){return l.sort(function(a,b){return instanteDoRegistro(b)-instanteDoRegistro(a);})[0];}
+  var ped=maisNovo(pedidos.filter(function(x){return x.clienteId===c.id&&x.loja===lojaAtual&&x.status!=="Cancelada"&&!x.cancelada&&String(x.data||"")>=d;}));
+  if(ped)return ped.vendedor||ped.prospector||ped.criadoPor||"";
+  var orc=maisNovo(orcamentos.filter(function(x){return x.clienteId===c.id&&x.loja===lojaAtual&&x.situacao!=="perdido"&&String(x.data||"")>=d;}));
+  if(orc)return orc.vendedor||orc.colaborador||orc.criadoPor||"";
+  var at=maisNovo(atendimentos.filter(function(x){return x.clienteId===c.id&&String(x.data||x.criadoEm||"").slice(0,10)>=d;}));
+  if(at)return at.colaborador||at.criadoPor||"";
+  return "";
+}
+/* O ÚLTIMO CARTÃO FECHADO JÁ COBRE O QUE EXISTE HOJE? (23/10)
+   Sem esta conferência, cliente que já comprou ganhava um cartão novo a cada abertura do
+   sistema: negocioAberto() ignora etapa fechada ("venda" e "perdido"), o ramo de quem não é
+   mais lead criava sem trava nenhuma, e etapaPelosDados levava o cartão de volta para Venda.
+   A regra da v277 continua: movimento NOVO (pedido, orçamento ou contato depois do
+   fechamento) faz nascer outro cartão — o que não nasce mais é a cópia do mesmo movimento. */
+function funilJaCoberto(c,ult){
+  if(!ult||!etapaFechada(ult.etapa))return false;
+  /* A CONTA É PELO INSTANTE EM QUE O CARTÃO FOI CRIADO (medido no id, regra da v387).
+     Comparar por DIA, ou pelo carimbo de minuto do fechamento, abria um laço: cliente com dois
+     pedidos veria sempre "o outro pedido" como movimento novo e ganharia um cartão por login,
+     para sempre. O cartão nasce depois de o sistema ler os movimentos, então tudo que é
+     anterior ao id dele já está dentro dele — e só o que vem depois é movimento de verdade. */
+  var tf=instanteDoRegistro(ult);
+  if(!tf)return true;   /* cartão sem carimbo nenhum: na dúvida NÃO cria (é o que se corrige aqui) */
+  function depois(r){var t=instanteDoRegistro(r);return t>0&&t>tf;}
+  var pedNovo=pedidos.some(function(x){return x.clienteId===c.id&&x.loja===lojaAtual&&x.status!=="Cancelada"&&!x.cancelada&&
+    x.id!==ult.pedidoId&&depois(x);});
+  if(pedNovo)return false;
+  /* orçamento convertido já é o pedido do cartão; perdido não puxa acompanhamento */
+  var orcNovo=orcamentos.some(function(x){return x.clienteId===c.id&&x.loja===lojaAtual&&
+    x.situacao!=="perdido"&&x.situacao!=="convertido"&&x.id!==ult.orcamentoId&&depois(x);});
+  if(orcNovo)return false;
+  /* contato de verdade: atendimento, ou atividade já realizada (o mesmo critério do
+     etapaPelosDados — um critério só para a mesma coisa, lição da v326) */
+  var contato=atendimentos.some(function(x){return x.clienteId===c.id&&
+    (x.natureza!=="atividade"||x.status==="finalizado")&&depois(x);});
+  return !contato;
+}
+function negocioNovo(c,etapa,via,desde,resp){
+  var d0=desde||String(c.criadoEm||"").slice(0,10)||hojeISO();
+  var n={id:uid(),desde:d0,loja:lojaAtual,clienteId:c.id,cliente:c.nome||"",tel:c.tel||"",cidade:c.cidade||"",origem:c.origem||"",
+    responsavel:resp||respPeloMovimento(c,d0)||vendedorDoCliente(c)||c.criadoPor||usuarioAtual,etapa:etapa,etapaEm:agoraCarimbo(),valor:0,produto:"",obs:"",
     criadoEm:agoraCarimbo(),criadoPor:usuarioAtual,via:via||"",historico:[{de:"",para:etapa,quando:agoraCarimbo(),por:via?"sistema":usuarioAtual,auto:!!via,obs:via||""}]};
   if(c.demo)n.demo=true;
   negocios.push(n);return n;
 }
 /* chamado depois de salvar atendimento, orçamento e pedido: cria o negócio do lead ou anda o cartão */
-async function atualizarFunilCliente(cid,motivo){
+async function atualizarFunilCliente(cid,motivo,quem){
   if(!cid)return null;
   var c=cliPorId(cid);if(!c)return null;
   if(ehClienteTeste(c))return null;   /* cliente de treinamento não entra no funil (v376) */
@@ -37353,7 +37407,7 @@ async function atualizarFunilCliente(cid,motivo){
     if(ehLead(c)){
       if(ult&&ult.etapa==="venda")return null;
       if(ult&&ult.etapa==="perdido"&&motivo!=="atendimento"&&!temOrcNovo)return null;
-      n=negocioNovo(c,"novo",motivo?"criado por "+motivo:"criado pelo sistema",desdeUlt);mudou=true;
+      n=negocioNovo(c,"novo",motivo?"criado por "+motivo:"criado pelo sistema",desdeUlt,quem);mudou=true;
       if(ult&&ult.etapa==="perdido")n.historico[0].obs="retomado depois de perdido";
     }else{
       /* REGRA DELE (03/10): "preciso que todos os atendimentos estejam no funil até virar venda,
@@ -37362,7 +37416,10 @@ async function atualizarFunilCliente(cid,motivo){
          de fora justamente QUEM COMPRA NA PRIMEIRA CONVERSA: ao salvar o pedido o cliente já não
          era mais lead, o cartão nunca nascia e a venda não aparecia no quadro (o caso do pedido
          20814). Agora o cartão nasce com o contato, e `etapaPelosDados` leva para Venda sozinho. */
-      n=negocioNovo(c,"novo",motivo?"criado por "+motivo:(temOrcNovo?"orçamento de cliente":"criado pelo sistema"),desdeUlt);mudou=true;
+      /* a trava que faltava (23/10): cartão novo só nasce com movimento que o último cartão
+         FECHADO não cobre. Era isto que fazia a varredura criar um cartão por login. */
+      if(funilJaCoberto(c,ult))return null;
+      n=negocioNovo(c,"novo",motivo?"criado por "+motivo:(temOrcNovo?"orçamento de cliente":"criado pelo sistema"),desdeUlt,quem);mudou=true;
     }
   }
   var e=etapaPelosDados(n,c);
@@ -37380,7 +37437,20 @@ async function atualizarFunilCliente(cid,motivo){
   return n;
 }
 /* abertura: leads e clientes com movimento nos últimos 90 dias ganham o cartão que faltar */
+var funilSincPromessa=null,funilRetentar=0,negociosLidos=false;
 async function sincronizarFunil(){
+  /* UMA VARREDURA POR VEZ (23/10): ela é disparada em DOIS pontos do boot — no .then() da
+     leitura dos clientes (que não é esperada desde a v219) e no bloco de fundo — e as duas
+     percorriam a mesma lista ao mesmo tempo. A segunda agora ESPERA a primeira em vez de
+     varrer de novo: no banco dele havia pares de cartões criados no MESMO minuto. */
+  if(funilSincPromessa)return funilSincPromessa;
+  /* LISTA INCOMPLETA NÃO DECIDE NADA (lição da v325): com os cadastros ou os negócios ainda
+     a caminho, a varredura recria cartão que já existe. Tenta de novo quando eles chegarem. */
+  if(db&&(clientesCarregando||!negociosLidos)){
+    if(!funilRetentar)funilRetentar=setTimeout(function(){funilRetentar=0;sincronizarFunil();},1500);
+    return 0;
+  }
+  funilSincPromessa=(async function(){
   var limite=somaDias(hojeISO(),-90),feitos=0;
   /* quem tem movimento recente sai de listas pequenas (orçamentos e atendimentos), não de
      uma varredura por cliente: com 22 mil cadastros aquilo era 22 mil × 22 mil (v148) */
@@ -37403,6 +37473,8 @@ async function sincronizarFunil(){
     if(negocios.length>antes||nn)feitos++;
   }
   return feitos;
+  })();
+  try{return await funilSincPromessa;}finally{funilSincPromessa=null;}
 }
 function diasParado(n){
   var ref=String(n.etapaEm||n.criadoEm||"").slice(0,10);
@@ -39755,7 +39827,7 @@ async function salvarAtend(){
     return avisarRecusaBanco("at_alerta",eGr,"O atendimento continua aqui na tela — tente de novo.");
   }
   /* funil de vendas: cria o cartão do lead ou anda para Em atendimento */
-  try{await atualizarFunilCliente(a.clienteId,"atendimento");}catch(eF){console.warn("funil",eF);}
+  try{await atualizarFunilCliente(a.clienteId,"atendimento",a.colaborador||usuarioAtual);}catch(eF){console.warn("funil",eF);}
   editandoAt=null;atendManutEq=null;atendAniv=null;
 
   /* fase 2 — encerramento */
@@ -39829,7 +39901,7 @@ async function agendarFuturaDoAtend(at){
     origemAtend:at.id,equipId:at.manutEquipId||at.equipId||"",status:"aberto"};
   atendimentos.push(f);
   if(db){try{await col("atendimentos").doc(f.id).set(f);}catch(e){console.warn(e);}}
-  try{await atualizarFunilCliente(f.clienteId,"atendimento");}catch(eF){console.warn("funil",eF);}
+  try{await atualizarFunilCliente(f.clienteId,"atendimento",f.colaborador||usuarioAtual);}catch(eF){console.warn("funil",eF);}
   return f;
 }
 async function fecharAtend(comFutura){
