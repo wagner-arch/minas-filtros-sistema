@@ -742,6 +742,10 @@
   .t-lim b{font-weight:600;color:var(--ink-2);white-space:nowrap}
   .t-lim b.tf-ag{color:var(--accent);font-weight:800}
   .t-lim b.tf-ruim{color:var(--crit);font-weight:800}
+  /* linha de "O que nasceu desta atividade" que abre o registro citado (22/10) */
+  .linha-tempo .lt-abre{cursor:pointer}
+  .linha-tempo .lt-abre:hover{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+  .linha-tempo .lt-ir{display:inline-block;margin-left:8px;color:var(--accent);font-weight:700;white-space:nowrap}
   /* coluna de marcar da lista de produtos (22/10) */
   .pm-col{width:38px;text-align:center}
   .pm-col input{margin:0}
@@ -9941,6 +9945,60 @@ async function apagarRegistro(tipo,id){
 function registrarAcessoApagou(tipo,r){
   try{console.warn("apagado por "+usuarioAtual+": "+tipo+" "+(r.numero||r.id));}catch(e){}
 }
+/* ===== CLICAR NA LINHA ABRE O QUE ELA CITOU (22/10, pedido dele com o print:
+   "preciso continuar a editar esse pedido iniciado, preciso de opção de clicar nele e
+   abrir esse pedido iniciado").
+   O PEDIDO INICIADO pode estar em três estados, e a linha leva ao certo em cada um:
+   (1) o pedido foi FINALIZADO → abre a ficha dele;
+   (2) ficou GUARDADO como Incompleto ("Salvar e continuar depois", v282) → retoma a
+       venda na etapa em que parou;
+   (3) a venda foi aberta e abandonada, sem nada guardado → abre a venda de novo com o
+       cliente e a origem desta atividade, que é de onde ele saiu. */
+function destinoAcaoAtiv(a,x){
+  if(!a||!x)return null;
+  if(x.tipo==="os"){
+    var o=x.id?ordens.filter(function(z){return z.id===x.id;})[0]:null;
+    return o?{k:"os",o:o,txt:"Abrir a OS "+(o.numero||"")}:null;
+  }
+  if(x.tipo==="orcam"){
+    var q=x.id?orcamentos.filter(function(z){return z.id===x.id;})[0]:null;
+    return q?{k:"orcam",o:q,txt:"Abrir o orçamento "+(q.numero||"")}:null;
+  }
+  if(x.tipo==="pedido"){
+    /* 1) pedido já finalizado a partir desta atividade */
+    var ps=pedidos.filter(function(z){return z.origemAtiv===a.id;})
+      .sort(function(u,v){return String(v.data||"").localeCompare(String(u.data||""));});
+    if(x.id){var pe=ps.filter(function(z){return z.id===x.id;})[0];if(pe)ps=[pe];}
+    if(ps.length)return {k:"pedido",o:ps[0],txt:"Abrir o pedido "+(ps[0].numero||"")};
+    /* 2) guardado como Incompleto */
+    var r=rascunhos.filter(function(z){return z.origemAtiv===a.id;})[0];
+    if(r)return {k:"rascunho",o:r,txt:"Continuar o pedido guardado"};
+    /* 3) nada guardado: começa de novo, com o cliente e a origem desta atividade */
+    return {k:"novo",o:null,txt:"Abrir o pedido para este cliente"};
+  }
+  return null;
+}
+function abrirAcaoAtiv(ativId,ix){
+  var a=atendPorId(ativId);
+  if(!a||!a.acoes||!a.acoes[ix])return;
+  var d=destinoAcaoAtiv(a,a.acoes[ix]);
+  if(!d)return;
+  $("detModal").hidden=true;
+  if(d.k==="os"){ ir("os");abrirOS(d.o);try{renderOS();}catch(e){} return; }
+  if(d.k==="orcam"){ ir("orcam");abrirOrc(d.o); return; }
+  if(d.k==="pedido"){ ir("pedidos");abrirPedido(d.o); return; }
+  if(d.k==="rascunho"){ retomarRascunho(d.o); return; }
+  /* o pedido foi aberto e abandonado: volta para a venda com o cliente e a origem */
+  pedOrigemAtiv=a;
+  var c=cliPorId(a.clienteId);
+  ir("venda");
+  try{
+    if(c){escolherClienteVenda(c);atualizarEtapas();}
+    if(a.colaborador&&$("v_vend"))$("v_vend").value=a.colaborador;
+    calcular();
+  }catch(e){console.warn("abrir acao pedido",e);}
+  toast("Nada tinha sido guardado neste pedido. A venda abriu de novo com "+(a.cliente||"o cliente")+".");
+}
 /* lixeira de UMA linha de "O que nasceu desta atividade" (pedido dele, 20/09) — apaga só o
    registro do histórico; o pedido, a OS ou o orçamento que a linha cita continuam no sistema */
 function htmlLixeiraAcao(ativId,ix){
@@ -11074,6 +11132,7 @@ function pedeManutProduto(p){
 window.__pedeManutMF=pedeManutProduto;
 window.__followupMF=function(){return followupsPendentes();};
 window.__atendsMF=function(){return atendimentos;};
+window.__detalhesMF=function(a){return abrirDetalhes(a);};
 window.__avisarAgMF=function(){return checarAgenda();};
 window.__alertaAgMF=function(a,min){return abrirAlerta(a,min||6);};
 window.__atrasadasMF=function(quem){return atividadesAtrasadas(quem);};
@@ -26468,9 +26527,14 @@ function abrirDetalhes(a){
           var oo=ordens.filter(function(z){return z.id===x.id;})[0];
           if(oo)st=' · <span class="pill '+osStatusO(oo.status).cls+'">'+osStatusO(oo.status).n+"</span>";
         }
-        return '<div class="lt"><div class="cab"><b>'+esc(dataCurta(x.quando))+"</b> · "+esc(x.por||"")+st+
+        /* clicar na linha abre o que ela citou (22/10) */
+        var d=destinoAcaoAtiv(a,x);
+        return '<div class="lt'+(d?' lt-abre" data-acnav="'+esc(a.id)+"|"+o.ix+'"':'"')+
+          (d?' role="button" tabindex="0" title="'+esc(d.txt)+'"':"")+'><div class="cab"><b>'+
+          esc(dataCurta(x.quando))+"</b> · "+esc(x.por||"")+st+
           htmlLixeiraAcao(a.id,o.ix)+"</div>"+
-          '<div class="txt">'+esc(x.texto)+"</div></div>";}).join("")+"</div></div>"
+          '<div class="txt">'+esc(x.texto)+
+          (d?('<span class="lt-ir">'+esc(d.txt)+" →</span>"):"")+"</div></div>";}).join("")+"</div></div>"
     : "";
   /* atividade de contato da OS: o atendente lê o diagnóstico do técnico aqui (v198) */
   var osDiagAtiv=a.osId?ordens.filter(function(z){return z.id===a.osId;})[0]:null;
@@ -26529,6 +26593,26 @@ function abrirDetalhes(a){
       "Ela se encerra sozinha pelo andamento da OS — por isso aqui só dá para abrir a OS, reagendar ou fechar.</div>";
 
   function on(id,fn){var e=$(id);if(e)e.onclick=fn;}
+  /* clicar na linha de "O que nasceu desta atividade" abre o pedido, a OS ou o orçamento
+     que ela cita (22/10). A lixeira fica de fora: ela tem o clique dela. */
+  var dh=$("dt_hist");
+  if(dh&&!dh.__ligNav){dh.__ligNav=1;
+    dh.addEventListener("click",function(ev){
+      if(ev.target&&ev.target.closest&&ev.target.closest("[data-rmacao]"))return;
+      var l=ev.target&&ev.target.closest?ev.target.closest("[data-acnav]"):null;
+      if(!l)return;
+      var pa=String(l.getAttribute("data-acnav")||"").split("|");
+      abrirAcaoAtiv(pa[0],+pa[1]);
+    });
+    dh.addEventListener("keydown",function(ev){
+      if(ev.key!=="Enter"&&ev.key!==" ")return;
+      var l=ev.target&&ev.target.closest?ev.target.closest("[data-acnav]"):null;
+      if(!l)return;
+      ev.preventDefault();
+      var pa=String(l.getAttribute("data-acnav")||"").split("|");
+      abrirAcaoAtiv(pa[0],+pa[1]);
+    });
+  }
   on("dt_fechar",function(){$("detModal").hidden=true;detReg=null;});
   on("dt_os",function(){$("detModal").hidden=true;ir("os");abrirOS(osDaAtiv);});
   on("dt_osPag",function(){$("detModal").hidden=true;abrirPedidoDaOS(osDaAtiv,"atendente",a);});
