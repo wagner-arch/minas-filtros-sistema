@@ -13066,6 +13066,8 @@ window.__geraAparelhoMF=function(i){return itemGeraAparelho(i);};
 window.__pedeLocalMF=function(i){return itemPedeLocal(i);};
 window.__pedeSerieMF=function(p){return pedeSerieProduto(p);};
 window.__pedeLocalProdMF=function(p){return pedeLocalProduto(p);};
+window.__regraGrupoMF=function(p){return regraDoGrupoProd(p);};
+window.__pedeLocalProdMF=function(p){return pedeLocalProduto(p);};
 window.__escolherClienteMF=function(c){return escolherClienteVenda(c);};
 window.__revisaoMF=function(){return abrirRevisaoPedido();};
 window.__faltaEndMF=function(){return faltaEnderecoInstalacao();};
@@ -15659,6 +15661,7 @@ function pillIdentProd(p){
   return out.join(" ");
 }
 /* a nota do cadastro diz o que o AUTOMÁTICO decidiu para este produto (22/10) */
+/* a nota mostra o que o AUTOMÁTICO decidiu: desde 23/10 quem manda é o grupo escolhido */
 function notaIdentProduto(){
   var el=$("p_identNota"); if(!el)return;
   var p={nome:($("p_nome")||{}).value||"",grupo:($("p_grupo")||{}).value||"",
@@ -15666,9 +15669,22 @@ function notaIdentProduto(){
          serie:($("p_serie")||{}).value||"",pedeLocal:($("p_pedeLocal")||{}).value||""};
   var ap=aparelhoAcompanhadoProd(p), temPrazo=!!(+p.manut);
   var ps=pedeSerieProduto(p), pl=pedeLocalProduto(p);
-  var porque=!temPrazo?"não tem prazo de troca cadastrado"
-    :(ap?"tem prazo de troca e o sistema o reconhece como APARELHO"
-        :"tem prazo de troca, mas o nome diz que é PEÇA — por isso o automático não pede nada");
+  var reg=regraDoGrupoProd(p), gNome=String(p.grupo||"").trim();
+  var porque;
+  if(!gNome){
+    porque="sem grupo escolhido ainda — escolha o Grupo lá em cima para o sistema decidir";
+  }else if(reg&&(reg.serie||reg.local)){
+    porque="quem decide é o GRUPO "+gNome+": ele pede "+
+      (reg.serie&&reg.local?"número de série e localização"
+        :(reg.serie?"número de série":"a localização"));
+  }else if(reg){
+    porque="quem decide é o GRUPO "+gNome+", e ele não pede nenhum dos dois"+
+      (temPrazo?" (nem com prazo de troca cadastrado)":"");
+  }else{
+    porque=!temPrazo?"não tem prazo de troca cadastrado"
+      :(ap?"tem prazo de troca e o sistema o reconhece como APARELHO"
+          :"tem prazo de troca, mas o nome diz que é PEÇA — por isso o automático não pede nada");
+  }
   var L=[];
   L.push("<div class=\"note"+((ps||pl)?"":" mut")+"\" style=\"margin-top:10px\">");
   L.push("<b>Na venda deste produto:</b> ");
@@ -15687,6 +15703,34 @@ function notaIdentProduto(){
    digitar "cozinha" para vender uma válvula, senão o item não entrava.
    Agora o automático pergunta duas coisas: o produto tem prazo de troca E é um APARELHO
    (`ehAparelhoDeOS`, a mesma regra da v322 que separa purificador de termostato)? */
+var REGRA_GRUPO_SERIE={
+  /* aparelho instalado na casa do cliente: pede os dois */
+  "purificadores":{serie:true,local:true},
+  "bebedouros":{serie:true,local:true},
+  "central":{serie:true,local:true},
+  "centrais de filtragem":{serie:true,local:true},
+  "central de filtragem":{serie:true,local:true},
+  /* refil: pede só onde o aparelho está, para a troca ir ao lugar certo */
+  "refis":{serie:false,local:true},
+  "refil recorrente":{serie:false,local:true}
+};
+/* o grupo é comparado sem acento, sem maiúscula e sem plural, como em mesmoGrupo (v207) */
+function regraDoGrupoProd(p){
+  if(!p)return null;
+  var g;
+  try{ g=chaveGrupo(p.grupo||""); }catch(e){ g=String(p.grupo||"").toLowerCase().trim(); }
+  if(!g)return null;
+  if(REGRA_GRUPO_SERIE[g])return REGRA_GRUPO_SERIE[g];
+  /* chaveGrupo tira o plural, então "purificadores" chega como "purificador" */
+  var k=Object.keys(REGRA_GRUPO_SERIE);
+  for(var i=0;i<k.length;i++){
+    var kk;try{ kk=chaveGrupo(k[i]); }catch(e){ kk=k[i]; }
+    if(kk===g)return REGRA_GRUPO_SERIE[k[i]];
+  }
+  /* grupo que não está na lista não pede nada — é a regra dele, dita assim:
+     "todos os outros grupos com os dois desligados" */
+  return {serie:false,local:false};
+}
 function aparelhoAcompanhadoProd(p){
   if(!p||!(+p.manut))return false;
   try{ return ehAparelhoDeOS(p.nome,p.grupo); }catch(e){ return true; }
@@ -15699,6 +15743,8 @@ function pedeSerieProduto(p){
   var v=String(p.serie||"");
   if(v==="nunca")return false;
   if(v==="sim")return true;
+  var r=regraDoGrupoProd(p);
+  if(r)return r.serie;
   return temSerieGrupo(p)||aparelhoAcompanhadoProd(p);
 }
 function pedeLocalProduto(p){
@@ -15706,6 +15752,8 @@ function pedeLocalProduto(p){
   var v=String(p.pedeLocal||"");
   if(v==="nunca")return false;
   if(v==="sim")return true;
+  var r=regraDoGrupoProd(p);
+  if(r)return r.local;
   return aparelhoAcompanhadoProd(p);
 }
 /* o item pede o LOCAL dentro da casa (cozinha, varanda…)? é a marca do produto (22/10) */
