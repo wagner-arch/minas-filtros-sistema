@@ -742,6 +742,9 @@
   .t-lim b{font-weight:600;color:var(--ink-2);white-space:nowrap}
   .t-lim b.tf-ag{color:var(--accent);font-weight:800}
   .t-lim b.tf-ruim{color:var(--crit);font-weight:800}
+  /* coluna de marcar da lista de produtos (22/10) */
+  .pm-col{width:38px;text-align:center}
+  .pm-col input{margin:0}
   tr.it-abaixo>td{background:color-mix(in srgb,var(--crit) 7%,transparent)}
   tr.it-abaixo>td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
   .tw>table.t-itens{table-layout:fixed;width:100%;min-width:0}
@@ -2307,6 +2310,13 @@ img{max-width:100%}
         <div class="toolbar">
           <input id="prodBusca" placeholder="Buscar por nome ou código">
           <button class="btn ghost" type="button" id="prodAtualizar" title="Buscar o que mudou no banco desde a última vez">Atualizar</button>
+          <!-- SITUAÇÃO (22/10, pedido dele): a tela abre mostrando só os ativos, que é
+               com o que se trabalha; o inativo continua a um toque de distância. -->
+          <select id="prodSit" style="max-width:160px">
+            <option value="ativo" selected>Só os ativos</option>
+            <option value="inativo">Só os inativos</option>
+            <option value="">Ativos e inativos</option>
+          </select>
           <select id="prodGrupo" style="max-width:200px"></select>
           <select id="prodSub" style="max-width:200px"></select>
           <span class="count" id="prodCount"></span>
@@ -2317,9 +2327,13 @@ img{max-width:100%}
           <button class="btn ghost" type="button" id="prodLojas" hidden>Conferir as 3 lojas</button>
           <!-- limpeza do que entrou errado na importação (pedido do Wagner, 03/10) -->
           <button class="btn mut" type="button" id="prodApagarBusca" hidden>Apagar os da busca</button>
+          <!-- excluir os marcados na lista (22/10, pedido dele) -->
+          <button class="btn mut" type="button" id="prodExcluir" hidden>Excluir os marcados</button>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Produto</th><th>Grupo · Subgrupo</th><th class="num">Estoque</th><th class="num">Custo</th><th class="num">Frete</th><th class="num">100%</th><th class="num">70%</th><th class="num">Campanha</th><th class="num">Pontos</th><th>Série</th><th>Manutenção</th></tr></thead>
+          <!-- EXCLUIR UM OU VÁRIOS (22/10, pedido dele): a coluna de marcar só existe
+               para o Administrador, e o botão da barra diz quantos estão marcados. -->
+          <thead><tr><th class="pm-col" hidden><input type="checkbox" id="prodTodos" title="Marcar todos os desta tela" aria-label="Marcar todos os produtos desta tela"></th><th>Produto</th><th>Grupo · Subgrupo</th><th class="num">Estoque</th><th class="num">Custo</th><th class="num">Frete</th><th class="num">100%</th><th class="num">70%</th><th class="num">Campanha</th><th class="num">Pontos</th><th>Série</th><th>Manutenção</th></tr></thead>
           <tbody id="prodBody"></tbody>
         </table></div>
       </div>
@@ -10288,6 +10302,9 @@ function mostrarFaltantes(){
 }
 
 /* produtos */
+/* SITUAÇÃO NA TELA DE PRODUTOS (22/10, pedido dele: "preciso de filtro de ativos e
+   inativos e manter sempre opção de ativo já escolhida"). Vazio = os dois. */
+function situacaoProdFiltro(){ var s=$("prodSit"); return s?s.value:"ativo"; }
 function renderProdutos(){
   try{ajustarBotaoLojas();}catch(e){}
   var q=($("prodBusca").value||"").toLowerCase();
@@ -10303,11 +10320,18 @@ function renderProdutos(){
     if(ss.value&&ss.selectedIndex<0)ss.value="";
   }
   var fg=sg?sg.value:"",fs=ss?ss.value:"";
+  /* situação: a tela nasce em "só os ativos" (22/10, pedido dele) */
+  var fsit=situacaoProdFiltro();
   var lista=produtos.filter(function(p){return !q||(p.nome||"").toLowerCase().indexOf(q)>=0||(p.cod||"").toLowerCase().indexOf(q)>=0;})
+    .filter(function(p){return !fsit||(p.status||"ativo")===fsit;})
     .filter(function(p){return !fg||(p.grupo||"")===fg;})
     .filter(function(p){return !fs||(p.subgrupo||"")===fs;})
     .sort(function(a,b){return ordAZ(a.nome,b.nome);});   /* ordem alfabética (regra dele, 20/09) */
-  $("prodCount").textContent=lista.length+(lista.length===1?" produto":" produtos");
+  /* a contagem diz o que está na tela, senão "563 produtos" parece que o resto sumiu */
+  var nomeSit=(fsit==="ativo"?" ativo":(fsit==="inativo"?" inativo":" produto"));
+  $("prodCount").textContent=lista.length+nomeSit+(lista.length===1?"":"s")+
+    (fsit?(" · de "+produtos.length+" no catálogo"):"");
+  setTimeout(function(){try{ligarExcluirProd();ajustarExcluirProd();}catch(e){}},0);
   var b=$("prodBody");b.innerHTML="";
   lista.forEach(function(p){
     var tr=document.createElement("tr");tr.className="clickable";
@@ -10316,7 +10340,9 @@ function renderProdutos(){
     var estCls=est<0?"p-crit":((mn>0&&est<mn)?"p-warn":"p-mut");
     var inativo=(p.status||"ativo")==="inativo";
     if(inativo)tr.style.opacity=".55";
-    tr.innerHTML='<td><div class="t-main">'+
+    tr.innerHTML=(podeExcluirProd()?('<td class="pm-col"><input type="checkbox" data-pmk="'+esc(p.id)+
+        '"'+(prodMarcados[p.id]?" checked":"")+' aria-label="Marcar '+esc(p.nome)+'"></td>'):"")+
+      '<td><div class="t-main">'+
         /* miniatura da imagem do produto (20/09) */
         (p.imagem?'<img class="prod-mini" src="'+p.imagem+'" alt="">':"")+
         esc(p.nome)+(inativo?' <span class="pill p-mut">inativo</span>':"")+
@@ -11486,8 +11512,12 @@ async function removerDuplicados(){
 function produtosDaBusca(){
   var q=semAcento($("prodBusca")?$("prodBusca").value:"").trim();
   if(q.length<3)return [];
+  /* a mesma situação que a tela está mostrando: apagar o que não está à vista seria
+     confirmar no escuro (22/10) */
+  var fsit=situacaoProdFiltro();
   return produtos.filter(function(p){
     if(p.loja&&p.loja!==lojaAtual)return false;
+    if(fsit&&(p.status||"ativo")!==fsit)return false;
     return semAcento(p.nome).indexOf(q)>=0||semAcento(p.cod||"").indexOf(q)>=0;
   });
 }
@@ -11497,6 +11527,108 @@ function ajustarApagarBusca(){
   var L=ehAdministrador()?produtosDaBusca():[];
   bt.hidden=!L.length;
   bt.textContent="Apagar os "+L.length+" da busca";
+}
+/* ===== EXCLUIR PRODUTO: UM CAMINHO SÓ (22/10) =============================
+   Quem pode: só o Administrador, como as outras exclusões em massa.
+   A trava que vale desde a v263 continua inteira: produto que JÁ FOI USADO
+   (venda, orçamento, OS, movimento de estoque, aparelho da manutenção ou
+   composição de outro produto) NÃO é apagado — ele é DESATIVADO, com o motivo
+   gravado, e o histórico fica de pé. Só some do catálogo o que nunca foi usado.
+   A gravação é conferida: o que o banco recusar é contado e dito na tela. */
+function podeExcluirProd(){ return ehAdministrador(); }
+var prodMarcados={};
+function marcadosProd(){
+  return produtos.filter(function(p){return prodMarcados[p.id];});
+}
+function ajustarExcluirProd(){
+  var bt=$("prodExcluir");if(!bt)return;
+  var L=podeExcluirProd()?marcadosProd():[];
+  bt.hidden=!L.length;
+  bt.textContent="Excluir "+L.length+(L.length===1?" produto marcado":" produtos marcados");
+  /* a coluna de marcar só aparece para quem pode excluir */
+  [].forEach.call(document.querySelectorAll("#s-produtos .pm-col"),function(e){e.hidden=!podeExcluirProd();});
+  var td=$("prodTodos");
+  if(td){ var naTela=[].slice.call(document.querySelectorAll("#prodBody [data-pmk]"));
+    td.checked=naTela.length>0&&naTela.every(function(c){return c.checked;}); }
+}
+/* o texto da confirmação, separando o que será apagado do que será desativado */
+function textoExclusaoProd(L){
+  var podem=[],presos=[];
+  L.forEach(function(p){(usoTotalProduto(p)?presos:podem).push(p);});
+  var amostra=L.slice(0,10).map(function(p){return "• "+(p.cod?p.cod+" ":"")+p.nome+
+    (usoTotalProduto(p)?" (já usado — será desativado)":"");}).join("\n");
+  return {podem:podem,presos:presos,
+    txt:"Apagar "+podem.length+" produto(s)"+
+      (presos.length?" e DESATIVAR "+presos.length+" que já têm venda, OS, estoque ou aparelho":"")+
+      "?\n\n"+amostra+(L.length>10?"\n… e mais "+(L.length-10):"")+
+      "\n\nApagar não tem volta. O que já foi usado continua no sistema, desativado."};
+}
+/* apaga/desativa a lista e devolve a conta — usado pelos DOIS botões */
+async function excluirProdutos(L,motivo){
+  var sep=textoExclusaoProd(L),apagados=0,desativados=0,erros=0,movs=0;
+  for(var i=0;i<sep.podem.length;i++){
+    var pr=sep.podem[i];
+    try{
+      /* o movimento da importação sai junto, senão sobra saldo de produto que não existe (v263) */
+      var meus=movEst.filter(function(m){return m.produtoId===pr.id&&m.doc===DOC_IMPORT;});
+      for(var j=0;j<meus.length;j++){await apaga("movest",meus[j].id);movEst.splice(movEst.indexOf(meus[j]),1);movs++;}
+      await apaga("produtos",pr.id);
+      produtos.splice(produtos.indexOf(pr),1);
+      delete prodMarcados[pr.id];
+      apagados++;
+    }catch(e){erros++;console.warn("excluir produto",pr.cod,e);}
+  }
+  for(var k=0;k<sep.presos.length;k++){
+    var d=sep.presos[k],antes=d.status;
+    delete prodMarcados[d.id];
+    if((d.status||"ativo")!=="ativo")continue;
+    try{
+      d.status="inativo";d.inativadoEm=hojeISO();d.inativadoPor=usuarioAtual;d.inativadoMotivo=motivo||"excluído da lista";
+      if(db)await col("produtos").doc(d.id).set(d);
+      desativados++;
+    }catch(e){d.status=antes;erros++;console.warn("desativar produto",d.cod,e);}
+  }
+  try{esquecerIndices();}catch(e){}
+  return {apagados:apagados,desativados:desativados,erros:erros,movs:movs};
+}
+async function excluirProdutosMarcados(){
+  if(!podeExcluirProd()){toast("Só o Administrador exclui produto.");return;}
+  var L=marcadosProd();
+  if(!L.length){toast("Marque ao menos um produto na lista.");return;}
+  if(!confirm(textoExclusaoProd(L).txt))return;
+  var bt=$("prodExcluir");bt.disabled=true;
+  var r=await excluirProdutos(L,"excluído da lista de produtos");
+  bt.disabled=false;
+  opcoesProduto();renderProdutos();
+  try{ajustarApagarBusca();}catch(e){}
+  toast(r.apagados+" produto(s) apagado(s)"+(r.desativados?" · "+r.desativados+" desativado(s) por já terem movimento":"")+
+    (r.erros?" · "+r.erros+" não gravaram — confira a internet":"")+".");
+}
+function ligarExcluirProd(){
+  var bt=$("prodExcluir");
+  if(bt&&!bt.__lig){bt.__lig=1;bt.onclick=excluirProdutosMarcados;}
+  var td=$("prodTodos");
+  if(td&&!td.__lig){td.__lig=1;td.onchange=function(){
+    [].forEach.call(document.querySelectorAll("#prodBody [data-pmk]"),function(c){
+      c.checked=td.checked;
+      if(td.checked)prodMarcados[c.getAttribute("data-pmk")]=1;else delete prodMarcados[c.getAttribute("data-pmk")];
+    });
+    ajustarExcluirProd();
+  };}
+  /* um clique em captura atende todas as caixinhas, inclusive as redesenhadas */
+  var tb=$("prodBody");
+  if(tb&&!tb.__ligMarca){tb.__ligMarca=1;
+    tb.addEventListener("change",function(ev){
+      var c=ev.target&&ev.target.closest?ev.target.closest("[data-pmk]"):null;
+      if(!c)return;
+      if(c.checked)prodMarcados[c.getAttribute("data-pmk")]=1;else delete prodMarcados[c.getAttribute("data-pmk")];
+      ajustarExcluirProd();
+    });
+    /* marcar não pode abrir a ficha do produto */
+    tb.addEventListener("click",function(ev){
+      if(ev.target&&ev.target.closest&&ev.target.closest("[data-pmk]"))ev.stopPropagation();
+    },true);
+  }
 }
 async function apagarProdutosDaBusca(){
   if(!ehAdministrador()){toast("Só o Administrador apaga produto em massa.");return;}
@@ -11511,30 +11643,12 @@ async function apagarProdutosDaBusca(){
     amostra+(L.length>10?"\n… e mais "+(L.length-10):"")+"\n\nApagar não tem volta."))return;
   var bt=$("prodApagarBusca");
   bt.disabled=true;
-  var apagados=0,desativados=0,erros=0,movs=0;
-  for(var i=0;i<podem.length;i++){
-    var p=podem[i];
-    try{
-      var meus=movEst.filter(function(m){return m.produtoId===p.id&&m.doc===DOC_IMPORT;});
-      for(var j=0;j<meus.length;j++){await apaga("movest",meus[j].id);movEst.splice(movEst.indexOf(meus[j]),1);movs++;}
-      await apaga("produtos",p.id);
-      produtos.splice(produtos.indexOf(p),1);
-      apagados++;
-    }catch(e){erros++;console.warn("apagar busca",p.cod,e);}
-  }
-  for(var k=0;k<presos.length;k++){
-    var d=presos[k],antes=d.status;
-    if((d.status||"ativo")!=="ativo")continue;
-    try{
-      d.status="inativo";d.inativadoEm=hojeISO();d.inativadoPor=usuarioAtual;d.inativadoMotivo="importado errado";
-      if(db)await col("produtos").doc(d.id).set(d);
-      desativados++;
-    }catch(e){d.status=antes;erros++;console.warn("desativar busca",d.cod,e);}
-  }
+  /* o MESMO motor da exclusão por marcação (22/10) — um caminho só */
+  var r=await excluirProdutos(L,"importado errado");
   bt.disabled=false;
   opcoesProduto();renderProdutos();ajustarApagarBusca();
-  toast(apagados+" produto(s) apagado(s)"+(desativados?" · "+desativados+" desativado(s) por já terem movimento":"")+
-    (erros?" · "+erros+" não gravaram":"")+".");
+  toast(r.apagados+" produto(s) apagado(s)"+(r.desativados?" · "+r.desativados+" desativado(s) por já terem movimento":"")+
+    (r.erros?" · "+r.erros+" não gravaram":"")+".");
 }
 function ligarApagarBusca(){
   var bt=$("prodApagarBusca");
@@ -42910,6 +43024,8 @@ function resetarProdutos(){
   if($("prodForm"))$("prodForm").hidden=true;
   if($("prodLista"))$("prodLista").hidden=false;
   if($("prodBusca"))$("prodBusca").value="";
+  if($("prodSit"))$("prodSit").value="ativo";
+  prodMarcados={};
   try{renderProdutos();}catch(e){console.warn(e);}
 }
 function resetarOS(){
@@ -43975,6 +44091,8 @@ function ligar(){
 
   $("prodCancelar").onclick=function(){$("prodForm").hidden=true;$("prodLista").hidden=false;};
   $("prodBusca").oninput=renderProdutos;
+  if($("prodSit"))$("prodSit").onchange=function(){renderProdutos();try{ajustarApagarBusca();}catch(e){}};
+  ligarExcluirProd();
   $("prodGrupo").onchange=function(){$("prodSub").value="";renderProdutos();};
   $("prodSub").onchange=renderProdutos;
   $("p_grupo").oninput=atualizarListasGrupoProd;
