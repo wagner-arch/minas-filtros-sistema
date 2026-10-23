@@ -209,33 +209,46 @@ create policy assinaturas_link_update on public.assinaturas_link for update to a
 --    Decisão dele: remoção total da LOJA. Divinópolis como cidade de
 --    cliente continua existindo normalmente.
 -- ---------------------------------------------------------------------
+-- A função é a MESMA que já está no banco, copiada linha por linha: muda só a lista de
+-- lojas da trava (saiu o 'dv') e a mensagem de erro. O tipo de retorno continua INTEGER e os
+-- parâmetros continuam (p_loja text, p_tipo text) — trocar qualquer um dos dois exigiria
+-- DROP FUNCTION, que derrubaria a numeração dos pedidos.
 create or replace function public.proximo_numero(p_loja text, p_tipo text)
-returns bigint
+returns integer
 language plpgsql
 security definer
-set search_path to 'public','pg_temp'
-as $$
+set search_path to 'public', 'pg_temp'
+as $function$
 declare
-  v_loja text := lower(trim(coalesce(p_loja,'')));
-  v_tipo text := lower(trim(coalesce(p_tipo,'')));
-  v_num  bigint;
+  v_loja text := btrim(coalesce(p_loja,''));
+  v_tipo text := btrim(coalesce(p_tipo,''));
+  v_num  integer;
 begin
-  if v_loja = '' or v_tipo = '' then
-    raise exception 'proximo_numero: loja e tipo são obrigatórios';
-  elsif v_loja not in ('mf','wf') then
-    raise exception 'proximo_numero: loja desconhecida (%)', v_loja;
+  if public.meu_nome() is null then
+    raise exception 'Sem perfil ativo: a numeracao exige um colaborador autenticado e ativo.'
+      using errcode = '42501';
+  end if;
+  if v_tipo = '' or not public.tipo_numerador_valido(v_tipo) then
+    raise exception 'proximo_numero: tipo invalido (%). Use pedido, orcamento, os, cliente ou fornecedor.', v_tipo
+      using errcode = '22023';
   end if;
 
-  insert into public.numeradores (loja, tipo, ultimo)
-       values (v_loja, v_tipo, 1)
+  if public.tipo_numerador_global(v_tipo) then
+    v_loja := '*';                      -- contador unico das lojas
+  elsif v_loja not in ('mf','wf') then
+    raise exception 'proximo_numero: loja invalida (%). Use mf ou wf.', v_loja
+      using errcode = '22023';
+  end if;
+
+  insert into public.numeradores as n (loja, tipo, ultimo)
+  values (v_loja, v_tipo, public.base_numerador(v_tipo))
   on conflict (loja, tipo)
-    do update set ultimo = public.numeradores.ultimo + 1,
-                  atualizado_em = now()
-    returning ultimo into v_num;
+  do update set ultimo = n.ultimo + 1, atualizado_em = now()
+  returning n.ultimo into v_num;
 
   return v_num;
 end;
-$$;
+$function$;
 
 
 -- ---------------------------------------------------------------------
