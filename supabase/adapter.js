@@ -96,9 +96,22 @@
      campo do documento que vira a coluna docs.loja. null = coleção global
      (catálogo/cadastro compartilhado pelas 3 lojas) — grava loja NULL.
      ---------------------------------------------------------------------- */
+  /* o id real da configuração no banco: a empresa original fica como está, as outras
+     ganham o prefixo da loja. Vale SÓ para a coleção "config". */
+  function idConfigReal(colecao, id, loja) {
+    if (colecao !== "config" || !id) return id;
+    var lj = loja || "mf";
+    return lj === "mf" ? id : (lj + ":" + id);
+  }
+  /* o caminho de volta: o id que o sistema conhece, sem o prefixo da empresa */
+  function idConfigVisivel(colecao, id) {
+    if (colecao !== "config" || !id) return id;
+    var i = String(id).indexOf(":");
+    return i > 0 ? String(id).slice(i + 1) : id;
+  }
   var CAMPO_LOJA = {
     clientes: "loja",
-    produtos: null,
+    produtos: "loja",
     pedidos: "loja",
     orcamentos: "loja",
     atendimentos: "loja",
@@ -106,8 +119,8 @@
     ajustes: "loja",
     pontos: "loja",
     caixas: "loja",
-    centros: null,
-    fornecedores: null,
+    centros: "loja",
+    fornecedores: "loja",
     titulos: "loja",
     movs: "loja",
     movest: "loja",
@@ -115,15 +128,16 @@
     equipamentos: "loja",
     ordens: "loja",
     notas: "loja",
-    prestadores: null,
-    servprest: null,
+    prestadores: "loja",
+    servprest: "loja",
     remunprest: "loja",
     recibosprest: "loja",
     custodia: "loja",
-    /* FERRAMENTAS (22/10): a ferramenta é da EMPRESA, e o cadastro do colaborador também não
-       é de loja — então ela é global, como produtos e prestadores. */
-    ferramentas: null,
-    config: null,
+    /* FERRAMENTAS: eram globais desde a v388; em 23/10 passaram a ser de cada EMPRESA,
+       junto com produtos, fornecedores, centros, prestadores e configurações. */
+    ferramentas: "loja",
+    /* cada empresa com as suas (23/10): o id leva o prefixo da loja, veja idConfigReal */
+    config: "loja",
     rh: null,
     facial: null,
     ponto_fotos: "loja"
@@ -733,8 +747,8 @@
         "ler " + colecao + "/" + id
       );
       /* documento inexistente: exists=false e data()===undefined (o HTML testa isso) */
-      if (!r.data) return fazerDocSnap(id, undefined, false);
-      return fazerDocSnap(id, r.data.data, true);
+      if (!r.data) return fazerDocSnap(idConfigVisivel(colecao, id), undefined, false);
+      return fazerDocSnap(idConfigVisivel(colecao, id), r.data.data, true);
     }
 
     /* -------------------- grava (upsert integral, sem merge) ---------------
@@ -957,20 +971,20 @@
         path: colecao + "/" + (idRef || ""),
         get: function () {
           if (vazia) return Promise.resolve(fazerDocSnap("", undefined, false));
-          return buscarDoc(colecao, idRef);
+          return buscarDoc(colecao, idConfigReal(colecao, idRef, adapter.lojaPadrao));
         },
         set: function (obj, ops) {
           if (vazia) return semId("set");
-          return gravarDoc(colecao, idRef, obj, ops);
+          return gravarDoc(colecao, idConfigReal(colecao, idRef, adapter.lojaPadrao), obj, ops);
         },
         delete: function () {
           if (vazia) return semId("delete");
-          return apagarDoc(colecao, idRef);
+          return apagarDoc(colecao, idConfigReal(colecao, idRef, adapter.lojaPadrao));
         },
         /* atalhos que o HTML não usa hoje, mas que evitam surpresa se alguém tentar */
         update: function (obj, ops) {
           if (vazia) return semId("update");
-          return gravarDoc(colecao, idRef, obj, ops);
+          return gravarDoc(colecao, idConfigReal(colecao, idRef, adapter.lojaPadrao), obj, ops);
         },
         onSnapshot: function () {
           throw ErroBanco("onSnapshot de documento não implementado — assine a coleção.", colecao, null);
@@ -1445,6 +1459,9 @@
     /* todas as configurações de uma vez (eram 19 idas ao banco, viram 1).
        Devolve um mapa nome -> o MESMO snapshot que db.doc("config/x").get() devolve,
        inclusive para a que não existe (exists=false), senão o boot leria undefined. */
+    /* ganchos de teste: a tradução do id da configuração por empresa */
+    adapter.idConfigReal = function (c, id, loja) { return idConfigReal(c, id, loja); };
+    adapter.idConfigVisivel = function (c, id) { return idConfigVisivel(c, id); };
     adapter.configs = async function (nomes) {
       var r = conferir(
         await naFila(function () {
@@ -1452,8 +1469,11 @@
         }),
         "ler config"
       );
+      /* as configurações são de cada empresa (23/10): aqui chega o id REAL (com o prefixo
+         da loja, quando houver) e o sistema conhece o id sem ele. A RLS do banco já entrega
+         só as da empresa de quem está logado, então basta tirar o prefixo. */
       var achados = {};
-      (r.data || []).forEach(function (l) { achados[l.id] = l.data; });
+      (r.data || []).forEach(function (l) { achados[idConfigVisivel("config", l.id)] = l.data; });
       var saida = {};
       (Array.isArray(nomes) ? nomes : Object.keys(achados)).forEach(function (n) {
         saida[n] = Object.prototype.hasOwnProperty.call(achados, n)

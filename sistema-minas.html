@@ -1899,6 +1899,7 @@ img{max-width:100%}
   </div>
 </div>
 
+<div id="avisoEmpresa" hidden></div>
 <div class="banner" id="offline" hidden>Modo demonstração — os dados desta sessão não estão sendo salvos.</div>
 <div class="banner" id="banner" hidden></div>
 <div class="aviso-versao" id="avisoApp" hidden></div>
@@ -5081,6 +5082,10 @@ img{max-width:100%}
           <div class="grid g4">
             <div class="fld"><label for="u_funcao">Função <span class="req">*</span></label><input id="u_funcao" placeholder="Ex.: Vendedor externo, Auxiliar de almoxarifado"></div>
             <div class="fld"><label for="u_perfil">Perfil no sistema</label><select id="u_perfil"></select></div>
+            <!-- a empresa do colaborador: ele entra SÓ nela, e só aparece nas listas dela (23/10) -->
+            <div class="fld"><label for="u_empresa">Empresa <span class="req">*</span></label>
+              <select id="u_empresa"></select>
+              <div class="help" id="u_empresaNota"></div></div>
             <div class="fld"><label for="u_admissao">Admissão</label><input id="u_admissao" type="date"></div>
             <div class="fld"><label for="u_ativo">Situação</label>
               <select id="u_ativo"><option value="sim">Ativo</option><option value="nao">Inativo</option></select></div>
@@ -7968,7 +7973,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=379"></script>
+<script src="supabase/adapter.js?v=395"></script>
 <script>
 (function(){
 "use strict";
@@ -8329,6 +8334,27 @@ function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(m){return({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[m];});}
 function col(n){return db?db.collection(n):null;}
 /* a empresa aberta, em letras, no alto da tela — e em lugar nenhum dá para trocar */
+/* a empresa que ainda não tem os dados preenchidos: o documento do cliente sairia com o
+   nome e o CNPJ errados, então o sistema avisa em toda tela (regra dele, 23/10) */
+function faltamDadosDaEmpresa(){
+  var e=EMPRESA||{};
+  var falta=[];
+  if(!String(e.razao||"").trim())falta.push("nome da empresa");
+  if(!String(e.cnpj||"").trim())falta.push("CNPJ");
+  if(!String(e.endereco||"").trim())falta.push("endereço");
+  return falta;
+}
+function avisarDadosDaEmpresa(){
+  var box=$("avisoEmpresa");if(!box)return;
+  var falta=faltamDadosDaEmpresa();
+  if(!falta.length||!ehGestor()){box.hidden=true;box.innerHTML="";return;}
+  box.hidden=false;
+  box.innerHTML='<div class="note warn" style="margin:0 0 14px"><b>Faltam os dados de '+esc(nomeLoja())+".</b> "+
+    "Sem "+esc(falta.join(", "))+", o pedido e o orçamento saem com os dados errados para o cliente. "+
+    '<button class="btn sm" type="button" id="avEmpIr" style="margin-left:8px">Preencher agora</button></div>';
+  var b=$("avEmpIr");
+  if(b)b.onclick=function(){ir("empresa");};
+}
 function mostrarEmpresaAberta(){
   var e=$("empresaPill");if(!e)return;
   e.textContent=nomeLoja();
@@ -13418,6 +13444,10 @@ window.__dbMF=function(novo){if(novo){var a=db;db=novo;return a;}return db;};
 window.__estadoBancoMF=function(ok,erro){return estadoBanco(ok,erro);};
 /* duas empresas, uma de cada vez (23/10) */
 window.__lojaAtualMF=function(){return lojaAtual;};
+window.__empresaMF=function(){return EMPRESA;};
+window.__abrirUsuarioMF=function(i){return abrirUsuario(i);};
+window.__idConfigMF=function(c,id,lj){return (db&&db.idConfigReal)?db.idConfigReal(c,id,lj):id;};
+window.__idConfigVisivelMF=function(c,id){return (db&&db.idConfigVisivel)?db.idConfigVisivel(c,id):id;};
 window.__lojasMF=function(){return LOJAS.slice();};
 window.__unidadeDocMF=function(id){return UNIDADES[id]||"";};
 window.__abrirRetiradaMF=function(pr,q,f){return abrirRetirada(pr,q,f);};
@@ -20001,6 +20031,20 @@ async function apagarColaborador(){
   renderUsuarios();render();
   toast("Cadastro de "+u.nome+" apagado.");
 }
+/* a lista de empresas do cadastro, e o aviso do que a escolha muda */
+function montarEmpresaUsuario(u){
+  var s=$("u_empresa");if(!s)return;
+  if(!s.options.length)LOJAS.forEach(function(l){
+    var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;s.appendChild(o);});
+  s.value=(u&&u.loja)||lojaAtual;
+  /* só Administrador e Gerente mudam a empresa de alguém */
+  s.disabled=!ehGestor();
+  var nota=$("u_empresaNota");
+  if(nota)nota.innerHTML=ehGestor()
+    ? ("Ele entra <b>só nesta empresa</b> e aparece nas listas dela. Mudando a empresa, o histórico que ele já tem "+
+       "<b>continua onde está</b> — o que muda é onde ele trabalha daqui para a frente.")
+    : "Só o Administrador e o Gerente mudam a empresa de um colaborador.";
+}
 function abrirUsuario(i){
 
   editandoUs=(i==null?null:USUARIOS[i]);
@@ -20012,6 +20056,7 @@ function abrirUsuario(i){
   funcoes.forEach(function(f){var o=document.createElement("option");o.textContent=f.nome;sp.appendChild(o);});
   sp.value=u.perfil||"Vendedor";
   $("u_ativo").value=(u.ativo===false?"nao":"sim");
+  montarEmpresaUsuario(u);
   ajustarBotoesUsuario();
   CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)e.value=u[k]||"";});
   try{ajustarConjuge();}catch(e){}
@@ -43048,6 +43093,7 @@ function renderTudo(){
 }
 function render(){
   try{mostrarEmpresaAberta();}catch(e){}
+  try{avisarDadosDaEmpresa();}catch(e){}
   RENDER_COMPLETO=true;
   /* quem não é Administrador não baixa nem imprime tabela/relatório (05/10) */
   try{document.body.classList.toggle("sem-export",!podeExportar());desenharMarcaDagua();}catch(e){}
@@ -44953,6 +44999,10 @@ function ligar(){
     var u=editandoUs||{ativo:true,cadastradoEm:hojeISO()};
     var nomeAntigo=u.nome;
     u.nome=n;u.perfil=$("u_perfil").value;u.ativo=($("u_ativo").value==="sim");
+    /* a empresa do colaborador (23/10): só a gestão muda; quem não é mantém a que estava */
+    var emp=$("u_empresa");
+    if(emp&&ehGestor())u.loja=emp.value||lojaAtual;
+    else if(!u.loja)u.loja=lojaAtual;
     CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)u[k]=e.value.trim?e.value.trim():e.value;});
     ["salario","vr","assiduidade","desempenho"].forEach(function(k){u[k]=numMF($("u_"+k).value)||0;});
     ["entrada","almocoIni","almocoFim","saida"].forEach(function(k){u[k]=$("u_"+k).value;});
@@ -46915,11 +46965,15 @@ async function mesclarPerfisBanco(){
   if(!db||!modoBanco()||typeof db.perfis!=="function")return;
   var ps=[];
   try{ps=await db.perfis(false);}catch(e){console.warn("perfis",e);return;}
+  /* só a equipe DESTA empresa entra nas listas (23/10) */
+  ps=ps.filter(function(p){return !p.loja||p.loja===lojaAtual;});
   ps.forEach(function(p){
     var u=USUARIOS.filter(function(x){return x.nome===p.nome;})[0];
     if(!u){u={nome:p.nome};USUARIOS.push(u);}
     u.perfil=p.funcao;u.funcaoBanco=p.funcao;u.ativo=p.ativo!==false;if(p.loja)u.loja=p.loja;u.temLogin=true;
   });
+  /* colaborador de OUTRA empresa que esteja na lista gravada sai dela */
+  USUARIOS=USUARIOS.filter(function(u){return !u.loja||u.loja===lojaAtual;});
   /* teste real zerado (pedido do Wagner, 17/09): os 6 colaboradores de exemplo do código saem da lista; fica quem
      tem login no banco e quem o Administrador cadastrar em Configurações › Usuários (cadastradoEm) */
   var comLogin={};ps.forEach(function(p){comLogin[p.nome]=1;});
