@@ -98,8 +98,13 @@
      ---------------------------------------------------------------------- */
   /* o id real da configuração no banco: a empresa original fica como está, as outras
      ganham o prefixo da loja. Vale SÓ para a coleção "config". */
+  var CONFIG_GLOBAL = ["usuarios"];
+  function configGlobal(colecao, id) {
+    return colecao === "config" && CONFIG_GLOBAL.indexOf(String(id || "")) >= 0;
+  }
   function idConfigReal(colecao, id, loja) {
     if (colecao !== "config" || !id) return id;
+    if (configGlobal(colecao, id)) return id;   /* uma lista só para as duas empresas */
     var lj = loja || "mf";
     return lj === "mf" ? id : (lj + ":" + id);
   }
@@ -793,6 +798,7 @@
       var campo = campoLojaDe(colecao);
       var loja = null;
       if (campo) loja = ehTexto(corpo[campo]) ? corpo[campo] : (ehTexto(adapter.lojaPadrao) ? adapter.lojaPadrao : null);
+      if (configGlobal(colecao, idFinal)) loja = null;
 
       var linha = { colecao: colecao, id: idFinal, loja: loja, data: corpo };
       var contexto = "gravar " + colecao + "/" + idFinal;

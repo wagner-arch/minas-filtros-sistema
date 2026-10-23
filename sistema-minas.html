@@ -5163,7 +5163,8 @@ img{max-width:100%}
           <div class="grid g4" style="margin-top:12px">
             <div class="fld" style="grid-column:span 2"><label for="u_acEmail">E-mail de acesso <span class="req">*</span></label>
               <input id="u_acEmail" type="email" inputmode="email" autocomplete="off" placeholder="nome@minasfiltrosonline.com.br"></div>
-            <div class="fld"><label for="u_acLoja">Loja do colaborador</label><select id="u_acLoja"></select></div>
+            <div class="fld"><label for="u_acLoja">Empresa do acesso</label><select id="u_acLoja" disabled></select>
+              <div class="help">Vem do campo <b>Empresa</b>, lá em cima na ficha. É nela que ele vai entrar.</div></div>
             <div class="fld" style="align-self:end"><button class="btn" type="button" id="u_acCriar">Cadastrar senha de acesso</button></div>
             <div class="fld" style="align-self:end"><button class="btn ghost" type="button" id="u_acFuncao" hidden>Atualizar a função no banco</button></div>
           </div>
@@ -5765,7 +5766,8 @@ img{max-width:100%}
         <div class="actions">
           <button class="btn" type="button" id="pmnSalvar">Salvar</button>
         </div>
-        <p class="help">Acima do mínimo o vendedor ganha <b>100%</b> de comissão · exatamente no mínimo, <b>70%</b> ·
+        <p class="help">Da <b>Tabela 100% mínima</b> para cima o vendedor ganha <b>100%</b> de comissão ·
+          abaixo dela, até o preço mínimo, ganha <b>70%</b> ·
           abaixo do mínimo a comissão <b>zera</b> e a venda vai para a autorização do Administrador.
           Produto que tenha a <b>Tabela 70% mínima</b> preenchida na ficha usa aquele valor, não este percentual.</p>
       </div>
@@ -7985,7 +7987,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=395"></script>
+<script src="supabase/adapter.js?v=397"></script>
 <script>
 (function(){
 "use strict";
@@ -9303,12 +9305,12 @@ function temFaixaPreco(p){return !!(p&&(+p.cheiaMax||0)>(+p.cheia||0));}
 function faixasDoProduto(p){
   if(!p)return [];
   var f=[],t=precoTabela(p),m=+p.minimo||0,campOn=(p.campativa==="sim");
-  var piso=pisoMinimo(p);
+  var piso=pisoMinimo(p),teto70=pisoCem(p);
   var cent=function(v){return Math.round(v*100)/100;};
-  var semDesconto=(piso>=t-0.009);   /* mínimo igual à tabela: não há faixa de 70% */
-  if(semDesconto){f.push({n:"100%",de:t,ate:0});return f;}
-  if(piso>0)f.push({n:"100%",de:cent(piso+0.01),ate:t>piso?t:0});
-  if(piso>0)f.push({n:"70%",de:piso,ate:piso});
+  var semDesconto=(piso>=teto70-0.009);   /* mínimo na própria tabela 100%: não há faixa de 70% */
+  if(semDesconto){f.push({n:"100%",de:teto70,ate:0});return f;}
+  if(piso>0)f.push({n:"100%",de:teto70,ate:t>teto70?t:0});
+  if(piso>0)f.push({n:"70%",de:piso,ate:cent(teto70-0.01)});
   if(campOn&&m>0&&m<piso)f.push({n:"Campanha",de:m,ate:cent(piso-0.01)});
   return f;
 }
@@ -9362,18 +9364,19 @@ function origemDoMinimo(p){
   return pctMinimoPadrao()+"% (padrão da empresa)";
 }
 function faixa(v,p){
-  /* A ESCADA DA COMISSÃO (22/10, regra dele, e ela substitui a de 19/10):
-       acima do mínimo (e acima da tabela) → 100%
-       exatamente no mínimo               → 70%
-       abaixo do mínimo                   → zero e aprovação do Administrador
-     Quem divide as faixas passou a ser o MÍNIMO, não mais a tabela cheia: com 730 dos 743
-     produtos sem tabela de 70% cadastrada, qualquer centavo abaixo da tabela zerava a comissão
-     e parava a venda na aprovação.
-     AVISADO A ELE E CONFIRMADO: "no mínimo" é o ponto exato, então R$ 700,00 paga 70% e
-     R$ 700,01 paga 100% — um centavo vale 30% de comissão, e na prática quase ninguém cai
-     nele, porque o preço da tela já vem com o acréscimo do parcelamento. Ele quis assim. */
+  /* A ESCADA DA COMISSÃO (23/10, regra dele, e ela substitui a de 22/10):
+       da Tabela 100% mínima para cima        → 100%
+       abaixo dela, até o mínimo (a 70%)      → 70%
+       abaixo do mínimo                       → zero e aprovação do Administrador
+     Quem divide as faixas voltou a ser a TABELA 100% MÍNIMA; o mínimo ficou sendo o fundo
+     da faixa de 70%. Isto desfaz a escada da v380, em que qualquer valor acima do mínimo
+     pagava 100% e só o mínimo exato pagava 70%.
+     O EFEITO, medido no cadastro dele antes de programar: 528 dos 530 produtos com preço
+     passam a ter faixa de 70% de verdade — qualquer desconto, por menor que seja, derruba o
+     item de 100% para 70%. Antes, só o mínimo exato fazia isso. */
   var m=+p.minimo||0, campOn=(p.campativa==="sim");
   var piso=pisoMinimo(p);
+  var teto70=pisoCem(p);   /* a "Tabela 100% mínima": daqui para cima é 100% */
   /* Tolerância de um centavo (v162, defeito que ele pegou em 20/09): o preço calculado pela
      forma de pagamento é arredondado em centavos — 38,50 × 12 × 0,1005 = 46,431 vira 46,43 —,
      e esse milésimo a menos jogava a venda inteira para "abaixo da tabela". */
@@ -9383,13 +9386,17 @@ function faixa(v,p){
      tela (`acima`) para ninguém cobrar além do combinado sem perceber. */
   var acimaDoTeto=(temFaixaPreco(p)&&v>(+p.cheiaMax||0)+eps);
   if(piso<=0)return{n:"100%",f:1,cls:"p-ok",acima:acimaDoTeto};   /* produto sem preço nenhum */
-  /* QUANDO O MÍNIMO É O PRÓPRIO PREÇO DE TABELA não existe faixa de 70%: o produto não aceita
-     desconto, e vender pelo preço cheio tem de pagar 100%. Sem isto, os serviços que têm o
-     piso igual à tabela (no banco dele, Serviço de Atendimento e Serviço de Orçamento)
-     passariam a pagar 70% vendidos pelo preço de sempre — achado na regressão. */
-  if(piso>=precoTabela(p)-eps)return{n:"100%",f:1,cls:"p-ok",acima:acimaDoTeto};
-  if(v>piso+eps)return{n:"100%",f:1,cls:"p-ok",acima:acimaDoTeto};
-  if(v>=piso-eps)return{n:"70%",f:.7,cls:"p-acc",noMinimo:true};
+  /* QUANDO O MÍNIMO É A PRÓPRIA TABELA 100% não existe faixa de 70%: o produto não aceita
+     desconto (no banco dele, Serviço de Atendimento e Serviço de Orçamento), e vender pelo
+     preço de sempre tem de pagar 100%. Abaixo disso ele cai nas faixas de baixo como
+     qualquer outro — antes devolvia 100% sem nem olhar o valor, e um serviço vendido por
+     R$ 1,00 pagava comissão cheia. */
+  if(piso>=teto70-eps){
+    if(v>=piso-eps)return{n:"100%",f:1,cls:"p-ok",acima:acimaDoTeto};
+  }else{
+    if(v>=teto70-eps)return{n:"100%",f:1,cls:"p-ok",acima:acimaDoTeto};
+    if(v>=piso-eps)return{n:"70%",f:.7,cls:"p-acc"};
+  }
   /* A CAMPANHA FICOU COMO ESTAVA (decisão dele de 22/10): ela só age no produto em que for
      LIGADA, e aí ocupa a faixa entre o piso da campanha e o mínimo. Medido no dia: nenhum dos
      743 produtos ativos tem a campanha ligada, então hoje ela não muda nada em lugar nenhum. */
@@ -10902,8 +10909,9 @@ function notaCampanha(){
   var pisoM=pisoMinimo(fake);
   var notaMin=!(pisoM>0)?"":
     '<div class="note ok"><b>Preço mínimo: '+BRL(pisoM)+"</b> · "+esc(origemDoMinimo(fake))+
-    ". Acima dele a comissão paga <b>100%</b>; exatamente nele, <b>70%</b>; abaixo, "+
-    "<b>zera</b> e a venda vai para a autorização do Administrador."+
+    ". De "+BRL(pisoCem(fake))+" para cima a comissão paga <b>100%</b>; abaixo disso, até "+
+    BRL(pisoM)+", paga <b>70%</b>; abaixo do mínimo <b>zera</b> e a venda vai para a "+
+    "autorização do Administrador."+
     (set>0?" <b>Este produto tem a Tabela 70% mínima preenchida</b>, e é ela que manda — "+
       "deixe em branco para usar o percentual.":"")+"</div>";
   $("p_campNota").innerHTML = notaMin + notaFaixa + (on
@@ -13516,6 +13524,7 @@ window.__estadoBancoMF=function(ok,erro){return estadoBanco(ok,erro);};
 window.__lojaAtualMF=function(){return lojaAtual;};
 window.__empresaMF=function(){return EMPRESA;};
 window.__abrirUsuarioMF=function(i){return abrirUsuario(i);};
+window.__empresaDaFichaMF=function(u){return empresaDaFicha(u);};
 window.__idConfigMF=function(c,id,lj){return (db&&db.idConfigReal)?db.idConfigReal(c,id,lj):id;};
 window.__idConfigVisivelMF=function(c,id){return (db&&db.idConfigVisivel)?db.idConfigVisivel(c,id):id;};
 window.__lojasMF=function(){return LOJAS.slice();};
@@ -15510,7 +15519,7 @@ function calcular(){
         '<div style="margin-top:4px"><span class="pill '+fx.cls+'">'+fx.n+"</span>"+
         (cobPl?"":' <span class="t-lim">'+
           '<b class="tf-100'+(fx.n==="100%"?" tf-ag":"")+'">100% '+BRL(tabU)+"</b>"+
-          (temMin?(' · <b class="tf-min'+(fx.noMinimo?" tf-ag":"")+(fx.abaixo?" tf-ruim":"")+
+          (temMin?(' · <b class="tf-min'+(fx.n==="70%"?" tf-ag":"")+(fx.abaixo?" tf-ruim":"")+
             '">70% '+BRL(minU)+"</b>"):' · <span class="t-sub">sem desconto</span>')+
           "</span>")+
         /* "paga N%" só quando o número difere do nome da faixa (Campanha e abaixo do mínimo) */
@@ -20166,6 +20175,14 @@ function montarEmpresaUsuario(u){
   s.value=(u&&u.loja)||lojaAtual;
   /* só Administrador e Gerente mudam a empresa de alguém */
   s.disabled=!ehGestor();
+  /* o acesso entra na MESMA empresa: o campo de lá é o espelho deste */
+  var sl=$("u_acLoja");
+  if(sl){
+    if(!sl.options.length)LOJAS.forEach(function(l){
+      var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;sl.appendChild(o);});
+    sl.value=s.value;sl.disabled=true;
+  }
+  s.onchange=function(){var x=$("u_acLoja");if(x)x.value=s.value;};
   var nota=$("u_empresaNota");
   if(nota)nota.innerHTML=ehGestor()
     ? ("Ele entra <b>só nesta empresa</b> e aparece nas listas dela. Mudando a empresa, o histórico que ele já tem "+
@@ -25834,9 +25851,11 @@ function renderPrecoMin(){
   $("pmn_exemplos").innerHTML=!ex.length?"":
     "<h2>Como fica em alguns produtos</h2>"+
     '<div class="tw"><table><thead><tr><th>Produto</th><th class="num">Tabela</th>'+
-    '<th class="num">Mínimo</th><th>De onde vem o mínimo</th></tr></thead><tbody>'+
+    '<th class="num">Paga 100% a partir de</th><th class="num">Mínimo (70%)</th>'+
+    '<th>De onde vem o mínimo</th></tr></thead><tbody>'+
     ex.map(function(p){
       return "<tr><td>"+esc(p.nome)+'</td><td class="num">'+BRL(precoTabela(p))+
+        '</td><td class="num">'+BRL(pisoCem(p))+
         '</td><td class="num"><b>'+BRL(pisoMinimo(p))+"</b></td><td>"+esc(origemDoMinimo(p))+"</td></tr>";
     }).join("")+"</tbody></table></div>"+
     '<p class="help">Estes valores são os comerciais, sem o acréscimo do parcelamento. '+
@@ -37101,7 +37120,9 @@ function ajustarAcessoUsuario(){
   var u=editandoUs||{};
   var sl=$("u_acLoja");
   if(!sl.options.length)LOJAS.forEach(function(l){var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;sl.appendChild(o);});
-  sl.value=u.loja||lojaAtual;
+  /* quem decide é o campo Empresa da ficha; aqui é só leitura (23/10) */
+  sl.value=empresaDaFicha(u);
+  sl.disabled=true;
   $("u_acEmail").value=u.emailAcesso||u.email||"";
   $("u_acSenha").value="";$("u_acSenha2").value="";$("u_acAlerta").innerHTML="";
   var tem=u.nome&&temLoginNoBanco(u.nome);
@@ -37124,7 +37145,7 @@ async function atualizarFuncaoBanco(){
   var rot=bt.textContent;bt.disabled=true;bt.textContent="Atualizando…";al.innerHTML="";
   try{
     await chamarFuncaoBanco("criar-acesso",{email:em,nome:u.nome,funcao:u.perfil||"Vendedor",
-      loja:$("u_acLoja").value||u.loja||lojaAtual,somenteFuncao:true});
+      loja:empresaDaFicha(u),somenteFuncao:true});
     u.funcaoBanco=u.perfil||"Vendedor";
     await gravarUsuarios();
     try{await mesclarPerfisBanco();sincronizarEquipe();}catch(e){}
@@ -37198,11 +37219,20 @@ async function chamarFuncaoBanco(nome,corpo){
   }
   return v.dados;
 }
+/* A EMPRESA DE UM COLABORADOR TEM UM LUGAR SÓ (23/10): o campo Empresa da ficha. O campo da
+   seção de acesso é só o espelho dele, e o acesso nasce na empresa que a ficha mostra —
+   senão o login podia nascer numa empresa e a ficha dizer outra. */
+function empresaDaFicha(u){
+  var s=$("u_empresa");
+  if(s&&s.value)return s.value;
+  return (u&&u.loja)||lojaAtual;
+}
 async function cadastrarAcessoUsuario(){
   var al=$("u_acAlerta"),bt=$("u_acCriar");
   var u=editandoUs;
   if(!u||!u.nome){al.innerHTML='<div class="note crit"><b>Salve o colaborador primeiro.</b></div>';return;}
-  var em=$("u_acEmail").value.trim(),s1=$("u_acSenha").value,s2=$("u_acSenha2").value,loja=$("u_acLoja").value;
+  var em=$("u_acEmail").value.trim(),s1=$("u_acSenha").value,s2=$("u_acSenha2").value;
+  var loja=empresaDaFicha(u);
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){al.innerHTML='<div class="note crit"><b>E-mail inválido.</b></div>';return;}
   if(s1.length<8){al.innerHTML='<div class="note crit"><b>A senha precisa de pelo menos 8 caracteres.</b></div>';return;}
   if(s1!==s2){al.innerHTML='<div class="note crit"><b>As duas senhas não são iguais.</b></div>';return;}
