@@ -4204,6 +4204,7 @@ img{max-width:100%}
     <!-- ESTOQUE DA EMPRESA (ALMOXARIFADO) -->
     <section class="screen" id="s-estEmpresa" hidden>
       <div class="page-head"><h1>Estoque Empresa</h1><p>O almoxarifado da <span id="eeLoja"></span>. Tudo que entra por nota fiscal e tudo que sai para vendedor, consumo ou venda direta.</p></div>
+      <div id="eeResps"></div>
       <div class="kpis" id="eeKpis"></div>
       <div class="card flush">
         <div class="toolbar">
@@ -4241,6 +4242,7 @@ img{max-width:100%}
     <!-- ESTOQUE DO COLABORADOR -->
     <section class="screen" id="s-estColab" hidden>
       <div class="page-head"><h1>Estoque Colaborador</h1><p>O estoque móvel de quem carrega produto no carro. Escolha de quem você quer ver.</p></div>
+      <div id="ecResps"></div>
       <div class="card" style="padding:18px 22px">
         <div class="toolbar" style="padding:0">
           <div class="fld" style="margin:0;min-width:280px">
@@ -5127,6 +5129,16 @@ img{max-width:100%}
           <div class="actions" style="margin-top:8px"><button class="btn ghost" type="button" id="u_verFerr">Ferramentas deste colaborador</button></div>
         </div>
 
+        <!-- ESTOQUES SOB RESPONSABILIDADE (23/10, regra dele): a escolha saiu de Dados da
+             Empresa e veio para a ficha de cada um. Uma pessoa responde por quantos estoques
+             quisermos, e um estoque pode ter mais de um responsável — qualquer um autoriza. -->
+        <div class="sect">
+          <p class="sect-t">Estoques sob responsabilidade</p>
+          <p class="help">Quem responde por um estoque <b>autoriza a venda que sai dele</b> quando quem vende é outra pessoa, confere a contagem e requisita produto ao almoxarifado. Um estoque pode ter mais de um responsável: <b>qualquer um deles autoriza</b>, e o primeiro que responder decide. Só o Administrador e o Gerente marcam e desmarcam.</p>
+          <div id="u_estoques"></div>
+          <div id="u_estoquesNota"></div>
+        </div>
+
         <div class="sect">
           <p class="sect-t">Jornada de trabalho</p>
           <div class="grid g4">
@@ -5576,8 +5588,8 @@ img{max-width:100%}
         <!-- quem responde pelo Estoque da Loja: ele requisita ao almoxarifado, confere a
              contagem e autoriza a venda que sai do balcao (regra dele, 23/10) -->
         <div class="sect">
-          <p class="sect-t">Quem responde pelo Estoque da Loja</p>
-          <p class="help">É o estoque do balcão de cada loja. O responsável requisita produto ao almoxarifado, confere a contagem e <b>autoriza a venda que sai dali</b> quando quem vende é outra pessoa. O substituto existe para folga e férias: ele autoriza no lugar do responsável. Só o Administrador e o Gerente mexem nesta escolha.</p>
+          <p class="sect-t">Quem responde por cada estoque</p>
+          <p class="help">A escolha <b>mudou de lugar em 23/10</b>: ela é feita na ficha de cada colaborador, em <b>Estoques sob responsabilidade</b>. Ali uma pessoa responde por quantos estoques quisermos, e um estoque pode ter mais de um responsável — qualquer um deles autoriza. Aqui ficou só a consulta.</p>
           <div id="em_respLojas"></div>
         </div>
         <div class="sect">
@@ -10216,6 +10228,12 @@ function ligarLixeiras(){
   document.addEventListener("click",function(ev){
     var alvo=ev.target&&ev.target.closest?ev.target:null;
     if(!alvo)return;
+    var fc=alvo.closest("[data-fcolab]");
+    if(fc){
+      ev.preventDefault();ev.stopPropagation();
+      irFichaColaborador(fc.getAttribute("data-fcolab")||"");
+      return;
+    }
     var la=alvo.closest("[data-rmacao]");
     if(la){
       ev.preventDefault();ev.stopPropagation();
@@ -11367,6 +11385,11 @@ window.__ajustarBaixaMF=function(p,a,b){return ajustarBaixa(p,a,b);};
 window.__hojeMF=function(){return hojeISO();};
 window.__perfilDeMF=function(n){return perfilDe(n);};
 window.__podeAutMF=function(loc,q){return podeAutorizarEstoque(loc,q);};
+window.__respsEstMF=function(loc){return responsaveisDoEstoque(loc);};
+window.__estoquesEmpMF=function(lj){return estoquesDaEmpresa(lj);};
+window.__semRespMF=function(){return estoquesSemResponsavel();};
+window.__respondeEstMF=function(q,loc){return respondePeloEstoque(q,loc);};
+window.__almoxMF=function(){return responsavelAlmox();};
 window.__ehGestorFerrMF=function(q){return ehGestorFerr(q);};
 window.__separarFerrMF=function(id){return separarFerr(id);};
 window.__receberFerrMF=function(id){return receberFerrVolta(id);};
@@ -11555,6 +11578,53 @@ async function limparVariacoesProduto(){
 }
 window.__limparVariacoesMF=aplicarLimpezaVariacoes;
 window.__variacaoForaMF=variacaoFora;
+/* QUEM JÁ RESPONDIA PELO ESTOQUE DA LOJA CONTINUA RESPONDENDO (23/10) ----------
+   A escolha antiga era um responsável e um substituto por loja, em Dados da Empresa. Os dois
+   passam a ser responsáveis marcados na ficha — e o Estoquista ativo é marcado no Almoxarifado,
+   para o responsável de lá continuar sendo o mesmo de hoje e o aviso do sino não acender sozinho.
+   Roda UMA vez (marcador em config/importacoes), só para o Administrador. */
+function aplicarRespEstoques(){
+  var r=respLojas(),mud=false,marcados=0;
+  function marca(nome,loc){
+    if(!nome||!loc)return;
+    var u=usuarioPor(nome);
+    if(!u||u.ativo===false)return;
+    u.estoques=u.estoques||[];
+    if(u.estoques.indexOf(loc)>=0)return;
+    u.estoques.push(loc);
+    u.estoquesHist=(u.estoquesHist||[]).concat([{quando:iso(new Date()),por:"sistema",
+      entrou:[loc],saiu:[],motivo:"veio da escolha que estava em Dados da Empresa"}]).slice(-20);
+    mud=true;marcados++;
+  }
+  LOJAS.forEach(function(l){
+    var v=r[l.id]||{};
+    marca(v.resp,locLoja(l.id));
+    marca(v.subst,locLoja(l.id));
+  });
+  /* o Almoxarifado: quem já responde por ele hoje, pelo perfil */
+  if(!responsaveisDoEstoque(LOC_EMPRESA).length){
+    USUARIOS.filter(function(u){return u.ativo!==false&&u.perfil==="Estoquista";})
+      .forEach(function(u){marca(u.nome,LOC_EMPRESA);});
+  }
+  return {mud:mud,marcados:marcados};
+}
+async function migrarRespEstoques(){
+  if(!db||!ehAdministrador())return 0;
+  var doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.respEstoques)return 0;}
+  var r=aplicarRespEstoques();
+  if(r.mud)await gravarUsuarios();
+  antes.respEstoques={quando:hojeISO(),por:usuarioAtual,marcados:r.marcados};
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador dos responsaveis",e);}
+  if(r.mud){
+    try{renderUsuarios();}catch(e){}
+    toast("Quem respondia pelos estoques foi levado para a ficha de cada um: "+r.marcados+
+      " marcação(ões). Para mudar, é em Configurações › Usuários › Estoques sob responsabilidade.");
+  }
+  return r.marcados;
+}
+window.__respEstoquesMF=aplicarRespEstoques;
 async function limparVersoesTroca(){
   if(!db||!ehAdministrador())return 0;
   var doc=null,antes={};
@@ -14423,16 +14493,20 @@ function addItem(){
     if(locEst===localVendaForm())continue;
     itA.estoque=locEst;
     if(precisaAut){
-      itA.autEstoque={id:uid(),status:"pendente",local:locEst,resp:donoDoEstoque(locEst),
-        pedidaPor:euEst,pedidaEm:iso(new Date())};
+      var respsA=responsaveisDoEstoque(locEst);
+      itA.autEstoque={id:uid(),status:"pendente",local:locEst,resp:respsA[0]||donoDoEstoque(locEst),
+        resps:respsA,pedidaPor:euEst,pedidaEm:iso(new Date())};
       pedeAut.push((itA.qtd||1)+"× "+itA.nome);
     }
   }
   if(pedeAut.length){
-    var donoA=donoDoEstoque(locEst);
+    var respsT=responsaveisDoEstoque(locEst);
     toast(pedeAut.join(" e ")+" sai do "+nomeLocal(locEst)+
-      (donoA?" — "+donoA+" recebe o pedido de autorização quando a venda for salva."
-           :" — este estoque está sem responsável; peça ao Administrador para escolher um."));
+      (respsT.length
+        ? (" — "+respsT.join(", ")+(respsT.length>1?" recebem":" recebe")+
+           " o pedido de autorização quando a venda for salva"+
+           (respsT.length>1?"; o primeiro que responder decide.":"."))
+        :" — este estoque está sem responsável; peça ao Administrador para marcar alguém na ficha do colaborador."));
   }
   $("v_serie").value="";$("v_local").value="";render();
   limparInclusao("v_prod","v_qtd",["v_valor"]);
@@ -17596,24 +17670,25 @@ function precisaAutorizacaoEstoque(loc,quem){
   var q=quem||euNoEstoque();
   if(loc===locColab(q))return false;                 /* é o meu estoque */
   if(loc===LOC_EMPRESA)return false;                 /* almoxarifado tem o caminho da retirada */
-  if(ehLocalLoja(loc)&&respondePorLoja(q,lojaDoLocal(loc)))return false;
+  if(respondePeloEstoque(q,loc))return false;
   return true;
 }
-/* quem responde por este estoque — é dele a autorização */
+/* quem responde por este estoque, em texto — pode ser mais de um, e qualquer um autoriza */
 function donoDoEstoque(loc){
-  if(ehLocalLoja(loc))return respEstoqueLoja(lojaDoLocal(loc))||"";
+  var r=textoResponsaveis(loc,2);
+  if(r)return r;
+  /* o estoque de colaborador tem sempre o dono dele, mesmo sem ninguém marcado */
   if(loc&&loc.indexOf("colab:")===0)return loc.slice(6);
   return "";
 }
-/* no Estoque da Loja o substituto autoriza junto (folga e férias); a gestão autoriza qualquer um */
+/* a gestão autoriza qualquer estoque; fora dela, quem está marcado naquele estoque */
 function podeAutorizarEstoque(loc,quem){
   var q=quem||euNoEstoque();
   /* "Administrador e Gerente podem autorizar qualquer um" (regra dele, 23/10). A conta é pelo
      PERFIL, como no rastreio (v345) e nas ferramentas (v388) — e não pela lista de ações, que
      a função Gerente pode não ter; e nunca por ehGestor(), que olha quem está LOGADO. */
   if(PERFIS_AUT_ESTOQUE.indexOf(perfilDe(q))>=0)return true;
-  if(ehLocalLoja(loc))return respondePorLoja(q,lojaDoLocal(loc));
-  return donoDoEstoque(loc)===q;
+  return respondePeloEstoque(q,loc);
 }
 /* o estoque escolhido no campo "Sai de" da linha do item; "meu" é o de quem entrega */
 function localItemForm(){
@@ -17635,7 +17710,7 @@ async function decidirAutEstoque(pedidoId,itemIx,aceita,motivo){
   /* a trava vale por dentro, não só no botão (regra da v321) */
   if(!podeAutorizarEstoque(a.local)){
     toast("Só "+(donoDoEstoque(a.local)||"quem responde por este estoque")+
-      (ehLocalLoja(a.local)?", o substituto":"")+" ou a gestão autoriza esta saída.");
+      " ou a gestão autoriza esta saída.");
     return false;
   }
   if(!aceita&&!String(motivo||"").trim()){toast("Escreva o motivo da recusa.");return false;}
@@ -17780,8 +17855,7 @@ function abrirAutEstoque(pedidoId,autId){
   $("aut_motivoWrap").hidden=true;$("aut_motivo").value="";$("aut_alerta").innerHTML="";
   if(a.status==="pendente"&&!podeDecidir)
     $("aut_alerta").innerHTML='<div class="note warn">Quem responde por este estoque é <b>'+
-      esc(donoDoEstoque(a.local)||"ninguém ainda")+"</b>"+
-      (ehLocalLoja(a.local)?" (ou o substituto)":"")+". Além dele, só a gestão autoriza.</div>";
+      esc(donoDoEstoque(a.local)||"ninguém ainda")+"</b>. Além deles, só a gestão autoriza.</div>";
   $("autEstModal").hidden=false;
 }
 /* monta o campo "Sai de qual estoque": o meu, o da loja aberta e os dos colegas */
@@ -17827,8 +17901,9 @@ function notaEstoqueItem(){
   var aut=precisaAutorizacaoEstoque(loc,eu),dono=donoDoEstoque(loc);
   el.innerHTML=linha+"<br>"+(aut
     ? ('<span class="pill p-warn">precisa de autorização</span> '+
-       (dono?esc(dono)+" responde por este estoque e vai receber o pedido quando a venda for salva."
-            :"este estoque está <b>sem responsável</b> — peça ao Administrador para escolher um em Dados da Empresa.")+
+       (dono?esc(dono)+" responde por este estoque e vai receber o pedido quando a venda for salva"+
+             (responsaveisDoEstoque(loc).length>1?" — o primeiro que responder decide.":".")
+            :"este estoque está <b>sem responsável</b> — peça ao Administrador para marcar alguém na ficha do colaborador.")+
        " O pedido pode ser finalizado, mas o financeiro só aprova depois da resposta.")
     : '<span class="pill p-ok">sai direto</span> você responde por este estoque.');
 }
@@ -18916,6 +18991,7 @@ function exportarRecuperacoes(){
 }
 function renderEstEmpresa(){
   $("eeLoja").textContent=nomeLoja();
+  try{$("eeResps").innerHTML=htmlRespsEstoque(LOC_EMPRESA);}catch(e){}
   try{
     $("eeRecPer").hidden=(eeAba!=="rec");
     $("eeRecCsv").hidden=(eeAba!=="rec"||!podeExportar());
@@ -19266,6 +19342,7 @@ function renderEstColab(){
   var btCg=$("ecContagem");
   if(btCg)btCg.hidden=(ecTipo==="ferr")||!ehLoja||!podeAutorizarEstoque(vSel);
   var loc=ehLoja?vSel:locColab(vSel),quem=ehLoja?"":vSel;
+  try{$("ecResps").innerHTML=htmlRespsEstoque(loc);}catch(e){}
   var q=($("ecBusca").value||"").toLowerCase();
 
   var reserv=reservasDe(loc);
@@ -20031,6 +20108,56 @@ async function apagarColaborador(){
   renderUsuarios();render();
   toast("Cadastro de "+u.nome+" apagado.");
 }
+/* a lista de estoques da empresa deste colaborador, com o que ele responde marcado */
+function montarEstoquesUsuario(u){
+  var box=$("u_estoques");if(!box)return;
+  var marcados=(u&&u.estoques)||[],lj=(u&&u.loja)||lojaAtual,nm=(u&&u.nome)||"";
+  var podeMexer=ehGestor();
+  var lista=estoquesDaEmpresa(lj);
+  box.innerHTML=lista.map(function(e){
+    var proprio=(e.pessoa&&e.pessoa===nm);
+    var marcado=proprio||marcados.indexOf(e.loc)>=0;
+    var outros=responsaveisDoEstoque(e.loc).filter(function(x){return x!==nm;});
+    return '<label class="chk"><input type="checkbox" data-uest="'+esc(e.loc)+'"'+
+      (marcado?" checked":"")+((!podeMexer||proprio)?" disabled":"")+">"+
+      "<span><b>"+esc(e.nome)+"</b> — "+esc(e.ajuda)+
+      (proprio?' <span class="pill p-ok">é o estoque dele — responde sempre</span>':"")+
+      '<span class="ajuda">'+
+      (outros.length?("Também responde"+(outros.length>1?"m":"")+": "+esc(outros.join(", ")))
+                    :(proprio?"":"Ninguém mais responde por este estoque."))+
+      "</span></span></label>";
+  }).join("");
+  var nota=$("u_estoquesNota");
+  if(nota){
+    var h=((u&&u.estoquesHist)||[]).slice(-3).reverse().map(function(x){
+      return "<li>"+esc(x.por||"")+" em "+dataBR(String(x.quando||"").slice(0,10))+
+        (x.entrou&&x.entrou.length?" · passou a responder por "+esc(x.entrou.map(nomeLocal).join(", ")):"")+
+        (x.saiu&&x.saiu.length?" · deixou "+esc(x.saiu.map(nomeLocal).join(", ")):"")+"</li>";
+    }).join("");
+    nota.innerHTML='<div class="help" style="margin-top:10px">Estoques de <b>'+esc(nomeLojaId(lj))+"</b>."+
+      (podeMexer?"":" Só o Administrador e o Gerente mudam esta marcação.")+
+      (h?("<br>Últimas mudanças:<ul style=\"margin:6px 0 0 18px\">"+h+"</ul>"):"")+"</div>";
+  }
+}
+/* o que está marcado na tela, e o registro de quem mudou e quando */
+function lerEstoquesDoForm(u){
+  var box=$("u_estoques");if(!box)return (u&&u.estoques)||[];
+  var antes=((u&&u.estoques)||[]).slice(),agora=[],nm=(u&&u.nome)||"";
+  Array.prototype.forEach.call(box.querySelectorAll("[data-uest]"),function(c){
+    var loc=c.getAttribute("data-uest");
+    /* o próprio estoque da pessoa não precisa ser marcado: ela responde por ele de qualquer jeito */
+    if(loc===locColab(nm))return;
+    if(c.checked)agora.push(loc);
+  });
+  if(!ehGestor())return antes;                       /* a trava vale por dentro (regra da v321) */
+  var entrou=agora.filter(function(x){return antes.indexOf(x)<0;});
+  var saiu=antes.filter(function(x){return agora.indexOf(x)<0;});
+  if(entrou.length||saiu.length){
+    u.estoquesHist=(u.estoquesHist||[]).concat([{quando:iso(new Date()),por:usuarioAtual,
+      entrou:entrou,saiu:saiu}]).slice(-20);
+  }
+  return agora;
+}
 /* a lista de empresas do cadastro, e o aviso do que a escolha muda */
 function montarEmpresaUsuario(u){
   var s=$("u_empresa");if(!s)return;
@@ -20057,6 +20184,7 @@ function abrirUsuario(i){
   sp.value=u.perfil||"Vendedor";
   $("u_ativo").value=(u.ativo===false?"nao":"sim");
   montarEmpresaUsuario(u);
+  try{montarEstoquesUsuario(u);}catch(e){}
   ajustarBotoesUsuario();
   CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)e.value=u[k]||"";});
   try{ajustarConjuge();}catch(e){}
@@ -21990,6 +22118,9 @@ var LADOS_VIST=[
 function ladosReq(){return LADOS_VIST.filter(function(l){return l.req;});}
 var vsCtx=null,vsFotos={},vsAvarias=[],vsLadoAtual="",aceCtx=null,aceAssinou=false;
 function responsavelAlmox(){
+  var marcados=[];
+  try{marcados=responsaveisDoEstoque(LOC_EMPRESA);}catch(e){}
+  if(marcados.length)return marcados[0];
   var ativos=USUARIOS.filter(function(u){return u.ativo!==false;});
   var e=ativos.filter(function(u){return u.perfil==="Estoquista";})[0];
   if(e)return e.nome;
@@ -21998,7 +22129,11 @@ function responsavelAlmox(){
   var a=ativos.filter(function(u){return u.perfil==="Administrador";})[0];
   return a?a.nome:usuarioAtual;
 }
-function ehAlmoxOuGestor(){return usuarioAtual===responsavelAlmox()||ehGestor()||pode("moverEstoque");}
+function ehAlmoxOuGestor(){
+  var eu=euNoEstoque();
+  try{if(respondePeloEstoque(eu,LOC_EMPRESA))return true;}catch(e){}
+  return usuarioAtual===responsavelAlmox()||ehGestor()||pode("moverEstoque");
+}
 function possesDoVeic(id){
   return posses.filter(function(p){return p.veiculoId===id;})
     .sort(function(a,b){return String(b.de||"").localeCompare(String(a.de||""));});
@@ -40210,37 +40345,93 @@ function geoLojas(){return (EMPRESA&&EMPRESA.geoLojas)||{};}
    Mora em Dados da Empresa, no mesmo bloco por loja do ponto de cada uma. O substituto
    existe para folga e férias: ele autoriza no lugar do responsável, e nada mais. */
 function respLojas(){return (EMPRESA&&EMPRESA.respLojas)||{};}
-function respEstoqueLoja(id){var r=respLojas()[id||lojaAtual];return (r&&r.resp)||"";}
+/* os dois campos antigos continuam legíveis: é deles que a migração parte */
+function respLojaAntigo(id){var r=respLojas()[id||lojaAtual];return (r&&r.resp)||"";}
 function substEstoqueLoja(id){var r=respLojas()[id||lojaAtual];return (r&&r.subst)||"";}
-/* responde pelo estoque daquela loja? o substituto responde junto, e a gestão sempre */
-function respondePorLoja(quem,id){
-  var q=quem||euNoEstoque(),lj=id||lojaAtual;
-  return q===respEstoqueLoja(lj)||q===substEstoqueLoja(lj);
+
+/* a linha de responsáveis de um estoque, só leitura, com atalho para a ficha de cada um */
+function htmlRespsEstoque(loc){
+  if(!loc)return "";
+  var r=responsaveisDoEstoque(loc),pessoa=(loc.indexOf("colab:")===0)?loc.slice(6):"";
+  var nomes=r.map(function(nm){
+    return '<button class="btn sm ghost" type="button" data-fcolab="'+esc(nm)+'">'+esc(nm)+"</button>";
+  }).join(" ");
+  if(pessoa&&r.indexOf(pessoa)<0)
+    nomes=('<button class="btn sm ghost" type="button" data-fcolab="'+esc(pessoa)+'">'+
+           esc(pessoa)+"</button> ")+nomes;
+  if(!nomes)
+    return '<div class="note warn" style="margin:0 0 14px"><b>'+esc(nomeLocal(loc))+
+      " está sem responsável.</b> Ninguém autoriza a venda que sai dele. "+
+      "Marque alguém em <b>Configurações › Usuários</b>, na ficha do colaborador, em "+
+      "<b>Estoques sob responsabilidade</b>.</div>";
+  return '<div class="note" style="margin:0 0 14px">Responsáveis por <b>'+esc(nomeLocal(loc))+
+    "</b>: "+nomes+(r.length>1?" — qualquer um deles autoriza.":"")+
+    '<span class="help" style="margin:4px 0 0">A marcação é na ficha de cada colaborador.</span></div>';
+}
+/* abre a ficha de um colaborador pelo nome (o atalho da linha de responsáveis) */
+function irFichaColaborador(nome){
+  var i=-1;
+  USUARIOS.forEach(function(u,ix){if(u.nome===nome)i=ix;});
+  if(i<0){toast("O cadastro de "+nome+" não está nesta empresa.");return;}
+  if(!veTela("usuarios")){toast("Só quem enxerga Configurações › Usuários abre a ficha.");return;}
+  ir("usuarios");
+  try{abrirUsuario(i);}catch(e){}
+}
+/* TODOS os estoques de uma empresa, na ordem em que a ficha os mostra */
+function estoquesDaEmpresa(loja){
+  var lj=loja||lojaAtual,r=[];
+  r.push({loc:LOC_EMPRESA,nome:"Almoxarifado",ajuda:"tudo que entra por nota fiscal sai dele"});
+  r.push({loc:locLoja(lj),nome:"Estoque da Loja",ajuda:"o balcão de "+nomeLojaId(lj)});
+  colabsComEstoque(true).forEach(function(nm){
+    r.push({loc:locColab(nm),nome:"Estoque de "+nm,ajuda:perfilDe(nm)||"colaborador",pessoa:nm});
+  });
+  return r;
+}
+/* quem está marcado como responsável por este estoque. Só gente ativa — colaborador
+   desativado não autoriza nada, e por isso ele também não conta para o aviso do sino. */
+function responsaveisDoEstoque(loc){
+  if(!loc)return [];
+  var eq=(typeof EQUIPE!=="undefined"&&EQUIPE)||[];
+  return eq.filter(function(nm){
+    var u=usuarioPor(nm);
+    return !!u&&u.ativo!==false&&(u.estoques||[]).indexOf(loc)>=0;
+  });
+}
+function textoResponsaveis(loc,max){
+  var r=responsaveisDoEstoque(loc);
+  if(!r.length)return "";
+  if(max&&r.length>max)return r.slice(0,max).join(", ")+" e mais "+(r.length-max);
+  return r.join(", ");
+}
+/* responde por este estoque? Quem responde, responde — não existe mais substituto, e
+   QUALQUER um dos marcados autoriza. O dono do próprio estoque sempre responde pelo dele. */
+function respondePeloEstoque(quem,loc){
+  var q=quem||euNoEstoque();
+  if(!loc)return false;
+  if(loc===locColab(q))return true;
+  return responsaveisDoEstoque(loc).indexOf(q)>=0;
+}
+/* o Estoque da Loja daquela loja, pelos mesmos marcadores */
+function respondePorLoja(quem,id){return respondePeloEstoque(quem,locLoja(id||lojaAtual));}
+function respEstoqueLoja(id){return textoResponsaveis(locLoja(id||lojaAtual),2);}
+/* os estoques da empresa que ficaram sem ninguém: viram aviso no sino para o Administrador.
+   O estoque de colaborador nunca entra aqui — o dono dele responde por ele. */
+function estoquesSemResponsavel(){
+  return [LOC_EMPRESA,locLoja(lojaAtual)].filter(function(lc){
+    return !responsaveisDoEstoque(lc).length;});
 }
 /* as lojas cujo Estoque da Loja esta pessoa responde — é o que o seletor da tela mostra */
 function lojasQueRespondo(quem){
   var q=quem||euNoEstoque();
   return LOJAS.filter(function(l){return respondePorLoja(q,l.id);});
 }
+/* só consulta: quem responde por cada estoque desta empresa, com atalho para a ficha */
 function renderRespLojas(){
   var box=$("em_respLojas");if(!box)return;
-  var r=respLojas(),eq=EQUIPE.slice().sort(function(a,b){return a.localeCompare(b,"pt-BR");});
-  function sel(id,campo,val){
-    return '<select id="em_'+campo+'_'+id+'"><option value="">— ninguém —</option>'+
-      eq.map(function(nm){return '<option value="'+esc(nm)+'"'+(nm===val?" selected":"")+">"+
-        esc(nm)+" · "+esc(perfilDe(nm)||"colaborador")+"</option>";}).join("")+"</select>";
-  }
-  box.innerHTML=LOJAS.map(function(l){
-    var v=r[l.id]||{};
-    return '<div class="grid g3" style="margin-bottom:10px">'+
-      '<div class="fld"><label for="em_respLoja_'+l.id+'">'+esc(l.nome)+" — responsável</label>"+sel(l.id,"respLoja",v.resp||"")+"</div>"+
-      '<div class="fld"><label for="em_substLoja_'+l.id+'">Substituto (folga e férias)</label>'+sel(l.id,"substLoja",v.subst||"")+"</div>"+
-      '<div class="fld"><label>&nbsp;</label><span class="help" style="margin:0">'+
-      (v.resp?('<span class="pill p-ok">'+esc(v.resp)+" responde</span>"+
-        (v.em?"<br>escolhido por "+esc(v.por||"")+" em "+dataBR(v.em):""))
-        :'<span class="pill p-warn">sem responsável — ninguém autoriza venda deste estoque</span>')+
-      "</span></div></div>";
-  }).join("");
+  box.innerHTML=estoquesDaEmpresa(lojaAtual).filter(function(e){return !e.pessoa;})
+    .map(function(e){return htmlRespsEstoque(e.loc);}).join("")+
+    '<div class="help">O estoque de cada colaborador aparece na ficha dele. '+
+    'Para mudar: <b>Configurações › Usuários</b> › ficha do colaborador › <b>Estoques sob responsabilidade</b>.</div>';
 }
 function lerRespLojasDoForm(){
   var r={},antes=respLojas();
@@ -42152,6 +42343,16 @@ function pendenciasMF(){
         ir:function(){abrirFollowup(a);}});
     });
   }catch(e){console.warn("pend follow-up",e);}
+  /* 0b. estoque sem ninguém marcado: só o Administrador vê, e é ele que resolve (23/10) */
+  try{
+    if(ehAdministrador())estoquesSemResponsavel().forEach(function(lc){
+      põe({chave:"semresp:"+lc,icone:"📦",titulo:nomeLocal(lc)+" está sem responsável",
+        texto:"Ninguém autoriza a venda que sai dele. Marque alguém na ficha do colaborador, "+
+          "em Estoques sob responsabilidade.",
+        quando:hojeISO(),
+        ir:function(){ir("usuarios");}});
+    });
+  }catch(e){console.warn("pend estoque sem responsavel",e);}
   /* 1. retirada de estoque esperando quem responde pelo estoque */
   try{
     if(podeAprovarRetirada()){
@@ -44556,7 +44757,6 @@ window.__gravarTermoFerrMF=function(){return gravarTermoFerr();};
 window.__ferrFotoMF=function(d){ferrFotoAtual=d||"";mostrarFotoFerr();return ferrFotoAtual.length;};
 window.__baixaFerrMF=function(f){return abrirBaixaFerr(f);};
 window.__passarFerrMF=function(f){return abrirPassarFerr(f);};
-window.__abrirUsuarioMF=function(i){return abrirUsuario(i);};
 function ir(s,doMenu){
   /* trocou de tela antes de o desenho de fundo terminar: desenha tudo agora, para ninguém
      chegar numa tela em branco (14/10) */
@@ -45003,6 +45203,8 @@ function ligar(){
     var emp=$("u_empresa");
     if(emp&&ehGestor())u.loja=emp.value||lojaAtual;
     else if(!u.loja)u.loja=lojaAtual;
+    /* os estoques que ele responde (23/10): a trava do gestor vale dentro da função */
+    try{u.estoques=lerEstoquesDoForm(u);}catch(e){}
     CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)u[k]=e.value.trim?e.value.trim():e.value;});
     ["salario","vr","assiduidade","desempenho"].forEach(function(k){u[k]=numMF($("u_"+k).value)||0;});
     ["entrada","almocoIni","almocoFim","saida"].forEach(function(k){u[k]=$("u_"+k).value;});
@@ -46082,7 +46284,8 @@ function ligar(){
        DENTRO da loja e nao gera aviso de parada (regra dele, 14/10) */
     try{EMPRESA.geoLojas=lerGeoLojasDoForm();}catch(e){}
     /* quem responde pelo Estoque da Loja (23/10) */
-    try{if(ehGestor())EMPRESA.respLojas=lerRespLojasDoForm();}catch(e){}
+    /* EMPRESA.respLojas NÃO é mais escrito: a escolha vive na ficha do colaborador (23/10).
+       O que está gravado fica, como histórico de onde a migração partiu. */
     sincChaveGoogle();
     await gravarEmpresa();renderEmpresa();toast("Dados da empresa salvos.");};
 
@@ -47008,6 +47211,7 @@ async function continuarBoot(){
   await passoBoot("acerto dos motivos",ajustarMotivosDaLista);
   await passoBoot("acerto dos centros",ajustarCentrosDaLista);
   await passoBoot("centros repetidos",ajustarDuplicadosCentros);
+  await passoBoot("responsáveis dos estoques",migrarRespEstoques);
   await passoBoot("versões de troca",limparVersoesTroca);
   await passoBoot("variações do produto",limparVariacoesProduto);
   await passoBoot("manutenção por marca",ajustarManutencaoMarcas);
