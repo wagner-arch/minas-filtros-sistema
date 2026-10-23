@@ -2446,14 +2446,21 @@ img{max-width:100%}
             <div class="fld"><label for="p_pontos">Pontuação</label><input id="p_pontos" type="number" step="1"></div>
             <div class="fld"><label for="p_manut">Manutenção (dias)</label><input id="p_manut" type="number" step="1"></div>
             <div class="fld"><label for="p_gar">Garantia (meses)</label><input id="p_gar" type="number" step="1"></div>
-            <div class="fld"><label for="p_serie">Controla nº de série</label><select id="p_serie"><option value="nao">Não</option><option value="sim">Sim</option></select></div>
+            <!-- OS DOIS INTERRUPTORES (22/10, pedido dele com o print da válvula pedindo
+                 "Localização do produto *"): tem produto que não precisa de série nem de
+                 localização, e o vendedor era obrigado a preencher para fechar a venda.
+                 Valor "" ou "nao" = AUTOMÁTICO (é o que está gravado em todo o cadastro hoje,
+                 então ninguém muda de comportamento); "sim" = sempre; "nunca" = nunca. -->
+            <div class="fld"><label for="p_serie">Pede número de série (leitura de código)?</label>
+              <select id="p_serie"><option value="auto">Automático</option><option value="sim">Sempre pede</option><option value="nunca">Nunca pede</option></select></div>
             <!-- LOCAL DA INSTALAÇÃO dentro da casa (22/10, pedido dele): cozinha, varanda,
                  área de serviço… NÃO é o endereço — o endereço é sempre perguntado para quem
                  gera aparelho. Regra dele: TODOS os produtos começam como Não, e vocês vão
                  marcando Sim conforme a necessidade. -->
-            <div class="fld"><label for="p_pedeLocal">Pede local da instalação?</label>
-              <select id="p_pedeLocal"><option value="nao">Não</option><option value="sim">Sim</option></select></div>
+            <div class="fld"><label for="p_pedeLocal">Pede a localização do produto?</label>
+              <select id="p_pedeLocal"><option value="auto">Automático</option><option value="sim">Sempre pede</option><option value="nunca">Nunca pede</option></select></div>
           </div>
+          <div id="p_identNota"></div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="p_un">Unidade</label><select id="p_un"><option>UN</option><option>PC</option><option>CX</option><option>MT</option></select></div>
           </div>
@@ -2545,7 +2552,7 @@ img{max-width:100%}
             <div class="grid g4">
               <div class="fld"><label for="v_qtd">Qtd</label><input id="v_qtd" type="number" step="1" min="1" value="" placeholder="Qtd" inputmode="numeric"></div>
               <div class="fld"><label for="v_valor">Valor unitário</label><input id="v_valor" type="text" inputmode="decimal" step="10"></div>
-              <div class="fld"><label for="v_serie">Número de série</label><input id="v_serie" placeholder="—"></div>
+              <div class="fld" id="v_serieWrap"><label for="v_serie">Número de série</label><input id="v_serie" placeholder="—"></div>
               <div class="fld" id="v_localWrap" hidden><label for="v_local">Localização do produto <span class="req">*</span></label>
                 <input id="v_local" placeholder="Cozinha, área gourmet, escritório…" autocomplete="off" list="dlLocais">
                 <div class="help">Onde o aparelho vai ficar <b>no cliente</b>. Sem número de série, é o que diferencia um aparelho do outro na manutenção periódica.</div></div>
@@ -10421,7 +10428,7 @@ function renderProdutos(){
         : BRL(p.cheia))+'</td><td class="num">'+(p.campanha?BRL(p.campanha):"—")+"</td>"+
       '<td class="num">'+(p.minimo?(BRL(p.minimo)+(p.campativa==="sim"?' <span class="pill p-warn">ativa</span>':' <span class="pill p-mut">off</span>')):"—")+"</td>"+
       '<td class="num">'+(p.pontos||0)+"</td>"+
-      "<td>"+(p.serie==="sim"?'<span class="pill p-acc">sim</span>':'<span class="pill p-mut">não</span>')+"</td>"+
+      "<td>"+pillIdentProd(p)+"</td>"+
       "<td>"+(p.manut?p.manut+" dias":"—")+"</td>";
     tr.onclick=function(){abrirProduto(p);};b.appendChild(tr);
   });
@@ -10434,11 +10441,18 @@ function abrirProduto(p){
   ["cod","nome","pop","marca","grupo","subgrupo","barras","cheiaMax","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca","pctMinimo"].forEach(function(k){
     var el=$("p_"+k);if(el)el.value=(v[k]!=null?v[k]:"");});
   atualizarListasGrupoProd();
-  $("p_un").value=v.un||"UN";$("p_serie").value=v.serie||"nao";
-  $("p_pedeLocal").value=(v.pedeLocal==="sim")?"sim":"nao";
+  $("p_un").value=v.un||"UN";
+  $("p_serie").value=valorIdent(v.serie);
+  $("p_pedeLocal").value=valorIdent(v.pedeLocal);
+  notaIdentProduto();
   $("p_campativa").value=v.campativa||"nao";
   $("p_status").value=v.status||"ativo";notaStatus();
   try{notaTrocaProduto();}catch(e){}   /* troca na venda (03/10) */
+  ["p_serie","p_pedeLocal","p_manut","p_nome","p_grupo"].forEach(function(id){
+    var el=$(id); if(!el||el.__identLig)return; el.__identLig=1;
+    el.addEventListener("change",function(){try{notaIdentProduto();}catch(e){}});
+    el.addEventListener("input",function(){try{notaIdentProduto();}catch(e){}});
+  });
   prodImagem=v.imagem||null;renderImagemProduto();   /* imagem do produto (20/09) */
   $("p_estLoja").textContent="· "+nomeLoja();
   var mins=v.estmin||{},locs=v.local||{};
@@ -12966,6 +12980,8 @@ window.__precoFormaMF=function(v){return precoPelaForma(v,1,somaTabelaCarrinho()
 window.__numMF=function(s){return numMF(s);};
 window.__geraAparelhoMF=function(i){return itemGeraAparelho(i);};
 window.__pedeLocalMF=function(i){return itemPedeLocal(i);};
+window.__pedeSerieMF=function(p){return pedeSerieProduto(p);};
+window.__pedeLocalProdMF=function(p){return pedeLocalProduto(p);};
 window.__escolherClienteMF=function(c){return escolherClienteVenda(c);};
 window.__revisaoMF=function(){return abrirRevisaoPedido();};
 window.__faltaEndMF=function(){return faltaEnderecoInstalacao();};
@@ -13352,11 +13368,13 @@ function sincronizarValor(){
   if($("v_valor"))$("v_valor").__manual=false;
   if(p){$("v_valor").value=brMF(precoPelaForma(precoTabela(p),qtdDoForm(),tabelaTotalVenda(true)));notaPrecoForma(p);
     /* número de série só para os grupos marcados em Configurações › Planos de Garantia › Número de série */
-    var sg=temSerieGrupo(p);
+    var sg=pedeSerieProduto(p);
+    if($("v_serieWrap"))$("v_serieWrap").hidden=!sg;
     $("v_serie").disabled=!sg;
     if(!sg)$("v_serie").value="";
-    $("v_serie").placeholder=!sg?"não se aplica ao grupo "+(p.grupo||"sem grupo"):(p.serie==="sim"?"obrigatório":"leia o código ou digite");}
+    $("v_serie").placeholder=!sg?"este produto não pede série":(String(p.serie)==="sim"?"obrigatório":"leia o código ou digite");}
   else{$("v_valor").value="";$("v_serie").value="";$("v_serie").disabled=true;$("v_serie").placeholder="escolha o produto";
+    if($("v_serieWrap"))$("v_serieWrap").hidden=false;
     try{$("v_precoNota").innerHTML="";mostrarValorFinal(null);}catch(e){}}
   ajustarEquipItem();
   try{renderEndDoEquipVenda();}catch(e){}
@@ -14032,7 +14050,7 @@ function ajustarLocalItem(){
   var w=$("v_localWrap"),sel=$("v_equip"),wEq=$("v_equipWrap");
   if(!w)return;
   var ehNovo=(!sel||!wEq||wEq.hidden||!sel.value);
-  var acompanhado=!!(p&&(+p.manut));
+  var acompanhado=pedeLocalProduto(p);
   /* com série o aparelho já está identificado: a localização nem aparece */
   var temSerie=!!($("v_serie").value||"").trim();
   var mostra=acompanhado&&ehNovo&&!temSerie;
@@ -14040,9 +14058,9 @@ function ajustarLocalItem(){
   if(!mostra){$("v_local").value="";}
   /* com manutenção, a série deixa de ser exclusiva do produto "tem série":
      o vendedor pode ler o código de barras de qualquer aparelho */
-  if(acompanhado&&ehNovo&&temSerieGrupo(p)){
+  if(ehNovo&&pedeSerieProduto(p)){
     $("v_serie").disabled=false;
-    $("v_serie").placeholder=(p.serie==="sim")?"leia o código ou digite":"série, se o aparelho tiver";
+    $("v_serie").placeholder=(String(p.serie)==="sim")?"leia o código ou digite":"série, se o aparelho tiver";
   }
 }
 function addItem(){
@@ -14055,7 +14073,7 @@ function addItem(){
   }
   var p=prodPorId($("v_prod").value);
   if(!p){toast("Escolha o produto.");try{$("v_prod_busca").focus();}catch(e){}return;}
-  var gar=$("v_gar").value, serie=temSerieGrupo(p)?$("v_serie").value.trim():"", qtd=parseInt($("v_qtd").value,10)||0;
+  var gar=$("v_gar").value, serie=pedeSerieProduto(p)?$("v_serie").value.trim():"", qtd=parseInt($("v_qtd").value,10)||0;
   if(!(qtd>=1)){toast("Informe a quantidade.");try{$("v_qtd").focus();}catch(e){}return;}
   var equipId=($("v_equip")&&!$("v_equipWrap").hidden)?$("v_equip").value:"";
   var local=($("v_local")&&!$("v_localWrap").hidden)?$("v_local").value.trim():"";
@@ -14070,7 +14088,7 @@ function addItem(){
      deixa de ser conselho e passa a ser obrigatória — é o único jeito de dizer depois em qual
      deles é o refil, a visita ou a garantia. */
   var iguaisAdd=aparelhosIguaisDoCliente($("v_cliente").value,p.id,p.nome);
-  if((+p.manut)&&!equipId&&!serie&&!local){
+  if((pedeSerieProduto(p)||pedeLocalProduto(p))&&!equipId&&!serie&&!local){
     toast(iguaisAdd.length
       ? "Este cliente já tem "+iguaisAdd.length+" aparelho(s) igual(is). Informe o número de série OU a localização (cozinha, escritório…) para dar para diferenciar depois."
       : "Informe o número de série OU a localização do produto — um dos dois identifica o aparelho.");
@@ -14079,7 +14097,7 @@ function addItem(){
   }
   /* série: continua sendo pedida, mas NÃO trava a venda (regra do Wagner, 18/09: "tem que ser
      simples"). Só o item com plano de garantia exige mesmo — o plano é amarrado pela série. */
-  if(!(+p.manut)&&p.serie==="sim"&&temSerieGrupo(p)&&!serie){
+  if(!aparelhoAcompanhadoProd(p)&&String(p.serie)==="sim"&&pedeSerieProduto(p)&&!serie){
     var gar=$("v_gar")?$("v_gar").value:"";
     var comPlano=!!(gar&&gar!=="Bronze"&&planoDaGarantia(gar));
     if(comPlano){toast("Com plano "+gar+", o número de série é obrigatório — é por ele que o plano fica amarrado ao aparelho.");return;}
@@ -15546,11 +15564,69 @@ function purificadoresDaVenda(){
     return itemGeraAparelho(x.i);
   });
 }
+/* o valor do select: só "sim" e "nunca" são escolhas; o resto é o automático */
+function valorIdent(v){ v=String(v||""); return (v==="sim"||v==="nunca")?v:"auto"; }
+function pillIdentProd(p){
+  var s=valorIdent(p&&p.serie), l=valorIdent(p&&p.pedeLocal), out=[];
+  out.push(pedeSerieProduto(p)?'<span class="pill p-acc" title="'+(s==="sim"?"sempre pede":s==="nunca"?"nunca":"automático")+'">série'+(s==="sim"?"":s==="nunca"?"":" auto")+'</span>'
+    :'<span class="pill p-mut">sem série</span>');
+  if(pedeLocalProduto(p))out.push('<span class="pill p-acc">local'+(l==="sim"?"":" auto")+'</span>');
+  return out.join(" ");
+}
+/* a nota do cadastro diz o que o AUTOMÁTICO decidiu para este produto (22/10) */
+function notaIdentProduto(){
+  var el=$("p_identNota"); if(!el)return;
+  var p={nome:($("p_nome")||{}).value||"",grupo:($("p_grupo")||{}).value||"",
+         manut:numMF(($("p_manut")||{}).value||0),
+         serie:($("p_serie")||{}).value||"",pedeLocal:($("p_pedeLocal")||{}).value||""};
+  var ap=aparelhoAcompanhadoProd(p), temPrazo=!!(+p.manut);
+  var ps=pedeSerieProduto(p), pl=pedeLocalProduto(p);
+  var porque=!temPrazo?"não tem prazo de troca cadastrado"
+    :(ap?"tem prazo de troca e o sistema o reconhece como APARELHO"
+        :"tem prazo de troca, mas o nome diz que é PEÇA — por isso o automático não pede nada");
+  var L=[];
+  L.push("<div class=\"note"+((ps||pl)?"":" mut")+"\" style=\"margin-top:10px\">");
+  L.push("<b>Na venda deste produto:</b> ");
+  L.push(ps?"pede o número de série (com o botão de ler o código)":"<b>não</b> pede número de série");
+  L.push(" · ");
+  L.push(pl?"pede a localização":"<b>não</b> pede a localização");
+  L.push("<div class=\"help\">"+esc(porque)+". Deixando em <b>Automático</b>, o sistema decide; ");
+  L.push("<b>Sempre pede</b> e <b>Nunca pede</b> mandam no automático.</div></div>");
+  el.innerHTML=L.join("");
+}
+/* ===== APARELHO ACOMPANHADO, E OS DOIS INTERRUPTORES DO CADASTRO (22/10, pedido dele:
+   "preciso ter a opção de ativar ou desativar a leitura do código de barras e a
+   localização do produto; tem produto que não é necessário essa informação").
+   O que acontecia: a VÁLVULA DE PRESSÃO herdou prazo de troca na migração de 22/10, e
+   bastava ter prazo para o sistema exigir série OU localização — o vendedor tinha de
+   digitar "cozinha" para vender uma válvula, senão o item não entrava.
+   Agora o automático pergunta duas coisas: o produto tem prazo de troca E é um APARELHO
+   (`ehAparelhoDeOS`, a mesma regra da v322 que separa purificador de termostato)? */
+function aparelhoAcompanhadoProd(p){
+  if(!p||!(+p.manut))return false;
+  try{ return ehAparelhoDeOS(p.nome,p.grupo); }catch(e){ return true; }
+}
+/* "nunca" = nunca · "sim" = sempre · qualquer outra coisa (inclusive o "nao" que está
+   gravado hoje em todo o cadastro) = AUTOMÁTICO, que é o comportamento de sempre.
+   Foi escolhido assim de propósito: nenhum dos 558 produtos precisou ser regravado. */
+function pedeSerieProduto(p){
+  if(!p)return false;
+  var v=String(p.serie||"");
+  if(v==="nunca")return false;
+  if(v==="sim")return true;
+  return temSerieGrupo(p)||aparelhoAcompanhadoProd(p);
+}
+function pedeLocalProduto(p){
+  if(!p)return false;
+  var v=String(p.pedeLocal||"");
+  if(v==="nunca")return false;
+  if(v==="sim")return true;
+  return aparelhoAcompanhadoProd(p);
+}
 /* o item pede o LOCAL dentro da casa (cozinha, varanda…)? é a marca do produto (22/10) */
 function itemPedeLocal(i){
   if(!i||i.planoCobre||ehPlano(i))return false;
-  var p=produtoPor(i.pid)||{};
-  return p.pedeLocal==="sim";
+  return pedeLocalProduto(produtoPor(i.pid));
 }
 /* o que ainda falta responder antes de fechar o pedido */
 function faltaEnderecoInstalacao(){
@@ -31109,10 +31185,10 @@ var OS_STATUS=[
 var DIAS_DESCARTE=90;
 function sincronizarSerieOS(){
   var p=prodPorId($("os_prod").value);
-  var comSerie=!!(p&&p.serie==="sim");
+  var comSerie=pedeSerieProduto(p);
   var e=$("os_serie");
   e.disabled=!comSerie;
-  e.placeholder=comSerie?"Digite ou leia o código de barras":"esta peça não tem número de série";
+  e.placeholder=comSerie?"Digite ou leia o código de barras":"este produto não pede número de série";
   if(!comSerie)e.value="";
   var lbl=document.querySelector('label[for="os_serie"]');
   if(lbl)lbl.style.opacity=comSerie?"":"0.5";
@@ -44278,6 +44354,7 @@ function ligar(){
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
     ["cheiaMax","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
+    p.pedeLocal=$("p_pedeLocal").value;
     /* preço mínimo e local da instalação (22/10) */
     var pct=numMF($("p_pctMinimo").value)||0;
     if(pct>0&&pct<=100)p.pctMinimo=pct;else delete p.pctMinimo;
