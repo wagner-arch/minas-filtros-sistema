@@ -1950,7 +1950,7 @@ img{max-width:100%}
     <button data-s="manut">Manutenção Periódica</button>
     <button data-s="produtos">Produtos</button>
     <div class="grp">Estoques</div>
-    <button data-s="estColab">Estoque Colaborador</button>
+    <button data-s="estColab">Estoque Colaborador <span class="rail-badge" id="estBadge" hidden></span></button>
     <button data-s="estEmpresa">Estoque Empresa</button>
     <button data-s="estConsumo">Uso e Consumo</button>
     <div class="grp">Gestão Administrativa</div>
@@ -2580,6 +2580,13 @@ img{max-width:100%}
               <div class="fld" id="v_localWrap" hidden><label for="v_local">Localização do produto <span class="req">*</span></label>
                 <input id="v_local" placeholder="Cozinha, área gourmet, escritório…" autocomplete="off" list="dlLocais">
                 <div class="help">Onde o aparelho vai ficar <b>no cliente</b>. Sem número de série, é o que diferencia um aparelho do outro na manutenção periódica.</div></div>
+            </div>
+            <!-- DE QUAL ESTOQUE SAI ESTE ITEM (23/10, regra dele): todo vendedor pode vender de
+                 qualquer estoque, mas so com a autorizacao de quem responde por ele. -->
+            <div class="fld" id="v_estoqueWrap" style="margin-top:12px">
+              <label for="v_estoque">Sai de qual estoque</label>
+              <select id="v_estoque"></select>
+              <div class="help" id="v_estNota"></div>
             </div>
             <!-- a nota do preço ocupa a largura toda: dentro do campo ela virava uma coluna de texto (25/09) -->
             <div id="v_precoNota"></div>
@@ -4253,12 +4260,14 @@ img{max-width:100%}
             <button type="button" data-t="meu" aria-current="true">Meu Estoque</button>
             <button type="button" data-t="receber">Requisições a Receber</button>
             <button type="button" data-t="devolver">Devoluções</button>
+            <button type="button" data-t="aut">Autorizações <span class="rail-badge" id="ecAutBadge" hidden></span></button>
             <button type="button" data-t="hist">Histórico de movimentações</button>
           </div>
           <input id="ecBusca" placeholder="Buscar produto">
           <span class="count" id="ecCount"></span><span class="sp"></span>
           <button class="btn" type="button" id="ecNovaReq">Requisitar produto</button>
           <button class="btn ghost" type="button" id="ecDevolver">Devolver produto</button>
+          <button class="btn ghost" type="button" id="ecContagem" hidden>Lançar contagem</button>
         </div>
         <div id="ecAvisoFerr"></div>
         <div class="tw"><table>
@@ -5557,6 +5566,13 @@ img{max-width:100%}
           <p class="help">Marque cada loja estando dentro dela, no celular, pelo botão <b>Marcar onde estou</b>. Parada num raio de 150 m de qualquer uma destas não gera aviso. Sem marcar, toda parada na loja virará aviso.</p>
           <div id="em_geoLojas"></div>
         </div>
+        <!-- quem responde pelo Estoque da Loja: ele requisita ao almoxarifado, confere a
+             contagem e autoriza a venda que sai do balcao (regra dele, 23/10) -->
+        <div class="sect">
+          <p class="sect-t">Quem responde pelo Estoque da Loja</p>
+          <p class="help">É o estoque do balcão de cada loja. O responsável requisita produto ao almoxarifado, confere a contagem e <b>autoriza a venda que sai dali</b> quando quem vende é outra pessoa. O substituto existe para folga e férias: ele autoriza no lugar do responsável. Só o Administrador e o Gerente mexem nesta escolha.</p>
+          <div id="em_respLojas"></div>
+        </div>
         <div class="sect">
           <p class="sect-t">Redes — viram QR Code no cabeçalho dos documentos e no rodapé da proposta</p>
           <div class="grid g2">
@@ -6521,6 +6537,48 @@ img{max-width:100%}
     <div class="actions">
       <button class="btn" type="button" id="rt_ok">Confirmar e adicionar</button>
       <button class="btn mut" type="button" id="rt_cancelar">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONTAGEM DO ESTOQUE DA LOJA (23/10): o responsavel lanca o que contou e a diferenca
+     vira movimento de ajuste, com quem contou e quando. -->
+<div class="modal" id="cgModal" hidden>
+  <div class="box" style="width:min(680px,100%)">
+    <h3>Contagem do Estoque da Loja</h3>
+    <div class="sub" id="cg_sub"></div>
+    <p class="help">Escreva ao lado de cada produto <b>quantas unidades você contou</b>. O que ficar em branco não é tocado. A diferença entra como movimento de ajuste de inventário, com o seu nome e a data.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Produto</th><th class="num">No sistema</th><th class="num">Contado</th><th class="num">Diferença</th></tr></thead>
+      <tbody id="cg_body"></tbody>
+    </table></div>
+    <div id="cg_resumo"></div>
+    <div id="cg_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="cg_ok">Lançar a contagem</button>
+      <button class="btn mut" type="button" id="cg_fechar">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- AUTORIZAR A SAIDA DO MEU ESTOQUE (23/10, regra dele): o dono do estoque decide, com o
+     pedido e o cliente na tela. Recusar exige o motivo, que vai ao vendedor.
+     O id "autModal" JA era da autorizacao de alteracao de venda (v126), por isso este e
+     autEstModal — a armadilha do prefixo repetido, de novo (v345). -->
+<div class="modal" id="autEstModal" hidden>
+  <div class="box" style="width:min(560px,100%)">
+    <h3>Autorizar a saída do estoque</h3>
+    <div class="sub" id="aut_sub"></div>
+    <div class="note" id="aut_det"></div>
+    <div class="fld" id="aut_motivoWrap" hidden>
+      <label for="aut_motivo">Motivo da recusa <span class="req">*</span></label>
+      <textarea id="aut_motivo" rows="2" placeholder="Por que não dá para sair deste estoque"></textarea>
+    </div>
+    <div id="aut_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="aut_sim">Autorizar</button>
+      <button class="btn mut" type="button" id="aut_nao">Recusar</button>
+      <button class="btn ghost" type="button" id="aut_fechar">Fechar</button>
     </div>
   </div>
 </div>
@@ -11223,6 +11281,40 @@ window.__atendsMF=function(){return atendimentos;};
 window.__instanteMF=function(r){return instanteDoRegistro(r);};
 window.__gruposProdMF=function(){return GRUPOS_PROD;};
 window.__ecTipoMF=function(v){if(v!==undefined)ecTipo=v;return ecTipo;};
+/* estoque da loja e autorizacao de saida (23/10) */
+window.__locLojaMF=function(id){return locLoja(id);};
+window.__respLojasMF=function(o){if(o)EMPRESA.respLojas=o;return respLojas();};
+window.__autsMF=function(f){return autorizacoesEstoque(f);};
+window.__autsParaMimMF=function(q){return autorizacoesParaMim(q);};
+window.__decidirAutMF=function(pid,ix,ok,mot){return decidirAutEstoque(pid,ix,ok,mot);};
+window.__abrirAutMF=function(pid,aid){return abrirAutEstoque(pid,aid);};
+window.__saldoEmMF=function(pid,loc){return saldoEm(pid,loc);};
+window.__reservasMF=function(loc){return reservasDe(loc);};
+window.__localItemMF=function(p,it){return localDoItemVenda(p,it);};
+window.__abrirContagemMF=function(loc){return abrirContagem(loc);};
+window.__lancarContagemMF=function(){return lancarContagem();};
+window.__movEstMF=function(){return movEst;};
+window.__requisicoesMF2=function(){return requisicoes;};
+window.__atenderReqMF=function(id){return atenderReq(id);};
+window.__abrirEstoqueMF=function(m,c,l){return abrirEstoque(m,c,l);};
+window.__ecQuemMF=function(v){var s=$("ecQuem");if(v!==undefined){s.value=v;renderEstColab();}return s.value;};
+window.__autPendPedMF=function(p){return autorizacoesPendentes(p);};
+window.__precisaAutMF=function(loc,q){return precisaAutorizacaoEstoque(loc,q);};
+window.__localItemFormMF=function(){return localItemForm();};
+window.__localVendaFormMF=function(){return localVendaForm();};
+window.__faltaEstMF=function(p,q,l){return faltaEstoqueVenda(p,q,l);};
+window.__esItensMF=function(l){if(l){esItens=l;try{renderEsItens();}catch(e){}}return esItens;};
+window.__confirmarRepMF=function(r,idx){repPend={r:r,idx:idx};return confirmarReposicaoItens();};
+window.__itensDeEstoqueMF=function(p){return itensDeEstoque(p);};
+window.__aprovarVendaMF=function(p,cx){return aprovarVenda(p,cx);};
+window.__lancarMovMF=function(pid,q,o,d,doc,obs,data,c){return lancarMov(pid,q,o,d,doc,obs,data,c);};
+window.__finalizarVendaMF=function(){return salvarPedido();};
+window.__irEtapaMF=function(n){return irEtapa(n);};
+window.__estornarVendaMF=function(p,o){return estornarVenda(p,o);};
+window.__ajustarBaixaMF=function(p,a,b){return ajustarBaixa(p,a,b);};
+window.__hojeMF=function(){return hojeISO();};
+window.__perfilDeMF=function(n){return perfilDe(n);};
+window.__podeAutMF=function(loc,q){return podeAutorizarEstoque(loc,q);};
 window.__ehGestorFerrMF=function(q){return ehGestorFerr(q);};
 window.__separarFerrMF=function(id){return separarFerr(id);};
 window.__receberFerrMF=function(id){return receberFerrVolta(id);};
@@ -13195,6 +13287,10 @@ window.__trocarUsuarioMF=function(n){usuarioAtual=n;
 window.__empresaMF=function(){return EMPRESA;};
 window.__pontosMF=function(){return pontos;};
 window.__facialMF=function(){return faciais;};
+window.__irEtapaMF=function(n){return irEtapa(n);};
+window.__estornarVendaMF=function(p,o){return estornarVenda(p,o);};
+window.__ajustarBaixaMF=function(p,a,b){return ajustarBaixa(p,a,b);};
+window.__hojeMF=function(){return hojeISO();};
 window.__perfilDeMF=function(n){return perfilDe(n);};
 window.__hojeMF=function(){return hojeISO();};
 window.__pendenciasMF=function(){return pendenciasMF();};
@@ -13464,6 +13560,8 @@ function sincronizarValor(){
     if($("v_serieWrap"))$("v_serieWrap").hidden=false;
     try{$("v_precoNota").innerHTML="";mostrarValorFinal(null);}catch(e){}}
   ajustarEquipItem();
+  /* de qual estoque este item sai, com o saldo de cada um (23/10) */
+  try{opcoesEstoqueItem();notaEstoqueItem();}catch(e){}
   try{renderEndDoEquipVenda();}catch(e){}
   opcoesGarantia();
   notaGarantia();
@@ -14248,6 +14346,29 @@ function addItem(){
       vinculo:uid(),vemCom:vinculo,vemComNome:p.nome});
     nomesJuntos.push(qj+"× "+j.prod.nome);
   });
+  /* de qual estoque sai cada linha que acabou de entrar (23/10). O item do PLANO e o
+     SERVIÇO ficam de fora: eles não têm estoque. */
+  var locEst=localItemForm(),euEst=euNoEstoque();
+  var precisaAut=precisaAutorizacaoEstoque(locEst,euEst);
+  var pedeAut=[];
+  for(var ia=idxAntes;ia<itens.length;ia++){
+    var itA=itens[ia];
+    if(!itA||ehPlano(itA)||ehServico(itA))continue;
+    /* "meu estoque" não grava nada: o item segue o responsável da venda, como sempre */
+    if(locEst===localVendaForm())continue;
+    itA.estoque=locEst;
+    if(precisaAut){
+      itA.autEstoque={id:uid(),status:"pendente",local:locEst,resp:donoDoEstoque(locEst),
+        pedidaPor:euEst,pedidaEm:iso(new Date())};
+      pedeAut.push((itA.qtd||1)+"× "+itA.nome);
+    }
+  }
+  if(pedeAut.length){
+    var donoA=donoDoEstoque(locEst);
+    toast(pedeAut.join(" e ")+" sai do "+nomeLocal(locEst)+
+      (donoA?" — "+donoA+" recebe o pedido de autorização quando a venda for salva."
+           :" — este estoque está sem responsável; peça ao Administrador para escolher um."));
+  }
   $("v_serie").value="";$("v_local").value="";render();
   limparInclusao("v_prod","v_qtd",["v_valor"]);
   ajustarEquipItem();
@@ -15237,6 +15358,8 @@ function calcular(){
         (i.serie?" · série "+esc(i.serie):"")+(i.local?" · "+esc(i.local):"")+
         (i.planoCobre?' · <span class="pill p-ok">coberto pelo plano '+esc(i.planoCobre.garantia)+"</span>":"")+
         (i.retirada?' · <span class="pill p-warn">'+i.retirada.qtd+" com retirada do "+esc(i.retirada.geral?"estoque geral":"estoque da loja "+i.retirada.lojaNome)+"</span>":"")+
+        /* de qual estoque este item sai, e se ainda espera autorização (23/10) */
+        seloEstoqueItem(i)+
         /* produto composto (v248): diz de onde a linha veio, para o vendedor saber o que pode tirar */
         (i.vemCom?' · <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+
         /* o preço deste produto mudou no cadastro depois que o item entrou (22/10) */
@@ -16012,6 +16135,25 @@ async function salvarPedido(){
     itR.retirada.reqId=rqR.id;itR.retirada.status="pendente";
     requisicoes.push(rqR);await grava("requisicoes",rqR);nRetiradas++;
   }
+  /* item que sai do estoque de outra pessoa: o dono é avisado agora que a venda foi salva.
+     O pedido de autorização já nasceu no item (addItem); aqui ele vira aviso de verdade. */
+  try{
+    var autNovas=autorizacoesPendentes(ped);
+    if(autNovas.length){
+      var porDono={};
+      autNovas.forEach(function(it){
+        var d=it.autEstoque.resp||nomeLocal(it.autEstoque.local);
+        (porDono[d]=porDono[d]||[]).push((it.qtd||1)+"× "+it.nome);});
+      Object.keys(porDono).forEach(function(d){
+        notificarNoCelular("Autorização de estoque · "+d,
+          usuarioAtual+" quer "+porDono[d].join(" e ")+" do seu estoque · pedido "+ped.numero);});
+      setTimeout(function(){
+        toast(autNovas.length+(autNovas.length===1?" item espera":" itens esperam")+
+          " autorização de estoque: "+Object.keys(porDono).join(", ")+
+          ". O financeiro só aprova depois da resposta.");
+      },1200);
+    }
+  }catch(eAut){console.warn("aviso de autorização de estoque",eAut);}
   if(nRetiradas)setTimeout(function(){
     toast(nRetiradas+(nRetiradas===1?" solicitação":" solicitações")+" de retirada de estoque enviada"+(nRetiradas===1?"":"s")+
       " ao responsável pelo estoque. A venda só é aprovada no financeiro depois do aceite.");
@@ -17290,11 +17432,16 @@ function renderEmpresa(){
 var movEst=[],requisicoes=[];
 var LOC_EMPRESA="empresa",LOC_CONSUMO="consumo";
 function locColab(n){return "colab:"+n;}
+/* o estoque de balcão de cada loja: tem responsável e é abastecido por requisição */
+function locLoja(id){return "eloja:"+(id||lojaAtual);}
+function ehLocalLoja(l){return !!l&&String(l).indexOf("eloja:")===0;}
+function lojaDoLocal(l){return ehLocalLoja(l)?String(l).slice(6):"";}
 function nomeLocal(l){
   if(l===LOC_EMPRESA)return "Almoxarifado";
   if(l===LOC_CONSUMO)return "Uso e consumo";
   if(l&&l.indexOf("colab:")===0)return l.slice(6);
-  if(l&&l.indexOf("loja:")===0)return "Loja "+nomeLojaId(l.slice(5));
+  if(ehLocalLoja(l))return "Estoque da Loja · "+nomeLojaId(lojaDoLocal(l));
+  if(l&&l.indexOf("loja:")===0)return "Em trânsito · "+nomeLojaId(l.slice(5));
   if(l==="venda")return "Venda ao cliente";
   if(l==="troca")return "Troca com o cliente";
   if(l===LOC_RECUP)return "Recuperado (virou seminovo)";
@@ -17338,12 +17485,295 @@ function localVendaForm(){
   var resp=temInst?($("v_iresp").value||$("v_inst").value||$("v_vend").value):$("v_vend").value;
   return resp?locColab(resp):LOC_EMPRESA;
 }
-function faltaEstoqueVenda(p,qtd){
+/* a etiqueta que diz de onde o item sai, quando não é o estoque de quem vende */
+function seloEstoqueItem(it){
+  if(!it||!it.estoque)return "";
+  var a=it.autEstoque,nome=nomeLocal(it.estoque);
+  if(!a)return ' <span class="pill p-mut">sai do '+esc(nome)+"</span>";
+  if(a.status==="pendente")return ' <span class="pill p-warn">aguardando autorização de '+
+    esc(a.resp||nome)+"</span>";
+  if(a.status==="autorizada")return ' <span class="pill p-ok">'+esc(nome)+" · autorizado por "+
+    esc(a.decididoPor||"")+"</span>";
+  return ' <span class="pill p-crit">'+esc(nome)+" · recusado</span>";
+}
+/* os itens deste pedido que estão esperando autorização de estoque */
+function autorizacoesPendentes(p){
+  return itensDeEstoque(p||{}).filter(function(it){
+    return it.autEstoque&&it.autEstoque.status==="pendente";});
+}
+/* todas as autorizações de estoque, de todos os pedidos da loja, com o pedido ao lado */
+function autorizacoesEstoque(filtro){
+  var L=[];
+  pedidos.forEach(function(p){
+    if(p.loja!==lojaAtual||p.status==="Cancelada")return;
+    itensDeEstoque(p).forEach(function(it){
+      var a=it.autEstoque;if(!a)return;
+      if(filtro&&filtro.status&&a.status!==filtro.status)return;
+      if(filtro&&filtro.local&&a.local!==filtro.local)return;
+      L.push({ped:p,item:it,aut:a});
+    });
+  });
+  return L.sort(function(a,b){return String(b.aut.pedidaEm||"").localeCompare(String(a.aut.pedidaEm||""));});
+}
+/* as que ESTA pessoa precisa decidir */
+function autorizacoesParaMim(quem){
+  var q=quem||euNoEstoque();
+  return autorizacoesEstoque({status:"pendente"}).filter(function(x){
+    return podeAutorizarEstoque(x.aut.local,q);});
+}
+/* ---------- VENDER DO ESTOQUE DE OUTRA PESSOA (23/10, regra dele) ----------
+   Todo vendedor pode vender de qualquer estoque — da loja ou de outro colaborador — mas só
+   com a autorização de quem responde por aquele estoque. Do próprio estoque sai direto, e o
+   responsável do Estoque da Loja vende dele sem pedir nada. */
+var PERFIS_AUT_ESTOQUE=["Administrador","Gerente"];
+function precisaAutorizacaoEstoque(loc,quem){
+  if(!loc)return false;
+  var q=quem||euNoEstoque();
+  if(loc===locColab(q))return false;                 /* é o meu estoque */
+  if(loc===LOC_EMPRESA)return false;                 /* almoxarifado tem o caminho da retirada */
+  if(ehLocalLoja(loc)&&respondePorLoja(q,lojaDoLocal(loc)))return false;
+  return true;
+}
+/* quem responde por este estoque — é dele a autorização */
+function donoDoEstoque(loc){
+  if(ehLocalLoja(loc))return respEstoqueLoja(lojaDoLocal(loc))||"";
+  if(loc&&loc.indexOf("colab:")===0)return loc.slice(6);
+  return "";
+}
+/* no Estoque da Loja o substituto autoriza junto (folga e férias); a gestão autoriza qualquer um */
+function podeAutorizarEstoque(loc,quem){
+  var q=quem||euNoEstoque();
+  /* "Administrador e Gerente podem autorizar qualquer um" (regra dele, 23/10). A conta é pelo
+     PERFIL, como no rastreio (v345) e nas ferramentas (v388) — e não pela lista de ações, que
+     a função Gerente pode não ter; e nunca por ehGestor(), que olha quem está LOGADO. */
+  if(PERFIS_AUT_ESTOQUE.indexOf(perfilDe(q))>=0)return true;
+  if(ehLocalLoja(loc))return respondePorLoja(q,lojaDoLocal(loc));
+  return donoDoEstoque(loc)===q;
+}
+/* o estoque escolhido no campo "Sai de" da linha do item; "meu" é o de quem entrega */
+function localItemForm(){
+  var e=$("v_estoque"),v=e?String(e.value||""):"";
+  if(!v||v==="meu")return localVendaForm();
+  return v;
+}
+/* Autorizar ou recusar a saída do estoque. Autorizando, a saída é lançada na Aprovação
+   Financeira junto do resto da venda (é lá que o estoque muda de mãos, como sempre) —
+   aqui fica o aval, com quem pediu, quem decidiu e quando. Recusando, a reserva cai
+   sozinha, porque o item deixa de apontar para aquele estoque. */
+async function decidirAutEstoque(pedidoId,itemIx,aceita,motivo){
+  var p=pedidos.filter(function(x){return x.id===pedidoId;})[0];
+  if(!p){toast("Pedido não encontrado.");return false;}
+  var lista=itensDeEstoque(p),it=lista[itemIx];
+  if(!it||!it.autEstoque){toast("Este item não está esperando autorização.");return false;}
+  var a=it.autEstoque;
+  if(a.status!=="pendente"){toast("Esta autorização já foi respondida.");return false;}
+  /* a trava vale por dentro, não só no botão (regra da v321) */
+  if(!podeAutorizarEstoque(a.local)){
+    toast("Só "+(donoDoEstoque(a.local)||"quem responde por este estoque")+
+      (ehLocalLoja(a.local)?", o substituto":"")+" ou a gestão autoriza esta saída.");
+    return false;
+  }
+  if(!aceita&&!String(motivo||"").trim()){toast("Escreva o motivo da recusa.");return false;}
+  var antes=JSON.parse(JSON.stringify(a));
+  var antesEst=it.estoque||"";
+  a.status=aceita?"autorizada":"recusada";
+  a.decididoPor=usuarioAtual;a.decididoEm=iso(new Date());
+  if(!aceita){a.motivo=String(motivo||"").trim();
+    /* recusado, o item volta a sair do estoque de quem vende: a reserva cai na hora */
+    it.estoque="";}
+  registrarEvento(p,(aceita?"Saída do "+nomeLocal(a.local)+" autorizada":
+    "Saída do "+nomeLocal(a.local)+" recusada")+" por "+usuarioAtual+
+    " · "+(it.qtd||1)+"× "+it.nome+(aceita?"":" · "+a.motivo));
+  try{await gravaConf("pedidos",p);}
+  catch(e){
+    it.autEstoque=antes;it.estoque=antesEst;
+    (p.eventos||[]).pop();
+    toast("Não foi salvo. Confira a internet e tente de novo.");
+    return false;
+  }
+  /* o vendedor é avisado no sino; no celular, pelo aviso do aplicativo */
+  try{notificarNoCelular(aceita?"Saída de estoque autorizada":"Saída de estoque recusada",
+    (it.qtd||1)+"× "+it.nome+" · pedido "+p.numero+(aceita?"":" · "+a.motivo));}catch(e){}
+  render();
+  toast(aceita
+    ? "Autorizado. "+(it.qtd||1)+"× "+it.nome+" sai do "+nomeLocal(a.local)+" quando o financeiro aprovar o pedido "+p.numero+"."
+    : "Recusado. "+a.pedidaPor+" foi avisado e precisa trocar a origem do item no pedido "+p.numero+".");
+  return true;
+}
+var cgLocal="";
+function abrirContagem(loc){
+  cgLocal=loc||locLoja(lojaAtual);
+  if(!podeAutorizarEstoque(cgLocal)){
+    toast("Só "+(donoDoEstoque(cgLocal)||"quem responde por este estoque")+" ou a gestão lança a contagem.");
+    return;}
+  $("cg_sub").textContent=nomeLocal(cgLocal)+" · "+dataBR(hojeISO());
+  var lista=produtos.filter(function(pr){return saldoEm(pr.id,cgLocal)!==0;})
+    .sort(function(a,b){return (a.nome||"").localeCompare(b.nome||"","pt-BR");});
+  var b=$("cg_body");b.innerHTML="";
+  if(!lista.length){
+    b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Estoque vazio</div>'+
+      "Não há produto neste estoque para contar.</div></td></tr>";
+  }else{
+    lista.forEach(function(pr){
+      b.innerHTML+="<tr data-cgp=\""+esc(pr.id)+"\"><td><div class=\"t-main\">"+esc(pr.nome)+
+        "</div><div class=\"t-sub\"><code>"+esc(pr.cod||"")+"</code></div></td>"+
+        '<td class="num"><b>'+saldoEm(pr.id,cgLocal)+"</b></td>"+
+        '<td class="num"><input type="number" min="0" step="1" style="max-width:90px" data-cgq="'+esc(pr.id)+'" placeholder="—"></td>'+
+        '<td class="num" data-cgd="'+esc(pr.id)+'">—</td></tr>';
+    });
+  }
+  $("cg_resumo").innerHTML="";$("cg_alerta").innerHTML="";
+  /* a diferença aparece ao vivo, enquanto a pessoa digita */
+  Array.prototype.forEach.call($("cg_body").querySelectorAll("[data-cgq]"),function(inp){
+    inp.oninput=function(){
+      var pid=inp.getAttribute("data-cgq"),cel=$("cg_body").querySelector('[data-cgd="'+pid+'"]');
+      var txt=String(inp.value||"").trim();
+      if(!txt){if(cel)cel.innerHTML="—";return contagemResumo();}
+      var d=(parseInt(txt,10)||0)-saldoEm(pid,cgLocal);
+      if(cel)cel.innerHTML=d===0?'<span class="pill p-ok">bate</span>'
+        :'<span class="pill '+(d>0?"p-acc":"p-crit")+'">'+(d>0?"+":"")+d+"</span>";
+      contagemResumo();
+    };
+  });
+  $("cgModal").hidden=false;
+}
+function contagemResumo(){
+  var el=$("cg_resumo");if(!el)return;
+  var cont=0,dif=0;
+  Array.prototype.forEach.call($("cg_body").querySelectorAll("[data-cgq]"),function(inp){
+    var txt=String(inp.value||"").trim();if(!txt)return;
+    cont++;
+    if((parseInt(txt,10)||0)!==saldoEm(inp.getAttribute("data-cgq"),cgLocal))dif++;
+  });
+  el.innerHTML=cont?('<div class="note'+(dif?" warn":"")+'">'+cont+" produto"+(cont>1?"s":"")+
+    " contado"+(cont>1?"s":"")+" · <b>"+dif+"</b> com diferença"+
+    (dif?". Cada diferença vira um movimento de ajuste de inventário.":". Nada a ajustar.")+"</div>"):"";
+}
+async function lancarContagem(){
+  if(!podeAutorizarEstoque(cgLocal)){
+    $("cg_alerta").innerHTML='<div class="note crit">Só quem responde por este estoque lança a contagem.</div>';
+    return;}
+  var difs=[];
+  Array.prototype.forEach.call($("cg_body").querySelectorAll("[data-cgq]"),function(inp){
+    var txt=String(inp.value||"").trim();if(!txt)return;
+    var pid=inp.getAttribute("data-cgq"),contado=parseInt(txt,10)||0;
+    var d=contado-saldoEm(pid,cgLocal);
+    if(d!==0)difs.push({pid:pid,d:d,contado:contado});
+  });
+  if(!difs.length){
+    $("cg_alerta").innerHTML='<div class="note">Nenhuma diferença para lançar. O estoque já está igual ao contado.</div>';
+    return;}
+  var doc="Contagem do "+nomeLocal(cgLocal);
+  var obs="Contagem lançada por "+usuarioAtual+" em "+dataBR(hojeISO());
+  var bt=$("cg_ok");bt.disabled=true;bt.textContent="Lançando…";
+  var feitos=0,erro="";
+  for(var i=0;i<difs.length;i++){
+    var x=difs[i];
+    try{
+      if(x.d>0)await lancarMov(x.pid,x.d,"ajuste",cgLocal,doc,obs+" · contado "+x.contado,hojeISO(),"");
+      else await lancarMov(x.pid,-x.d,cgLocal,"ajuste",doc,obs+" · contado "+x.contado,hojeISO(),"");
+      feitos++;
+    }catch(e){erro=(e&&e.message)||String(e);break;}
+  }
+  bt.disabled=false;bt.textContent="Lançar a contagem";
+  if(erro){
+    $("cg_alerta").innerHTML='<div class="note crit"><b>Não foi salvo tudo.</b> '+esc(erro)+
+      " Foram lançados "+feitos+" de "+difs.length+" ajustes — confira a internet e lance os que faltam.</div>";
+    render();try{renderEstColab();}catch(e2){}
+    return;
+  }
+  $("cgModal").hidden=true;
+  toast("Contagem lançada: "+feitos+" ajuste"+(feitos>1?"s":"")+" de inventário no "+nomeLocal(cgLocal)+".");
+  render();try{renderEstColab();renderEstEmpresa();}catch(e){}
+}
+var autPend2=null;
+function abrirAutEstoque(pedidoId,autId){
+  var p=pedidos.filter(function(x){return x.id===pedidoId;})[0];
+  if(!p){toast("Pedido não encontrado.");return;}
+  var lista=itensDeEstoque(p),ix=-1;
+  for(var i=0;i<lista.length;i++){
+    if(lista[i].autEstoque&&lista[i].autEstoque.id===autId){ix=i;break;}}
+  if(ix<0){toast("Esta autorização não está mais no pedido.");return;}
+  var it=lista[ix],a=it.autEstoque;
+  autPend2={pedidoId:pedidoId,ix:ix};
+  $("aut_sub").textContent="Pedido "+p.numero+" · "+(p.cliente||"");
+  var cli=cliPorId(p.clienteId);
+  $("aut_det").innerHTML=
+    "<b>"+esc((it.qtd||1)+"× "+it.nome)+"</b>"+(it.cod?" <code>"+esc(it.cod)+"</code>":"")+"<br>"+
+    "Sai do <b>"+esc(nomeLocal(a.local))+"</b><br>"+
+    "Quem pediu: <b>"+esc(a.pedidaPor||"")+"</b>"+(a.pedidaEm?" · "+dataBR(a.pedidaEm.slice(0,10)):"")+"<br>"+
+    "Cliente: "+esc(p.cliente||"—")+(cli&&cli.cidade?" · "+esc(cli.cidade):"")+"<br>"+
+    "Saldo hoje neste estoque: <b>"+saldoEm(it.pid,a.local)+"</b> · reservado para vendas: "+
+      ((reservasDe(a.local)[it.pid])||0)+
+    (a.status!=="pendente"
+      ? "<br><br><b>Já respondida:</b> "+(a.status==="autorizada"?"autorizada":"recusada")+
+        " por "+esc(a.decididoPor||"")+(a.decididoEm?" em "+dataBR(a.decididoEm.slice(0,10)):"")+
+        (a.motivo?" · "+esc(a.motivo):"")
+      : "");
+  var podeDecidir=(a.status==="pendente"&&podeAutorizarEstoque(a.local));
+  $("aut_sim").hidden=!podeDecidir;$("aut_nao").hidden=!podeDecidir;
+  $("aut_motivoWrap").hidden=true;$("aut_motivo").value="";$("aut_alerta").innerHTML="";
+  if(a.status==="pendente"&&!podeDecidir)
+    $("aut_alerta").innerHTML='<div class="note warn">Quem responde por este estoque é <b>'+
+      esc(donoDoEstoque(a.local)||"ninguém ainda")+"</b>"+
+      (ehLocalLoja(a.local)?" (ou o substituto)":"")+". Além dele, só a gestão autoriza.</div>";
+  $("autEstModal").hidden=false;
+}
+/* monta o campo "Sai de qual estoque": o meu, o da loja aberta e os dos colegas */
+function opcoesEstoqueItem(){
+  var s=$("v_estoque");if(!s)return;
+  var ant=String(s.value||""),eu=euNoEstoque();
+  s.innerHTML="";
+  function add(v,txt){var o=document.createElement("option");o.value=v;o.textContent=txt;s.appendChild(o);}
+  add("meu","Meu estoque"+(eu?" · "+eu:""));
+  /* o razão de estoque é de cada loja, então o balcão oferecido é o da loja aberta */
+  add(locLoja(lojaAtual),"Estoque da Loja · "+nomeLoja()+
+    (respEstoqueLoja(lojaAtual)?" · "+respEstoqueLoja(lojaAtual):" · sem responsável"));
+  colabsComEstoque().forEach(function(nm){
+    if(nm===eu)return;
+    add(locColab(nm),nm+" · "+(perfilDe(nm)||"colaborador"));
+  });
+  if(ant){try{s.value=ant;}catch(e){}}
+  if(!s.value)s.value="meu";
+}
+/* o saldo de cada estoque para o produto escolhido, e de quem é a autorização */
+function notaEstoqueItem(){
+  var el=$("v_estNota");if(!el)return;
+  var sel=$("v_prod"),p=sel?prodPorId(sel.value):null;
+  var loc=localItemForm(),eu=euNoEstoque();
+  if(!p){
+    el.innerHTML="Escolha o produto para ver o saldo de cada estoque. Do <b>seu</b> estoque a venda sai direto; de outro, quem responde por ele precisa autorizar.";
+    return;
+  }
+  if(ehPlano({pid:p.id})||ehServico({pid:p.id})){
+    el.innerHTML="Plano e serviço não têm estoque — este campo não vale para eles.";
+    return;
+  }
+  var ops=[],s=$("v_estoque");
+  if(s)Array.prototype.forEach.call(s.options,function(o){
+    var lc=(o.value==="meu")?localVendaForm():o.value;
+    var disp=saldoEm(p.id,lc)-((reservasDe(lc)[p.id])||0);
+    ops.push({v:o.value,nome:o.value==="meu"?"Meu estoque":nomeLocal(lc),disp:disp,
+      res:(reservasDe(lc)[p.id])||0,aqui:(o.value===String(s.value))});
+  });
+  var linha=ops.map(function(o){
+    return (o.aqui?"<b>":"")+esc(o.nome)+" "+o.disp+(o.res?" ("+o.res+" reservado"+(o.res>1?"s":"")+")":"")+(o.aqui?"</b>":"");
+  }).join(" · ");
+  var aut=precisaAutorizacaoEstoque(loc,eu),dono=donoDoEstoque(loc);
+  el.innerHTML=linha+"<br>"+(aut
+    ? ('<span class="pill p-warn">precisa de autorização</span> '+
+       (dono?esc(dono)+" responde por este estoque e vai receber o pedido quando a venda for salva."
+            :"este estoque está <b>sem responsável</b> — peça ao Administrador para escolher um em Dados da Empresa.")+
+       " O pedido pode ser finalizado, mas o financeiro só aprova depois da resposta.")
+    : '<span class="pill p-ok">sai direto</span> você responde por este estoque.');
+}
+function faltaEstoqueVenda(p,qtd,localEscolhido){
   if(!p||p.grupo==="Planos"||/servi|m[ãa]o de obra/i.test(p.grupo||""))return 0;
-  var loc=localVendaForm();
+  var loc=localEscolhido||localItemForm();
   var disp=saldoEm(p.id,loc)-((reservasDe(loc)[p.id])||0);
   if(loc===LOC_EMPRESA)disp-=retiradasPendentesSaindo(p.id,lojaAtual);
-  var noCarrinho=itens.filter(function(i){return i.pid===p.id;})
+  var noCarrinho=itens.filter(function(i){
+      return i.pid===p.id&&(i.estoque?i.estoque:localVendaForm())===loc;})
     .reduce(function(a,i){return a+(+i.qtd||0)-(i.retirada?(+i.retirada.qtd||0):0);},0);
   return Math.max(0,qtd-Math.max(0,disp-noCarrinho));
 }
@@ -18170,6 +18600,20 @@ function opcoesGarantia(){
   });
 }
 /* OS interna (bancada) sem atividade futura: a peça sai do estoque da empresa, nunca do técnico (regra do Wagner, 15/09) */
+/* de qual estoque sai ESTE item. Sem `it.estoque` vale o estoque do pedido, como sempre valeu. */
+function localDoItemVenda(p,it){
+  if(it&&it.estoque)return it.estoque;
+  return localDaVenda(p);
+}
+/* os estoques que este pedido toca, cada um com os itens que saem dele */
+function locaisDoPedido(p){
+  var m={};
+  itensDeEstoque(p).forEach(function(it){
+    var l=localDoItemVenda(p,it);
+    (m[l]=m[l]||[]).push(it);
+  });
+  return m;
+}
 function localDaVenda(p){
   if(p&&p.osId&&p.osLocal==="loja"&&!p.instalacao)return LOC_EMPRESA;
   var n=responsavelVenda(p);return n?locColab(n):LOC_EMPRESA;
@@ -18200,10 +18644,13 @@ function saidasLiquidas(p){
 function reservasDe(local){
   var r={};
   pedidos.forEach(function(p){
-    if(p.loja!==lojaAtual||!vendaPendente(p)||localDaVenda(p)!==local)return;
+    if(p.loja!==lojaAtual||!vendaPendente(p))return;
     var saiu={},pede={};
-    saidasLiquidas(p).forEach(function(s){saiu[s.pid]=(saiu[s.pid]||0)+s.qtd;});
-    itensDeEstoque(p).forEach(function(it){pede[it.pid]=(pede[it.pid]||0)+(it.qtd||1);});
+    /* o que já saiu deste pedido NAQUELE estoque, e o que ele ainda pede dali */
+    saidasLiquidas(p).forEach(function(s){if(s.local===local)saiu[s.pid]=(saiu[s.pid]||0)+s.qtd;});
+    itensDeEstoque(p).forEach(function(it){
+      if(localDoItemVenda(p,it)!==local)return;
+      pede[it.pid]=(pede[it.pid]||0)+(it.qtd||1);});
     Object.keys(pede).forEach(function(pid){r[pid]=(r[pid]||0)+Math.max(0,pede[pid]-(saiu[pid]||0));});
   });
   return r;
@@ -18211,23 +18658,23 @@ function reservasDe(local){
 /* deixa o estoque igual aos itens do pedido: baixa o que falta do local da venda,
    devolve o que sobrou para onde saiu. Devolve o que foi baixado agora. */
 async function ajustarBaixa(p,docBaixa,docEstorno){
-  var loc=localDaVenda(p),pede={},saiu={},por=saidasLiquidas(p),baixou=[],pids={};
-  itensDeEstoque(p).forEach(function(it){pede[it.pid]=(pede[it.pid]||0)+(it.qtd||1);});
-  por.forEach(function(s){saiu[s.pid]=(saiu[s.pid]||0)+s.qtd;});
-  Object.keys(pede).forEach(function(k){pids[k]=1;});Object.keys(saiu).forEach(function(k){pids[k]=1;});
-  var lista=Object.keys(pids);
+  /* a conta é por PRODUTO E ESTOQUE: quem mudou a origem de um item depois de a venda ter
+     baixado tem a saída estornada no estoque antigo e lançada no novo, sem sobra nem falta */
+  var pede={},saiu={},por=saidasLiquidas(p),baixou=[],chaves={};
+  itensDeEstoque(p).forEach(function(it){
+    var k=it.pid+"|"+localDoItemVenda(p,it);
+    pede[k]=(pede[k]||0)+(it.qtd||1);});
+  por.forEach(function(s){var k=s.pid+"|"+s.local;saiu[k]=(saiu[k]||0)+s.qtd;});
+  Object.keys(pede).forEach(function(k){chaves[k]=1;});Object.keys(saiu).forEach(function(k){chaves[k]=1;});
+  var lista=Object.keys(chaves);
   for(var i=0;i<lista.length;i++){
-    var pid=lista[i],d=(pede[pid]||0)-(saiu[pid]||0);
+    var k2=lista[i],corte=k2.indexOf("|"),pid=k2.slice(0,corte),loc=k2.slice(corte+1);
+    var d=(pede[k2]||0)-(saiu[k2]||0);
     if(d>0){
       await lancarMov(pid,d,loc,"venda",docBaixa,p.cliente||"",hojeISO(),"");
-      baixou.push({pid:pid,qtd:d});
+      baixou.push({pid:pid,qtd:d,local:loc});
     } else if(d<0){
-      var resto=-d,locais=por.filter(function(s){return s.pid===pid;});
-      for(var j=0;j<locais.length&&resto>0;j++){
-        var q=Math.min(locais[j].qtd,resto);
-        await lancarMov(pid,q,"venda",locais[j].local,docEstorno,p.cliente||"",hojeISO(),"");
-        resto-=q;
-      }
+      await lancarMov(pid,-d,"venda",loc,docEstorno,p.cliente||"",hojeISO(),"");
     }
   }
   return baixou;
@@ -18245,18 +18692,27 @@ function custoTotalDe(p){
 }
 
 /* ---------- modal de movimento ---------- */
-var esModo="mov",esItens=[],esColab="";
+var esModo="mov",esItens=[],esColab="",esLocal="";
 function localOpcoes(sel,incluirColabs,incluirExternos){
   var s=$(sel);s.innerHTML="";
   function add(v,t){var o=document.createElement("option");o.value=v;o.textContent=t;s.appendChild(o);}
   add(LOC_EMPRESA,"Almoxarifado da empresa");
   add(LOC_CONSUMO,"Uso e consumo");
   /* aqui a lista é para ESCOLHER: entra toda a equipe ativa, com a função ao lado do nome */
-  if(incluirColabs)colabsComEstoque(true).forEach(function(n){add(locColab(n),n+" · "+(perfilDe(n)||"colaborador"));});
+  /* o estoque de balcão de cada loja vem antes das pessoas: ele é da loja, não de alguém */
+  if(incluirColabs){
+    LOJAS.forEach(function(l){
+      var r=respEstoqueLoja(l.id);
+      add(locLoja(l.id),"Estoque da Loja · "+l.nome+(r?" · "+r:""));
+    });
+    colabsComEstoque(true).forEach(function(n){add(locColab(n),n+" · "+(perfilDe(n)||"colaborador"));});
+  }
   if(incluirExternos){add("fornecedor","Fornecedor (entrada avulsa)");add("ajuste","Ajuste de inventário");add("venda","Venda ao cliente");}
 }
-function abrirEstoque(modo,colab){
+function abrirEstoque(modo,colab,local){
   esModo=modo;esColab=colab||"";esItens=[];
+  /* o local manda quando ele vem: é assim que o Estoque da Loja requisita e devolve */
+  esLocal=local||(esColab?locColab(esColab):"");
   var t={mov:"Lançar movimento de estoque",transf:"Transferir entre estoques",
     req:"Requisitar produto ao almoxarifado",dev:"Devolver produto ao almoxarifado",
     consumo:"Lançar consumo interno"}[modo]||"Movimento";
@@ -18279,11 +18735,11 @@ function abrirEstoque(modo,colab){
     $("es_destino").value=esColab?locColab(esColab):(primeiroColab?locColab(primeiroColab):LOC_EMPRESA);
     nota="Sai de um estoque e entra no outro no mesmo instante. O produto continua sendo da empresa — muda só quem responde por ele.";
   } else if(modo==="req"){
-    $("es_origem").value=LOC_EMPRESA;$("es_destino").value=locColab(esColab||usuarioAtual);
+    $("es_origem").value=LOC_EMPRESA;$("es_destino").value=esLocal||locColab(esColab||usuarioAtual);
     $("es_origemWrap").hidden=true;$("es_destinoWrap").hidden=true;
     nota="A requisição não move estoque agora. Ela fica pendente até o almoxarifado separar e você confirmar o recebimento.";
   } else if(modo==="dev"){
-    $("es_origem").value=locColab(esColab||usuarioAtual);$("es_destino").value=LOC_EMPRESA;
+    $("es_origem").value=esLocal||locColab(esColab||usuarioAtual);$("es_destino").value=LOC_EMPRESA;
     $("es_origemWrap").hidden=true;$("es_destinoWrap").hidden=true;
     nota="A devolução também espera a conferência do almoxarifado antes de voltar para o estoque da empresa.";
   } else if(modo==="consumo"){
@@ -18317,8 +18773,11 @@ async function confirmarEstoque(){
   if(!esItens.length){$("es_alerta").innerHTML='<div class="note crit"><b>Adicione ao menos um item.</b></div>';return;}
   var data=$("es_data").value||hojeISO(),obs=$("es_obs").value.trim();
   if(esModo==="req"||esModo==="dev"){
+    var lcl=esLocal||locColab(esColab||usuarioAtual);
     var r={id:uid(),loja:lojaAtual,tipo:(esModo==="req"?"requisicao":"devolucao"),
-      colaborador:esColab||usuarioAtual,
+      local:lcl,
+      colaborador:ehLocalLoja(lcl)?"":(esColab||usuarioAtual),
+      pedidaPor:usuarioAtual,
       itens:esItens.map(function(i){return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:i.qtd,atendida:i.qtd};}),
       obs:obs,data:data,status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual};
     requisicoes.push(r);await grava("requisicoes",r);
@@ -18538,6 +18997,18 @@ function renderEstEmpresa(){
       bt.onclick=function(){decidirRetirada(bt.getAttribute("data-rtr"),false);};});
   }
 }
+/* para onde esta requisição leva o produto: o Estoque da Loja (campo novo) ou a pessoa */
+function localDaReq(r){
+  if(!r)return "";
+  if(r.local)return r.local;
+  return r.colaborador?locColab(r.colaborador):LOC_EMPRESA;
+}
+/* o nome de quem responde pela requisição, para o texto da tela */
+function donoDaReq(r){
+  var l=localDaReq(r);
+  if(ehLocalLoja(l))return respEstoqueLoja(lojaDoLocal(l))||("Estoque da Loja · "+nomeLojaId(lojaDoLocal(l)));
+  return r.colaborador||"";
+}
 async function atenderReq(id){
   var r=requisicoes.filter(function(x){return x.id===id;})[0];
   if(!r)return;
@@ -18561,11 +19032,11 @@ async function atenderReq(id){
     /* o almoxarifado separa: o estoque ainda não muda de mãos, espera o colaborador confirmar */
     r.status="separada";r.separadaPor=usuarioAtual;r.separadaEm=hojeISO();
     await grava("requisicoes",r);
-    toast("Separada. Agora "+r.colaborador+" precisa confirmar o recebimento.");
+    toast("Separada. Agora "+donoDaReq(r)+" precisa confirmar o recebimento.");
   } else {
     for(var i=0;i<r.itens.length;i++)
       await lancarMov(r.itens[i].pid,r.itens[i].atendida||r.itens[i].qtd,
-        locColab(r.colaborador),LOC_EMPRESA,"Devolução",r.obs,hojeISO(),"");
+        localDaReq(r),LOC_EMPRESA,"Devolução",r.obs,hojeISO(),"");
     r.status="concluida";r.recebidaPor=usuarioAtual;r.recebidaEm=hojeISO();
     await grava("requisicoes",r);
     toast("Devolução recebida — produtos de volta no almoxarifado.");
@@ -18620,7 +19091,7 @@ async function confirmarReposicaoItens(){
   var ehTrocaR=r.origem==="troca";
   var nTroca=r.itens.reduce(function(a,it){return a+(+(it.atendida||it.qtd)||0);},0);
   var ut=usadoTrocaDoColab(r.colaborador);
-  if(r.tipo==="requisicao"&&!ehTrocaR&&ut.atrasado){
+  if(r.tipo==="requisicao"&&!ehTrocaR&&!ehLocalLoja(localDaReq(r))&&ut.atrasado){
     $("repModal").hidden=true;repPend=null;
     toast("Antes de receber a reposição, transfira ao almoxarifado o Purificador Sucata pego na troca em "+dataCurta(ut.desde)+
       " (Meu Estoque › Devolver).");
@@ -18628,7 +19099,7 @@ async function confirmarReposicaoItens(){
   }
   for(var k=0;k<x.idx.length;k++){
     var it=r.itens[x.idx[k]];if(!it||it.recebido)continue;
-    await lancarMov(it.pid,it.atendida||it.qtd,ehTrocaR?"troca":LOC_EMPRESA,locColab(r.colaborador),
+    await lancarMov(it.pid,it.atendida||it.qtd,ehTrocaR?"troca":LOC_EMPRESA,localDaReq(r),
       ehTrocaR?"Pego na troca":"Requisição",r.obs,hojeISO(),"");
     it.recebido=true;it.recebidoEm=hojeISO();it.recebidoPor=usuarioAtual;
     nomes.push((it.atendida||it.qtd)+"× "+it.nome);
@@ -18660,8 +19131,22 @@ function ajustarTextosEC(){
          hist:ferr?"Histórico":"Histórico de movimentações"};
   Array.prototype.forEach.call(ab.querySelectorAll("button"),function(b){
     var k=b.getAttribute("data-t");if(m[k])b.textContent=m[k];});
+  /* a aba Autorizações é só de produto — ferramenta tem o caminho dela */
+  var bAut=ab.querySelector('[data-t="aut"]');
+  if(bAut){
+    bAut.hidden=ferr;
+    var nAut=0;try{nAut=autorizacoesParaMim().length;}catch(e){}
+    var bg=$("ecAutBadge");if(bg){bg.textContent=nAut||"";bg.hidden=!nAut;}
+  }
+  if(ferr&&ecAba==="aut")ecAba="meu";
   $("ecNovaReq").textContent=ferr?"Requisitar ferramenta":"Requisitar produto";
   $("ecDevolver").textContent=ferr?"Devolver ferramenta":"Devolver produto";
+  /* a contagem é do Estoque da Loja: o botão só aparece quando ele está escolhido (23/10) */
+  var bc=$("ecContagem");
+  if(bc){
+    var vq=$("ecQuem")?String($("ecQuem").value||""):"";
+    bc.hidden=ferr||!ehLocalLoja(vq)||!podeAutorizarEstoque(vq);
+  }
   $("ecDevolver").hidden=ferr;      /* na ferramenta, o Devolver fica na linha de cada uma */
   $("ecBusca").placeholder=ferr?"Buscar ferramenta, marca, série ou acessório":"Buscar produto";
 }
@@ -18691,26 +19176,41 @@ function marcarAbasEC(){
 }
 function renderEstColab(){
   if(ecTipo==="ferr")return renderEstColabFerr();
-  var sq=$("ecQuem"),lista=colabsComEstoque();
-  var atual=sq.value;
+  var sq=$("ecQuem"),euEst=euNoEstoque(),atual=sq.value;
+  /* quem não é da gestão vê o próprio estoque e os Estoques de Loja que ele responde */
+  var lista=ehGestor()?colabsComEstoque():[euEst];
+  var lojasEst=(ehGestor()?LOJAS:lojasQueRespondo(euEst)).map(function(l){return locLoja(l.id);});
   sq.innerHTML="";
-  lista.forEach(function(n){var o=document.createElement("option");o.textContent=n;sq.appendChild(o);});
-  if(!lista.length){var o=document.createElement("option");o.textContent="— ninguém com estoque —";sq.appendChild(o);}
-  var euEst=euNoEstoque();
-  if(!ehGestor()){sq.value=euEst;sq.disabled=true;}
-  else{sq.disabled=false;if(atual&&lista.indexOf(atual)>=0)sq.value=atual;
-    else if(lista.indexOf(euEst)>=0)sq.value=euEst;}
-  var quem=sq.value,loc=locColab(quem);
+  lojasEst.forEach(function(lc){
+    var o=document.createElement("option");o.value=lc;
+    var r=respEstoqueLoja(lojaDoLocal(lc));
+    o.textContent=nomeLocal(lc)+(r?" · "+r:" · sem responsável");
+    sq.appendChild(o);});
+  lista.forEach(function(nm){var o=document.createElement("option");o.value=nm;o.textContent=nm;sq.appendChild(o);});
+  if(!lista.length&&!lojasEst.length){var o=document.createElement("option");o.textContent="— ninguém com estoque —";sq.appendChild(o);}
+  var valores=lojasEst.concat(lista);
+  sq.disabled=(!ehGestor()&&valores.length<2);
+  if(atual&&valores.indexOf(atual)>=0)sq.value=atual;
+  else if(valores.indexOf(euEst)>=0)sq.value=euEst;
+  else if(valores.length)sq.value=valores[0];
+  /* é estoque de loja ou de pessoa? quem fica vazio na loja, porque ali o dono é a loja */
+  var vSel=sq.value||"",ehLoja=ehLocalLoja(vSel);
+  /* o botao da contagem segue o estoque escolhido (e nao so o tipo, como no ajustarTextosEC) */
+  var btCg=$("ecContagem");
+  if(btCg)btCg.hidden=(ecTipo==="ferr")||!ehLoja||!podeAutorizarEstoque(vSel);
+  var loc=ehLoja?vSel:locColab(vSel),quem=ehLoja?"":vSel;
   var q=($("ecBusca").value||"").toLowerCase();
 
   var reserv=reservasDe(loc);
   var comigo=produtos.filter(function(p){return saldoEm(p.id,loc)!==0||(reserv[p.id]||0)>0;});
   var unid=comigo.reduce(function(a,p){return a+saldoEm(p.id,loc);},0);
   var valor=comigo.reduce(function(a,p){return a+saldoEm(p.id,loc)*custoTotalDe(p);},0);
-  var receber=requisicoes.filter(function(r){return r.loja===lojaAtual&&r.colaborador===quem&&
+  var receber=requisicoes.filter(function(r){return r.loja===lojaAtual&&localDaReq(r)===loc&&
     r.tipo==="requisicao"&&(r.status==="pendente"||r.status==="separada");});
-  var devol=requisicoes.filter(function(r){return r.loja===lojaAtual&&r.colaborador===quem&&r.tipo==="devolucao";});
-  $("ecResumo").textContent=quem+" · "+perfilDe(quem);
+  var devol=requisicoes.filter(function(r){return r.loja===lojaAtual&&localDaReq(r)===loc&&r.tipo==="devolucao";});
+  $("ecResumo").textContent=ehLoja
+    ? nomeLocal(loc)+" · "+(respEstoqueLoja(lojaDoLocal(loc))||"sem responsável")
+    : quem+" · "+perfilDe(quem);
   $("ecKpis").innerHTML=
     '<div class="kpi"><div class="l">Itens diferentes</div><div class="v">'+comigo.length+"</div></div>"+
     '<div class="kpi"><div class="l">Unidades</div><div class="v">'+unid+"</div></div>"+
@@ -18721,10 +19221,10 @@ function renderEstColab(){
       (receber.length?"var(--warn)":"inherit")+'">'+receber.length+"</div></div>"+
     '<div class="kpi"><div class="l">Devoluções em aberto</div><div class="v">'+
       devol.filter(function(r){return r.status==="pendente";}).length+"</div></div>"+
-    (function(){var ut=usadoTrocaDoColab(quem);
+    (ehLoja?"":function(){var ut=usadoTrocaDoColab(quem);
       return '<div class="kpi"><div class="l">Purificador Sucata em seu poder</div><div class="v" style="color:'+
         (ut.atrasado?"var(--crit)":(ut.saldo?"var(--warn)":"inherit"))+'">'+ut.saldo+"</div>"+
-        (ut.saldo?'<div class="l" style="margin-top:4px">'+(ut.atrasado?"devolver hoje · desde "+dataCurta(ut.desde):"devolver amanhã")+"</div>":"")+"</div>";})();
+        (ut.saldo?'<div class="l" style="margin-top:4px">'+(ut.atrasado?"devolver hoje · desde "+dataCurta(ut.desde):"devolver amanhã")+"</div>":"")+"</div>";}());
 
   var h=$("ecHead"),b=$("ecBody");b.innerHTML="";
   if(ecAba==="meu"){
@@ -18732,7 +19232,9 @@ function renderEstColab(){
     var l1=comigo.filter(function(p){return !q||(p.nome||"").toLowerCase().indexOf(q)>=0||(p.cod||"").toLowerCase().indexOf(q)>=0;})
       .sort(function(a,b2){return (a.nome||"").localeCompare(b2.nome||"","pt-BR");});
     $("ecCount").textContent=l1.length+(l1.length===1?" produto":" produtos");
-    if(!l1.length){b.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Estoque vazio</div>Use <b>Requisitar produto</b> para pedir ao almoxarifado.</div></td></tr>';return;}
+    if(!l1.length){b.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Estoque vazio</div>'+
+      (ehLoja?"Use <b>Requisitar produto</b> para pedir ao almoxarifado. O estoquista separa e você confirma o recebimento."
+             :"Use <b>Requisitar produto</b> para pedir ao almoxarifado.")+"</div></td></tr>";return;}
     l1.forEach(function(p){
       var s=saldoEm(p.id,loc),rs=reserv[p.id]||0,dp=s-rs;
       var utRow=(ehProdutoSucata(p)&&s>0)?usadoTrocaDoColab(quem):null;
@@ -18747,8 +19249,44 @@ function renderEstColab(){
     Array.prototype.forEach.call(b.querySelectorAll("[data-ecd]"),function(bt){
       bt.onclick=function(){
         var p=prodPorId(bt.getAttribute("data-ecd"));
-        abrirEstoque("dev",quem);
+        abrirEstoque("dev",quem,loc);
         esItens=[{pid:p.id,nome:p.nome,cod:p.cod,qtd:1}];renderEsItens();};});
+  }
+  else if(ecAba==="aut"){
+    /* autorizações de saída do estoque: as que esperam a minha resposta primeiro (23/10) */
+    h.innerHTML="<th>Pedido</th><th>Produto</th><th>Sai de</th><th>Quem pediu</th><th>Situação</th><th></th>";
+    var minhas=[],outras=[];
+    autorizacoesEstoque().forEach(function(x){
+      if(x.aut.status==="pendente"&&podeAutorizarEstoque(x.aut.local))minhas.push(x);
+      else if(ehGestor()||x.aut.pedidaPor===euEst||podeAutorizarEstoque(x.aut.local))outras.push(x);
+    });
+    var todas=minhas.concat(outras).filter(function(x){
+      return !q||((x.item.nome||"")+" "+(x.ped.numero||"")+" "+(x.ped.cliente||"")+" "+(x.aut.pedidaPor||""))
+        .toLowerCase().indexOf(q)>=0;});
+    $("ecCount").textContent=minhas.length
+      ? minhas.length+" esperando você · "+todas.length+" no total"
+      : todas.length+(todas.length===1?" autorização":" autorizações");
+    if(!todas.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma autorização</div>'+
+      "Quando alguém vender um produto que sai do seu estoque, o pedido de autorização aparece aqui e no sino.</div></td></tr>";return;}
+    todas.forEach(function(x){
+      var a=x.aut,pend=(a.status==="pendente"),euDecido=pend&&podeAutorizarEstoque(a.local);
+      var sit=pend?'<span class="pill p-warn">aguardando'+(euDecido?" você":" "+esc(a.resp||"—"))+"</span>"
+        :a.status==="autorizada"?'<span class="pill p-ok">autorizada</span>'
+        :'<span class="pill p-crit">recusada</span>';
+      b.innerHTML+='<tr><td><b>'+esc(x.ped.numero)+'</b><div class="t-sub">'+esc(x.ped.cliente||"")+"</div></td>"+
+        '<td><div class="t-main">'+esc(x.item.nome||"")+'</div><div class="t-sub">'+(x.item.qtd||1)+"× "+
+          (x.item.cod?"<code>"+esc(x.item.cod)+"</code>":"")+"</div></td>"+
+        "<td>"+esc(nomeLocal(a.local))+"</td>"+
+        "<td>"+esc(a.pedidaPor||"")+'<div class="t-sub">'+(a.pedidaEm?esc(dataBR(a.pedidaEm.slice(0,10))):"")+"</div></td>"+
+        "<td>"+sit+(a.status==="recusada"&&a.motivo?'<div class="t-sub">'+esc(a.motivo)+"</div>":"")+
+          (a.status!=="pendente"&&a.decididoPor?'<div class="t-sub">por '+esc(a.decididoPor)+"</div>":"")+"</td>"+
+        '<td class="num"><button class="btn sm'+(euDecido?"":" ghost")+'" type="button" data-ecaut="'+
+          esc(x.ped.id)+"|"+esc(a.id)+'">'+(euDecido?"Responder":"Ver")+"</button></td></tr>";
+    });
+    Array.prototype.forEach.call(b.querySelectorAll("[data-ecaut]"),function(bt){
+      bt.onclick=function(){
+        var v=bt.getAttribute("data-ecaut").split("|");
+        abrirAutEstoque(v[0],v[1]);};});
   }
   else if(ecAba==="usados"){
     h.innerHTML="<th>Aparelho</th><th>Situação</th><th>Veio do pedido</th><th>Desde</th><th>Onde está</th><th></th>";
@@ -34628,6 +35166,8 @@ function renderPedDet(){
     if(i.garantia)subI.push(esc(i.garantia));
     if(i.daInstalacao)subI.push("incluído na instalação");
     if(i.planoCobre)subI.push("coberto pelo plano "+esc(i.planoCobre.garantia));
+    /* de qual estoque o item sai, quando não é o de quem vendeu (23/10) */
+    if(i.estoque)subI.push(seloEstoqueItem(i).replace(/^ /,""));
     ti.innerHTML+='<tr><td><div class="t-main"><span class="pd-nome" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+"</span></div>"+
       (subI.length?'<div class="t-sub">'+subI.join(" · ")+"</div>":"")+"</td>"+
       '<td class="num">'+(edInline?'<input type="number" min="1" style="max-width:80px" data-pi="qtd" data-i="'+idx+'" value="'+(i.qtd||1)+'">':(i.qtd||1))+"</td>"+
@@ -35020,16 +35560,34 @@ async function aprovarVenda(p,caixaId){
       ? "O estoque recusou a retirada de produto deste pedido. Ajuste ou cancele a venda antes de aprovar."
       : "Este pedido espera o responsável pelo estoque aceitar a retirada de produto. Aprove depois do aceite.");
     return false;}
+  /* item que sai do estoque de outra pessoa espera a autorização dela (23/10, regra dele) */
+  var autPend=autorizacoesPendentes(p);
+  if(autPend.length){
+    toast("Este pedido espera autorização de estoque: "+
+      autPend.map(function(it){return (it.qtd||1)+"× "+it.nome+" ("+
+        (it.autEstoque.resp||nomeLocal(it.autEstoque.local))+")";}).join(" · ")+
+      ". Aprove depois da resposta.");
+    return false;}
   if(aprovandoVenda[p.id])return false;
   aprovandoVenda[p.id]=true;
   try{
     var quem=responsavelVenda(p),loc=localDaVenda(p);
-    /* 1. baixa definitiva no estoque de quem entregou (pode ficar negativo) */
+    /* 1. baixa definitiva no estoque de cada item (pode ficar negativo) */
     var baixou=await ajustarBaixa(p,"Pedido "+p.numero,"Estorno do pedido "+p.numero);
-    /* 2. o que saiu volta pela reposição, para quem teve a baixa */
-    if(baixou.length&&loc.indexOf("colab:")===0){
-      var rq={id:uid(),loja:p.loja,tipo:"requisicao",colaborador:quem,
-        itens:baixou.map(function(b){
+    /* 2. o que saiu volta pela reposição — UMA requisição por estoque que teve baixa,
+       porque desde 23/10 o pedido pode tirar produto de mais de um estoque */
+    var porLocal={};
+    baixou.forEach(function(b){
+      var l=b.local||loc;
+      if(l.indexOf("colab:")!==0&&!ehLocalLoja(l))return;  /* almoxarifado é a origem, não repõe */
+      (porLocal[l]=porLocal[l]||[]).push(b);
+    });
+    var locs=Object.keys(porLocal);
+    for(var ilr=0;ilr<locs.length;ilr++){
+      var lr=locs[ilr];
+      var rq={id:uid(),loja:p.loja,tipo:"requisicao",local:lr,
+        colaborador:ehLocalLoja(lr)?"":lr.slice(6),
+        itens:porLocal[lr].map(function(b){
           var pr=prodPorId(b.pid)||{};
           return {pid:b.pid,nome:pr.nome||"",cod:pr.cod||"",qtd:b.qtd,atendida:b.qtd};}),
         obs:"Reposição · Pedido "+p.numero+((p.itens||[]).some(function(i){return i.daInstalacao;})
@@ -37816,9 +38374,17 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
       ? (function(){
           /* venda sem estoque do vendedor: sem o aceite do responsável pelo estoque, não aprova */
           var trava=retiradaPendentePedido(p);
-          return (trava?'<div class="note crit" style="margin-top:10px"><b>Aprovação travada.</b> '+trava.texto+
+          /* item que sai do estoque de outra pessoa, ainda sem a resposta do dono (23/10) */
+          var autP=autorizacoesPendentes(p);
+          if(autP.length)trava=trava||{texto:""};
+          return (trava&&trava.texto?'<div class="note crit" style="margin-top:10px"><b>Aprovação travada.</b> '+trava.texto+
               " O financeiro só libera esta venda depois que a retirada for <b>aceita</b> pelo responsável pelo estoque."+
               ' <button class="btn ghost sm" type="button" data-finreq="'+p.id+'" style="margin-top:8px">Ver as requisições de estoque</button></div>':"")+
+            (autP.length?'<div class="note crit" style="margin-top:10px"><b>Aprovação travada.</b> '+
+              autP.length+" item"+(autP.length>1?"ns":"")+" deste pedido sai do estoque de outra pessoa e ainda espera a autorização dela:<br>"+
+              autP.map(function(it){return "• "+(it.qtd||1)+"× "+esc(it.nome)+" · "+esc(nomeLocal(it.autEstoque.local))+
+                " · aguardando <b>"+esc(it.autEstoque.resp||"sem responsável")+"</b>";}).join("<br>")+
+              "</div>":"")+
             /* o caixa NÃO é escolhido aqui: ele vem do cadastro da forma de pagamento, que é
                onde a empresa define onde o dinheiro cai (regra dele, 26/09 — o cartão da
                Rendimentos aparecia caindo na Caixa da Loja, e ele é creditado no Ascicred). */
@@ -39400,6 +39966,7 @@ async function marcarSolicVista(s){
   if(s&&s.solicitante===usuarioAtual&&s.status!=="pendente"&&!s.vistaSolicitante){
     s.vistaSolicitante=true;await grava("solicitacoes",s);
     try{atualizarBadgeSolic();}catch(e){}
+    try{atualizarBadgeEstoque();}catch(e){}
   }
 }
 async function decidirSolic(status){
@@ -39484,6 +40051,7 @@ function renderSolic(){
     }
   }
   atualizarBadgeSolic();
+  try{atualizarBadgeEstoque();}catch(e){}
 }
 function solicPendentesParaMim(){
   if(podeAprovarSolic())return solicitacoes.filter(function(s){return s.loja===lojaAtual&&s.status==="pendente";});
@@ -39493,6 +40061,14 @@ function solicPendentesParaMim(){
 function atualizarBadgeSolic(){
   var b=$("solicBadge");if(!b)return;
   var n=solicPendentesParaMim().length;
+  b.textContent=n||"";b.hidden=!n;
+}
+/* autorização de estoque esperando resposta: o número fica ao lado do item do menu, porque
+   não existe contagem de tempo e quem responde pelo estoque não pode esquecer (23/10) */
+function atualizarBadgeEstoque(){
+  var b=$("estBadge");if(!b)return;
+  var n=0;
+  try{n=autorizacoesParaMim().length;}catch(e){n=0;}
   b.textContent=n||"";b.hidden=!n;
 }
 /* ================= SINO DE PENDÊNCIAS (pedido do Wagner, 03/10) =================
@@ -39535,6 +40111,57 @@ function recebeAvisoRastreio(){
 
 /* ---------- onde ficam as lojas (campo novo em Dados da Empresa) ---------- */
 function geoLojas(){return (EMPRESA&&EMPRESA.geoLojas)||{};}
+/* ---------- RESPONSÁVEL DO ESTOQUE DA LOJA (23/10, regra dele) ----------
+   Mora em Dados da Empresa, no mesmo bloco por loja do ponto de cada uma. O substituto
+   existe para folga e férias: ele autoriza no lugar do responsável, e nada mais. */
+function respLojas(){return (EMPRESA&&EMPRESA.respLojas)||{};}
+function respEstoqueLoja(id){var r=respLojas()[id||lojaAtual];return (r&&r.resp)||"";}
+function substEstoqueLoja(id){var r=respLojas()[id||lojaAtual];return (r&&r.subst)||"";}
+/* responde pelo estoque daquela loja? o substituto responde junto, e a gestão sempre */
+function respondePorLoja(quem,id){
+  var q=quem||euNoEstoque(),lj=id||lojaAtual;
+  return q===respEstoqueLoja(lj)||q===substEstoqueLoja(lj);
+}
+/* as lojas cujo Estoque da Loja esta pessoa responde — é o que o seletor da tela mostra */
+function lojasQueRespondo(quem){
+  var q=quem||euNoEstoque();
+  return LOJAS.filter(function(l){return respondePorLoja(q,l.id);});
+}
+function renderRespLojas(){
+  var box=$("em_respLojas");if(!box)return;
+  var r=respLojas(),eq=EQUIPE.slice().sort(function(a,b){return a.localeCompare(b,"pt-BR");});
+  function sel(id,campo,val){
+    return '<select id="em_'+campo+'_'+id+'"><option value="">— ninguém —</option>'+
+      eq.map(function(nm){return '<option value="'+esc(nm)+'"'+(nm===val?" selected":"")+">"+
+        esc(nm)+" · "+esc(perfilDe(nm)||"colaborador")+"</option>";}).join("")+"</select>";
+  }
+  box.innerHTML=LOJAS.map(function(l){
+    var v=r[l.id]||{};
+    return '<div class="grid g3" style="margin-bottom:10px">'+
+      '<div class="fld"><label for="em_respLoja_'+l.id+'">'+esc(l.nome)+" — responsável</label>"+sel(l.id,"respLoja",v.resp||"")+"</div>"+
+      '<div class="fld"><label for="em_substLoja_'+l.id+'">Substituto (folga e férias)</label>'+sel(l.id,"substLoja",v.subst||"")+"</div>"+
+      '<div class="fld"><label>&nbsp;</label><span class="help" style="margin:0">'+
+      (v.resp?('<span class="pill p-ok">'+esc(v.resp)+" responde</span>"+
+        (v.em?"<br>escolhido por "+esc(v.por||"")+" em "+dataBR(v.em):""))
+        :'<span class="pill p-warn">sem responsável — ninguém autoriza venda deste estoque</span>')+
+      "</span></div></div>";
+  }).join("");
+}
+function lerRespLojasDoForm(){
+  var r={},antes=respLojas();
+  LOJAS.forEach(function(l){
+    var a=$("em_respLoja_"+l.id),b=$("em_substLoja_"+l.id);
+    if(!a&&!b)return;
+    var resp=a?a.value:"",subst=b?b.value:"",ant=antes[l.id]||{};
+    if(!resp&&!subst)return;
+    /* só regrava quem escolheu e quando se a pessoa mudou de verdade */
+    var mudou=(resp!==(ant.resp||"")||subst!==(ant.subst||""));
+    r[l.id]={resp:resp,subst:subst,
+      por:mudou?usuarioAtual:(ant.por||usuarioAtual),
+      em:mudou?hojeISO():(ant.em||hojeISO())};
+  });
+  return r;
+}
 function renderGeoLojas(){
   var box=$("em_geoLojas");if(!box)return;
   var g=geoLojas();
@@ -41448,6 +42075,33 @@ function pendenciasMF(){
       });
     }
   }catch(e){console.warn("pend retirada",e);}
+  /* 1b. autorização de estoque esperando a minha resposta (23/10, regra dele) */
+  try{
+    autorizacoesParaMim().forEach(function(x){
+      põe({chave:"aut:"+x.aut.id,icone:"🔑",titulo:"Autorização de estoque",
+        texto:(x.aut.pedidaPor||"")+" quer "+(x.item.qtd||1)+"× "+x.item.nome+
+          " do "+nomeLocal(x.aut.local)+" · pedido "+x.ped.numero,
+        quando:x.aut.pedidaEm||"",
+        ir:function(){abrirAutEstoque(x.ped.id,x.aut.id);}});
+    });
+  }catch(e){console.warn("pend autorização de estoque",e);}
+  /* 1c. a autorização que EU pedi foi respondida e ainda não vi */
+  try{
+    autorizacoesEstoque().filter(function(x){
+      return x.aut.pedidaPor===euNoEstoque()&&x.aut.status!=="pendente"&&!x.aut.vista;
+    }).forEach(function(x){
+      var ok=(x.aut.status==="autorizada");
+      põe({chave:"autr:"+x.aut.id,icone:ok?"✅":"⛔",
+        titulo:ok?"Saída de estoque autorizada":"Saída de estoque recusada",
+        texto:(x.item.qtd||1)+"× "+x.item.nome+" · "+nomeLocal(x.aut.local)+
+          " · pedido "+x.ped.numero+(x.aut.motivo?" · "+x.aut.motivo:""),
+        quando:x.aut.decididoEm||"",
+        ir:async function(){
+          x.aut.vista=true;
+          try{await gravaConf("pedidos",x.ped);}catch(e){}
+          abrirPedido(x.ped);renderSino();}});
+    });
+  }catch(e){console.warn("pend resposta de estoque",e);}
   /* 2. a minha retirada foi recusada */
   try{
     requisicoes.filter(function(r){
@@ -42376,7 +43030,7 @@ function render(){
     desenhaTela("relat",renderDRE);desenhaTela("veiculos",renderVeiculos);
     desenhaTela("faturamento",renderFaturamento);desenhaTela("notas",renderNotas);
     desenhaTela("os",renderOS);desenhaTela("manut",renderManut);
-    desenhaTela("prest",renderPrest);desenhaTela("empresa",renderGeoLojas);
+    desenhaTela("prest",renderPrest);desenhaTela("empresa",function(){renderGeoLojas();renderRespLojas();});
     desenhaTela("rastreio",renderRastreio);
     desenhaTela("estEmpresa",renderEstEmpresa);desenhaTela("estColab",renderEstColab);
     desenhaTela("estConsumo",renderEstConsumo);
@@ -44016,15 +44670,16 @@ function ligar(){
         x.setAttribute("aria-current",String(x===b));});
       renderEstColab();};});
   $("ecNovaReq").onclick=function(){
-    var quem=$("ecQuem").value||usuarioAtual;
-    if(ecTipo==="ferr")return abrirReqFerr(quem);
-    abrirEstoque("req",quem);};
+    var v=$("ecQuem").value||usuarioAtual,lj=ehLocalLoja(v);
+    if(ecTipo==="ferr")return abrirReqFerr(lj?euNoEstoque():v);
+    abrirEstoque("req",lj?"":v,lj?v:"");};
   $("ecDevolver").onclick=function(){
-    var quem=$("ecQuem").value||usuarioAtual;
+    var v=$("ecQuem").value||usuarioAtual,lj=ehLocalLoja(v);
+    var quem=lj?"":v;
     if(ecTipo==="ferr"){
       ecAba="meu";marcarAbasEC();renderEstColab();
       toast("Toque em Devolver na linha da ferramenta que você vai entregar.");return;}
-    abrirEstoque("dev",quem);};
+    abrirEstoque("dev",quem,lj?v:"");};
   /* o seletor Produtos | Ferramentas (23/10) */
   if($("ecTipos"))Array.prototype.forEach.call($("ecTipos").querySelectorAll("button"),function(b){
     b.onclick=async function(){
@@ -45143,6 +45798,37 @@ function ligar(){
     opcoesProduto();render();
   };
   $("v_prod").onchange=sincronizarValor;$("v_add").onclick=addItem;
+  /* o estoque de onde o item sai (23/10): trocar refaz a nota dos saldos */
+  if($("v_estoque"))$("v_estoque").onchange=function(){try{notaEstoqueItem();}catch(e){}};
+  if($("ecContagem"))$("ecContagem").onclick=function(){abrirContagem($("ecQuem")?$("ecQuem").value:"");};
+  if($("cg_fechar"))$("cg_fechar").onclick=function(){$("cgModal").hidden=true;};
+  if($("cg_ok"))$("cg_ok").onclick=lancarContagem;
+  if($("aut_fechar"))$("aut_fechar").onclick=function(){$("autEstModal").hidden=true;autPend2=null;};
+  if($("aut_sim"))$("aut_sim").onclick=async function(){
+    if(!autPend2)return;
+    var bt=this;bt.disabled=true;
+    var ok=await decidirAutEstoque(autPend2.pedidoId,autPend2.ix,true,"");
+    bt.disabled=false;
+    if(ok){$("autEstModal").hidden=true;autPend2=null;
+      try{renderEstColab();renderFin();}catch(e){}}
+  };
+  if($("aut_nao"))$("aut_nao").onclick=async function(){
+    if(!autPend2)return;
+    /* o primeiro toque pede o motivo; o segundo recusa de verdade */
+    if($("aut_motivoWrap").hidden){
+      $("aut_motivoWrap").hidden=false;
+      this.textContent="Confirmar a recusa";
+      try{$("aut_motivo").focus();}catch(e){}
+      return;
+    }
+    var mot=$("aut_motivo").value.trim();
+    if(!mot){$("aut_alerta").innerHTML='<div class="note crit">Escreva o motivo da recusa — ele vai para quem pediu.</div>';return;}
+    var bt=this;bt.disabled=true;
+    var ok=await decidirAutEstoque(autPend2.pedidoId,autPend2.ix,false,mot);
+    bt.disabled=false;bt.textContent="Recusar";
+    if(ok){$("autEstModal").hidden=true;autPend2=null;
+      try{renderEstColab();renderFin();}catch(e){}}
+  };
   $("v_equip").onchange=function(){ajustarLocalItem();try{notaPlanoVenda();}catch(e){}
     try{renderEndDoEquipVenda();}catch(e){}};
   try{ligarEndDoEquipVenda();}catch(e){}
@@ -45289,6 +45975,8 @@ function ligar(){
     /* o ponto de cada loja: e por ele que o rastreio sabe que o vendedor esta
        DENTRO da loja e nao gera aviso de parada (regra dele, 14/10) */
     try{EMPRESA.geoLojas=lerGeoLojasDoForm();}catch(e){}
+    /* quem responde pelo Estoque da Loja (23/10) */
+    try{if(ehGestor())EMPRESA.respLojas=lerRespLojasDoForm();}catch(e){}
     sincChaveGoogle();
     await gravarEmpresa();renderEmpresa();toast("Dados da empresa salvos.");};
 
