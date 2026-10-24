@@ -13403,6 +13403,12 @@ window.__precoFormaMF=function(v){return precoPelaForma(v,1,somaTabelaCarrinho()
 window.__numMF=function(s){return numMF(s);};
 window.__geraAparelhoMF=function(i){return itemGeraAparelho(i);};
 window.__grupoEndInstMF=function(n){return grupoPedeEndInst(n);};
+window.__herdaEndMF=function(){return endParaHerdar();};
+window.__semearGruposMF=function(){return semearGruposCadastro();};
+window.__chaveGrupoMF=function(n){return chaveGrupo(n);};
+window.__endinstPadraoMF=function(){return ENDINST_PADRAO;};
+window.__itemHerdaMF=function(i,ix){return itemHerdaEnd({i:i,ix:ix});};
+window.__mandaEndMF=function(i,ix){return mandaEndereco({i:i,ix:ix});};
 window.__gruposProdMF=function(){return GRUPOS_PROD;};
 window.__renderGruposMF=function(){return renderGruposProd();};
 window.__pedeLocalMF=function(i){return itemPedeLocal(i);};
@@ -16153,9 +16159,43 @@ function itemPedeLocal(i){
   if(!i||i.planoCobre||ehPlano(i))return false;
   return pedeLocalProduto(produtoPor(i.pid));
 }
+/* ===== O REFIL RECORRENTE VAI PARA O ENDEREÇO DO PURIFICADOR DA MESMA VENDA =====
+   Regra dele (24/10): "se tiver sozinho na venda deve perguntar, agora se ele tiver na venda
+   com algum purificador copiar o mesmo endereço que foi adicionado no purificador".
+   Quem MANDA é o item que pede número de série — purificador e central são aparelho de verdade;
+   quem HERDA é o item que pede endereço e não pede série, que é o consumível que acompanha.
+   Isso sai da regra de grupo que já existe (v389/v390), então nenhum nome fica fixo aqui. */
+function mandaEndereco(x){
+  return pedeSerieProduto(produtoPor(x.i.pid));
+}
+function aparelhosQueMandam(){return purificadoresDaVenda().filter(mandaEndereco);}
+/* o endereço que o consumível herda: só quando TODOS os aparelhos já foram respondidos e vão
+   para o MESMO lugar. Endereços diferentes na mesma venda não dão para adivinhar — aí ele
+   volta a perguntar, e a tela diz por quê. */
+function endParaHerdar(){
+  var ap=aparelhosQueMandam();
+  if(!ap.length)return {tem:false,motivo:"sem aparelho na venda"};
+  var falta=ap.filter(function(x){return !revRespondido[chaveEndItem(x.i,x.ix)];});
+  if(falta.length)return {tem:false,espera:true,nome:ap[0].i.nome,
+    motivo:"o endereço do aparelho ainda não foi respondido"};
+  var chaves=ap.map(function(x){return chaveEndItem(x.i,x.ix);});
+  var assin=chaves.map(function(ch){
+    var e=revEnderecos[ch];
+    return e?JSON.stringify([e.cep,e.rua,e.num,e.bairro,e.cidade,e.uf]):"cadastro";
+  });
+  var iguais=assin.every(function(a){return a===assin[0];});
+  if(!iguais)return {tem:false,divergem:true,motivo:"os aparelhos vão para endereços diferentes"};
+  return {tem:true,end:revEnderecos[chaves[0]]||null,nome:ap[0].i.nome,n:ap.length};
+}
+function itemHerdaEnd(x){
+  if(mandaEndereco(x))return false;
+  var h=endParaHerdar();
+  return !!(h.tem||h.espera);
+}
 /* o que ainda falta responder antes de fechar o pedido */
 function faltaEnderecoInstalacao(){
   return purificadoresDaVenda().filter(function(x){
+    if(itemHerdaEnd(x))return false;   /* ele vai junto do aparelho: não trava sozinho */
     return !revRespondido[chaveEndItem(x.i,x.ix)];
   });
 }
@@ -16173,6 +16213,23 @@ function htmlEndRevisao(c){
       var ch=chaveEndItem(x.i,x.ix),esc0=revEnderecos[ch],resp=revRespondido[ch];
       var q=(x.i.qtd||1);
       var pedeLoc=itemPedeLocal(x.i), loc=String(x.i.local||"").trim();
+      /* consumível que acompanha o aparelho da mesma venda: não pergunta, vai junto */
+      var herda=itemHerdaEnd(x)?endParaHerdar():null;
+      if(herda){
+        return '<div class="note'+(herda.tem?"":" warn")+'" style="margin-bottom:8px" data-enditem="'+ch+'"><b>'+
+          esc(x.i.nome)+"</b>"+(q>1?(" · "+q+" unidades"):"")+"<br>"+
+          (herda.tem
+            ? ('<span class="pill p-ok">vai junto do aparelho</span> Mesmo endereço do <b>'+
+               esc(herda.nome)+"</b>"+(herda.n>1?" e dos outros aparelhos deste pedido":"")+": "+
+               esc(herda.end?enderecoDoAparelho({endInst:herda.end}).texto:cad))
+            : ('<span class="pill p-warn">aguardando</span> Vai para o mesmo endereço de <b>'+
+               esc(herda.nome)+"</b> — responda o endereço dele aqui em cima."))+
+          (pedeLoc?('<div class="fld" style="margin-top:10px"><label>Local da instalação <span class="req">*</span></label>'+
+            '<input class="rv-local'+(loc?"":" campo-falta")+'" data-rvloc="'+x.ix+'" list="dlLocais" value="'+esc(loc)+
+            '" placeholder="cozinha, varanda, área de serviço…">'+
+            '<div class="help">Onde o aparelho fica dentro do imóvel. É isso que o técnico procura na visita.</div></div>'):"")+
+          "</div>";
+      }
       return '<div class="note'+(resp?"":" crit")+'" style="margin-bottom:8px" data-enditem="'+ch+'"><b>'+esc(x.i.nome)+"</b>"+
         (q>1?(" · "+q+" unidades, todas neste endereço"):"")+"<br>"+
         (!resp
@@ -16201,7 +16258,11 @@ function htmlEndRevisao(c){
     '<p class="help"><b>Responder é obrigatório</b> em todo item que gera aparelho: o endereço '+
     "escolhido fica <b>no aparelho</b>, e é para ele que a manutenção, a troca de refil, a "+
     "agenda e a ordem de serviço vão daqui para a frente. Dois aparelhos do mesmo pedido podem "+
-    "ir para endereços diferentes — um para a casa e outro para a empresa.</p></div>";
+    "ir para endereços diferentes — um para a casa e outro para a empresa. "+
+    "<b>O refil recorrente vendido junto de um purificador vai para o endereço dele</b>, sem "+
+    "perguntar de novo; vendido sozinho, ele pergunta."+
+    (endParaHerdar().divergem?" <b>Neste pedido os aparelhos vão para endereços diferentes</b>, "+
+      "então cada refil pergunta o seu.":"")+"</p></div>";
 }
 /* a chave que liga a escolha ao item (o vínculo, que é estável, ou a posição) */
 function chaveEndItem(i,ix){return String(i.vinculo||("ix"+ix));}
@@ -16266,8 +16327,11 @@ async function salvarPedido(){
   /* o endereço escolhido na revisão vai para o ITEM, e de lá a aprovação financeira o copia
      para o aparelho criado (21/10). Fica no item e não numa lista à parte para o pedido
      salvo carregar a informação por conta própria. */
+  var herdado=endParaHerdar();
   itens.forEach(function(i,ix){
     var x=revEnderecos[chaveEndItem(i,ix)];
+    /* o consumível que acompanha leva o endereço do aparelho da mesma venda (24/10) */
+    if(!x&&herdado.tem&&herdado.end&&itemHerdaEnd({i:i,ix:ix}))x=herdado.end;
     if(x)i.endInst=x;else if(i.endInst)delete i.endInst;
   });
   if(formas.some(function(f){return (+f.valor||0)>0&&!f.tipo;})){toast("Escolha a forma de pagamento de cada valor.");irEtapa(2);return;}
@@ -18818,9 +18882,25 @@ function grupoCad(nome){
    prazo para peça: no print dele a venda perguntava o endereço de uma CONEXÃO L 1/4.
    O padrão nasce ligado nos grupos que o sistema já trata como aparelho acompanhado
    (REGRA_GRUPO_SERIE, v389/v390) — e a partir daí quem decide é a caixa da tela. */
-var ENDINST_PADRAO={"purificadores":1,"bebedouros":1,"central":1,
-  "centrais de filtragem":1,"central de filtragem":1,
-  "refil recorrente":1,"refis recorrentes":1};
+/* CADA ESCRITA PRECISA ESTAR NA LISTA, uma a uma: a chaveGrupo NÃO tira o "s" do plural.
+   O CLAUDE.md dizia que tirava, e não tira — o  dela virou um caractere de controle numa
+   edição antiga, então a troca nunca aconteceu. Medido em 24/10: chaveGrupo("Bebedouros")
+   devolve "bebedouros", não "bebedouro". Enquanto isso não for corrigido com medição, toda
+   lista de grupo aqui leva o singular E o plural. */
+var ENDINST_PADRAO={"purificadores":1,"purificador":1,
+  "central":1,"centrais":1,"centrais de filtragem":1,"central de filtragem":1,
+  "refil recorrente":1,"refis recorrentes":1,"refis recorrente":1,"refil recorrentes":1};
+/* BEBEDOUROS SAIU DO PADRÃO (correção dele, 24/10, logo depois da v402: "somente purificadores,
+   refis recorrentes e centrais filtragem"). Como a v402 já semeou o padrão com bebedouro ligado,
+   esta rotina desliga uma vez — quem quiser ligar de novo é um clique na tela. */
+function ajustarPadraoEndInst(){
+  var mudou=false;
+  GRUPOS_PROD.forEach(function(g){
+    var k=chaveGrupo(g.nome);
+    if((k==="bebedouros"||k==="bebedouro")&&g.endInst===true){g.endInst=false;mudou=true;}
+  });
+  return mudou;
+}
 function grupoPedeEndInst(nome){
   var g=grupoCad(nome);
   if(g&&g.endInst!==undefined&&g.endInst!==null)return !!g.endInst;
@@ -18860,6 +18940,7 @@ function semearGruposCadastro(){
   });
   /* grupo que nunca foi marcado recebe o padrão da pergunta do endereço (24/10) */
   if(semearEndInstGrupos())mudou=true;
+  if(ajustarPadraoEndInst())mudou=true;
   return mudou;
 }
 async function gravarGruposProd(subir){
