@@ -609,6 +609,8 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default}
   .ev.ativ{background:#3E7BC4}.ev.atend{background:#3FA36B}.ev.inst{background:#C4763E}
   .ev.atrasada{background:#C4463E}
+  /* horário ocupado na agenda de outra pessoa (Etapa 2): sem cliente e sem clique */
+  .ev .ev-cid{display:block;font-size:10.5px;opacity:.85}
   .ev.clicavel{cursor:pointer}
   .ev.clicavel:hover{filter:brightness(1.15);box-shadow:0 0 0 2px rgba(255,255,255,.5) inset}
   .ev-mais{font-size:11.5px;color:var(--acc);padding:2px 4px;cursor:pointer;font-weight:500;border-radius:4px}
@@ -1712,6 +1714,8 @@ img{max-width:100%}
   .btn.sm{padding:6px 11px;font-size:13px;min-height:34px}
   /* ferramenta: o tecnico toca na rua, entao o botao da linha tem tamanho de dedo */
   #ecBody .btn.sm,#frBody .btn,#fq_lista .btn.sm{min-height:40px}
+  /* o botao de editar da lista de Atendimentos tambem e toque de dedo (24/10) */
+  #atendBody .btn.sm,#avBody .btn.sm{min-height:40px}
   .novo-btn{padding:13px 16px}
   .barra-inf button{min-height:52px;font-size:10.5px}
   .barra-inf button svg{width:20px;height:20px}
@@ -2006,7 +2010,7 @@ img{max-width:100%}
           </div>
           <div class="cal-titulo" id="cal_titulo"></div>
           <span class="sp"></span>
-          <select id="agendaPessoa" style="max-width:210px"></select>
+          <select id="agendaPessoa" style="max-width:260px"></select>
           <div class="cal-views">
             <button type="button" data-v="mes" aria-current="true">Mês</button>
             <button type="button" data-v="semana">Semana</button>
@@ -3699,6 +3703,7 @@ img{max-width:100%}
             <option value="atividade">Só atividades</option>
             <option value="atendimento">Só atendimentos</option>
           </select>
+          <select id="atendVend" style="max-width:210px" title="Mostrar os registros de um vendedor ou de todos"></select>
           <span class="count" id="atendCount"></span>
           <span class="sp"></span>
           <button class="btn" type="button" id="atendNovo">Registrar</button>
@@ -3837,6 +3842,7 @@ img{max-width:100%}
             <div class="fld"><label for="af_resp">Responsável</label><select id="af_resp"></select></div>
             <div class="fld"><label for="af_obs">O que fazer</label><input id="af_obs" placeholder="Ex.: retornar com proposta"></div>
           </div>
+          <div id="at_conflito"></div>
         </div>
 
         <div id="at_fechaAlerta"></div>
@@ -7912,6 +7918,7 @@ img{max-width:100%}
     </div>
     <div class="fld" style="margin-top:14px"><label for="na_obs" id="na_obsLbl">O que fazer nesta atividade</label>
       <input id="na_obs" placeholder="Ex.: o que combinar com o cliente"></div>
+    <div id="na_conflito"></div>
     <div id="na_alerta"></div>
     <div class="actions">
       <button class="btn" type="button" id="na_criar">Criar atividade</button>
@@ -9173,7 +9180,9 @@ async function carregar(){
       custodia=kz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     }catch(ePz){console.warn("prestadores",ePz);}
     var ng=await jaPedido("col:negocios",function(){return col("negocios").limit(1000).get();});
-    negocios=ng.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    negocios=ng.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;})
+      /* cartão desativado (as cópias repetidas de 23/10) fica no banco, mas não volta ao funil */
+      .filter(function(x){return x.ativo!==false;});
     negociosLidos=true;   /* a varredura do funil só roda depois desta linha (23/10) */
     var sl=await jaPedido("col:solicitacoes",function(){return col("solicitacoes").limit(1000).get();});
     solicitacoes=sl.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
@@ -9413,11 +9422,16 @@ function faltantes(c){
 /* com 22 mil cadastros isto roda 22 mil vezes a cada tecla digitada na busca: o texto
    fica guardado no próprio cadastro e só é remontado quando ele muda (v148) */
 function textoBusca(c){
-  var chave=(c.nome||"")+"|"+(c.tel||"")+"|"+(c.doc||"")+"|"+(c.cidade||"")+"|"+(c.rua||"");
+  /* A BUSCA NÃO ENXERGA ACENTO (24/10, relato dele: "pesquisei Antônio e não aparece porque não
+     tem Antônio com acento na vogal o"). O texto guardado já vem sem acento, e quem procura
+     normaliza o que foi digitado com semAcento — assim "Antonio", "Antônio" e "ANTONIO" acham
+     o mesmo cadastro. O "a2|" na chave é de propósito: ele força o texto a ser remontado em
+     quem está com a aba aberta desde antes desta versão. */
+  var chave="a2|"+(c.nome||"")+"|"+(c.tel||"")+"|"+(c.doc||"")+"|"+(c.cidade||"")+"|"+(c.rua||"");
   if(c.__bk===chave&&c.__bt!=null)return c.__bt;
-  var t=[c.nome,c.apelido,c.doc,c.tel,c.email,c.codigo,c.rua,c.num,c.comp,c.bairro,c.cidade,c.uf,c.cep,
+  var t=semAcento([c.nome,c.apelido,c.doc,c.tel,c.email,c.codigo,c.rua,c.num,c.comp,c.bairro,c.cidade,c.uf,c.cep,
           c.conjnome,c.conjtel,c.respNome,c.comprasNome]
-    .filter(Boolean).join(" ").toLowerCase();
+    .filter(Boolean).join(" "));
   try{Object.defineProperty(c,"__bt",{value:t,writable:true,enumerable:false,configurable:true});
       Object.defineProperty(c,"__bk",{value:chave,writable:true,enumerable:false,configurable:true});}
   catch(e){}
@@ -9796,7 +9810,7 @@ function renderClientes(){
   encherFiltro("cliRua",unicos(nivel2,"rua"),"Todas as ruas");
   var rua=$("cliRua").value,qual=$("cliQual").value;
 
-  var q=($("cliBusca").value||"").toLowerCase().trim();
+  var q=semAcento($("cliBusca").value||"");
   var num=q.replace(/\D/g,"");
   var lista=nivel2.filter(function(c){return !rua||c.rua===rua;})
     .filter(function(c){
@@ -9889,6 +9903,25 @@ var CO_CLI=[["tipo","Tipo de contato"],["nome","Nome e sobrenome"],["sexo","Sexo
 /* pessoa física precisa de nome E sobrenome — "Maria" sozinho não identifica ninguém */
 function temSobrenome(n){
   return String(n||"").trim().split(/\s+/).filter(function(p){return p.length>=2;}).length>=2;
+}
+/* CADASTRO GRAVADO EM MAIÚSCULAS (24/10, regra dele): "toda vez que um usuário for cadastrar
+   qualquer lead, mesmo que ele digite minúsculo, favor gravar todas as informações em letra
+   maiúscula". Vale nos três caminhos que criam ou salvam cadastro: o lead do Atendimento, o
+   lead da janela de atividade e a ficha do cliente. O e-mail fica MINÚSCULO de propósito
+   (endereço de e-mail não se escreve em caixa alta e o mailto fica estranho), e observação,
+   anotação e documento ficam como foram digitados. Cadastro antigo não é regravado: ele vai
+   para maiúsculas na primeira vez que alguém salvar a ficha. */
+var MAIUSC_CLI=["nome","apelido","prof","rua","num","comp","bairro","cidade","uf","ref",
+  "respNome","respContato","comprasNome","conjnome"];
+function maiusculizarCadastro(c){
+  if(!c)return c;
+  MAIUSC_CLI.forEach(function(k){
+    if(typeof c[k]==="string"&&c[k])c[k]=c[k].toUpperCase();
+  });
+  if(typeof c.email==="string")c.email=c.email.toLowerCase().trim();
+  if(typeof c.comprasEmail==="string")c.comprasEmail=c.comprasEmail.toLowerCase().trim();
+  if(typeof c.conjemail==="string")c.conjemail=c.conjemail.toLowerCase().trim();
+  return c;
 }
 var CAMPOS_CLI=["nome","doc","rg","apelido","nasc","tel","email","prof","cep","rua","num","comp","bairro","cidade","uf",
   "tipoend","ref","geo",
@@ -13229,6 +13262,37 @@ window.__renderFunilMF=function(){return renderFunil();};
 window.__funilClienteMF=function(cid,m,q){return atualizarFunilCliente(cid,m,q);};
 window.__funilCobertoMF=function(c,u){return funilJaCoberto(c,u);};
 window.__conflitosMF=function(cid,quem){return conflitosComerciais(cid,quem);};
+/* Etapa 2 (23/10): solicitações, agenda só com os horários e a trava por dentro */
+window.__solicitacoesMF=function(){return solicitacoes;};
+window.__abrirSolicMF=function(id){return abrirSolic(id);};
+window.__resolverSolicMF=function(){return resolverSolicSemConflito();};
+window.__podeDecidirSolicMF=function(s){return podeDecidirSolic(s);};
+window.__eventosAgendaMF=function(){return eventos();};
+/* ganchos da agenda de todos, do conflito de horário, da trava de edição,
+   das maiúsculas e da busca sem acento (24/10) */
+window.__abrirDetalhesMF=function(a){return abrirDetalhes(a);};
+window.__respInstalacaoMF=function(p){return respInstalacao(p);};
+window.__abrirNovaAtivMF=function(ctx){return abrirNovaAtividade(ctx||{});};
+window.__conflitoAgendaMF=function(q,d,h,f,ig){return conflitoDeAgenda(q,d,h,f,ig);};
+window.__horariosLivresMF=function(q,d,ig,dur){return horariosLivresDoDia(q,d,ig,dur);};
+window.__compromissosDiaMF=function(q,d,ig){return compromissosDoDia(q,d,ig);};
+window.__textoConflitoMF=function(cf,q,d,ig){return textoConflito(cf,q,d,ig);};
+window.__modoEdicaoMF=function(a){return modoEdicaoAtend(a);};
+window.__podeEditarAtivMF=function(a){return podeEditarAtiv(a);};
+window.__editarAtendMF=function(a){return editarAtendDaLista(a);};
+window.__abrirAtendMF=function(a){return abrirAtend(a);};
+window.__salvarAtendMF=function(){return salvarAtend();};
+window.__maiusculizarMF=function(c){return maiusculizarCadastro(c);};
+window.__semAcentoMF=function(s){return semAcento(s);};
+window.__textoBuscaMF=function(c){return textoBusca(c);};
+window.__renderAtendMF=function(){return renderAtend();};
+window.__naCriarLeadMF=function(n){return naCriarLead(n);};
+window.__travaClienteMF=function(c,o){return conferirTravaCliente(c,o);};
+window.__autClienteMF=function(cid,q){return autorizacaoCliente(cid,q);};
+window.__hcEventosMF=function(c){return hcEventos(c);};
+window.__avisosTrabalhoMF=function(){return avisosDoTrabalho();};
+window.__emCfgLeituraMF=function(){return emConfigLeitura();};
+window.__protegerDbCfgMF=function(d){return protegerDbConfig(d);};
 window.__respMovMF=function(c,d){return respPeloMovimento(c,d);};
 window.__vendCliMF=function(c){return vendedorDoCliente(c);};
 window.__sincFunilMF=function(){return sincronizarFunil();};
@@ -13523,7 +13587,7 @@ window.__termoDesatualizadoMF=function(n){return termoRastreioDesatualizado(n);}
 window.__termoVersaoMF=function(){return TERMO_RASTREIO_VERSAO;};
 /* ganchos para o teste da sessão vencida (19/10) */
 window.__chamarFuncaoMF=function(n,c){return chamarFuncaoBanco(n,c);};
-window.__dbMF=function(novo){if(novo){var a=db;db=novo;return a;}return db;};
+window.__dbMF=function(novo){if(novo!==undefined){var a=db;db=novo;return a;}return db;};
 window.__estadoBancoMF=function(ok,erro){return estadoBanco(ok,erro);};
 /* duas empresas, uma de cada vez (23/10) */
 window.__lojaAtualMF=function(){return lojaAtual;};
@@ -16136,6 +16200,15 @@ async function salvarPedido(){
   }
   var cliSel=clientes.filter(function(c){return c.id===$("v_cliente").value;})[0];
   if(!cliSel){toast("Escolha o cliente do pedido.");irEtapa(1);return;}
+  /* a trava do cliente vale POR DENTRO (regra da v321; defeito 1 da Etapa 2): forçando a tela, o
+     pedido de cliente que está com outra pessoa não fecha sem autorização. O pedido que nasce de
+     uma OS e a edição de um pedido já salvo não passam por aqui, como na escolha do cliente. */
+  var trvP={ok:true,precisou:false};
+  if(!pedOrigemOS&&!pedEditando){
+    trvP=conferirTravaCliente(cliSel,"pedido");
+    if(!trvP.ok){toast(cliSel.nome+" está em atendimento com "+(trvP.quem||"outra pessoa")+
+      " — peça autorização na janela que abriu.");return;}
+  }
   if(!avisoCadastroVenda()){toast("Complete o cadastro de "+cliSel.nome+" antes de tirar o pedido.");irEtapa(1);return;}
   if(!itens.length){toast("Adicione ao menos um produto, com a quantidade.");irEtapa(2);return;}
   var r=calcular();
@@ -16332,7 +16405,7 @@ async function salvarPedido(){
     }
   }
   /* autorização de cliente em atendimento: vale para ESTE pedido e acaba aqui (22/09) */
-  try{await consumirAutorizacao(ped.clienteId,"pedido "+ped.numero);}catch(eA){console.warn("autorização",eA);}
+  try{await consumirAutorizacao(ped.clienteId,"pedido "+ped.numero,{tipo:"pedido",id:ped.id},trvP.precisou);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: pedido lançado fecha o cartão como Venda */
   try{await atualizarFunilCliente(ped.clienteId,"pedido",ped.vendedor||usuarioAtual);}catch(eF){console.warn("funil",eF);}
   if(solDesc){
@@ -17444,7 +17517,7 @@ function renderPedidos(){
     EQUIPE.forEach(function(n){var o=document.createElement("option");o.value=n;o.textContent=n;sv.appendChild(o);});
   }
   travarSelectPessoa(sv,"Meus pedidos");
-  var j=janelaPed(),q=($("pedBusca").value||"").toLowerCase();
+  var j=janelaPed(),q=semAcento($("pedBusca").value||"");
   var vend=sv.value,sit=$("pedSit").value;
   if(pedPeriodo!=="livre"){$("pedDe").value=j.de||"";$("pedAte").value=j.ate||"";}
   var lista=pedidos.filter(function(p){return p.loja===lojaAtual&&meuPedido(p);})
@@ -17458,7 +17531,7 @@ function renderPedidos(){
       if(sit==="instalacao"&&(p.status||"").indexOf("instalação")<0)return false;
       if(sit==="financeiro"&&(p.status||"")!=="Aguardando aprovação financeira")return false;
       if(q){
-        var alvo=(String(p.numero)+" "+(p.cliente||"")+" "+(p.vendedor||"")+" "+(p.prospector||"")).toLowerCase();
+        var alvo=semAcento(String(p.numero)+" "+(p.cliente||"")+" "+(p.vendedor||"")+" "+(p.prospector||""));
         if(alvo.indexOf(q)<0)return false;
       }
       return true;})
@@ -19630,6 +19703,7 @@ async function grava(colecao,obj){
   try{await col(colecao).doc(obj.id).set(obj);}
   catch(e){
     console.warn(colecao,e);
+    if(e&&e.soLeitura){try{toast(MSG_CFG_LEITURA);}catch(x){}return;}
     ultimaFalhaGrava={colecao:colecao,id:obj&&obj.id,quando:agoraCarimbo(),motivo:motivoBanco(e)};
     var agora=Date.now();
     if(agora-ultimoAvisoGrava>4000){
@@ -27681,7 +27755,11 @@ function abrirDetalhes(a){
   var osAberta=a.osId?ordens.filter(function(z){
     return z.id===a.osId&&["concluida","entregue","cancelada","reprovada"].indexOf(z.status)<0;})[0]:null;
   var ac="";
-  if(ativ&&a.status!=="finalizado"&&osAberta){
+  /* compromisso de outra pessoa: só dá para olhar (24/10). Sem Finalizar, sem Reagendar,
+     sem Mais + e sem abrir o registro para editar — a trava é a mesma por dentro. */
+  if(!podeEditarAtiv(a)){
+    ac="";
+  } else if(ativ&&a.status!=="finalizado"&&osAberta){
     ac='<button class="btn ghost" type="button" id="dt_reagendar">Reagendar</button>';
   } else if(ativ&&a.status!=="finalizado"){
     ac='<button class="btn" type="button" id="dt_concluir">Finalizar atividade como concluída</button>'+
@@ -27710,7 +27788,9 @@ function abrirDetalhes(a){
   if(trava)$("dt_alerta").innerHTML='<div class="note crit"><b>Você tem atividade mais antiga em atraso.</b> '+
     "Finalize a de <b>"+esc(trava.cliente||"—")+"</b> ("+esc(dataBR(trava.data))+") antes de abrir esta.</div>";
   else if(!podeEditarAtiv(a))$("dt_alerta").innerHTML='<div class="note warn"><b>Só leitura.</b> '+
-    "Esta atividade é de "+esc(a.colaborador||"outro colaborador")+".</div>";
+    "Este compromisso é de <b>"+esc(a.colaborador||"outro colaborador")+"</b>"+
+    (a.criadoPor&&a.criadoPor!==a.colaborador?" e foi agendado por <b>"+esc(a.criadoPor)+"</b>":"")+
+    ". Quem finaliza ou altera é quem agendou, quem vai executar ou a gestão.</div>";
   else if(osAberta&&ativ&&a.status!=="finalizado")
     $("dt_alerta").innerHTML='<div class="note"><b>Esta atividade pertence à OS '+esc(osAberta.numero)+'.</b> '+
       "Ela se encerra sozinha pelo andamento da OS — por isso aqui só dá para abrir a OS, reagendar ou fechar.</div>";
@@ -28003,11 +28083,13 @@ function abrirAcoes(a){
         toast("Pedido aberto para "+(a.cliente||"o cliente")+".");
       } else if(k==="orcam"){
         ir("orcam");abrirOrc(null);
-        if(c.id)preencherOrcDoCliente(c);
-        else $("or_nome").value=a.cliente||"";
-        if(a.colaborador)$("or_vend").value=a.colaborador;
-        orcOrigemAtiv=a;
-        await registrarAcaoAtiv(a,"orcamento","","","Orçamento iniciado a partir desta atividade");
+        /* cliente com outra pessoa: a janela de autorização abriu e nada é registrado (Etapa 2) */
+        if(!c.id||preencherOrcDoCliente(c)){
+          if(!c.id)$("or_nome").value=a.cliente||"";
+          if(a.colaborador)$("or_vend").value=a.colaborador;
+          orcOrigemAtiv=a;
+          await registrarAcaoAtiv(a,"orcamento","","","Orçamento iniciado a partir desta atividade");
+        }
       } else if(k==="retorno"){
         abrirNovaAtividade({clienteId:c.id||"",cliente:a.cliente,tel:a.tel||c.tel,doc:a.doc||c.doc,
           cidade:a.cidade||c.cidade,origem:c.origem,colaborador:a.colaborador||usuarioAtual,dias:3,
@@ -28022,11 +28104,16 @@ function abrirAcoes(a){
   $("acoesModal").hidden=false;
 }
 function preencherOrcDoCliente(c){
+  /* o botão da atividade, o "+ Novo orçamento" da ficha e o botão Orçamento da lista de Leads não
+     passam pela busca — e por isso furavam a trava do cliente (defeito 2 da Etapa 2) */
+  if(c&&c.id&&!liberarClienteComercial(c,"orçamento",function(){
+    orcCli=null;$("or_nome").value="";$("or_achou").innerHTML="";}))return false;
   orcCli=c;
   $("or_nome").value=c.nome||"";$("or_tel").value=c.tel||"";
   $("or_email").value=c.email||"";$("or_doc").value=c.doc||"";
   $("or_cidade").value=[c.rua,c.num,c.bairro,c.cidade,c.uf].filter(Boolean).join(", ")||c.cidade||"";
   $("or_achou").innerHTML='<div class="note ok"><b>Cliente vinculado a partir da atividade.</b></div>';
+  return true;
 }
 var pedOrigemAtiv=null,orcOrigemAtiv=null;
 
@@ -29051,9 +29138,11 @@ function renderAtividades(){
   if(!sq.options.length){
     var o0=document.createElement("option");o0.value="";o0.textContent="Equipe toda";sq.appendChild(o0);
     EQUIPE.forEach(function(n){var o=document.createElement("option");o.value=n;o.textContent=n;sq.appendChild(o);});
+    /* nasce no nome de quem está usando (24/10); remontagem pela troca de equipe devolve a escolha */
+    sq.value=(sq.__valorAnterior!==undefined&&sq.__valorAnterior!==null)?sq.__valorAnterior:pessoaInicialFiltro(EQUIPE);
   }
   travarSelectPessoa(sq,"Minhas atividades");
-  var q=($("avBusca").value||"").toLowerCase(),f=$("avQuando").value,quem=sq.value;
+  var q=semAcento($("avBusca").value||""),f=$("avQuando").value,quem=sq.value;
   var hoje=iso(new Date()),agora=new Date();
   var sem=new Date();sem.setDate(sem.getDate()+7);var semISO=iso(sem);
 
@@ -29065,7 +29154,7 @@ function renderAtividades(){
 
   var lista=(f==="feitas"?feitas:abertas)
     .filter(function(a){return !quem||a.colaborador===quem;})
-    .filter(function(a){return !q||(a.cliente||"").toLowerCase().indexOf(q)>=0;})
+    .filter(function(a){return !q||semAcento(a.cliente).indexOf(q)>=0;})
     .filter(function(a){
       if(f==="atraso"){var d=quando(a);return d&&d<agora;}
       if(f==="hoje")return a.data===hoje;
@@ -29160,7 +29249,7 @@ function retratoLead(c){
   return {feitos:feitos,proximos:proximos,orcs:orcs,abertos:abertos,ultimo:ultimo,dias:dias,sit:sit,cls:cls};
 }
 function renderLeads(){
-  var q=($("ldBusca").value||"").toLowerCase(),f=$("ldFiltro").value;
+  var q=semAcento($("ldBusca").value||""),f=$("ldFiltro").value;
   /* lead é registro comercial (regra dele, 22/09): cada um vê os seus. O CADASTRO do lead
      continua achável por todos na busca e na aba Clientes — o que é restrito é a lista de
      trabalho, com o retrato do atendimento. */
@@ -29173,7 +29262,7 @@ function renderLeads(){
       if(f==="agendado")return x.r.proximos.length>0;
       if(f==="parado")return x.r.proximos.length===0;
       return true;})
-    .filter(function(x){return !q||(x.c.nome||"").toLowerCase().indexOf(q)>=0||(x.c.tel||"").indexOf(q)>=0;})
+    .filter(function(x){return !q||semAcento(x.c.nome).indexOf(q)>=0||(x.c.tel||"").indexOf(q)>=0;})
     .sort(function(a,b){return (b.r.ultimo||"").localeCompare(a.r.ultimo||"");});
   var todos=base.map(function(c){return retratoLead(c);});
   $("ldKpis").innerHTML=
@@ -29209,10 +29298,9 @@ function renderLeads(){
       var c=cliPorId(bt.getAttribute("data-ldo"));
       if(!c)return;
       ir("orcam");abrirOrc(null);
-      orcCli=c;$("or_nome").value=c.nome||"";$("or_tel").value=c.tel||"";
-      $("or_email").value=c.email||"";$("or_doc").value=c.doc||"";
-      $("or_cidade").value=[c.rua,c.num,c.bairro,c.cidade,c.uf].filter(Boolean).join(", ")||c.cidade||"";
-      $("or_achou").innerHTML='<div class="note ok"><b>Lead vinculado.</b> Dados preenchidos automaticamente.</div>';};});
+      /* mesmo caminho dos outros: a trava do cliente vale aqui também (Etapa 2) */
+      if(preencherOrcDoCliente(c))
+        $("or_achou").innerHTML='<div class="note ok"><b>Lead vinculado.</b> Dados preenchidos automaticamente.</div>';};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-lda]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
       var c=cliPorId(bt.getAttribute("data-lda"));
@@ -29284,11 +29372,29 @@ function maisNovoPrimeiro(a,b){
   if(da!==db)return db.localeCompare(da);
   return (+b.numero||0)-(+a.numero||0);
 }
+/* FICHA DO CLIENTE (Etapa 2, regra dele de 23/10): o vendedor vê sempre os aparelhos e as
+   manutenções; o histórico comercial — atendimentos, orçamentos e pedidos — de outras pessoas fica
+   de fora, com a linha dizendo quantos são. A gestão vê tudo, como antes. */
+function meuNaFicha(tipo,o){
+  if(!soMeus())return true;
+  if(tipo==="ped")return meuPedido(o);
+  if(tipo==="orc")return meuOrc(o);
+  return meuAtend(o);
+}
+function notaOcultosFicha(n){
+  if(!n)return "";
+  return '<div class="note ficha-ocultos" style="margin:8px 0">Há mais <b>'+n+"</b> registro"+(n===1?"":"s")+
+    " de outras pessoas neste cliente (atendimentos, orçamentos ou pedidos). Eles aparecem só para quem fez e para a gestão.</div>";
+}
+function linhaOcultosFicha(n,cols){
+  return n?'<tr><td colspan="'+cols+'" style="text-align:left">'+notaOcultosFicha(n)+"</td></tr>":"";
+}
 function hcEventos(c){
-  var ev=[];
+  var ev=[],ocultos=0;
   function hm(h){return h?String(h).slice(0,5):"";}
   function pagos(p){return (p.formas||[]).filter(function(f){return +f.valor>0;});}
   atendsDe(c.id).forEach(function(a){
+    if(!meuNaFicha("ate",a)){ocultos++;return;}
     var ativ=a.natureza==="atividade",feita=a.status==="finalizado";
     ev.push({chave:"ate:"+a.id,tipo:ativ?"atv":"ate",
       quando:((ativ&&feita&&a.concluidaEm)?a.concluidaEm:(a.data||""))+" "+hm(a.inicio),
@@ -29300,12 +29406,14 @@ function hcEventos(c){
       abrir:function(){abrirDetalhes(a);}});
   });
   orcsDe(c.id).forEach(function(o){
+    if(!meuNaFicha("orc",o)){ocultos++;return;}
     ev.push({chave:"orc:"+o.id,tipo:"orc",quando:(o.data||"")+" ",rotulo:"Orçamento",
       titulo:"Nº "+o.numero+" · "+BRL(o.total)+" · "+orcSituacao(o).n,por:o.vendedor||"",
       texto:(o.itens||[]).map(function(i){return (i.qtd||1)+"× "+i.nome;}).join(", ")+(o.obs?" — "+o.obs:""),
       motivo:o.motivoPerda||"",abrir:function(){ir("orcam");abrirOrc(o);}});
   });
   vendasDe(c.id).forEach(function(p){
+    if(!meuNaFicha("ped",p)){ocultos++;return;}
     ev.push({chave:"ped:"+p.id,tipo:"ped",quando:(p.data||"")+" "+hm(p.hora),rotulo:"Pedido",
       titulo:"Nº "+p.numero+" · "+BRL(p.total)+" · "+(p.status||""),por:p.vendedor||"",
       texto:(p.itens||[]).filter(function(i){return !ehPlano(i);}).map(function(i){return (i.qtd||1)+"× "+i.nome;}).join(", ")+
@@ -29331,7 +29439,9 @@ function hcEventos(c){
   /* mais antigo em cima, mais novo embaixo — como uma conversa */
   /* o mais novo em cima (22/10, pedido dele). Isto DESFAZ de propósito a leitura tipo chat
      da v83 ("mais antigo em cima"): quem abre a ficha quer ver o último contato primeiro. */
-  return ev.sort(function(x,y){return String(y.quando).localeCompare(String(x.quando));});
+  ev.sort(function(x,y){return String(y.quando).localeCompare(String(x.quando));});
+  ev.ocultos=ocultos;
+  return ev;
 }
 function hcCartao(e,fixado){
   var q=String(e.quando||"").trim().split(" ");
@@ -29353,9 +29463,9 @@ function renderHistoricoCli(c){
   $("hc_fixados").innerHTML=fixados.length
     ? '<div class="hc-fixados"><p class="sect-t" style="margin:0 0 2px">📌 Fixados no topo</p>'+fixados.map(function(e){return hcCartao(e,true);}).join("")+"</div>"
     : "";
-  lista.innerHTML=ev.length
+  lista.innerHTML=notaOcultosFicha(ev.ocultos||0)+(ev.length
     ? ev.map(function(e){return hcCartao(e,fix.indexOf(e.chave)>=0);}).join("")
-    : '<div class="empty"><div class="big">Nada no histórico ainda</div>Registre um atendimento ou escreva uma anotação.</div>';
+    : '<div class="empty"><div class="big">Nada no histórico ainda</div>Registre um atendimento ou escreva uma anotação.</div>');
   Array.prototype.forEach.call(document.querySelectorAll("#hc_fixados .hc-item,#hc_lista .hc-item"),function(el){
     el.onclick=function(){var e=porChave[el.getAttribute("data-hk")];if(e&&e.abrir)e.abrir();};
   });
@@ -29427,15 +29537,18 @@ function renderCliHist(c){
   try{renderHistoricoCli(c);}catch(e){console.warn(e);}
   try{renderAnexosCli(c,rotAba);}catch(e){console.warn(e);}
   try{renderManutCli(c,rotAba);}catch(e){console.warn(e);}
-  var orcs=orcsDe(c.id).sort(maisNovoPrimeiro);
+  var orcsTodos=orcsDe(c.id);
+  var orcs=orcsTodos.filter(function(o){return meuNaFicha("orc",o);}).sort(maisNovoPrimeiro);
+  var orcOcultos=orcsTodos.length-orcs.length;
   var conv=orcs.filter(function(o){return o.situacao==="convertido";});
   $("ch_orcKpis").innerHTML=
     '<div class="kpi"><div class="l">Orçamentos</div><div class="v">'+orcs.length+"</div></div>"+
     '<div class="kpi"><div class="l">Valor proposto</div><div class="v">'+BRL(orcs.reduce(function(a,o){return a+o.total;},0))+"</div></div>"+
     '<div class="kpi"><div class="l">Convertidos</div><div class="v">'+conv.length+"</div></div>";
   rotAba("orc",orcs.length);
-  var bo=$("ch_orc");bo.innerHTML="";
-  if(!orcs.length)bo.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum orçamento</div>Este cliente ainda não recebeu proposta.</div></td></tr>';
+  var bo=$("ch_orc");bo.innerHTML=linhaOcultosFicha(orcOcultos,6);
+  if(!orcs.length)bo.innerHTML+='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum orçamento</div>'+
+    (orcOcultos?"Nenhum feito por você.":"Este cliente ainda não recebeu proposta.")+"</div></td></tr>";
   orcs.forEach(function(o){
     var s=orcSituacao(o);
     var tr=document.createElement("tr");tr.className="clickable";
@@ -29446,15 +29559,18 @@ function renderCliHist(c){
     tr.onclick=function(){ir("orcam");abrirOrc(o);};
     bo.appendChild(tr);
   });
-  var peds=vendasDe(c.id).sort(maisNovoPrimeiro);
+  var pedsTodos=vendasDe(c.id);
+  var peds=pedsTodos.filter(function(p){return meuNaFicha("ped",p);}).sort(maisNovoPrimeiro);
+  var pedOcultos=pedsTodos.length-peds.length;
   $("ch_pedKpis").innerHTML=
     '<div class="kpi"><div class="l">Vendas</div><div class="v">'+peds.length+"</div></div>"+
     '<div class="kpi"><div class="l">Total comprado</div><div class="v">'+BRL(peds.reduce(function(a,p){return a+(+p.total||0);},0))+"</div></div>"+
     '<div class="kpi"><div class="l">Última compra</div><div class="v" style="font-size:18px">'+
       (peds.length?esc(dataCurta(peds[0].data)):"—")+"</div></div>";
   rotAba("ped",peds.length);
-  var bp=$("ch_ped");bp.innerHTML="";
-  if(!peds.length)bp.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhuma venda</div>Ainda é um lead.</div></td></tr>';
+  var bp=$("ch_ped");bp.innerHTML=linhaOcultosFicha(pedOcultos,5);
+  if(!peds.length)bp.innerHTML+='<tr><td colspan="5"><div class="empty"><div class="big">Nenhuma venda</div>'+
+    (pedOcultos?"Nenhuma feita por você.":"Ainda é um lead.")+"</div></td></tr>";
   peds.forEach(function(p){
     var tr=document.createElement("tr");tr.className="clickable";
     tr.innerHTML="<td><b>"+p.numero+"</b></td><td>"+esc(dataCurta(p.data))+"</td>"+
@@ -29465,12 +29581,15 @@ function renderCliHist(c){
   });
   /* regra do Wagner (12/09): atendimento = contato registrado na hora; atividade = atendimento futuro.
      Cada um na sua aba. */
-  var todosAt=atendsDe(c.id);
+  var todosAtTudo=atendsDe(c.id);
+  var todosAt=todosAtTudo.filter(function(a){return meuNaFicha("ate",a);});
+  var atOcultos=todosAtTudo.length-todosAt.length;
   var ats=todosAt.filter(function(a){return a.natureza!=="atividade"||a.status==="finalizado";})
     .sort(function(a,b){return ((b.data||"")+(b.inicio||"")).localeCompare((a.data||"")+(a.inicio||""));});
   rotAba("ate",ats.length);
-  var ba=$("ch_ate");ba.innerHTML="";
-  if(!ats.length)ba.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum atendimento registrado</div></div></td></tr>';
+  var ba=$("ch_ate");ba.innerHTML=linhaOcultosFicha(atOcultos,5);
+  if(!ats.length)ba.innerHTML+='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum atendimento registrado'+
+    (atOcultos?" por você":"")+"</div></div></td></tr>";
   ats.forEach(function(a){
     var tr=document.createElement("tr");tr.className="clickable";
     var reg=a.obs||"";
@@ -29487,7 +29606,7 @@ function renderCliHist(c){
   /* atividades do cliente: agendadas + venda com instalação futura ainda não feita */
   var atvs=todosAt.filter(function(a){return a.natureza==="atividade";}).map(function(a){
     return {a:a,data:a.data||"",hora:a.inicio||"",feita:a.status==="finalizado"};});
-  vendasDe(c.id).forEach(function(p){
+  peds.forEach(function(p){
     if(!p.instalacao||p.instaladoEm||p.status==="Cancelada")return;
     var pr=String(p.instalacao).split(" ");
     atvs.push({p:p,data:pr[0]||"",hora:pr[1]||"",feita:false});
@@ -29495,8 +29614,8 @@ function renderCliHist(c){
   var aRealizar=atvs.filter(function(x){return !x.feita;}).sort(function(x,y){return (x.data+x.hora).localeCompare(y.data+y.hora);});
   var realizadas=atvs.filter(function(x){return x.feita;}).sort(function(x,y){return (y.data+y.hora).localeCompare(x.data+x.hora);});
   rotAba("atv",aRealizar.length);
-  var bv=$("ch_atv");bv.innerHTML="";
-  if(!atvs.length)bv.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhuma atividade</div>Agende pelo botão Nova atividade ou pela agenda.</div></td></tr>';
+  var bv=$("ch_atv");bv.innerHTML=linhaOcultosFicha(atOcultos,5);
+  if(!atvs.length)bv.innerHTML+='<tr><td colspan="5"><div class="empty"><div class="big">Nenhuma atividade</div>Agende pelo botão Nova atividade ou pela agenda.</div></td></tr>';
   function linhaAtv(x){
     var tr=document.createElement("tr");tr.className="clickable";
     var quando=esc(dataCurta(x.data))+(x.hora?'<div class="t-sub">'+esc(x.hora)+"</div>":"");
@@ -30614,7 +30733,7 @@ function renderManut(){
     return sm.k==="no_periodo"||cabe;   /* mês + atrasadas */
   });
 
-  var q=($("mpBusca").value||"").toLowerCase().trim(),num=q.replace(/\D/g,"");
+  var q=semAcento($("mpBusca").value||""),num=q.replace(/\D/g,"");
   var lista=n6
     .filter(function(e){
       var s=sitEq(e);
@@ -30631,7 +30750,7 @@ function renderManut(){
       return pf==="com"?at:!at;})
     .filter(function(e){
       if(!q)return true;
-      var alvo=(textoBusca(e._c)+" "+(e.serie||"")+" "+(e.produto||"")+" "+(e.cliente||"")).toLowerCase();
+      var alvo=textoBusca(e._c)+" "+semAcento((e.serie||"")+" "+(e.produto||"")+" "+(e.cliente||""));
       if(alvo.indexOf(q)>=0)return true;
       if(num.length>=3){
         if((e._c.doc||"").replace(/\D/g,"").indexOf(num)>=0)return true;
@@ -32303,7 +32422,7 @@ function totalOS(o){
   return Math.round((p+(+o.mao||0)+(+o.taxa||0)-(+o.desconto||0)+totalItensOS(o))*100)/100;
 }
 function renderOS(){
-  var q=($("osBusca").value||"").toLowerCase(),s=$("osSit").value,tp=$("osTipo").value;
+  var q=semAcento($("osBusca").value||""),s=$("osSit").value,tp=$("osTipo").value;
   if(!$("osTipo").options.length||$("osTipo").options.length===1)
     OS_TIPOS.forEach(function(t){var o=document.createElement("option");o.value=t.k;o.textContent=t.n;$("osTipo").appendChild(o);});
   var base=ordens.filter(function(o){return o.loja===lojaAtual&&minhaOS(o);});
@@ -32314,7 +32433,7 @@ function renderOS(){
     .filter(function(o){return !tp||o.tipo===tp;})
     .filter(function(o){
       if(!q)return true;
-      return (String(o.numero)+" "+(o.cliente||"")+" "+(o.serie||"")+" "+(o.equipamento||"")).toLowerCase().indexOf(q)>=0;})
+      return semAcento(String(o.numero)+" "+(o.cliente||"")+" "+(o.serie||"")+" "+(o.equipamento||"")).indexOf(q)>=0;})
     .sort(maisNovoPrimeiro);
   var abertas=base.filter(function(o){return !osFechada(o);});
   var atrasadas=abertas.filter(function(o){return o.prazo&&o.prazo<hojeISO();});
@@ -34345,14 +34464,14 @@ function orcSituacao(o){
   return{n:"Em aberto",cls:"p-acc"};
 }
 function renderOrcam(){
-  var q=($("orcBusca").value||"").toLowerCase(),f=$("orcFiltro").value;
+  var q=semAcento($("orcBusca").value||""),f=$("orcFiltro").value;
   var todos=orcamentos.filter(function(o){return o.loja===lojaAtual&&meuOrc(o);});
   var lista=todos.filter(function(o){
       if(!f)return true;
       var s=orcSituacao(o).n;
       return (f==="aberto"&&s==="Em aberto")||(f==="vencido"&&s==="Vencido")||
              (f==="convertido"&&s==="Convertido em venda")||(f==="perdido"&&s==="Perdido");})
-    .filter(function(o){return !q||(o.cliente||"").toLowerCase().indexOf(q)>=0||String(o.numero).indexOf(q)>=0;})
+    .filter(function(o){return !q||semAcento(o.cliente).indexOf(q)>=0||String(o.numero).indexOf(q)>=0;})
     .sort(maisNovoPrimeiro);
   var abertos=todos.filter(function(o){return orcSituacao(o).n==="Em aberto";});
   var conv=todos.filter(function(o){return o.situacao==="convertido";});
@@ -34683,6 +34802,17 @@ async function salvarOrc(){
   var nome=$("or_nome").value.trim();
   if(!nome){$("or_alerta").innerHTML='<div class="note crit"><b>Informe o nome do cliente.</b></div>';return null;}
   if(!orcItens.length){$("or_alerta").innerHTML='<div class="note crit"><b>Adicione ao menos um item.</b></div>';return null;}
+  /* a trava do cliente vale por dentro (Etapa 2): orçamento NOVO de cliente que está com outra
+     pessoa só sai com autorização. Orçamento já salvo é desta pessoa e segue livre. */
+  var trvO={ok:true,precisou:false};
+  if(!editandoOrc&&orcCli){
+    trvO=conferirTravaCliente(orcCli,"orçamento");
+    if(!trvO.ok){
+      $("or_alerta").innerHTML='<div class="note crit"><b>'+esc(orcCli.nome||"Este cliente")+" está em atendimento com "+
+        esc(trvO.quem||"outra pessoa")+".</b> Peça autorização na janela que abriu — o orçamento continua aqui na tela.</div>";
+      return null;
+    }
+  }
   var r=calcOrc();
   var o=editandoOrc||{id:uid(),loja:lojaAtual,situacao:"aberto",
     numero:(await numeroNovo("orcamento",orcamentos,1001)),
@@ -34713,7 +34843,7 @@ async function salvarOrc(){
     avisarRecusaBanco("or_alerta",eGr,"O orçamento continua aqui na tela — tente de novo.");
     return null;
   }
-  try{await consumirAutorizacao(o.clienteId,"orçamento "+o.numero);}catch(eA){console.warn("autorização",eA);}
+  try{await consumirAutorizacao(o.clienteId,"orçamento "+o.numero,{tipo:"orcamento",id:o.id},trvO.precisou);}catch(eA){console.warn("autorização",eA);}
   /* funil de vendas: cartão vai para Orçamento enviado, com o valor */
   try{await atualizarFunilCliente(o.clienteId,"orçamento",o.vendedor||usuarioAtual);}catch(eF){console.warn("funil",eF);}
   /* lembrete do vencimento: nasce com o orçamento, na data da validade (regra dele, 02/10) */
@@ -34956,6 +35086,7 @@ async function naCriarLead(nome){
     nome:nome,tel:$("na_tel").value.trim(),cidade:$("na_cidade").value.trim(),
     bairro:$("na_bairro").value.trim(),rua:$("na_rua").value.trim(),
     num:$("na_num").value.trim(),comp:$("na_ref").value.trim()};
+  maiusculizarCadastro(c);
   clientes.push(c);
   if(db){try{await col("clientes").doc(c.id).set(c);}catch(e){console.warn(e);}}
   return c;
@@ -35004,6 +35135,7 @@ function abrirNovaAtividade(ctx){
   var d=new Date();d.setDate(d.getDate()+(ctx.dias||3));
   $("na_data").value=iso(d);$("na_hora").value=ctx.hora||"09:00";
   $("na_obs").value=ctx.obs||"";$("na_alerta").innerHTML="";
+  if($("na_conflito"))$("na_conflito").innerHTML="";
   naLimparCadastro();
   opcoesOrigem("na_origem","");
   renderChipsNa();naConferirCadastro();naAjustarTexto();
@@ -35067,6 +35199,9 @@ async function criarAtividadeRetorno(){
     naCtx.osId=osNovaAberta.id;
     $("na_obs").value=$("na_obs").value.replace(/^OS nova/,"OS "+osNovaAberta.numero);
   }
+  /* já tem compromisso nesse horário? avisa e mostra os horários livres (24/10) */
+  var cfN=conflitoDeAgenda($("na_resp").value,$("na_data").value,$("na_hora").value,"",null);
+  if(cfN&&!confirm(textoConflito(cfN,$("na_resp").value,$("na_data").value)+"\n\nMarcar assim mesmo?"))return;
   var vinc=clientes.filter(function(c){return c.id===naCtx.clienteId;})[0]||{};
   var a={id:uid(),loja:lojaAtual,natureza:"atividade",
     clienteId:naCtx.clienteId||"",cliente:naCtx.cliente,tel:naCtx.tel||vinc.tel||"",
@@ -35074,6 +35209,9 @@ async function criarAtividadeRetorno(){
     endereco:[vinc.rua,vinc.num,vinc.bairro,vinc.cidade].filter(Boolean).join(", "),
     origem:naCtx.origem||vinc.origem||"",
     colaborador:$("na_resp").value,vendedor:naCtx.colaborador||"",
+    /* quem marcou o compromisso (24/10): é por este campo que quem agenda para um colega
+       continua podendo alterar e finalizar o que marcou */
+    criadoPor:usuarioAtual,
     tipos:naTipos.slice(),tipo:naTipos.join(" · "),
     data:$("na_data").value,inicio:$("na_hora").value,fim:"",
     obs:$("na_obs").value.trim(),origemOrc:naCtx.orcId||"",
@@ -37191,6 +37329,8 @@ function ehSessaoPerdida(e){
   return !!(e&&(e.sessaoPerdida||/sess[ãa]o (venceu|expirada|inv[áa]lida)/i.test(String(e.message||""))));
 }
 async function chamarFuncaoBanco(nome,corpo){
+  /* acesso de colaborador é configuração: o Financeiro só olha (Etapa 2) */
+  if(emConfigLeitura())throw new Error(MSG_CFG_LEITURA);
   if(!db||!db.sb)throw new Error("Sem conexão com o banco.");
   var s=db.auth.sessaoFresca?await db.auth.sessaoFresca():await db.auth.sessao();
   if(!s){var ex=new Error("Sessão expirada — entre no sistema de novo.");ex.sessaoPerdida=true;throw ex;}
@@ -38735,9 +38875,9 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
 }
 function renderFin(){
   var tela=$("finFila");if(!tela)return;
-  var q=($("finBusca").value||"").toLowerCase().trim();
+  var q=semAcento($("finBusca").value||"");
   var daqui=pedidos.filter(function(p){return p.loja===lojaAtual;});
-  function casa(p){return !q||(String(p.numero)+" "+(p.cliente||"")).toLowerCase().indexOf(q)>=0;}
+  function casa(p){return !q||semAcento(String(p.numero)+" "+(p.cliente||"")).indexOf(q)>=0;}
   function soma(l){return l.reduce(function(a,p){return a+(+p.total||0);},0);}
   function porId(id){return pedPorId(id);}
   var fila=daqui.filter(function(p){return vendaPendente(p)&&p.status==="Aguardando aprovação financeira";});
@@ -39448,6 +39588,45 @@ function abrirAtend(a){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-i")===iniSel));});
   renderChipsTipos();$("at_alerta").innerHTML="";$("at_achou").innerHTML="";$("at_sug").hidden=true;
   ajustarOrigemAt();
+  travarFormAtend(a);
+}
+/* ATIVIDADE JÁ AGENDADA SÓ ACEITA O HORÁRIO, E DENTRO DO MESMO DIA (24/10, escolha dele):
+   "as atividades só pode editar data e horário se for para o mesmo dia, fora isso nada mais".
+   Mudar de dia continua existindo, pelo botão Reagendar, que registra o motivo e deixa a
+   atividade antiga no histórico. Atividade já finalizada e compromisso de outra pessoa abrem
+   só para leitura. A trava vale também por dentro, no salvarAtend (regra da v321). */
+var LIVRES_HORA=["at_ini","at_fim"];
+function travarFormAtend(a){
+  var form=$("atendForm");if(!form)return;
+  var modo=modoEdicaoAtend(a);
+  /* devolve o que esta função travou da última vez, sem abrir o que já estava fechado */
+  Array.prototype.forEach.call(form.querySelectorAll("[data-attrav]"),function(e){
+    var m=e.getAttribute("data-attrav");
+    if(m==="r")e.readOnly=false;else e.disabled=false;
+    e.removeAttribute("data-attrav");
+  });
+  var nota=$("at_travaNota");
+  if(!nota){nota=document.createElement("div");nota.id="at_travaNota";$("at_alerta").parentNode.insertBefore(nota,$("at_alerta"));}
+  nota.innerHTML="";
+  $("atendSalvar").hidden=false;
+  if(modo==="tudo")return;
+  Array.prototype.forEach.call(form.querySelectorAll("input,select,textarea,button"),function(e){
+    if(e.id==="atendCancelar"||e.id==="atendSalvar")return;
+    if(modo==="hora"&&LIVRES_HORA.indexOf(e.id)>=0)return;
+    if(e.tagName==="INPUT"&&(e.type==="text"||e.type==="date"||e.type==="time"||e.type==="tel"||e.type==="number"||!e.type)){
+      if(!e.readOnly){e.readOnly=true;e.setAttribute("data-attrav","r");}
+    } else if(!e.disabled){e.disabled=true;e.setAttribute("data-attrav","d");}
+  });
+  if(modo==="nada"){
+    $("atendSalvar").hidden=true;
+    nota.innerHTML='<div class="note warn"><b>Só leitura.</b> '+
+      (a&&a.status==="finalizado"?"Esta atividade já foi finalizada — o que aconteceu fica como está.":
+       "Este compromisso é de outra pessoa. Quem altera é quem agendou, quem vai executar ou a gestão.")+"</div>";
+  }else{
+    nota.innerHTML='<div class="note"><b>Atividade agendada: aqui só muda o horário.</b> '+
+      "Dá para acertar o início e o fim dentro do dia "+esc(dataBR(a.data))+
+      ". Para passar para outro dia, feche e use o botão <b>Reagendar</b> — assim fica registrado o motivo.</div>";
+  }
 }
 /* no atendimento, a origem só se escolhe para contato novo (ou cadastro antigo sem
    origem); de quem já tem, ela vem do cadastro e fica travada */
@@ -39506,14 +39685,15 @@ function buscarIndicadorAt(){
 }
 function achaCliente(q){
   /* procura por nome, telefone, documento ou código — o vendedor digita o que tiver na mão */
-  var s=(q||"").trim().toLowerCase(),num=s.replace(/\D/g,"");
+  var s=semAcento(q),num=s.replace(/\D/g,"");
   if(s.length<2)return [];
   return clientes.filter(function(c){
     if(c.loja!==lojaAtual)return false;
     /* prestador: só acha o cliente em que ele é o responsável pela instalação (05/10) */
     if(!clientePermitido(c))return false;
-    if((c.nome||"").toLowerCase().indexOf(s)>=0)return true;
-    if((c.codigo||"").toLowerCase().indexOf(s)>=0)return true;
+    /* sem acento nos dois lados (24/10): "Antonio" acha "Antônio" */
+    if(semAcento(c.nome).indexOf(s)>=0)return true;
+    if(semAcento(c.codigo).indexOf(s)>=0)return true;
     if(num.length>=3){
       if((c.tel||"").replace(/\D/g,"").indexOf(num)>=0)return true;
       if((c.doc||"").replace(/\D/g,"").indexOf(num)>=0)return true;
@@ -39649,11 +39829,47 @@ function voltarDoLead(c){
   try{preencherCliente(c);}catch(e){}
   toast("Lead "+(c.codigo||"")+" vinculado ao atendimento.");
 }
+/* filtro de vendedor da tela de Atendimentos (pedido dele, 23/10): "Todos os vendedores" ou
+   um só. Lista a equipe e mais quem aparece nos registros da loja, para nenhum nome sumir.
+   Quem não é da gestão continua vendo só o que é dele, com o campo travado. */
+/* O FILTRO DE PESSOA ABRE NO NOME DE QUEM ESTÁ USANDO (24/10, regra dele: "deixe sempre o meu
+   usuário no filtro e quando eu quiser eu coloco todos"). Trocar para a equipe toda vale
+   enquanto a pessoa está na tela; voltar pelo menu devolve o nome dela — é a mesma regra da
+   agenda (v357). Quem não é da gestão já fica travado no próprio nome desde a v200. */
+function pessoaInicialFiltro(lista){
+  return lista.indexOf(usuarioAtual)>=0?usuarioAtual:"";
+}
+function abrirFiltroNoMeuNome(sel){
+  if(!sel||sel.disabled)return;
+  var nomes=[].map.call(sel.options,function(o){return o.value;});
+  sel.value=pessoaInicialFiltro(nomes);
+}
+function resetarPessoaAtend(){
+  try{renderAtend();abrirFiltroNoMeuNome($("atendVend"));renderAtend();}catch(e){console.warn("atend",e);}
+}
+function resetarPessoaAtividades(){
+  try{renderAtividades();abrirFiltroNoMeuNome($("avQuem"));renderAtividades();}catch(e){console.warn("ativ",e);}
+}
+function montarVendAtend(){
+  var sv=$("atendVend");if(!sv)return "";
+  if(travarSelectPessoa(sv,"Meus registros"))return "";
+  var antes=sv.options.length?sv.value:(sv.__valorAnterior!==undefined?sv.__valorAnterior:null);
+  var nomes={};
+  EQUIPE.forEach(function(n){if(n)nomes[n]=1;});
+  atendimentos.forEach(function(a){if(a.loja===lojaAtual&&a.colaborador)nomes[a.colaborador]=1;});
+  var lista=Object.keys(nomes).sort(ordAZ);
+  sv.innerHTML='<option value="">Todos os vendedores</option>'+lista.map(function(n){return '<option value="'+esc(n)+'">'+esc(n)+"</option>";}).join("");
+  if(antes===null)antes=pessoaInicialFiltro(lista);   /* primeira vez na sessão: o nome de quem está usando */
+  sv.value=lista.indexOf(antes)>=0?antes:"";
+  return sv.value;
+}
 function renderAtend(){
-  var q=($("atendBusca").value||"").toLowerCase(),f=$("atendFiltro").value;
+  var q=semAcento($("atendBusca").value||""),f=$("atendFiltro").value;
+  var vend=montarVendAtend();
   var lista=visiveis(atendimentos.filter(function(a){return a.loja===lojaAtual;}))
     .filter(function(a){return !f||a.natureza===f;})
-    .filter(function(a){return !q||(a.cliente||"").toLowerCase().indexOf(q)>=0;})
+    .filter(function(a){return !vend||deOutro(a,CAMPOS_ATEND,vend);})
+    .filter(function(a){return !q||semAcento(a.cliente).indexOf(q)>=0;})
     /* O QUE FOI LANÇADO POR ÚLTIMO FICA EM CIMA (23/10, escolha dele).
        Antes mandava a data do compromisso, e com isso a atividade marcada para daqui a duas
        semanas ocupava o topo enquanto o atendimento registrado ontem à noite ficava no fim.
@@ -39687,11 +39903,16 @@ function renderAtend(){
       "<td>"+esc(a.colaborador||"—")+"</td>"+
       "<td>"+sit+"</td>"+
       '<td class="num"><button class="btn '+(trava||!podeEd?"mut":"ghost")+' sm" type="button" data-real="'+a.id+'">Ver detalhes</button>'+
+        botaoEditarLinha(a)+
         (trava?' <span class="pill p-mut">bloqueada</span>':"")+
         htmlLixeira(a.natureza==="atividade"?"atividade":"atendimento",a.id)+"</td>";
     tr.onclick=function(ev){
-      if(ev.target.getAttribute("data-real"))return;
+      if(ev.target.getAttribute("data-real")||ev.target.getAttribute("data-aed"))return;
       abrirDetalhes(a);};
+    /* dois cliques na linha abrem direto a edição (ele pediu "dois cliques ou um botão") */
+    tr.ondblclick=function(ev){
+      if(ev.target.getAttribute("data-real")||ev.target.getAttribute("data-aed"))return;
+      editarAtendDaLista(a);};
     b.appendChild(tr);
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-real]"),function(bt){
@@ -39700,8 +39921,48 @@ function renderAtend(){
       var a=atendPorId(bt.getAttribute("data-real"));
       if(a)abrirDetalhes(a);
     };});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-aed]"),function(bt){
+    bt.onclick=function(ev){
+      ev.stopPropagation();
+      var a=atendPorId(bt.getAttribute("data-aed"));
+      if(a)editarAtendDaLista(a);
+    };});
+}
+/* EDITAR PELA LISTA (24/10, pedido dele): antes só dava para editar entrando nos Detalhes e
+   clicando em "Editar o registro" — quem olhava a lista não via saída nenhuma. O botão respeita
+   a mesma trava de dentro (modoEdicaoAtend): atendimento abre inteiro, atividade agendada abre
+   só com o horário, e compromisso de outro ou atividade finalizada nem oferece o botão. */
+function botaoEditarLinha(a){
+  var modo=modoEdicaoAtend(a);
+  if(modo==="nada")return "";
+  var rot=modo==="hora"?"Horário":"Editar";
+  var t=modo==="hora"?"Acertar o horário desta atividade (o dia muda pelo Reagendar)":"Editar este registro";
+  return ' <button class="btn ghost sm" type="button" data-aed="'+a.id+'" title="'+esc(t)+'">'+rot+"</button>";
+}
+function editarAtendDaLista(a){
+  if(!a)return;
+  if(modoEdicaoAtend(a)==="nada"){toast("Este registro é de outra pessoa ou já foi finalizado — dá só para ver.");return;}
+  var m=$("detModal");if(m)m.hidden=true;
+  ir("atend");abrirAtend(a);
 }
 async function salvarAtend(){
+  /* a trava da tela vale também aqui (regra da v321): atividade agendada só muda o horário,
+     e no mesmo dia; compromisso de outro ou atividade finalizada não muda nada */
+  var modoEd=modoEdicaoAtend(editandoAt);
+  if(modoEd==="nada"){
+    $("at_alerta").innerHTML='<div class="note crit"><b>Este registro não pode ser alterado.</b> '+
+      "Compromisso de outra pessoa ou atividade já finalizada.</div>";return;}
+  if(modoEd==="hora"){
+    var ini2=$("at_ini").value,fim2=$("at_fim").value;
+    if(fim2&&ini2&&fim2<ini2){$("at_alerta").innerHTML='<div class="note crit"><b>O fim não pode ser antes do início.</b></div>';return;}
+    var cf=conflitoDeAgenda(editandoAt.colaborador,editandoAt.data,ini2,fim2,editandoAt.id);
+    if(cf&&!confirm(textoConflito(cf,editandoAt.colaborador,editandoAt.data)+"\n\nMarcar assim mesmo?"))return;
+    editandoAt.inicio=ini2;editandoAt.fim=fim2;
+    try{await gravaConf("atendimentos",editandoAt);}
+    catch(e){$("at_alerta").innerHTML='<div class="note crit"><b>Não foi salvo.</b> '+esc(e&&e.message||e)+"</div>";return;}
+    toast("Horário da atividade atualizado.");
+    $("atendForm").hidden=true;$("atendLista").hidden=false;editandoAt=null;render();return;
+  }
   var nome=$("at_nome").value.trim(),tel=$("at_tel").value.trim();
   if(!nome||!tel){$("at_alerta").innerHTML='<div class="note crit"><b>Nome e telefone são obrigatórios.</b></div>';return;}
   if(!tiposSel.length){$("at_alerta").innerHTML='<div class="note warn"><b>Marque ao menos um tipo</b> de atendimento acima.</div>';return;}
@@ -39775,6 +40036,7 @@ async function salvarAtend(){
       indicado:($("at_indicado").value||""),
       tipoPrimeiroAtend:tiposSel[0]||"",primeiroAtendEm:iso(new Date()),
       criadoEm:iso(new Date()),criadoPor:usuarioAtual,criadoVia:"atendimento"};
+    maiusculizarCadastro(c);
     clientes.push(c);clienteVinc=c;leadNovo=c;
     /* o lead nasce aqui: banco recusando, ele NÃO fica na lista e o atendimento não segue —
        senão o contato seguiria para um cadastro que não existe no banco (09/10) */
@@ -39851,6 +40113,7 @@ async function salvarAtend(){
       ".</b> Para o cliente ficar como <b>Agendado visita</b>, use <b>Finalizar e criar atividade futura</b> com a data da visita.");
   }
   $("at_futuraBloco").hidden=true;$("at_fechaAlerta").innerHTML="";
+  if($("at_conflito"))$("at_conflito").innerHTML="";
   /* contato de aniversariante: a pergunta Sim/Não substitui "completo" e motivo, e não cria atividade */
   var anivF=ehAtendAniv(a);
   $("at_secCompleto").hidden=anivF;$("at_secMotivos").hidden=anivF;$("at_btnFuturo").hidden=anivF;
@@ -39900,6 +40163,7 @@ function validaFecho(){
 /* a atividade futura combinada no fecho do atendimento */
 async function agendarFuturaDoAtend(at){
   var f={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:at.clienteId,cliente:at.cliente,
+    criadoPor:usuarioAtual,
     colaborador:$("af_resp").value,tipos:(at.tipos||[]).slice(),tipo:at.tipo,
     data:$("af_data").value,inicio:$("af_ini").value,fim:"",obs:$("af_obs").value.trim(),
     origemAtend:at.id,equipId:at.manutEquipId||at.equipId||"",status:"aberto"};
@@ -39916,6 +40180,12 @@ async function fecharAtend(comFutura){
   if(comFutura&&!$("af_data").value){
     $("at_fechaAlerta").innerHTML='<div class="note crit"><b>Informe a data da atividade futura.</b></div>';
     $("at_futuraBloco").hidden=false;return;}
+  /* a atividade futura também confere a agenda de quem vai executar (24/10) */
+  if(comFutura){
+    var cfF=conflitoDeAgenda($("af_resp").value,$("af_data").value,$("af_ini").value,"",null);
+    if(cfF&&!confirm(textoConflito(cfF,$("af_resp").value,$("af_data").value)+"\n\nMarcar assim mesmo?")){
+      $("at_futuraBloco").hidden=false;return;}
+  }
   /* Vendido sem pedido não fecha: abre a venda, e o pedido salvo fecha o atendimento */
   if(ehVendido(motivosSel)&&!pedidoDoRegistro(atendPend)){
     var pend=atendPend;
@@ -39999,8 +40269,9 @@ var funcoes=[];
 var SEED_FUNCOES=[
   {nome:"Administrador",desc:"Enxerga e aprova tudo",telas:TODAS_TELAS.slice(),
     acoes:ACOES.map(function(a){return a[0];})},
-  {nome:"Financeiro",desc:"Caixa, títulos, conciliação e aprovação",
-    telas:TELAS_OPERACAO.concat(["caixas","faturamento","fornec","notas","receber","pagar","concil","fatur","prest","fluxo","relat","veiculos","fin","estEmpresa","estConsumo"]),
+  /* o Financeiro VÊ TUDO, mas nas Configurações só olha (Etapa 2, regra dele de 23/10) */
+  {nome:"Financeiro",desc:"Vê tudo; nas Configurações, só olha",
+    telas:TODAS_TELAS.slice(),
     acoes:["verTudo","verCustos","aprovarFinanceiro","reabrirVenda","baixarTitulos","exportar"]},
   {nome:"Gerente",desc:"Acompanha a equipe e aprova desconto",
     telas:TELAS_OPERACAO.concat(["estEmpresa","faturamento","fatur","metasop"]),
@@ -40085,6 +40356,100 @@ function veTela(s,quem){
   return (f.telas||[]).indexOf(s)>=0;
 }
 var PERFIS_GESTAO=["Administrador","Financeiro","Gerente"];
+/* FINANCEIRO VÊ TUDO, MAS NÃO MEXE NAS CONFIGURAÇÕES (Etapa 2, regra dele de 23/10): as telas de
+   Configurações abrem para ele só para olhar. A trava vale em dois lugares: o toque em botão e em
+   caixa de marcar dentro da tela (e das janelas abertas por ela) é recusado, e a gravação dos
+   cadastros que as Configurações mexem é recusada POR DENTRO, antes de chegar ao banco (regra
+   da v321 — esconder o botão não protege nada). */
+var TELAS_CONFIG=(GRUPOS_TELA.filter(function(g){return g.g==="Configurações";})[0]||{telas:[]})
+  .telas.map(function(t){return t[0];});
+var MSG_CFG_LEITURA="As Configurações estão abertas para você só para olhar. Para mudar, peça ao Administrador.";
+function configSoLeitura(){return perfilDe(usuarioAtual)==="Financeiro";}
+function emConfigLeitura(){return configSoLeitura()&&TELAS_CONFIG.indexOf(telaAtual)>=0;}
+/* o que as telas de Configurações gravam: as configurações, centros de custo, caixas e produtos
+   (os planos de garantia e os grupos moram neles) */
+var CFG_BLOQ_COL=["config","centros","caixas","produtos"];
+function escritaCfgBloqueada(colecao){
+  if(!emConfigLeitura())return false;
+  return CFG_BLOQ_COL.indexOf(String(colecao||"").split("/")[0])>=0;
+}
+function protegerDbConfig(d){
+  if(!d||d.__protegidoCfg)return d;
+  try{
+    function erro(){var e=new Error(MSG_CFG_LEITURA);e.soLeitura=true;return e;}
+    function embrulha(ref,colecao){
+      if(!ref)return ref;
+      ["set","delete","update"].forEach(function(k){
+        if(typeof ref[k]!=="function")return;
+        var f=ref[k];
+        ref[k]=function(){
+          if(escritaCfgBloqueada(colecao))return Promise.reject(erro());
+          return f.apply(ref,arguments);
+        };
+      });
+      return ref;
+    }
+    if(typeof d.collection==="function"){
+      var oc=d.collection;
+      d.collection=function(n){
+        var c=oc.apply(d,arguments);
+        if(c&&typeof c.doc==="function"){var od=c.doc;c.doc=function(id){return embrulha(od.apply(c,arguments),n);};}
+        return c;
+      };
+    }
+    if(typeof d.doc==="function"){
+      var odd=d.doc;
+      d.doc=function(p){return embrulha(odd.apply(d,arguments),String(p||"").split("/")[0]);};
+    }
+    if(typeof d.gravarVarios==="function"){
+      var gv=d.gravarVarios;
+      d.gravarVarios=function(colecao){
+        if(escritaCfgBloqueada(colecao))return Promise.reject(erro());
+        return gv.apply(d,arguments);
+      };
+    }
+    d.__protegidoCfg=true;
+  }catch(e){console.warn("proteger configurações",e);}
+  return d;
+}
+var CFG_LIVRE=/^(fechar|voltar|cancelar|ver |ver$|abrir|buscar|filtrar|limpar|imprimir|sair|anterior|pr[óo]xim|primeira|[úu]ltima|mostrar|esconder|atualizar|‹|›|«|»|\+$|−$|-$)/i;
+function ligarGuardaConfig(){
+  if(document.__guardaCfg)return;
+  document.__guardaCfg=true;
+  document.addEventListener("click",function(ev){
+    if(!document.body.classList.contains("cfg-leitura"))return;
+    var t=ev.target;if(!t||!t.closest)return;
+    if(t.closest(".rail,.top,#sinoPainel,.sino"))return;
+    var sec=$("s-"+telaAtual);
+    var dentro=(sec&&sec.contains(t))||!!t.closest(".modal:not([hidden])");
+    if(!dentro)return;
+    var el=t.closest('button,input[type="checkbox"],input[type="radio"],label');
+    if(!el)return;
+    if(el.tagName==="LABEL"&&!el.querySelector('input[type="checkbox"],input[type="radio"]'))return;
+    if(el.tagName==="BUTTON"){
+      if(el.hasAttribute("data-ab")||el.getAttribute("role")==="tab"||
+         el.closest('[role="tablist"],.cal-views,.paginacao,.pag'))return;
+      if(el.classList.contains("cfg-livre"))return;
+      if(CFG_LIVRE.test((el.textContent||"").trim()))return;
+    }
+    ev.preventDefault();ev.stopImmediatePropagation();
+    toast(MSG_CFG_LEITURA);
+  },true);
+}
+function aplicarLeituraConfig(s){
+  ligarGuardaConfig();
+  var on=configSoLeitura()&&TELAS_CONFIG.indexOf(s)>=0;
+  document.body.classList.toggle("cfg-leitura",on);
+  var sec=$("s-"+s);if(!sec)return;
+  var av=sec.querySelector(".cfg-leitura-aviso");
+  if(on&&!av){
+    av=document.createElement("div");av.className="note warn cfg-leitura-aviso";
+    av.innerHTML="<b>Só para olhar.</b> "+esc(MSG_CFG_LEITURA);
+    var ph=sec.querySelector(".page-head");
+    if(ph&&ph.parentNode===sec)sec.insertBefore(av,ph.nextSibling);else sec.insertBefore(av,sec.firstChild);
+  }
+  if(av)av.hidden=!on;
+}
 /* o catálogo de ferramentas é do almoxarifado (23/10, regra dele) */
 var PERFIS_FERR=["Administrador","Estoquista"];
 /* Enquanto as funções não carregaram, funcaoDe() devolve TUDO para o menu não nascer cortado —
@@ -40096,11 +40461,24 @@ function ehGestor(){
   return pode("verTudo");
 }
 /* quem não é da gestão só VÊ o que é dele (v200, soMeus); aqui é quem pode ALTERAR */
+/* QUEM ALTERA O COMPROMISSO (24/10, regra dele): "somente quem agendou ou quem vai executar".
+   Antes o criador não entrava na conta — quem marcasse a visita para um colega não conseguia
+   mais mexer nela. A gestão continua podendo tudo. */
 function podeEditarAtiv(a){
   if(!a)return true;
   if(ehGestor())return true;
-  return [a.colaborador,a.prospector,a.vendedor,a.instalador]
+  return [a.colaborador,a.prospector,a.vendedor,a.instalador,a.criadoPor]
     .some(function(n){return n&&n===usuarioAtual;});
+}
+/* o que a pessoa pode mexer no registro aberto:
+   "tudo" = atendimento dela · "hora" = atividade agendada (só o horário, no mesmo dia)
+   "nada" = compromisso de outro, ou atividade já finalizada */
+function modoEdicaoAtend(a){
+  if(!a)return "tudo";
+  if(!podeEditarAtiv(a))return "nada";
+  if(a.natureza!=="atividade")return "tudo";
+  if(a.status==="finalizado")return "nada";
+  return "hora";
 }
 function aplicarPerfil(){
   var g=ehGestor(),p=perfilDe(usuarioAtual);
@@ -40140,13 +40518,30 @@ var SOLIC_TIPOS={
   responsavel:{n:"Trocar o responsável",d:"Passar o atendimento para outra pessoa."}
 };
 var SOLIC_SIT={pendente:{n:"Pendente",cls:"p-warn"},aprovada:{n:"Aprovada",cls:"p-ok"},
-  recusada:{n:"Recusada",cls:"p-crit"},cancelada:{n:"Cancelada",cls:"p-mut"}};
+  recusada:{n:"Recusada",cls:"p-crit"},cancelada:{n:"Cancelada",cls:"p-mut"},
+  /* o conflito sumiu antes de alguém responder: o sistema encerra sozinho (Etapa 2, 23/10) */
+  resolvida:{n:"Resolvida pelo sistema",cls:"p-mut"}};
 function podeAprovarSolic(){return pode("aprovarSolicitacoes")||ehAdministrador();}
+/* QUEM DECIDE A SOLICITAÇÃO DE CLIENTE (Etapa 2, regra dele de 23/10): ela chega para o
+   RESPONSÁVEL pelo cliente E para o Administrador — o primeiro que responder decide.
+   Responsável = as pessoas dos registros em andamento que travaram o atendimento. */
+function responsaveisSolic(s){
+  if(!s)return [];
+  var r=(s.responsaveis||[]).slice();
+  if(!r.length&&s.responsavelAtual)r=[s.responsavelAtual];
+  return r.filter(function(x){return x&&x!==s.solicitante;});
+}
+function souResponsavelSolic(s){return !!s&&s.tipo==="cliente"&&responsaveisSolic(s).indexOf(usuarioAtual)>=0;}
+function podeDecidirSolic(s){
+  if(!s||s.status!=="pendente")return false;
+  if(s.solicitante===usuarioAtual)return false;
+  return podeAprovarSolic()||souResponsavelSolic(s);
+}
 function nomeTipoSolic(t){return (SOLIC_TIPOS[t]||{}).n||t||"Solicitação";}
 function solicMinhas(){
   return solicitacoes.filter(function(s){
     if(s.loja!==lojaAtual)return false;
-    return podeAprovarSolic()||s.solicitante===usuarioAtual;
+    return podeAprovarSolic()||s.solicitante===usuarioAtual||souResponsavelSolic(s);
   });
 }
 /* ---------- o que conta como "cliente em atendimento" ---------- */
@@ -40185,32 +40580,94 @@ function conflitosComerciais(cid,quem){
     out.push({tipo:"atividade",rotulo:"Atividade agendada",numero:"",id:a.id,
       responsavel:a.colaborador||a.criadoPor||"",quando:a.data});
   });
+  /* cartão parado em Orçamento/Negociação sem nenhum orçamento em aberto nem pedido em andamento:
+     o orçamento venceu ou foi perdido, e o cartão não pode continuar travando (Etapa 2, 23/10) */
+  var temAberto=orcamentos.some(function(o){return o.clienteId===cid&&o.loja===lojaAtual&&orcSituacao(o).n==="Em aberto";})||
+    pedidos.some(function(p){return p.clienteId===cid&&p.loja===lojaAtual&&p.status!=="Cancelada"&&!p.encerrada;});
   negocios.forEach(function(n){
     if(n.clienteId!==cid||n.loja!==lojaAtual)return;
-    if(etapaFechada(n.etapa))return;
+    if(n.ativo===false||etapaFechada(n.etapa))return;
     if(!n.responsavel||n.responsavel===quem)return;
+    if((n.etapa==="orcamento"||n.etapa==="negociacao")&&!temAberto)return;
     out.push({tipo:"negocio",rotulo:"Negócio no funil",numero:"",id:n.id,
       responsavel:n.responsavel,quando:String(n.etapaEm||n.criadoEm||"").slice(0,10)});
   });
   return out.filter(function(c){return c.responsavel&&c.responsavel!==quem;});
 }
 /* ---------- autorização por solicitação, nunca permanente ---------- */
+/* a autorização vale para o ATENDIMENTO em que foi usada: enquanto o orçamento ou o pedido feito
+   com ela continua em andamento, o passo seguinte do mesmo cliente (o pedido do orçamento, por
+   exemplo) não pede outra. Fechado o negócio, ela acaba — nunca vira permissão permanente. */
+function usoAindaAberto(s){
+  var u=s&&s.usadaRef;if(!u||!u.id)return false;
+  function pedAberto(p){return !!(p&&p.status!=="Cancelada"&&!p.encerrada);}
+  if(u.tipo==="orcamento"){
+    var o=orcamentos.filter(function(x){return x.id===u.id;})[0];
+    if(!o)return false;
+    if(orcSituacao(o).n==="Em aberto")return true;
+    return o.situacao==="convertido"&&!!o.pedidoId&&pedAberto(pedPorId(o.pedidoId));
+  }
+  if(u.tipo==="pedido")return pedAberto(pedPorId(u.id));
+  return false;
+}
 function autorizacaoCliente(cid,quem){
   var ls=solicitacoes.filter(function(s){
     return s.tipo==="cliente"&&s.clienteId===cid&&s.solicitante===quem&&s.loja===lojaAtual;
   }).sort(function(a,b){return String(b.criadoEm).localeCompare(String(a.criadoEm));});
-  var aprovada=ls.filter(function(s){return s.status==="aprovada"&&!s.usadaEm;})[0];
+  var aprovada=ls.filter(function(s){return s.status==="aprovada"&&(!s.usadaEm||usoAindaAberto(s));})[0];
   if(aprovada)return {liberado:true,s:aprovada};
   var pend=ls.filter(function(s){return s.status==="pendente";})[0];
   if(pend)return {pendente:true,s:pend};
   var rec=ls.filter(function(s){return s.status==="recusada";})[0];
   return {recusada:rec||null};
 }
-async function consumirAutorizacao(cid,onde){
+/* só gasta a autorização quando ela foi PRECISA (defeito 3 da Etapa 2): sem conflito na hora de
+   salvar, a venda passaria livre e a autorização continua guardada para quando fizer falta */
+async function consumirAutorizacao(cid,onde,ref,precisou){
+  if(!precisou)return;
   var a=autorizacaoCliente(cid,usuarioAtual);
   if(!a.liberado)return;
-  a.s.usadaEm=onde||"";a.s.usadaQuando=agoraCarimbo();
+  if(!a.s.usadaEm){a.s.usadaEm=onde||"";a.s.usadaQuando=agoraCarimbo();}
+  if(ref&&ref.id)a.s.usadaRef=ref;
+  a.s.usos=(a.s.usos||[]).concat([{onde:onde||"",quando:agoraCarimbo()}]);
   await grava("solicitacoes",a.s);
+}
+/* A TRAVA VALE POR DENTRO (regra da v321; defeito 1 da Etapa 2): o salvar do pedido e do orçamento
+   confere de novo. Forçando a tela, o registro de cliente que está com outra pessoa não sai sem
+   autorização — e a janela de pedir autorização abre ali mesmo. */
+function conferirTravaCliente(c,origem){
+  if(!c||!c.id||!soMeus())return {ok:true,precisou:false};
+  var cs=conflitosComerciais(c.id,usuarioAtual);
+  if(!cs.length)return {ok:true,precisou:false};
+  if(autorizacaoCliente(c.id,usuarioAtual).liberado)return {ok:true,precisou:true};
+  try{liberarClienteComercial(c,origem,null);}catch(e){console.warn(e);}
+  return {ok:false,precisou:true,quem:cs[0].responsavel};
+}
+/* solicitação pendente cujo conflito desapareceu não fica pendente para sempre (defeito 4 da
+   Etapa 2): quem enxerga a solicitação encerra como "Resolvida pelo sistema". Só roda com as
+   listas já lidas, para não decidir em cima de lista pela metade (lição da v325). */
+var _solicResolvendo=false,_solicResolvidaEm=0;
+async function resolverSolicSemConflito(){
+  /* sem banco (demonstração) as listas já estão todas na memória, como na varredura do funil */
+  if(_solicResolvendo||(db&&!negociosLidos))return 0;
+  _solicResolvendo=true;var feitas=0;
+  try{
+    var ls=solicitacoes.filter(function(s){
+      return s.tipo==="cliente"&&s.status==="pendente"&&s.loja===lojaAtual&&s.clienteId&&
+        (s.solicitante===usuarioAtual||podeDecidirSolic(s));});
+    for(var i=0;i<ls.length;i++){
+      var x=ls[i];
+      if(conflitosComerciais(x.clienteId,x.solicitante).length)continue;
+      var antes=JSON.parse(JSON.stringify(x));
+      x.status="resolvida";x.resolvidaEm=agoraCarimbo();x.decididoPor="sistema";x.decididoEm=x.resolvidaEm;
+      x.obsDecisao="O cliente deixou de estar em atendimento com outra pessoa — a autorização não é mais necessária.";
+      x.vistaSolicitante=(x.solicitante===usuarioAtual);
+      try{await gravaConf("solicitacoes",x);feitas++;}
+      catch(e){Object.keys(x).forEach(function(k){delete x[k];});Object.keys(antes).forEach(function(k){x[k]=antes[k];});
+        console.warn("resolver solicitação",e);}
+    }
+  }finally{_solicResolvendo=false;}
+  return feitas;
 }
 /* ---------- aviso na tela quando o cliente é de outro vendedor ---------- */
 var cfCtx=null;
@@ -40238,7 +40695,8 @@ function liberarClienteComercial(c,origem,aoVoltar){
   if(a.pendente){
     $("cf_motivoWrap").hidden=true;$("cf_pedir").hidden=true;
     $("cf_alerta").innerHTML='<div class="note warn"><b>Você já pediu autorização para este cliente em '+
-      esc(dataBR(a.s.criadoEm))+".</b> Enquanto o administrador não responder, não dá para abrir o atendimento. "+
+      esc(dataBR(a.s.criadoEm))+".</b> Enquanto "+esc(responsaveisSolic(a.s).join(", ")||"o responsável")+
+      " ou o administrador não responder, não dá para abrir o atendimento. "+
       "Acompanhe em <b>Solicitações</b>.</div>";
   }else{
     $("cf_motivoWrap").hidden=false;$("cf_pedir").hidden=false;
@@ -40253,17 +40711,27 @@ async function pedirAutorizacaoCliente(){
   var mot=$("cf_motivo").value.trim();
   if(!mot){$("cf_alerta").innerHTML='<div class="note crit"><b>Escreva o motivo.</b> É o que o administrador vai ler para decidir.</div>';return;}
   var c=cfCtx.cliente,cs=cfCtx.conflitos;
+  /* vai para TODOS os responsáveis dos registros que travaram, e para o Administrador (Etapa 2) */
+  var resps=[];
+  cs.forEach(function(x){if(x.responsavel&&x.responsavel!==usuarioAtual&&resps.indexOf(x.responsavel)<0)resps.push(x.responsavel);});
   var s={id:uid(),loja:lojaAtual,tipo:"cliente",status:"pendente",
     clienteId:c.id,cliente:c.nome||"",solicitante:usuarioAtual,
-    responsavelAtual:cs[0].responsavel,conflitos:cs,origem:cfCtx.origem||"",
+    responsavelAtual:cs[0].responsavel,responsaveis:resps,conflitos:cs,origem:cfCtx.origem||"",
     motivo:mot,criadoEm:agoraCarimbo()};
   solicitacoes.push(s);
-  await grava("solicitacoes",s);
+  /* gravação conferida (regra da v327): recusada, a solicitação não fica como enviada */
+  try{await gravaConf("solicitacoes",s);}
+  catch(eG){
+    solicitacoes=solicitacoes.filter(function(x){return x!==s;});
+    avisarRecusaBanco("cf_alerta",eG,"A solicitação não foi enviada — tente de novo.");
+    return;
+  }
   $("conflitoModal").hidden=true;
   var vv=cfCtx.aoVoltar;cfCtx=null;
   if(vv)try{vv();}catch(e){console.warn(e);}
   render();
-  toast("Solicitação enviada ao administrador. Assim que ele responder, você vê em Solicitações.");
+  toast("Pedido de autorização enviado para "+(resps.join(", ")||"o responsável")+
+    " e para o administrador. O primeiro que responder decide — você vê a resposta no sino.");
 }
 /* ---------- decisão do administrador ---------- */
 var solAberta=null;
@@ -40276,14 +40744,18 @@ function abrirSolic(id){
     "</b> em "+esc(dataBR(s.criadoEm));
   $("sl_corpo").innerHTML=
     '<div class="note"><b>Cliente:</b> '+esc(s.cliente||"—")+
-      (s.responsavelAtual?"<br><b>Responsável atual:</b> "+esc(s.responsavelAtual):"")+
-      "<br><b>Motivo do solicitante:</b> "+esc(s.motivo||"—")+"</div>"+
+      (responsaveisSolic(s).length?"<br><b>Responsável atual:</b> "+esc(responsaveisSolic(s).join(", ")):"")+
+      "<br><b>Motivo do solicitante:</b> "+esc(s.motivo||"—")+
+      (s.tipo==="cliente"&&s.status==="pendente"?"<br><b>Quem pode decidir:</b> "+
+        esc(responsaveisSolic(s).concat(["o administrador"]).join(", "))+" — o primeiro que responder decide.":"")+"</div>"+
     (s.conflitos&&s.conflitos.length?"<p class=\"sect-t\" style=\"margin-top:14px\">O que está em andamento</p>"+htmlConflitos(s.conflitos):"")+
-    (s.decididoPor?'<div class="note '+(s.status==="aprovada"?"ok":"crit")+'" style="margin-top:12px"><b>'+
+    (s.status==="resolvida"?'<div class="note" style="margin-top:12px"><b>Resolvida pelo sistema em '+esc(dataBR(s.resolvidaEm||s.decididoEm))+".</b> "+
+      esc(s.obsDecisao||"")+"</div>":"")+
+    (s.decididoPor&&s.status!=="resolvida"?'<div class="note '+(s.status==="aprovada"?"ok":"crit")+'" style="margin-top:12px"><b>'+
       (s.status==="aprovada"?"Aprovada":"Recusada")+" por "+esc(s.decididoPor)+" em "+esc(dataBR(s.decididoEm))+".</b>"+
       (s.obsDecisao?" "+esc(s.obsDecisao):"")+
       (s.usadaEm?"<br>Autorização já usada em "+esc(s.usadaEm)+".":"")+"</div>":"");
-  var podeDecidir=podeAprovarSolic()&&s.status==="pendente";
+  var podeDecidir=podeDecidirSolic(s);
   $("sl_obsWrap").hidden=!podeDecidir;
   $("sl_obs").value="";
   $("sl_alerta").innerHTML="";
@@ -40308,14 +40780,39 @@ async function marcarSolicVista(s){
 async function decidirSolic(status){
   var s=solAberta;if(!s)return;
   var obs=$("sl_obs").value.trim();
-  if(status!=="cancelada"&&!podeAprovarSolic()){
-    $("sl_alerta").innerHTML='<div class="note crit"><b>Só um administrador decide esta solicitação.</b></div>';return;}
+  if(status!=="cancelada"&&!podeDecidirSolic(s)){
+    $("sl_alerta").innerHTML='<div class="note crit"><b>Quem decide esta solicitação é o responsável pelo cliente ou um administrador.</b></div>';return;}
+  if(status==="cancelada"&&s.solicitante!==usuarioAtual){
+    $("sl_alerta").innerHTML='<div class="note crit"><b>Só quem pediu pode cancelar a solicitação.</b></div>';return;}
   if(status==="recusada"&&!obs){
     $("sl_alerta").innerHTML='<div class="note crit"><b>Escreva o motivo da recusa.</b> O solicitante vai ler.</div>';return;}
+  /* O PRIMEIRO QUE RESPONDER DECIDE (Etapa 2): antes de gravar, lê de novo do banco — se outra
+     pessoa já respondeu, nada é alterado e a tela diz quem decidiu */
+  try{
+    if(db){
+      var sn=await col("solicitacoes").doc(s.id).get();
+      var dz=(sn&&sn.exists)?sn.data():null;
+      if(dz&&dz.status&&dz.status!=="pendente"){
+        Object.keys(dz).forEach(function(k){s[k]=dz[k];});
+        $("sl_alerta").innerHTML='<div class="note warn"><b>Esta solicitação já foi '+
+          esc(((SOLIC_SIT[dz.status]||{}).n||dz.status).toLowerCase())+
+          (dz.decididoPor?" por "+esc(dz.decididoPor):"")+".</b> Nada foi alterado.</div>";
+        $("sl_obsWrap").hidden=true;
+        Array.prototype.forEach.call(document.querySelectorAll("#sl_aprovar,#sl_recusar,#sl_cancelar"),function(b){b.hidden=true;});
+        render();return;
+      }
+    }
+  }catch(eL){console.warn("reler solicitação",eL);}
+  var antesS=JSON.parse(JSON.stringify(s));
   s.status=status;
   if(status==="cancelada"){s.canceladaEm=agoraCarimbo();}
   else{s.decididoPor=usuarioAtual;s.decididoEm=agoraCarimbo();s.obsDecisao=obs;s.vistaSolicitante=false;}
-  await grava("solicitacoes",s);
+  try{await gravaConf("solicitacoes",s);}
+  catch(eG){
+    Object.keys(s).forEach(function(k){delete s[k];});Object.keys(antesS).forEach(function(k){s[k]=antesS[k];});
+    avisarRecusaBanco("sl_alerta",eG,"A decisão não foi gravada — tente de novo.");
+    return;
+  }
   $("solModal").hidden=true;solAberta=null;
   render();
   toast(status==="aprovada"?("Autorização liberada para "+s.solicitante+".")
@@ -40358,11 +40855,11 @@ function renderSolic(){
         "<td>"+esc(s.solicitante||"—")+"</td>"+
         "<td>"+esc(s.cliente||"—")+"</td>"+
         "<td>"+esc(nomeTipoSolic(s.tipo))+"</td>"+
-        "<td>"+esc(s.responsavelAtual||"—")+"</td>"+
+        "<td>"+esc(responsaveisSolic(s).join(", ")||"—")+"</td>"+
         '<td><span class="pill '+sit.cls+'">'+sit.n+"</span>"+
           (s.status!=="pendente"&&s.decididoPor?'<div class="t-sub">'+esc(s.decididoPor)+"</div>":"")+"</td>"+
         '<td class="num"><button class="btn ghost sm" type="button" data-slab="'+esc(s.id)+'">'+
-          (podeAprovarSolic()&&s.status==="pendente"?"Analisar":"Ver")+"</button></td>";
+          (podeDecidirSolic(s)?"Analisar":"Ver")+"</button></td>";
       tr.onclick=function(){abrirSolic(s.id);};
       body.appendChild(tr);
     });
@@ -40389,10 +40886,14 @@ function renderSolic(){
   atualizarBadgeSolic();
   try{atualizarBadgeEstoque();}catch(e){}
 }
+/* o que pede uma ação minha: decidir (sou o responsável pelo cliente ou o administrador) ou
+   ler a resposta da que eu pedi */
 function solicPendentesParaMim(){
-  if(podeAprovarSolic())return solicitacoes.filter(function(s){return s.loja===lojaAtual&&s.status==="pendente";});
-  return solicitacoes.filter(function(s){return s.loja===lojaAtual&&s.solicitante===usuarioAtual&&
-    s.status!=="pendente"&&s.status!=="cancelada"&&!s.vistaSolicitante;});
+  return solicitacoes.filter(function(s){
+    if(s.loja!==lojaAtual)return false;
+    if(podeDecidirSolic(s))return true;
+    return s.solicitante===usuarioAtual&&s.status!=="pendente"&&s.status!=="cancelada"&&!s.vistaSolicitante;
+  });
 }
 function atualizarBadgeSolic(){
   var b=$("solicBadge");if(!b)return;
@@ -42567,15 +43068,25 @@ function pendenciasMF(){
   }catch(e){console.warn("pend posse",e);}
   /* 6. solicitações (para quem aprova) e as respostas das minhas */
   try{
-    var aprova=podeAprovarSolic();
     solicPendentesParaMim().forEach(function(s){
-      põe({chave:"solic:"+s.id,icone:"🔑",
-        titulo:aprova?"Solicitação para autorizar":("Sua solicitação foi "+(s.status==="aprovada"?"aprovada":"recusada")),
-        texto:(s.cliente||"")+(aprova&&s.solicitante?" · "+s.solicitante:""),
+      var decide=podeDecidirSolic(s);
+      /* o responsável pelo cliente recebe o pedido de permissão (Etapa 2, regra dele) */
+      var tit=decide?(souResponsavelSolic(s)?"Pedido para atender um cliente que está com você":"Solicitação para autorizar")
+        :("Sua solicitação foi "+(s.status==="aprovada"?"aprovada":s.status==="resolvida"?"resolvida pelo sistema":"recusada"));
+      põe({chave:"solic:"+s.id,icone:"🔑",titulo:tit,
+        texto:(s.cliente||"")+(decide&&s.solicitante?" · "+s.solicitante+" pediu":"")+
+          (decide&&s.motivo?" · "+(s.motivo.length>60?s.motivo.slice(0,57)+"…":s.motivo):""),
         quando:s.quando||s.criadoEm||"",
-        ir:function(){ir("solic");}});
+        ir:function(){ir("solic");try{abrirSolic(s.id);}catch(e){}}});
     });
   }catch(e){console.warn("pend solic",e);}
+  /* 6b. AVISOS DO PRÓPRIO TRABALHO (Etapa 2, pedido dele de 23/10): só o que pede uma ação de quem
+     está logado — a reposição que o almoxarifado já separou, a devolução que ele recebeu, o que
+     espera o almoxarifado, o orçamento que vence, os compromissos de hoje e as trocas de refil dos
+     clientes dele. */
+  try{
+    avisosDoTrabalho().forEach(põe);
+  }catch(e){console.warn("pend trabalho",e);}
   /* 7. RASTREIO (14/10): parada sem atendimento e rastreio desligado no expediente.
      Só Gerente e Administrador recebem. As paradas vêm da conferência, que já
      separou loja, almoço e atendimento. */
@@ -42628,8 +43139,115 @@ function pendenciasMF(){
   }catch(e){console.warn("pend rastreio",e);}
   return L;
 }
+/* as trocas de refil dos clientes de quem está logado: vencidas há até 7 dias ou vencendo nos
+   próximos 7. A conta passa pelos aparelhos todos, então fica guardada por 10 minutos. */
+var _trocasMeus={chave:"",em:0,lista:[]};
+function trocasRefilDosMeus(){
+  var ch=usuarioAtual+"|"+lojaAtual+"|"+equipamentos.length+"|"+pedidos.length;
+  if(_trocasMeus.chave===ch&&Date.now()-_trocasMeus.em<600000)return _trocasMeus.lista;
+  var hj=hojeISO(),de=somaDias(hj,-7),ate=somaDias(hj,7),out=[];
+  equipamentos.forEach(function(e){
+    if(e.ativo===false||!e.clienteId||!e.manutDias)return;
+    if(e.loja&&e.loja!==lojaAtual)return;
+    var px=proximaDe(e);if(!px||px<de||px>ate)return;
+    var c=cliPorId(e.clienteId);if(!c)return;
+    var v="";try{v=vendedorDoCliente(c);}catch(x){v="";}
+    if(v!==usuarioAtual)return;
+    out.push({e:e,c:c,px:px});
+  });
+  out.sort(function(a,b){return a.px.localeCompare(b.px);});
+  _trocasMeus={chave:ch,em:Date.now(),lista:out};
+  return out;
+}
+function avisosDoTrabalho(){
+  var L=[],euE=euNoEstoque(),hj=hojeISO();
+  function daLoja(r){return (r.loja||lojaAtual)===lojaAtual;}
+  /* a requisição que o almoxarifado já separou: falta eu confirmar que recebi */
+  requisicoes.filter(function(r){
+    if(r.tipo!=="requisicao"||r.status!=="separada"||!daLoja(r))return false;
+    var l=localDaReq(r);
+    if(ehLocalLoja(l))return respondePeloEstoque(euE,l);
+    return r.colaborador===euE;
+  }).forEach(function(r){
+    var troca=r.origem==="troca";
+    L.push({chave:"reqsep:"+r.id,icone:"📦",
+      titulo:troca?"Confirme o purificador recebido na troca":"Sua requisição foi separada",
+      texto:(troca?"":"O almoxarifado separou ")+itensReqTexto(r)+" · confirme quando receber",
+      quando:r.separadaEm||r.criadoEm||"",
+      ir:function(){ir("estColab");}});
+  });
+  /* a devolução que o almoxarifado recebeu: o produto saiu do meu estoque */
+  var lim=somaDias(hj,-3);
+  requisicoes.filter(function(r){
+    return r.tipo==="devolucao"&&r.status==="concluida"&&daLoja(r)&&r.colaborador===euE&&
+      r.recebidaPor&&r.recebidaPor!==euE&&!r.devolVista&&String(r.recebidaEm||"")>=lim;
+  }).forEach(function(r){
+    L.push({chave:"devrec:"+r.id,icone:"✅",titulo:"Sua devolução foi recebida",
+      texto:itensReqTexto(r)+" · recebida por "+r.recebidaPor+" — saiu do seu estoque",
+      quando:r.recebidaEm||"",
+      ir:async function(){
+        r.devolVista=true;
+        try{await gravaConf("requisicoes",r);}catch(e){r.devolVista=false;}
+        ir("estColab");try{renderSino();}catch(e){}
+      }});
+  });
+  /* quem responde pelo almoxarifado: o que está esperando por ele (uma linha só) */
+  var almox=false;try{almox=respondePeloEstoque(euE,LOC_EMPRESA);}catch(e){almox=false;}
+  if(almox){
+    var fila=requisicoes.filter(function(r){
+      return daLoja(r)&&r.status==="pendente"&&(r.tipo==="requisicao"||r.tipo==="devolucao"||r.tipo==="usado");});
+    if(fila.length)L.push({chave:"almox:fila",icone:"📦",
+      titulo:fila.length+(fila.length===1?" requisição esperando o almoxarifado":" requisições esperando o almoxarifado"),
+      texto:"Separar o que foi pedido e receber o que foi devolvido",
+      quando:fila[0].criadoEm||fila[0].data||"",
+      ir:function(){
+        ir("estEmpresa");
+        var t=$("eeAbas")&&$("eeAbas").querySelector('[data-t="req"]');
+        if(t)t.click();
+      }});
+  }
+  /* o meu orçamento que vence hoje ou amanhã */
+  var am=somaDias(hj,1);
+  orcamentos.filter(function(o){
+    return o.loja===lojaAtual&&!ehTeste(o)&&deMim(o,CAMPOS_ORC)&&orcSituacao(o).n==="Em aberto"&&
+      (o.validade===hj||o.validade===am);
+  }).forEach(function(o){
+    L.push({chave:"orcvenc:"+o.id,icone:"📝",
+      titulo:"Orçamento "+o.numero+" vence "+(o.validade===hj?"hoje":"amanhã"),
+      texto:(o.cliente||"")+" · "+BRL(o.total)+" — fale com o cliente e saiba se fechou",
+      quando:o.validade,
+      ir:function(){ir("orcam");abrirOrc(o);}});
+  });
+  /* os meus compromissos de hoje e os atrasados (uma linha só) */
+  var meus=atendimentos.filter(function(a){
+    return a.loja===lojaAtual&&a.natureza==="atividade"&&a.status!=="finalizado"&&a.status!=="cancelada"&&
+      !a.finalizado&&a.situacao!=="reagendada"&&(a.colaborador||"")===usuarioAtual;});
+  var nHoje=meus.filter(function(a){return a.data===hj;}).length;
+  var nAtr=meus.filter(function(a){return a.data&&a.data<hj;}).length;
+  if(nHoje||nAtr)L.push({chave:"agenda:"+hj,icone:"📅",
+    titulo:"Seus compromissos: "+(nHoje?nHoje+" hoje":"nenhum hoje")+(nAtr?" · "+nAtr+(nAtr===1?" atrasado":" atrasados"):""),
+    texto:"Abra a sua agenda para ver e finalizar",
+    quando:hj,
+    ir:function(){
+      ir("agenda");
+      if(!nHoje&&nAtr)try{abrirAgendaAtrasadas();}catch(e){}
+    }});
+  /* as trocas de refil dos meus clientes (uma linha só) */
+  var tr=[];try{tr=trocasRefilDosMeus();}catch(e){tr=[];}
+  if(tr.length)L.push({chave:"trocas:"+hj,icone:"💧",
+    titulo:tr.length+(tr.length===1?" troca de refil de cliente seu":" trocas de refil de clientes seus")+" nesta semana",
+    texto:tr.slice(0,3).map(function(x){return (x.c.nome||"")+" "+dataCurta(x.px);}).join(" · ")+(tr.length>3?" · …":""),
+    quando:tr[0].px,
+    ir:function(){ir("manut");}});
+  return L;
+}
 var _pendSino=[];
 function renderSino(){
+  /* solicitação pendente que não tem mais motivo é encerrada sozinha, no máximo uma vez por minuto */
+  if(Date.now()-_solicResolvidaEm>60000){
+    _solicResolvidaEm=Date.now();
+    try{resolverSolicSemConflito().then(function(n){if(n){try{renderSino();atualizarBadgeSolic();}catch(e){}}});}catch(e){}
+  }
   var bt=$("sinoBt");
   if(!bt)return;
   var L=[];
@@ -42865,7 +43483,7 @@ function marcarTravadas(){
   $("agendaAviso").innerHTML = (at.length&&!ehGestor())
     ? '<div class="note crit"><b>'+at.length+" atividade"+(at.length===1?"":"s")+" em atraso"+
       (at.length===1?"":" — a mais antiga primeiro")+".</b> "+esc(usuarioAtual)+
-      " só consegue abrir a atividade de <b>"+esc(at[0].cliente||"—")+"</b> ("+esc(at[0].data)+
+      " só consegue abrir a atividade de <b>"+esc(at[0].cliente||"—")+"</b> ("+esc(dataBR(at[0].data))+
       (at[0].inicio?" às "+esc(at[0].inicio):"")+"). As próximas aparecem, mas ficam bloqueadas até esta ser finalizada.</div>"
     : "";
 }
@@ -42913,15 +43531,50 @@ async function remarcar(){
   $("alertaAg").hidden=true;agPend=null;
   toast("Atividade remarcada para "+d+" às "+h+".");render();
 }
+/* AGENDA ABERTA PARA TODOS, SÓ COM OS HORÁRIOS (Etapa 2, regra dele de 23/10): na agenda de outra
+   pessoa aparecem o dia, o horário de início e fim, de quem é e o tipo — "Thiago · 09:00–10:00 ·
+   ocupado". Cliente, telefone, endereço, observação e o que vai ser feito NÃO aparecem, e o
+   compromisso não abre. Na própria agenda, tudo como antes. Administrador e Gerente (e o
+   Financeiro, que vê tudo) continuam vendo tudo de todos. */
+/* A AGENDA É DE TODOS, COM TUDO (24/10, regra dele): "todos podem ver a agenda de todos mas
+   colocar bloqueio onde não consiga finalizar ou alterar nada, somente quem agendou ou quem
+   vai executar". Isto DESFAZ de propósito a agenda só com horários da Etapa 2: o vendedor
+   volta a ver data, hora, cliente e tipo de qualquer colega — e passou a ver também a CIDADE,
+   que ele pediu no mesmo recado. Quem não participa do compromisso só OLHA: a trava de ação
+   está em podeEditarAtiv, e a janela do compromisso não oferece nenhum botão que mude algo. */
+function montarPessoaAgenda(sel){
+  if(!sel)return;
+  sel.disabled=false;
+  var assin=EQUIPE.join("|");
+  if(sel.__assin!==assin||!sel.options.length||sel.options[0].textContent!=="Equipe toda"){
+    var antes=sel.value;
+    sel.innerHTML='<option value="">Equipe toda</option>'+
+      EQUIPE.map(function(n){return '<option value="'+esc(n)+'">'+esc(n)+"</option>";}).join("");
+    sel.__assin=assin;
+    sel.value=[].slice.call(sel.options).some(function(o){return o.value===antes;})?antes:"";
+  }
+}
+function rotuloEv(e){return e.cliente||e.tipo;}
+function horarioEv(e){return (e.hora||"")+(e.fim?"–"+e.fim:"");}
+function tituloEv(e){
+  return e.rot+" · "+e.cliente+(e.cidade?" · "+e.cidade:"")+(e.obs?" — "+e.obs:"");
+}
+/* cidade do compromisso: a do próprio registro, senão a do cadastro do cliente */
+function cidadeDoEvento(reg,cid){
+  var c=cid?cliPorId(cid):null;
+  return String((reg&&reg.cidade)||(c&&c.cidade)||"").trim();
+}
 function eventos(){
-  travarSelectPessoa($("agendaPessoa"),"Minha agenda");
-  var pessoa=$("agendaPessoa").value,out=[],agora=new Date();
-  visiveis(atendimentos.filter(function(a){return a.loja===lojaAtual;})).forEach(function(a){
+  var selP=$("agendaPessoa");
+  montarPessoaAgenda(selP);
+  var pessoa=selP?selP.value:"",out=[],agora=new Date();
+  atendimentos.filter(function(a){return a.loja===lojaAtual;}).forEach(function(a){
     var d=quando(a);
     var atrasou=(a.natureza==="atividade"&&a.status!=="finalizado"&&d&&d<agora);
     var feita=(a.status==="finalizado");
     out.push({id:a.id,data:a.data,hora:a.inicio||"",fim:a.fim||"",quem:a.colaborador||"",
-      cliente:a.cliente||"",tipo:a.tipo||"",obs:a.resultado||a.obs||"",
+      cliente:a.cliente||"",cidade:cidadeDoEvento(a,a.clienteId),tipo:a.tipo||"",obs:a.resultado||a.obs||"",
+      meu:podeEditarAtiv(a),
       classe:(a.natureza==="atendimento"||feita)?"atend":(atrasou?"ativ atrasada":"ativ"),
       rot:(a.natureza==="atendimento"?"Atendimento":
         feita?"Atividade concluída":(atrasou?"Atividade atrasada":"Atividade"))});
@@ -42931,12 +43584,90 @@ function eventos(){
     var pr=String(p.instalacao).split(" ");
     /* id "ped:": o clique abre a janela da instalação */
     out.push({id:"ped:"+p.id,pedido:p.id,data:pr[0],hora:pr[1]||"",fim:"",quem:respInstalacao(p),
-      cliente:p.cliente,tipo:"Instalação",obs:p.obsInstalacao||p.obs||"",classe:"inst",
+      cliente:p.cliente,cidade:cidadeDoEvento(p,p.clienteId),tipo:"Instalação",obs:p.obsInstalacao||p.obs||"",classe:"inst",
+      meu:podeInstalar(p),
       rot:(p.instaladoEm?"Instalação finalizada":"Instalação")+" · pedido "+p.numero});
   });
   return out.filter(function(e){return !pessoa||e.quem===pessoa;});
 }
 
+/* ============ CONFLITO DE HORÁRIO NA AGENDA (24/10, pedido dele) ============
+   "quando um usuário for criar uma atividade para ele mesmo ou para qualquer outro colega e
+   que o horário que ele tiver agendando e já tiver alguma atividade agendada o sistema deve
+   informar que já tem uma agenda nesse horário e que tem disponível para esse dia somente os
+   seguintes horários". O sistema AVISA e SUGERE — não impede: quem quiser marcar dois no
+   mesmo horário confirma e segue, porque às vezes é de propósito.
+   Compromisso sem hora de fim conta DUR_PADRAO minutos, senão nada se sobreporia a ele. */
+var DUR_PADRAO=60,PASSO_AGENDA=30;
+function fimDoCompromisso(hora,fim){
+  var i=minutosHM(hora);
+  var f=fim?minutosHM(fim):0;
+  return f>i?f:i+DUR_PADRAO;
+}
+/* o que a pessoa tem marcado naquele dia: atividade em aberto e instalação de pedido */
+function compromissosDoDia(quem,data,ignoraId){
+  if(!quem||!data)return [];
+  var out=[];
+  atendimentos.forEach(function(a){
+    if(a.loja!==lojaAtual||a.data!==data)return;
+    if(a.natureza!=="atividade"||a.status==="finalizado"||a.situacao==="reagendada")return;
+    if((a.colaborador||"")!==quem)return;
+    if(ignoraId&&a.id===ignoraId)return;
+    if(!a.inicio)return;
+    out.push({id:a.id,hora:a.inicio,fim:a.fim||"",cliente:a.cliente||"—",tipo:a.tipo||"atividade"});
+  });
+  pedidos.forEach(function(p){
+    if(p.loja!==lojaAtual||!p.instalacao||p.status==="Cancelada"||p.instaladoEm)return;
+    var pr=String(p.instalacao).split(" ");
+    if(pr[0]!==data||respInstalacao(p)!==quem||!pr[1])return;
+    out.push({id:"ped:"+p.id,hora:pr[1],fim:"",cliente:p.cliente||"—",tipo:"Instalação"});
+  });
+  return out.sort(function(a,b){return a.hora.localeCompare(b.hora);});
+}
+/* devolve o compromisso que se sobrepõe ao horário pedido, ou null */
+function conflitoDeAgenda(quem,data,hora,fim,ignoraId){
+  if(!quem||!data||!hora)return null;
+  var i=minutosHM(hora),f=fimDoCompromisso(hora,fim),achado=null;
+  compromissosDoDia(quem,data,ignoraId).forEach(function(c){
+    if(achado)return;
+    var ci=minutosHM(c.hora),cf=fimDoCompromisso(c.hora,c.fim);
+    if(i<cf&&ci<f)achado=c;
+  });
+  return achado;
+}
+/* horários do expediente que continuam livres naquele dia */
+function horariosLivresDoDia(quem,data,ignoraId,dur){
+  var cfg=cfgOS(),ini=minutosHM(cfg.horaIni),fim=minutosHM(cfg.horaFim);
+  var d=dur||DUR_PADRAO,ocup=compromissosDoDia(quem,data,ignoraId),livres=[];
+  for(var m=ini;m+d<=fim;m+=PASSO_AGENDA){
+    var bate=false;
+    for(var k=0;k<ocup.length;k++){
+      var ci=minutosHM(ocup[k].hora),cf=fimDoCompromisso(ocup[k].hora,ocup[k].fim);
+      if(m<cf&&ci<m+d){bate=true;break;}
+    }
+    if(!bate)livres.push(hmDeMinutos(m));
+  }
+  return livres;
+}
+function textoConflito(cf,quem,data,ignoraId){
+  var livres=horariosLivresDoDia(quem,data,ignoraId);
+  return primeiroNome(quem)+" já tem compromisso nesse horário: "+cf.hora+
+    (cf.fim?"–"+cf.fim:"")+" · "+cf.cliente+" · "+cf.tipo+".\n\n"+
+    (livres.length?"Horários livres em "+dataBR(data)+": "+livres.join(", "):
+      "Não sobrou horário livre em "+dataBR(data)+" dentro do expediente.");
+}
+/* o mesmo aviso, escrito na tela */
+function avisoConflitoHTML(quem,data,hora,fim,ignoraId){
+  if(!quem||!data||!hora)return "";
+  var cf=conflitoDeAgenda(quem,data,hora,fim,ignoraId);
+  if(!cf)return "";
+  var livres=horariosLivresDoDia(quem,data,ignoraId);
+  return '<div class="note warn"><b>'+esc(primeiroNome(quem))+" já tem compromisso às "+esc(cf.hora)+
+    (cf.fim?"–"+esc(cf.fim):"")+":</b> "+esc(cf.cliente)+" · "+esc(cf.tipo)+".<br>"+
+    (livres.length?"Livres em "+esc(dataBR(data))+": <b>"+esc(livres.join(", "))+"</b>"
+      :"Não sobrou horário livre neste dia dentro do expediente.")+
+    "<br>Dá para marcar assim mesmo — o sistema só avisa.</div>";
+}
 /* TODAS as atividades vencidas, sem limite de período (pedido dele, 05/10) — serve ao card
    do Dashboard e à visão "Atrasadas" da agenda. `quem` vazio = o que a pessoa enxerga hoje
    (a regra de "só os meus" da v200 continua valendo, pelo `visiveis`). */
@@ -42968,6 +43699,12 @@ function renderCalendario(){
   var area=$("cal_area"),evs=eventos(),hoje=new Date();
   if(calVista==="atrasadas"){
     var pes=$("agendaPessoa").value;
+    if(soMeus()&&pes){
+      $("cal_titulo").textContent="Atividades atrasadas";
+      area.innerHTML='<div class="empty"><div class="big">Na agenda de outra pessoa aparecem só os horários</div>'+
+        "As atividades atrasadas são de cada um. Volte para <b>Minha agenda</b> para ver as suas.</div>";
+      return;
+    }
     var at=atividadesAtrasadas(pes);
     $("cal_titulo").textContent="Atividades atrasadas"+(at.length?" · "+at.length:"");
     if(!at.length){
@@ -42999,7 +43736,7 @@ function renderCalendario(){
       var doDia=evs.filter(function(e){return e.data===k;}).sort(function(a,b){return (a.hora||"").localeCompare(b.hora||"");});
       h+='<div class="dia'+(fora?" fora":"")+(hj?" hoje":"")+'"><div class="num" data-dia="'+k+'" title="Ver o dia">'+d.getDate()+"</div>";
       doDia.slice(0,3).forEach(function(e){
-        h+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(e.rot+" · "+e.cliente+(e.obs?" — "+e.obs:""))+'">'+(e.hora?esc(e.hora)+" ":"")+esc(e.cliente||e.tipo)+"</div>";});
+        h+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(tituloEv(e))+'">'+(e.hora?esc(e.hora)+" ":"")+esc(rotuloEv(e))+"</div>";});
       if(doDia.length>3)h+='<div class="ev-mais" data-dia="'+k+'" title="Ver todas as '+doDia.length+' do dia">+'+(doDia.length-3)+" · ver todas</div>";
       h+="</div>";
     }
@@ -43017,7 +43754,7 @@ function renderCalendario(){
       hs+='<div class="col'+(hj2?" hoje":"")+'"><div class="ch"><div class="d">'+WD[dd.getDay()]+'</div><div class="n">'+dd.getDate()+"</div></div>";
       if(!lst.length)hs+='<div style="font-size:12.5px;color:var(--ink-3);text-align:center;padding:8px 0">—</div>';
       lst.forEach(function(e){
-        hs+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(e.obs||e.rot)+'"><b>'+(e.hora?esc(e.hora):"")+"</b>"+esc(e.cliente||e.tipo)+"</div>";});
+        hs+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(tituloEv(e))+'"><b>'+(e.hora?esc(e.hora):"")+"</b>"+esc(rotuloEv(e))+(e.cidade?'<span class="ev-cid">'+esc(e.cidade)+"</span>":"")+"</div>";});
       hs+="</div>";
     }
     area.innerHTML=hs+"</div>";ligarEventosCal();
@@ -43030,7 +43767,10 @@ function renderCalendario(){
     var hd='<div class="dia-lista">';
     doDia2.forEach(function(e){
       hd+='<div class="hora"><div class="h">'+(e.hora||"—")+(e.fim?"<br>"+e.fim:"")+'</div><div class="evs">'+
-        '<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'"><b>'+esc(e.cliente||"—")+"</b><span>"+esc(e.rot)+(e.tipo?" · "+esc(e.tipo):"")+(e.quem?" · "+esc(e.quem):"")+"</span></div>"+
+        '<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'"><b>'+esc(e.cliente||"—")+
+          (e.cidade?' <span class="pill p-mut">'+esc(e.cidade)+"</span>":"")+"</b><span>"+
+          esc(e.rot)+(e.tipo?" · "+esc(e.tipo):"")+(e.quem?" · "+esc(e.quem):"")+
+          (e.meu?"":' · <i>só leitura</i>')+"</span></div>"+
         /* lixeira do agendamento, só para o Administrador (regra dele, 20/09) */
         (e.id&&e.id.indexOf("ped:")!==0?htmlLixeira("atividade",e.id):"")+"</div></div>";
     });
@@ -43072,7 +43812,8 @@ function moverCal(dir){
 }
 
 function renderAgenda(){
-  $("agendaSub").textContent=nomeLoja()+" — atividades agendadas e atendimentos realizados.";
+  $("agendaSub").textContent=nomeLoja()+" — a agenda da equipe toda: atividades agendadas e "+
+    "atendimentos realizados. Você vê o compromisso de qualquer colega, mas só altera o que é seu.";
   renderCalendario();
 }
 /* A AGENDA ABRE NO DIA (regra dele, 19/10): "toda vez que abrir a tela de agenda o sistema
@@ -43090,10 +43831,11 @@ function resetarAgenda(diaISO){
     Array.prototype.forEach.call(document.querySelectorAll("#s-agenda .cal-views button"),function(b){
       b.setAttribute("aria-current",String(b.dataset.v==="dia"));});
   }catch(e){}
-  /* "do usuário": quem não é da gestão já fica travado no próprio nome (v200); para a gestão,
-     a agenda abre na dela e o campo continua ali para trocar por Equipe toda num toque */
+  /* a agenda abre no nome de quem está entrando, e o campo fica ali para trocar por outra
+     pessoa ou pela Equipe toda num toque — ninguém mais fica preso no próprio nome (24/10) */
   var sp=$("agendaPessoa");
-  if(sp&&!sp.disabled&&[].slice.call(sp.options).some(function(o){return o.value===usuarioAtual;}))
+  try{montarPessoaAgenda(sp);}catch(e){}
+  if(sp&&[].slice.call(sp.options).some(function(o){return o.value===usuarioAtual;}))
     sp.value=usuarioAtual;
   try{renderAgenda();}catch(e){console.warn("agenda",e);}
 }
@@ -44904,6 +45646,11 @@ function ir(s,doMenu){
   if((mudou||doMenu)&&s==="orcam")resetarOrcamentos();
   /* a agenda abre no DIA de hoje, não no mês (regra dele, 19/10) */
   if((mudou||doMenu)&&s==="agenda")try{resetarAgenda();}catch(e){console.warn(e);}
+  /* Atendimentos e Atividades abrem no nome de quem está usando (24/10). Só pelo MENU: quem
+     chega por um link de registro de outra pessoa (sino, Dashboard, Detalhes) continua vendo
+     aquele registro, em vez de ele sumir da lista por trás da janela. */
+  if(doMenu&&s==="atend")resetarPessoaAtend();
+  if(doMenu&&s==="ativ")resetarPessoaAtividades();
   if(s==="aniver")try{renderAniversariantes();}catch(e){console.warn(e);}
   if(s==="funil")try{opcoesFunil();renderFunil();}catch(e){console.warn(e);}
   if(s==="solic")try{renderSolic();}catch(e){console.warn(e);}
@@ -44928,6 +45675,8 @@ function ir(s,doMenu){
   if(s==="rastreio")try{ligarAoVivo();abrirRastreioDoDia();}catch(e){console.warn(e);}
   else try{pararAoVivo();}catch(e){}
   telaAtual=s;
+  /* Configurações só para olhar, para o Financeiro (Etapa 2) */
+  try{aplicarLeituraConfig(s);}catch(e){console.warn("configurações só leitura",e);}
   /* o que a tela escreveu nos campos de valor aparece no padrão brasileiro (v166) */
   try{formatarValoresVisiveis($("s-"+s)||document);}catch(e){}
   /* o sino acompanha a navegação: `ir` não chama `render`, e sem isto o número ficava velho (v266) */
@@ -45716,6 +46465,21 @@ function ligar(){
     await gravarMetas();renderCfgMetas();renderMetasOp();renderDash();
     toast("Metas de "+n+" copiadas para os "+EQUIPE.length+" colaboradores ativos.");};
 
+  /* AVISO DE HORÁRIO OCUPADO enquanto a pessoa preenche (24/10): nas duas telas que agendam,
+     mexer na data, na hora ou no responsável já mostra o conflito e os horários livres. */
+  function ligarAvisoAgenda(ids,alvo,quemFn,dataFn,horaFn){
+    ids.forEach(function(id){
+      var e=$(id);if(!e)return;
+      e.addEventListener("change",function(){
+        var box=$(alvo);if(!box)return;
+        box.innerHTML=avisoConflitoHTML(quemFn(),dataFn(),horaFn(),"",null);
+      });
+    });
+  }
+  ligarAvisoAgenda(["na_data","na_hora","na_resp"],"na_conflito",
+    function(){return $("na_resp").value;},function(){return $("na_data").value;},function(){return $("na_hora").value;});
+  ligarAvisoAgenda(["af_data","af_ini","af_resp"],"at_conflito",
+    function(){return $("af_resp").value;},function(){return $("af_data").value;},function(){return $("af_ini").value;});
   $("avBusca").oninput=renderAtividades;
   $("avQuando").onchange=renderAtividades;$("avQuem").onchange=renderAtividades;
   $("avNova").onclick=function(){
@@ -46033,6 +46797,7 @@ function ligar(){
         else{delete c.teste;c.testePor="";c.testeEm="";}
       }
     }
+    maiusculizarCadastro(c);
     var cliNovo=!editandoCli;
     if(cliNovo)clientes.push(c);
     /* banco recusando, o cadastro NÃO se perde: a ficha continua aberta, com tudo preenchido,
@@ -46639,7 +47404,7 @@ function ligar(){
   $("atendNovo").onclick=function(){abrirAtend(null);};
   $("atendCancelar").onclick=function(){$("atendForm").hidden=true;$("atendLista").hidden=false;};
   $("atendSalvar").onclick=salvarAtend;
-  $("atendBusca").oninput=renderAtend;$("atendFiltro").onchange=renderAtend;
+  $("atendBusca").oninput=renderAtend;$("atendFiltro").onchange=renderAtend;$("atendVend").onchange=renderAtend;
 
   $("at_nome").oninput=function(){clienteVinc=null;$("at_achou").innerHTML="";ajustarOrigemAt();marcarTipoPessoaAt(tipoPessoaAt,false);buscarCliente();};
   $("at_leadCompleto").onclick=abrirLeadCompleto;
@@ -47401,7 +48166,7 @@ function erro(msg){
     prepararLoginBanco();
     $("login").hidden=false;
     if(!bancoCarregado()){alertaLogin("Não consegui carregar o banco de dados (sem internet?). Recarregue a página.");return;}
-    try{db=window.criarDbSupabase(SUPABASE_URL,SUPABASE_CHAVE,{aoEstado:estadoBanco,aoTruncar:avisarTruncado});}
+    try{db=protegerDbConfig(window.criarDbSupabase(SUPABASE_URL,SUPABASE_CHAVE,{aoEstado:estadoBanco,aoTruncar:avisarTruncado}));}
     catch(e){alertaLogin("Banco de dados: "+e.message);return;}
     var sessao=null;
     try{sessao=await db.auth.sessao();}catch(e){}
@@ -47409,7 +48174,7 @@ function erro(msg){
     else{try{$("lg_email").focus();}catch(e){}}
     return;
   }
-  try{db=await claude.use("db");}catch(e){db=null;}
+  try{db=protegerDbConfig(await claude.use("db"));}catch(e){db=null;}
   if(!db&&$("offline").hidden)$("offline").hidden=false;
   await continuarBoot();
 })();
