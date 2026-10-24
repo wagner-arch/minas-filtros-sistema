@@ -558,6 +558,7 @@
   .gp-s button{background:none;border:0;cursor:pointer;color:var(--ink-3);font-size:13px;padding:2px 3px}
   .gp-s button:hover{color:var(--crit)}
   .gp-add{display:flex;gap:8px;flex-wrap:wrap}
+  .gp-end{margin:8px 0 2px}
   .gp-add input{flex:1 1 220px}
   /* ficha do produto: código e situação do tamanho necessário, nome grande (20/09) */
   .p-ident{grid-template-columns:150px minmax(0,1fr) 140px}
@@ -13401,6 +13402,9 @@ window.__pisoMinimoMF=function(p){return pisoMinimo(p);};
 window.__precoFormaMF=function(v){return precoPelaForma(v,1,somaTabelaCarrinho());};
 window.__numMF=function(s){return numMF(s);};
 window.__geraAparelhoMF=function(i){return itemGeraAparelho(i);};
+window.__grupoEndInstMF=function(n){return grupoPedeEndInst(n);};
+window.__gruposProdMF=function(){return GRUPOS_PROD;};
+window.__renderGruposMF=function(){return renderGruposProd();};
 window.__pedeLocalMF=function(i){return itemPedeLocal(i);};
 window.__pedeSerieMF=function(p){return pedeSerieProduto(p);};
 window.__pedeLocalProdMF=function(p){return pedeLocalProduto(p);};
@@ -16028,6 +16032,9 @@ function abrirRevisaoPedido(){
 function itemGeraAparelho(i){
   if(!i||i.planoCobre||ehPlano(i))return false;
   var p=produtoPor(i.pid)||{};
+  /* a pergunta do endereço é do GRUPO (24/10): prazo de troca sozinho não basta, senão
+     peça que herdou prazo na migração de 22/10 volta a perguntar onde vai ser instalada */
+  if(!grupoPedeEndInst(p.grupo))return false;
   return (+p.manut||0)>0;
 }
 function purificadoresDaVenda(){
@@ -18804,6 +18811,31 @@ function grupoCad(nome){
   var n=String(nome||"").trim();
   return GRUPOS_PROD.filter(function(g){return ordAZ(g.nome,n)===0;})[0]||null;
 }
+/* ===== A PERGUNTA DO ENDEREÇO DE INSTALAÇÃO É LIGADA POR GRUPO (24/10, pedido dele) =====
+   "essa pergunta só deve ser feita para produtos que estão no grupo de Purificadores e Refis
+   recorrentes… no cadastro dos grupos e subgrupos criar essa opção ativada ou não ativada".
+   Antes quem mandava era o prazo de troca do produto, e a migração de 22/10 herdou
+   prazo para peça: no print dele a venda perguntava o endereço de uma CONEXÃO L 1/4.
+   O padrão nasce ligado nos grupos que o sistema já trata como aparelho acompanhado
+   (REGRA_GRUPO_SERIE, v389/v390) — e a partir daí quem decide é a caixa da tela. */
+var ENDINST_PADRAO={"purificadores":1,"bebedouros":1,"central":1,
+  "centrais de filtragem":1,"central de filtragem":1,
+  "refil recorrente":1,"refis recorrentes":1};
+function grupoPedeEndInst(nome){
+  var g=grupoCad(nome);
+  if(g&&g.endInst!==undefined&&g.endInst!==null)return !!g.endInst;
+  return !!ENDINST_PADRAO[chaveGrupo(nome)];
+}
+/* grupo que nunca foi marcado recebe o padrão uma vez, para a tela já abrir com a verdade */
+function semearEndInstGrupos(){
+  var mudou=false;
+  GRUPOS_PROD.forEach(function(g){
+    if(g.endInst===undefined||g.endInst===null){
+      g.endInst=!!ENDINST_PADRAO[chaveGrupo(g.nome)];mudou=true;
+    }
+  });
+  return mudou;
+}
 function nomesGruposCad(){return GRUPOS_PROD.map(function(g){return g.nome;}).sort(ordAZ);}
 function subgruposCad(nome){
   var g=grupoCad(nome);
@@ -18826,10 +18858,15 @@ function semearGruposCadastro(){
     if(!(g.subgrupos||[]).some(function(s){return ordAZ(s,sn)===0;})){
       g.subgrupos=(g.subgrupos||[]).concat([sn]);mudou=true;}
   });
+  /* grupo que nunca foi marcado recebe o padrão da pergunta do endereço (24/10) */
+  if(semearEndInstGrupos())mudou=true;
   return mudou;
 }
-async function gravarGruposProd(){
+async function gravarGruposProd(subir){
   if(!db)return;
+  /* subir=true: o erro sobe para quem clicou avisar na tela (regra da v327). Sem ele, a
+     chamada de rotina (semeadura do boot) continua silenciosa, como sempre foi. */
+  if(subir){await db.doc("config/grupos_produtos").set({lista:GRUPOS_PROD});return;}
   try{await db.doc("config/grupos_produtos").set({lista:GRUPOS_PROD});}catch(e){console.warn(e);}
 }
 function encherLocaisAparelho(){
@@ -21245,10 +21282,16 @@ function renderGruposProd(){
     return '<div class="gp-g">'+
       '<div class="gp-cab"><b>'+esc(g.nome)+"</b>"+
         '<span class="pill '+(usoG?"p-acc":"p-mut")+'">'+usoG+(usoG===1?" produto":" produtos")+"</span>"+
+        (grupoPedeEndInst(g.nome)?'<span class="pill p-acc">pergunta o endereço</span>':"")+
         '<span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">'+
           '<button class="btn ghost sm" type="button" data-gpren="'+esc(g.nome)+'">Renomear</button>'+
           '<button class="btn mut sm" type="button" data-gpdel="'+esc(g.nome)+'">Excluir</button>'+
         "</span></div>"+
+      '<label class="chk gp-end"><input type="checkbox" data-gpend="'+esc(g.nome)+'"'+
+        (grupoPedeEndInst(g.nome)?" checked":"")+">"+
+        "<span>Perguntar onde o aparelho será instalado"+
+        '<span class="ajuda">Na venda, cada item deste grupo pergunta se vai para o endereço do '+
+        "cadastro ou para outro. Deixe desligado em peça, conexão e serviço.</span></span></label>"+
       '<div class="gp-subs">'+
         (subs.length?subs.map(function(s){
           var u=usoGrupoProd(g.nome,s);
@@ -21363,6 +21406,19 @@ function ligarGruposProd(){
       g.subgrupos=(g.subgrupos||[]).concat([s]);
       await gravarGruposProd();av("Subgrupo <b>"+esc(s)+"</b> criado em "+esc(gn)+".","ok");
       renderGruposProd();atualizarListasGrupoProd();
+    };});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-gpend]"),function(c){
+    c.onchange=async function(){
+      var g=grupoCad(c.getAttribute("data-gpend"));if(!g)return;
+      var antes=g.endInst;
+      g.endInst=!!c.checked;
+      try{await gravarGruposProd(true);}
+      catch(e){g.endInst=antes;c.checked=!!antes;
+        av("<b>Não foi salvo.</b> "+esc(e&&e.message||e),"crit");return;}
+      av(g.endInst
+        ? "A venda passa a perguntar o endereço de instalação dos produtos de <b>"+esc(g.nome)+"</b>."
+        : "Os produtos de <b>"+esc(g.nome)+"</b> não perguntam mais o endereço de instalação.","ok");
+      renderGruposProd();
     };});
   Array.prototype.forEach.call(w.querySelectorAll("[data-gpren]"),function(b){
     b.onclick=async function(){
