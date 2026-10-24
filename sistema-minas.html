@@ -13406,6 +13406,8 @@ window.__grupoEndInstMF=function(n){return grupoPedeEndInst(n);};
 window.__herdaEndMF=function(){return endParaHerdar();};
 window.__semearGruposMF=function(){return semearGruposCadastro();};
 window.__chaveGrupoMF=function(n){return chaveGrupo(n);};
+window.__chaveRegraMF=function(n){return chaveRegraGrupo(n);};
+window.__regraGrupoMF=function(p){return regraDoGrupoProd(p);};
 window.__endinstPadraoMF=function(){return ENDINST_PADRAO;};
 window.__itemHerdaMF=function(i,ix){return itemHerdaEnd({i:i,ix:ix});};
 window.__mandaEndMF=function(i,ix){return mandaEndereco({i:i,ix:ix});};
@@ -16121,12 +16123,11 @@ function regraDoGrupoProd(p){
   try{ g=chaveGrupo(p.grupo||""); }catch(e){ g=String(p.grupo||"").toLowerCase().trim(); }
   if(!g)return null;
   if(REGRA_GRUPO_SERIE[g])return REGRA_GRUPO_SERIE[g];
-  /* chaveGrupo tira o plural, então "purificadores" chega como "purificador" */
-  var k=Object.keys(REGRA_GRUPO_SERIE);
-  for(var i=0;i<k.length;i++){
-    var kk;try{ kk=chaveGrupo(k[i]); }catch(e){ kk=k[i]; }
-    if(kk===g)return REGRA_GRUPO_SERIE[k[i]];
-  }
+  /* a chave da regra ignora "de/da/do", então "Centrais Filtragem" casa com
+     "Central de Filtragem" — era aí que as centrais dele ficavam de fora (24/10) */
+  var achou=null;
+  try{ achou=regraPorGrupo(REGRA_GRUPO_SERIE,p.grupo||""); }catch(e){ achou=null; }
+  if(achou)return achou;
   /* grupo que não está na lista não pede nada — é a regra dele, dita assim:
      "todos os outros grupos com os dois desligados" */
   return {serie:false,local:false};
@@ -18792,6 +18793,27 @@ function chaveGrupo(n){
   return s.replace(/s/g,"");
 }
 function mesmoGrupo(a,b){var x=chaveGrupo(a),y=chaveGrupo(b);return !!x&&x===y;}
+/* CHAVE DAS REGRAS DE GRUPO (24/10). O cadastro dele tem o grupo escrito "Centrais Filtragem",
+   sem o "de" — e as listas de regra tinham "central de filtragem" e "centrais de filtragem".
+   Resultado: as 11 centrais de filtragem ativas NÃO pediam série, localização nem endereço,
+   desde a v389, em silêncio. Esta chave tira as palavras de ligação, então as três escritas
+   ("Central de Filtragem", "Centrais de Filtragem", "Centrais Filtragem") caem no mesmo lugar.
+   Ela NÃO substitui a chaveGrupo: vale só para as listas de regra, que são poucas e nomeadas. */
+var LIGACAO_GRUPO={de:1,da:1,do:1,das:1,dos:1,e:1};
+function chaveRegraGrupo(n){
+  return chaveGrupo(n).split(" ").filter(function(w){return w&&!LIGACAO_GRUPO[w];}).join(" ");
+}
+/* a regra casa quando a chave bate com qualquer escrita da lista */
+function regraPorGrupo(lista,nome){
+  var k=chaveRegraGrupo(nome);
+  if(!k)return null;
+  var achado=null;
+  Object.keys(lista).forEach(function(chave){
+    if(achado)return;
+    if(chaveRegraGrupo(chave)===k)achado=lista[chave];
+  });
+  return achado;
+}
 function grupoNaLista(lista,g){
   return (lista||[]).some(function(n){return mesmoGrupo(n,g);});
 }
@@ -18891,6 +18913,7 @@ function grupoCad(nome){
    lista de grupo aqui leva o singular E o plural. */
 var ENDINST_PADRAO={"purificadores":1,"purificador":1,
   "central":1,"centrais":1,"centrais de filtragem":1,"central de filtragem":1,
+  "centrais filtragem":1,"central filtragem":1,
   "refil recorrente":1,"refis recorrentes":1,"refis recorrente":1,"refil recorrentes":1};
 /* BEBEDOUROS SAIU DO PADRÃO (correção dele, 24/10, logo depois da v402: "somente purificadores,
    refis recorrentes e centrais filtragem"). Como a v402 já semeou o padrão com bebedouro ligado,
@@ -18898,7 +18921,7 @@ var ENDINST_PADRAO={"purificadores":1,"purificador":1,
 function ajustarPadraoEndInst(){
   var mudou=false;
   GRUPOS_PROD.forEach(function(g){
-    var k=chaveGrupo(g.nome);
+    var k=chaveRegraGrupo(g.nome);
     if((k==="bebedouros"||k==="bebedouro")&&g.endInst===true){g.endInst=false;mudou=true;}
   });
   return mudou;
@@ -18906,7 +18929,8 @@ function ajustarPadraoEndInst(){
 function grupoPedeEndInst(nome){
   var g=grupoCad(nome);
   if(g&&g.endInst!==undefined&&g.endInst!==null)return !!g.endInst;
-  return !!ENDINST_PADRAO[chaveGrupo(nome)];
+  if(ENDINST_PADRAO[chaveGrupo(nome)])return true;
+  try{ return !!regraPorGrupo(ENDINST_PADRAO,nome); }catch(e){ return false; }
 }
 /* grupo que nunca foi marcado recebe o padrão uma vez, para a tela já abrir com a verdade */
 function semearEndInstGrupos(){
