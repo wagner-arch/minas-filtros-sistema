@@ -269,7 +269,8 @@
       return e;
     }
     if (cod === "PGRST301" || cod === "401" || baixa.indexOf("jwt") >= 0 || baixa.indexOf("not authenticated") >= 0) {
-      e = ErroBanco("Sessão expirada — entre no sistema novamente.", contexto, erro);
+      e = ErroBanco("A sua sessão venceu. Recarregue a página (F5) e entre de novo — "+
+        "nada do que está na tela se perdeu.", contexto, erro);
       e.ehSessao = true;
       return e;
     }
@@ -482,6 +483,40 @@
        ehEscrita=true nas operações que MUDAM o banco: só elas acendem e apagam
        o banner persistente. Leitura que deu certo devolve o "online", nunca
        apaga uma gravação perdida. */
+    /* ===== A SESSÃO VENCIDA DEIXOU DE PARECER FALTA DE PERMISSÃO (24/10) =====
+       Relato dele: "não estou conseguindo alterar esse pedido", com a faixa dizendo
+       "Sem permissão para gravar pedidos/…". Medido no banco: a recusa era
+       "permission denied for table docs" — e só quem está AUTENTICADO tem esse direito
+       (anon não tem nenhum). Ou seja: a aba estava aberta havia horas, a credencial
+       venceu e as gravações passaram a ir sem sessão. A v364 já tratava isto nas Edge
+       Functions; faltava nas gravações comuns.
+       Aqui a sessão é renovada ANTES de gravar (custa nada quando ela está boa: o
+       getSession é local e só renova faltando menos de 1 minuto) e, diante de uma recusa
+       por permissão, há MAIS UMA tentativa com a credencial renovada — uma só, sem laço. */
+    async function garantirSessao(margem) {
+      if (!sb || !sb.auth) return null;
+      try { return await adapter.auth.sessaoFresca(margem === undefined ? 60 : margem); }
+      catch (e) { return null; }
+    }
+    function pareceSemSessao(erro) {
+      var cod = String((erro && (erro.code || erro.status)) || "");
+      var msg = String((erro && erro.message) || "").toLowerCase();
+      return cod === "42501" || cod === "PGRST301" || cod === "401" ||
+             msg.indexOf("permission denied") >= 0 || msg.indexOf("jwt") >= 0 ||
+             msg.indexOf("not authenticated") >= 0;
+    }
+    /* executa; recusado por credencial, renova e tenta MAIS UMA vez */
+    async function comSessao(tentar) {
+      var r = await tentar();
+      if (!(r && r.error && pareceSemSessao(r.error))) return r;
+      var s = await garantirSessao(0);
+      if (!s) {
+        /* não há sessão nenhuma: o problema é esse, e não o perfil da pessoa */
+        r.error = { code: "PGRST301", message: "sessão vencida (sem credencial)" };
+        return r;
+      }
+      return await tentar();
+    }
     function conferir(resp, contexto, ehEscrita) {
       if (resp && resp.error) {
         var e = anotar(traduzir(resp.error, contexto, ehEscrita), ehEscrita);
@@ -804,8 +839,9 @@
       var contexto = "gravar " + colecao + "/" + idFinal;
       var apenasInserir = (ops && typeof ops.upsert === "boolean") ? !ops.upsert : soInserir(colecao);
 
+      await garantirSessao();
       if (apenasInserir) {
-        var r = await sb.from(TABELA).insert(linha);
+        var r = await comSessao(function () { return sb.from(TABELA).insert(linha); });
         /* id repetido numa coleção append-only = o documento JÁ ESTÁ gravado.
            É o caso da foto de ponto reenviada porque o registro de "pontos"
            falhou: a foto certa já está no banco, então isto é sucesso, não erro.
@@ -819,7 +855,7 @@
       }
 
       conferir(
-        await sb.from(TABELA).upsert(linha, { onConflict: "colecao,id" }),
+        await comSessao(function () { return sb.from(TABELA).upsert(linha, { onConflict: "colecao,id" }); }),
         contexto,
         true
       );
@@ -834,7 +870,7 @@
       }
       /* apagar id que existe no banco ou não resolve igual (o HTML conta com isso) */
       conferir(
-        await sb.from(TABELA).delete().eq("colecao", colecao).eq("id", id),
+        await comSessao(function () { return sb.from(TABELA).delete().eq("colecao", colecao).eq("id", id); }),
         "apagar " + colecao + "/" + id,
         true
       );
@@ -1411,7 +1447,7 @@
       for (var i = 0; i < linhas.length; i += tam) {
         var parte = linhas.slice(i, i + tam);
         conferir(
-          await sb.from(TABELA).upsert(parte, { onConflict: "colecao,id" }),
+          await comSessao(function () { return sb.from(TABELA).upsert(parte, { onConflict: "colecao,id" }); }),
           "gravar " + parte.length + " de " + colecao,
           true
         );
