@@ -11422,14 +11422,38 @@ var ACESSORIO_FILTRO=/chave|carcaca|suporte|porta\s*filtro|cavalete|invólucro|i
    vela e purificador — o que o cliente troca. Acessório com a palavra filtro no nome fica
    de fora, e produto de sistema (sucata, serviços, planos, equipamento de OS) nunca entra. */
 var ITEM_COM_TROCA=/refil|refill|elemento\s*filtrante|vela\s*filtrante|\bvela\b|cartucho|\bfiltro\b|\bfiltros\b|purificad/;
+/* OS GRUPOS QUE EXIGEM O INTERVALO DE TROCA (24/10, regra dele): "tire o item de
+   obrigatoriedade manutenção periódica dos cadastros dos produtos, deixar somente
+   obrigatoriedade produtos dos grupos Centrais de Filtragem, Purificadores, Refis
+   Recorrentes, Refis Magazine somente".
+   ISTO DESFAZ DE PROPÓSITO a regra da v298, que olhava o NOME (refil, filtro, vela,
+   cartucho, purificador) — e por isso cobrava o intervalo de peça e acessório que tinham
+   essas palavras no nome. Agora quem manda é o grupo, e só estes quatro.
+   As escritas estão listadas uma a uma porque a chaveGrupo não tira plural (ver v403); o
+   "de/da/do" é que a chaveRegraGrupo ignora (v405). */
+var GRUPOS_PEDEM_MANUT={
+  "purificadores":1,"purificador":1,
+  "centrais filtragem":1,"central filtragem":1,"centrais":1,"central":1,
+  "refis recorrentes":1,"refil recorrente":1,"refis recorrente":1,"refil recorrentes":1,
+  "refis magazine":1,"refil magazine":1
+};
 function pedeManutProduto(p){
   if(!p||produtoDeSistema(p))return false;
   if((p.grupo||"")==="Planos")return false;
-  var t=normNomeImp([p.marca||"",p.nome||"",p.pop||"",p.grupo||""].join(" ")).toLowerCase();
-  if(ACESSORIO_FILTRO.test(t))return false;
-  return ITEM_COM_TROCA.test(t);
+  var k;
+  try{ k=chaveRegraGrupo(p.grupo||""); }catch(e){ k=String(p.grupo||"").toLowerCase().trim(); }
+  if(!k)return false;
+  if(GRUPOS_PEDEM_MANUT[k])return true;
+  /* grupo escrito de outro jeito: compara com cada escrita da lista pela mesma chave */
+  var achou=false;
+  Object.keys(GRUPOS_PEDEM_MANUT).forEach(function(nome){
+    if(achou)return;
+    try{ if(chaveRegraGrupo(nome)===k)achou=true; }catch(e){}
+  });
+  return achou;
 }
 window.__pedeManutMF=pedeManutProduto;
+window.__gruposManutMF=function(){return GRUPOS_PEDEM_MANUT;};
 window.__followupMF=function(){return followupsPendentes();};
 window.__atendsMF=function(){return atendimentos;};
 window.__instanteMF=function(r){return instanteDoRegistro(r);};
@@ -47247,9 +47271,10 @@ function ligar(){
     if(pedeManutProduto({cod:cod,nome:nome,marca:$("p_marca").value,pop:$("p_pop").value,grupo:grupo})
        &&!(numMF($("p_manut").value)>0)){
       var sug=regraManutDoProduto({cod:cod,nome:nome,marca:$("p_marca").value,pop:$("p_pop").value});
-      avisoProduto("<b>Falta a manutenção periódica deste produto.</b> Refil, filtro, vela e purificador "+
-        "precisam do intervalo de troca em <b>Manutenção (dias)</b> — é ele que põe o aparelho na "+
-        "Manutenção Periódica e avisa o cliente na hora certa."+
+      avisoProduto("<b>Falta a manutenção periódica deste produto.</b> Os grupos <b>Purificadores, "+
+        "Centrais de Filtragem, Refis Recorrentes e Refis Magazine</b> precisam do intervalo de troca "+
+        "em <b>Manutenção (dias)</b> — é ele que põe o aparelho na Manutenção Periódica e avisa o "+
+        "cliente na hora certa. Nos outros grupos o campo é opcional."+
         (sug?" Pela marca, o sistema sugere <b>"+sug.dias+" dias</b> ("+esc(sug.nome)+").":
              " Use 365 dias para troca anual e 180 para semestral.")+
         " Preencha e clique em Salvar produto de novo."+
