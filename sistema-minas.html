@@ -7483,6 +7483,47 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- EDITAR O CADASTRO SEM SAIR DA TELA (pedido dele, 24/10): "no campo do cadastro do cliente
+     dar dois cliques e poder editar o cadastro nessa tela mesmo". A janela traz o que se corrige
+     no dia a dia; o resto continua na ficha completa, pelo botão de baixo. -->
+<div class="modal" id="cliRapModal" hidden>
+  <div class="box">
+    <h3 id="cr_titulo">Editar o cadastro</h3>
+    <p class="sub" id="cr_sub"></p>
+    <div id="cr_nota"></div>
+    <!-- dentro da janela cabem DUAS colunas: a caixa tem 480 px úteis e o .g2 pede 496, então
+         quem divide a linha aqui é o .g3 (190 px por coluna) -->
+    <div class="fld"><label for="cr_nome">Nome <span class="req">*</span></label><input id="cr_nome"></div>
+    <div class="grid g3">
+      <div class="fld"><label for="cr_tel">Telefone <span class="req">*</span></label><input id="cr_tel" inputmode="tel"></div>
+      <div class="fld"><label for="cr_email">E-mail</label><input id="cr_email" inputmode="email"></div>
+    </div>
+    <div class="grid g3">
+      <div class="fld"><label for="cr_doc">CPF / CNPJ</label><input id="cr_doc" inputmode="numeric"></div>
+      <div class="fld"><label for="cr_cep">CEP</label><input id="cr_cep" inputmode="numeric"></div>
+    </div>
+    <div class="fld"><label for="cr_rua">Rua</label><input id="cr_rua"></div>
+    <div class="grid g3">
+      <div class="fld"><label for="cr_num">Número</label><input id="cr_num"></div>
+      <div class="fld"><label for="cr_comp">Complemento</label><input id="cr_comp"></div>
+    </div>
+    <div class="grid g3">
+      <div class="fld"><label for="cr_bairro">Bairro</label><input id="cr_bairro"></div>
+      <div class="fld"><label for="cr_cidade">Cidade</label><input id="cr_cidade"></div>
+    </div>
+    <div class="grid g3">
+      <div class="fld"><label for="cr_uf">Estado</label><input id="cr_uf" maxlength="2"></div>
+      <div class="fld"><label for="cr_ref">Ponto de referência</label><input id="cr_ref"></div>
+    </div>
+    <div id="cr_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="cr_salvar">Salvar o cadastro</button>
+      <button class="btn ghost" type="button" id="cr_completo">Abrir o cadastro completo</button>
+      <button class="btn mut" type="button" id="cr_fechar">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <!-- TROCA FEITA (pedido do Wagner, 02/10): acerta o aparelho que o sistema antigo não baixou —
      informa a data da última troca e o sistema reagenda a próxima pelo intervalo do produto -->
 <!-- limpeza das OS de teste antes do módulo novo (decisão dele, 05/10): mostra tudo antes de apagar -->
@@ -13271,6 +13312,9 @@ window.__eventosAgendaMF=function(){return eventos();};
 /* ganchos da agenda de todos, do conflito de horário, da trava de edição,
    das maiúsculas e da busca sem acento (24/10) */
 window.__abrirDetalhesMF=function(a){return abrirDetalhes(a);};
+window.__atendPorIdMF=function(id){return atendPorId(id);};
+window.__abrirCliRapMF=function(cid){return abrirCliRapido(cid);};
+window.__editandoAtMF=function(){return editandoAt;};
 window.__respInstalacaoMF=function(p){return respInstalacao(p);};
 window.__abrirNovaAtivMF=function(ctx){return abrirNovaAtividade(ctx||{});};
 window.__conflitoAgendaMF=function(q,d,h,f,ig){return conflitoDeAgenda(q,d,h,f,ig);};
@@ -27673,6 +27717,80 @@ function htmlVendaResumo(p){
       "<br><b>Instalação:</b> "+esc(dataCurta(pr[0]))+(pr[1]?" às "+esc(pr[1]):"")+" · "+esc(respInstalacao(p)||"—")+
       (p.instaladoEm?" · finalizada em "+esc(dataCurta(p.instaladoEm)):" · a realizar")+"</div></div>";
 }
+/* O BOTÃO DE EDITAR NA JANELA DE DETALHES (24/10, relato dele: "não estou conseguindo editar
+   atendimento", com o print da janela aberta numa atividade pendente). Ele existia só no ramo
+   do atendimento e no da atividade já finalizada — justamente na atividade EM ABERTO, que é a
+   que a pessoa olha todo dia, não havia saída nenhuma. O rótulo segue a regra que ele fixou:
+   atendimento abre inteiro, atividade agendada abre só com o horário. */
+function btEditarDet(a){
+  var modo=modoEdicaoAtend(a);
+  if(modo==="nada")return "";
+  return '<button class="btn ghost" type="button" id="dt_editar">'+
+    (modo==="hora"?"Alterar o horário":"Editar o registro")+"</button>";
+}
+/* ===== EDITAR O CADASTRO DO CLIENTE SEM SAIR DA TELA (24/10, pedido dele) =====
+   Dois cliques no bloco do cliente, dentro dos Detalhes, abrem esta janela. Ela traz o que se
+   corrige no dia a dia — contato e endereço. Nome, CPF/CNPJ e RG de CLIENTE continuam só do
+   Administrador (regra de 12/09), e a gravação é conferida com o banco (regra da v327). */
+var crCliId="";
+function abrirCliRapido(cid){
+  var c=cliPorId(cid);
+  if(!c)return toast("Cadastro não encontrado.");
+  crCliId=c.id;
+  var travado=clienteTravado(c)&&!ehAdministrador();
+  $("cr_titulo").textContent="Editar o cadastro · "+(ehLead(c)?"lead":"cliente");
+  $("cr_sub").textContent=(c.nome||"")+(c.codigo?" · "+c.codigo:"");
+  [["cr_nome","nome"],["cr_tel","tel"],["cr_email","email"],["cr_doc","doc"],["cr_cep","cep"],
+   ["cr_rua","rua"],["cr_num","num"],["cr_comp","comp"],["cr_bairro","bairro"],
+   ["cr_cidade","cidade"],["cr_uf","uf"],["cr_ref","ref"]].forEach(function(p){
+     var e=$(p[0]);if(!e)return;
+     e.value=c[p[1]]||"";
+     e.readOnly=false;
+   });
+  /* nome e documento de cliente: só o Administrador */
+  if(travado){
+    ["cr_nome","cr_doc"].forEach(function(id){var e=$(id);if(e&&String(e.value).trim())e.readOnly=true;});
+  }
+  $("cr_nota").innerHTML=travado
+    ? '<div class="note"><b>Nome e CPF/CNPJ de cliente só o Administrador corrige.</b> '+
+      "Contato e endereço você altera aqui mesmo.</div>"
+    : "";
+  $("cr_alerta").innerHTML="";
+  $("cliRapModal").hidden=false;
+  setTimeout(function(){var e=$("cr_tel");if(e)e.focus();},60);
+}
+async function salvarCliRapido(){
+  var c=cliPorId(crCliId);
+  if(!c)return toast("Cadastro não encontrado.");
+  var nome=$("cr_nome").value.trim(),tel=$("cr_tel").value.trim();
+  if(!nome){$("cr_alerta").innerHTML='<div class="note crit"><b>Falta o nome.</b></div>';return;}
+  if(!tel){$("cr_alerta").innerHTML='<div class="note crit"><b>Falta o telefone.</b> É por ele que se fala com o cliente.</div>';return;}
+  var doc=$("cr_doc").value.trim();
+  if(doc&&!docValido(doc)){
+    $("cr_alerta").innerHTML='<div class="note crit"><b>CPF/CNPJ inválido.</b> Confira os números.</div>';return;}
+  /* o que estava antes, para devolver se o banco recusar */
+  var antes={};
+  var CAMPOS=[["cr_nome","nome"],["cr_tel","tel"],["cr_email","email"],["cr_doc","doc"],["cr_cep","cep"],
+    ["cr_rua","rua"],["cr_num","num"],["cr_comp","comp"],["cr_bairro","bairro"],
+    ["cr_cidade","cidade"],["cr_uf","uf"],["cr_ref","ref"]];
+  CAMPOS.forEach(function(p){antes[p[1]]=c[p[1]];});
+  CAMPOS.forEach(function(p){
+    var e=$(p[0]);if(!e||e.readOnly)return;
+    c[p[1]]=e.value.trim();
+  });
+  if(c.uf)c.uf=String(c.uf).toUpperCase();
+  maiusculizarCadastro(c);
+  try{await gravaConf("clientes",c);}
+  catch(e){
+    Object.keys(antes).forEach(function(k){c[k]=antes[k];});
+    return avisarRecusaBanco("cr_alerta",e,"O cadastro continua como estava — tente de novo.");
+  }
+  $("cliRapModal").hidden=true;
+  toast("Cadastro de "+(c.nome||"")+" salvo.");
+  /* a janela de Detalhes atrás continua aberta: refaz o que ela mostra */
+  try{if(detReg&&!$("detModal").hidden)abrirDetalhes(detReg);}catch(e2){}
+  render();
+}
 function abrirDetalhes(a){
   detReg=a;
   /* regra dele (20/09): "essas repetições da mesma ação não aparecer" — limpa o que já estava
@@ -27692,13 +27810,18 @@ function abrirDetalhes(a){
   $("dt_obs").className=obs?"obs-box":"obs-box vazio";
   $("dt_obs").textContent=obs||"Nada foi anotado nesta atividade. Ao registrar o atendimento, escreva o que ficou combinado — é isso que aparece aqui da próxima vez.";
 
+  /* dois cliques no cadastro abrem a edição rápida, sem sair da tela (24/10) */
+  $("dt_cliente").setAttribute("data-cliedit",c.id||"");
+  $("dt_cliente").title=c.id?"Dois cliques para editar o cadastro":"";
+  $("dt_cliente").style.cursor=c.id?"pointer":"";
   $("dt_cliente").innerHTML="<b>"+esc(c.nome||a.cliente||"—")+"</b>"+
     (c.codigo?' <span class="pill p-mut">'+esc(c.codigo)+"</span>":"")+
     (a.tel||c.tel?"<br>"+esc(a.tel||c.tel):"")+
     (c.rua?"<br>"+esc([c.rua,c.num,c.bairro].filter(Boolean).join(", ")):"")+
     (c.cidade?"<br>"+esc(c.cidade+(c.uf?"/"+c.uf:"")):"")+
     mapaLink(c.geo)+
-    (c.origem?'<br><span class="t-sub">veio por '+esc(c.origem)+"</span>":"");
+    (c.origem?'<br><span class="t-sub">veio por '+esc(c.origem)+"</span>":"")+
+    (c.id?'<br><span class="t-sub cli-dica">dois cliques para editar o cadastro</span>':"");
   $("dt_quando").innerHTML="<b>"+esc(dataCurta(a.data))+(a.inicio?" às "+esc(a.inicio):"")+"</b>"+
     (a.fim?" – "+esc(a.fim):"")+
     "<br>"+esc(a.colaborador||"—")+
@@ -27760,11 +27883,11 @@ function abrirDetalhes(a){
   if(!podeEditarAtiv(a)){
     ac="";
   } else if(ativ&&a.status!=="finalizado"&&osAberta){
-    ac='<button class="btn ghost" type="button" id="dt_reagendar">Reagendar</button>';
+    ac='<button class="btn ghost" type="button" id="dt_reagendar">Reagendar</button>'+btEditarDet(a);
   } else if(ativ&&a.status!=="finalizado"){
     ac='<button class="btn" type="button" id="dt_concluir">Finalizar atividade como concluída</button>'+
        '<button class="btn ghost" type="button" id="dt_acoes2">Mais +</button>'+
-       '<button class="btn ghost" type="button" id="dt_reagendar">Reagendar</button>';
+       '<button class="btn ghost" type="button" id="dt_reagendar">Reagendar</button>'+btEditarDet(a);
   } else if(!ativ){
     ac='<button class="btn" type="button" id="dt_acoes2">Mais +</button>'+
        '<button class="btn ghost" type="button" id="dt_editar">Editar o registro</button>';
@@ -46480,6 +46603,30 @@ function ligar(){
     function(){return $("na_resp").value;},function(){return $("na_data").value;},function(){return $("na_hora").value;});
   ligarAvisoAgenda(["af_data","af_ini","af_resp"],"at_conflito",
     function(){return $("af_resp").value;},function(){return $("af_data").value;},function(){return $("af_ini").value;});
+  /* dois cliques no cadastro do cliente, dentro dos Detalhes (24/10) */
+  var dc=$("dt_cliente");
+  if(dc){
+    /* UM CAMINHO SÓ: os dois toques são contados à mão, como na Manutenção Periódica (v91) e nos
+       Aniversariantes (v98). O dblclick do navegador não serve no celular — ele briga com o zoom —
+       e ter os dois reabriria a janela por cima de si mesma. */
+    dc.addEventListener("click",function(){
+      var id=dc.getAttribute("data-cliedit");
+      if(!id)return;
+      var agora=Date.now();
+      if(dc.__toque&&agora-dc.__toque<650){dc.__toque=0;abrirCliRapido(id);return;}
+      dc.__toque=agora;
+      setTimeout(function(){
+        if(dc.__toque===agora){dc.__toque=0;toast("Dê dois cliques no cadastro para editá-lo.");}
+      },660);
+    });
+  }
+  /* ligação direta: o helper on() é LOCAL de outras funções e aqui não existe */
+  if($("cr_salvar"))$("cr_salvar").onclick=salvarCliRapido;
+  if($("cr_fechar"))$("cr_fechar").onclick=function(){$("cliRapModal").hidden=true;};
+  if($("cr_completo"))$("cr_completo").onclick=function(){
+    var id=crCliId;$("cliRapModal").hidden=true;$("detModal").hidden=true;
+    var c=cliPorId(id);if(c){ir("clientes");abrirCliente(c);}
+  };
   $("avBusca").oninput=renderAtividades;
   $("avQuando").onchange=renderAtividades;$("avQuem").onchange=renderAtividades;
   $("avNova").onclick=function(){
