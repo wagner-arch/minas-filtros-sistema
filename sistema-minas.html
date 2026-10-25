@@ -9927,7 +9927,7 @@ function renderClientes(){
   });
   /* o botao "Cidades a conferir" acompanha a lista (a analise fica guardada: ela so e
      refeita quando a lista de clientes muda de tamanho ou a loja troca) */
-  try{atualizarBotaoCidades();}catch(e){}
+  try{atualizarBotaoCidades();avisarCidadesCliente();}catch(e){}
 }
 /* obrigatórios do LEAD (primeiro atendimento) — regra do Wagner: nome e sobrenome,
    telefone e cidade. CPF, identidade, nascimento, sexo e endereço ficam para a venda. */
@@ -13512,25 +13512,18 @@ async function aplicarCidadesLista(lista,aviso){
   }
   return {n:n,falhou:falhou};
 }
-/* roda UMA vez, no login do Administrador */
+/* no login so CONTA e avisa; a gravacao e pelo botao */
 async function padronizarCidades(){
-  if(!db||!ehAdministrador())return 0;
-  var doc=null,antes={};
-  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
-  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.cidadesOficiais)return 0;}
-  var a=analisarCidades(),r={n:0,falhou:0};
-  if(a.corrigir.length)r=await aplicarCidadesLista(a.corrigir);
-  var duvidas=Object.keys(a.duvida).length;
-  antes.cidadesOficiais={quando:hojeISO(),por:usuarioAtual,corrigidos:r.n,
-    recusados:r.falhou,duvidas:duvidas};
-  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador das cidades",e);}
-  try{renderClientes();atualizarBotaoCidades();}catch(e){}
-  if(r.n||duvidas){
-    toast("Nome das cidades padronizado: "+r.n+" cadastro(s) arrumado(s)"+
-      (duvidas?" · "+duvidas+" cidade(s) para você conferir em Clientes › Cidades a conferir":"")+
-      (r.falhou?" · "+r.falhou+" o banco recusou":"")+".");
+  if(!ehAdministrador())return 0;
+  var a=analiseCidades(),duvidas=Object.keys(a.duvida).length;
+  try{atualizarBotaoCidades();}catch(e){}
+  if(a.corrigir.length||duvidas){
+    toast("Nome das cidades: "+a.corrigir.length.toLocaleString("pt-BR")+
+      " cadastro(s) com a escrita fora do padrão"+
+      (duvidas?" e "+duvidas+" cidade(s) que o sistema não reconhece":"")+
+      ". Veja em Clientes › Cidades a conferir.");
   }
-  return r.n;
+  return a.corrigir.length;
 }
 /* o botao so aparece quando ha o que conferir, e so para o Administrador */
 function atualizarBotaoCidades(){
@@ -13540,6 +13533,31 @@ function atualizarBotaoCidades(){
   var n=q+(p?1:0);
   b.hidden=!n;
   b.textContent=q?("Cidades a conferir ("+q+")"):"Padronizar o nome das cidades";
+}
+/* a faixa no alto da lista de Clientes: 8 mil cadastros com a escrita fora do padrao
+   nao se resolvem por um botao discreto na barra */
+function avisarCidadesCliente(){
+  var el=$("cliAvisoCidade");
+  if(!el){
+    var alvo=$("cliBody")&&$("cliBody").closest?$("cliBody").closest(".card"):null;
+    if(!alvo)return;
+    el=document.createElement("div");
+    el.id="cliAvisoCidade";
+    alvo.insertBefore(el,alvo.firstChild);
+  }
+  if(!ehAdministrador()){el.innerHTML="";return;}
+  var a=analiseCidades(),q=Object.keys(a.duvida).length;
+  if(!a.corrigir.length&&!q){el.innerHTML="";return;}
+  el.innerHTML='<div class="note warn"><b>O nome da cidade está escrito de vários jeitos '+
+    "no cadastro.</b> "+
+    (a.corrigir.length?("<b>"+a.corrigir.length.toLocaleString("pt-BR")+
+      "</b> cadastro(s) são da mesma cidade escrita de outro jeito (“PARA DE MINAS” e "+
+      "“PARÁ DE MINAS” são a mesma) e o sistema arruma de uma vez. "):"")+
+    (q?("<b>"+q+"</b> cidade(s) ele não reconhece e precisam da sua conferência. "):"")+
+    'O que você já cadastrar agora nasce com o nome oficial. '+
+    '<button class="btn sm" type="button" id="cliAvisoBt">Abrir Cidades a conferir</button></div>';
+  var b=$("cliAvisoBt");
+  if(b)b.onclick=abrirCidadesConferir;
 }
 var cidEscolha={},cidAnalise=null,cidSelo="";
 function analiseCidades(){
