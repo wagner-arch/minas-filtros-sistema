@@ -9484,7 +9484,7 @@ function textoBusca(c){
      quem está com a aba aberta desde antes desta versão. */
   var chave="a2|"+(c.nome||"")+"|"+(c.tel||"")+"|"+(c.doc||"")+"|"+(c.cidade||"")+"|"+(c.rua||"");
   if(c.__bk===chave&&c.__bt!=null)return c.__bt;
-  var t=semAcento([c.nome,c.apelido,c.doc,c.tel,c.email,c.codigo,c.rua,c.num,c.comp,c.bairro,c.cidade,c.uf,c.cep,
+  var t=semAcento([c.nome,c.apelido,c.doc,c.tel,c.email,c.codigo,c.rua,c.num,c.comp,c.bairro,c.distrito,c.cidade,c.uf,c.cep,
           c.conjnome,c.conjtel,c.respNome,c.comprasNome]
     .filter(Boolean).join(" "));
   try{Object.defineProperty(c,"__bt",{value:t,writable:true,enumerable:false,configurable:true});
@@ -9921,7 +9921,7 @@ function renderClientes(){
         (c.apelido?'<div class="t-sub">'+esc(c.apelido)+'</div>':'')+'</td>'+
       '<td data-r="Documento">'+esc(c.doc||"—")+"</td>"+
       '<td data-r="Endereço"><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
-        '</div><div class="t-sub">'+esc([c.bairro,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
+        '</div><div class="t-sub">'+esc([c.bairro,c.distrito,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
         mapaLink(c.geo)+"</div></td>";
     tr.onclick=function(){abrirCliente(c);};b.appendChild(tr);
   });
@@ -9981,9 +9981,33 @@ function cidadeOficialDe(nome,uf){
   if(typeof window.cidadeOficialMF!=="function")return String(nome||"").toUpperCase();
   return window.cidadeOficialMF(nome,uf)||"";
 }
+/* o distrito aparece na ficha, embaixo da cidade: o campo nao existe no formulario e sem
+   isto quem abre o cadastro nao ve que o cliente mora no distrito */
+function notaDistritoCli(c){
+  var el=document.getElementById("c_distritoNota");
+  if(!el){
+    var cid=document.getElementById("c_cidade");
+    var fld=cid&&cid.closest?cid.closest(".fld"):null;
+    if(!fld)return;
+    el=document.createElement("div");
+    el.id="c_distritoNota";
+    el.className="sub";
+    fld.appendChild(el);
+  }
+  if(!c||!c.distrito){el.innerHTML="";return;}
+  el.innerHTML="Distrito: <b>"+esc(c.distrito)+"</b>"+
+    (c.cidadeAnterior&&c.cidadeAnterior!==c.distrito
+      ? (" · o cadastro estava com “"+esc(c.cidadeAnterior)+"” na cidade")
+      : "");
+}
 function cidadeSugeridaDe(nome,uf){
   if(typeof window.cidadeSugeridaMF!=="function")return null;
   return window.cidadeSugeridaMF(nome,uf);
+}
+/* distrito que ele nomeou: nao e municipio, mas o sistema sabe a que cidade pertence */
+function distritoDe(nome){
+  if(typeof window.distritoConhecidoMF!=="function")return null;
+  return window.distritoConhecidoMF(nome);
 }
 /* a cidade esta escrita de um jeito que o sistema reconhece? */
 function cidadeConfere(c){
@@ -10186,6 +10210,7 @@ function abrirCliente(c){
   });
   editandoCli=c||null;$("cliLista").hidden=true;$("cliForm").hidden=false;
   var v=c||{};
+  try{notaDistritoCli(c);}catch(e){}
   $("c_codigo").value=v.codigo||proxCodigo();
   $("c_tipo").value=v.tipo||"Pessoa Física";
   /* origem gravada no primeiro cadastro não muda mais */
@@ -13420,6 +13445,8 @@ window.__abrirAtendMF=function(a){return abrirAtend(a);};
 window.__salvarAtendMF=function(){return salvarAtend();};
 window.__maiusculizarMF=function(c){return maiusculizarCadastro(c);};
 window.__cidadeOficialMF=cidadeOficialDe;
+window.__notaDistritoMF=notaDistritoCli;
+window.__endCadMF=function(c){return enderecoCadastroCli(c);};
 window.__cidadeSugeridaMF=cidadeSugeridaDe;
 window.__cidadeConfereMF=cidadeConfere;
 window.__recusaCidadeMF=recusaCidade;
@@ -13451,6 +13478,14 @@ function analisarCidades(lista){
     if(of){
       if(of===c.cidade&&(!ufNova||ufNova===uf)){saida.ok++;return;}
       saida.corrigir.push({c:c,de:c.cidade,para:of,ufDe:uf,ufPara:ufNova||uf});
+      return;
+    }
+    /* distrito conhecido: a cidade e a do municipio e o nome do lugar fica guardado */
+    var dd=distritoDe(c.cidade);
+    if(dd){
+      saida.corrigir.push({c:c,de:c.cidade,para:dd.cidade,ufDe:uf,ufPara:dd.uf,
+        distrito:dd.distrito,eraChamado:dd.eraChamado});
+      saida.distritos=(saida.distritos||0)+1;
       return;
     }
     var k=String(c.cidade).toUpperCase()+" ("+(uf||"sem UF")+")";
@@ -13491,6 +13526,7 @@ async function aplicarCidadesLista(lista,aviso){
     var parte=lista.slice(i,i+bloco),gravar=[];
     parte.forEach(function(x){
       x.c.cidadeAnterior=x.de;
+      if(x.distrito)x.c.distrito=x.distrito;
       if(x.ufDe!==x.ufPara)x.c.ufAnterior=x.ufDe;
       x.c.cidadeArrumadaEm=hojeISO();
       x.c.cidadeArrumadaPor=usuarioAtual;
@@ -13550,6 +13586,9 @@ function avisarCidadesCliente(){
   if(!a.corrigir.length&&!q){el.innerHTML="";return;}
   el.innerHTML='<div class="note warn"><b>O nome da cidade está escrito de vários jeitos '+
     "no cadastro.</b> "+
+    (a.distritos?("<b>"+a.distritos+"</b> estão com o nome do DISTRITO no lugar da cidade "+
+      "(Antunes, Ascenção, Torneiros, Albert Isaacson, São José dos Salgados e Ermida) e já "+
+      "têm o município certo. "):"")+
     (a.corrigir.length?("<b>"+a.corrigir.length.toLocaleString("pt-BR")+
       "</b> cadastro(s) são da mesma cidade escrita de outro jeito (“PARA DE MINAS” e "+
       "“PARÁ DE MINAS” são a mesma) e o sistema arruma de uma vez. "):"")+
@@ -13589,8 +13628,10 @@ function renderCidadesConferir(){
   var h="";
   if(a.corrigir.length){
     h+='<div class="note ok"><b>'+a.corrigir.length.toLocaleString("pt-BR")+
-      " cadastro(s) só precisam da escrita oficial</b> — mesma cidade, escrita de outro jeito "+
-      "(“PARA DE MINAS” e “PARÁ DE MINAS” são a mesma). "+
+      " cadastro(s) o sistema arruma de uma vez</b> — mesma cidade escrita de outro jeito "+
+      "(“PARA DE MINAS” e “PARÁ DE MINAS” são a mesma)"+
+      (a.distritos?(", mais <b>"+a.distritos+"</b> que estão com o nome do distrito no lugar "+
+        "da cidade (o nome do lugar fica guardado no cadastro)"):"")+". "+
       '<button class="btn sm" type="button" data-cidpad="1">Arrumar a escrita desses '+
       a.corrigir.length.toLocaleString("pt-BR")+"</button></div>";
   }
@@ -33597,7 +33638,9 @@ function clienteDaOS(){
 }
 function enderecoCadastroCli(c){
   if(!c)return "";
-  return [[c.rua,c.num].filter(Boolean).join(", "),c.comp,c.bairro,[c.cidade,c.uf].filter(Boolean).join("/"),c.cep?"CEP "+c.cep:""].filter(Boolean).join(" · ");
+  return [[c.rua,c.num].filter(Boolean).join(", "),c.comp,c.bairro,
+    c.distrito?("distrito de "+c.distrito):"",
+    [c.cidade,c.uf].filter(Boolean).join("/"),c.cep?"CEP "+c.cep:""].filter(Boolean).join(" · ");
 }
 /* ======================================================================
    O ENDEREÇO É DO APARELHO, NÃO SÓ DO CLIENTE (21/10, regra dele): "o vendedor faz o pedido
@@ -49579,12 +49622,31 @@ function erro(msg){
     return ant[b.length];
   }
   function tetoErro(n){return n.length<=6?1:(n.length<=12?2:3);}
+  var DISTRITOS_MF={
+    "antunes":{cidade:"PARÁ DE MINAS",uf:"MG",distrito:"ANTUNES"},
+    "ascencao":{cidade:"PARÁ DE MINAS",uf:"MG",distrito:"ASCENÇÃO"},
+    "torneiros":{cidade:"PARÁ DE MINAS",uf:"MG",distrito:"TORNEIROS"},
+    "albert isaacson":{cidade:"MARTINHO CAMPOS",uf:"MG",distrito:"ALBERT ISAACSON"},
+    "sao jose dos salgados":{cidade:"CARMO DO CAJURU",uf:"MG",distrito:"SÃO JOSÉ DOS SALGADOS"},
+    "ermida":{cidade:"DIVINÓPOLIS",uf:"MG",distrito:"SANTO ANTÔNIO DOS CAMPOS",
+              eraChamado:"ERMIDA"}
+  };
+  function distritoConhecido(nome){
+    var n=normalizar(limparNomeCidade(nome));
+    if(!n)return null;
+    var d=DISTRITOS_MF[n];
+    if(!d)return null;
+    return {cidade:d.cidade,uf:d.uf,distrito:d.distrito,eraChamado:d.eraChamado||"",dist:0,
+            ehDistrito:true};
+  }
   var cacheSug={};
   function cidadeSugerida(nome,uf){
     var n=normalizar(limparNomeCidade(nome));
     if(!n)return null;
     var ck=(uf||"*")+"|"+n;
     if(cacheSug.hasOwnProperty(ck))return cacheSug[ck];
+    var dd=distritoConhecido(nome);
+    if(dd){cacheSug[ck]=dd;return dd;}
     var teto=tetoErro(n),melhor=null,md=99;
     var ufs=uf?[String(uf).toUpperCase()]:Object.keys(MUNIC_BR);
     ufs.forEach(function(u){
@@ -49596,6 +49658,7 @@ function erro(msg){
     cacheSug[ck]=melhor;
     return melhor;
   }
+  window.distritoConhecidoMF=distritoConhecido;
   window.cidadeOficialMF=cidadeOficial;
   window.cidadeSugeridaMF=cidadeSugerida;
   window.municBrMF=function(uf){return listaMunic(uf);};
