@@ -1714,7 +1714,7 @@ img{max-width:100%}
   .btn{padding:9px 14px;font-size:14px;min-height:42px}
   .btn.sm{padding:6px 11px;font-size:13px;min-height:34px}
   /* ferramenta: o tecnico toca na rua, entao o botao da linha tem tamanho de dedo */
-  #ecBody .btn.sm,#frBody .btn,#fq_lista .btn.sm{min-height:40px}
+  #ecBody .btn.sm,#frBody .btn,#fq_lista .btn.sm,#pedPendentes{min-height:40px}
   /* o botao de editar da lista de Atendimentos tambem e toque de dedo (24/10) */
   #atendBody .btn.sm,#avBody .btn.sm{min-height:40px}
   .novo-btn{padding:13px 16px}
@@ -3603,12 +3603,14 @@ img{max-width:100%}
             <select id="pedVend" style="max-width:190px"></select>
             <select id="pedSit" style="max-width:200px">
               <option value="">Todas as situações</option>
+              <option value="pendente">Vendas pendentes (não aprovadas)</option>
               <option value="aberta">Em andamento</option>
               <option value="financeiro">Aguardando financeiro</option>
               <option value="encerrada">Aprovadas</option>
               <option value="desconto">Aguardando desconto</option>
               <option value="instalacao">Aguardando instalação</option>
             </select>
+            <button class="btn sm" type="button" id="pedPendentes">Vendas pendentes</button>
             <span class="sp"></span>
             <span class="count" id="pedCount"></span>
           </div>
@@ -18078,6 +18080,37 @@ function janelaPed(){
   var i=new Date(h.getFullYear(),h.getMonth(),1),f2=new Date(h.getFullYear(),h.getMonth()+1,0);
   return {de:iso(i),ate:iso(f2)};
 }
+/* VENDAS PENDENTES = a venda que o financeiro ainda NAO aprovou (vendaPendente:
+   nao e teste, nao foi cancelada e nao esta aprovada). De QUALQUER data, de proposito:
+   venda pendente do mes passado e justamente a que precisa aparecer — o mesmo
+   princípio do card de atividades atrasadas (v302). Respeita a regra da v200:
+   quem nao e da gestao ve so as suas (meuPedido). */
+function vendasPendentes(quem){
+  return pedidos.filter(function(p){
+    return p.loja===lojaAtual&&meuPedido(p)&&vendaPendente(p)&&
+      (!quem||p.vendedor===quem||p.prospector===quem||p.instalador===quem);
+  }).sort(maisNovoPrimeiro);
+}
+/* abre a tela de Pedidos ja com as pendentes na tela */
+function abrirVendasPendentes(quem){
+  ir("pedidos");
+  if($("pedBusca"))$("pedBusca").value="";
+  if($("pedSit"))$("pedSit").value="pendente";
+  var sv=$("pedVend");
+  /* quem nao e da gestao tem o campo de pessoa TRAVADO em "Meus pedidos" (v200):
+     ali nao se mexe, porque meuPedido ja restringe a lista */
+  if(quem&&sv&&!soMeus()){
+    if(!sv.options.length)renderPedidos();
+    /* o nome TEM de existir na lista: select com valor de fora fica vazio,
+       e vazio quer dizer "todos os vendedores" (licao da v371) */
+    var tem=[].slice.call(sv.options).some(function(o){return o.value===quem;});
+    if(!tem){var o=document.createElement("option");o.value=quem;o.textContent=quem;sv.appendChild(o);}
+    try{sv.value=quem;}catch(e){}
+  }
+  renderPedidos();
+}
+window.__pendentesMF=vendasPendentes;
+window.__abrirPendentesMF=abrirVendasPendentes;
 function renderPedidos(){
   var sv=$("pedVend");
   if(!sv.options.length){
@@ -18087,24 +18120,41 @@ function renderPedidos(){
   travarSelectPessoa(sv,"Meus pedidos");
   var j=janelaPed(),q=semAcento($("pedBusca").value||"");
   var vend=sv.value,sit=$("pedSit").value;
+  /* em "Vendas pendentes" o periodo nao se aplica: a lista traz as de qualquer data */
+  var semPeriodo=(sit==="pendente");
   if(pedPeriodo!=="livre"){$("pedDe").value=j.de||"";$("pedAte").value=j.ate||"";}
+  /* a tela nao pode mentir: no modo pendentes o periodo fica desligado */
+  $("pedDe").disabled=semPeriodo;$("pedAte").disabled=semPeriodo;
+  [].slice.call(document.querySelectorAll("#pedPer button")).forEach(function(b){
+    b.disabled=semPeriodo;});
   var lista=pedidos.filter(function(p){return p.loja===lojaAtual&&meuPedido(p);})
     .filter(function(p){
-      if(j.de&&p.data<j.de)return false;
-      if(j.ate&&p.data>j.ate)return false;
+      if(!semPeriodo){
+        if(j.de&&p.data<j.de)return false;
+        if(j.ate&&p.data>j.ate)return false;
+      }
       if(vend&&p.vendedor!==vend&&p.prospector!==vend&&p.instalador!==vend)return false;
       if(sit==="encerrada"&&!p.encerrada)return false;
       if(sit==="aberta"&&p.encerrada)return false;
       if(sit==="desconto"&&(p.status||"").indexOf("desconto")<0)return false;
       if(sit==="instalacao"&&(p.status||"").indexOf("instalação")<0)return false;
       if(sit==="financeiro"&&(p.status||"")!=="Aguardando aprovação financeira")return false;
+      if(sit==="pendente"&&!vendaPendente(p))return false;
       if(q){
         var alvo=semAcento(String(p.numero)+" "+(p.cliente||"")+" "+(p.vendedor||"")+" "+(p.prospector||""));
         if(alvo.indexOf(q)<0)return false;
       }
       return true;})
     .sort(maisNovoPrimeiro);
-  $("pedCount").textContent=lista.length+(lista.length===1?" pedido":" pedidos");
+  $("pedCount").textContent=lista.length+(lista.length===1?" pedido":" pedidos")+
+    (semPeriodo?" · vendas pendentes de qualquer data (o período não se aplica)":"");
+  /* o botao mostra quantas estao esperando, e vira a saida quando o filtro esta ligado */
+  (function(){
+    var bt=$("pedPendentes");if(!bt)return;
+    var n=vendasPendentes(vend).length;
+    bt.textContent=semPeriodo?"Ver todas as situações":"Vendas pendentes ("+n+")";
+    bt.className="btn sm"+(semPeriodo?" mut":(n?"":" ghost"));
+  })();
   var tot=lista.reduce(function(a,p){return a+p.total;},0),bas=lista.reduce(function(a,p){return a+p.base;},0);
   $("pedKpis").innerHTML='<div class="kpi"><div class="l">Pedidos</div><div class="v">'+lista.length+'</div></div>'+
     '<div class="kpi"><div class="l">Faturamento</div><div class="v">'+BRL(tot)+'</div></div>'+
@@ -28280,6 +28330,18 @@ function renderDash(){
           : "nenhuma vencida")+"</div></div>";
     })()+
     '<div class="kpi"><div class="l">Vendas realizadas</div><div class="v">'+d.vds.length+"</div></div>"+
+    /* vendas pendentes: as que o financeiro ainda nao aprovou, de QUALQUER data —
+       pelo mesmo motivo das atrasadas, a pendente do mes passado e a que mais importa */
+    (function(){
+      var pd=vendasPendentes(quem);
+      var vl=pd.reduce(function(a,p){return a+(+p.total||0);},0);
+      return '<div class="kpi kpi-bt'+(pd.length?" crit":"")+'" id="dashPendentes" role="button" tabindex="0" '+
+        'title="Ver as vendas pendentes na tela de Pedidos"><div class="l">Vendas pendentes</div>'+
+        '<div class="v" style="color:'+(pd.length?"var(--crit)":"inherit")+'">'+pd.length+"</div>"+
+        '<div class="l" style="margin-top:4px">'+(pd.length
+          ? BRL(vl)+" esperando o financeiro · toque para ver"
+          : "nada esperando o financeiro")+"</div></div>";
+    })()+
     '<div class="kpi"><div class="l">Faturamento</div><div class="v">'+BRL(d.fat)+"</div></div>"+
     '<div class="kpi"><div class="l">Conversão</div><div class="v">'+conv+"%</div>"+
       '<div class="l" style="margin-top:4px">'+d.vds.length+" venda"+(d.vds.length===1?"":"s")+" em "+totalContatos+" contato"+(totalContatos===1?"":"s")+"</div></div>";
@@ -28291,6 +28353,13 @@ function renderDash(){
       if(quem&&$("agendaPessoa"))try{$("agendaPessoa").value=quem;}catch(e){}
       abrirAgendaAtrasadas();
     }
+    bt.onclick=vai;
+    bt.onkeydown=function(ev){if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();vai();}};
+  })();
+  /* o card das vendas pendentes abre a tela de Pedidos com elas na tela */
+  (function(){
+    var bt=$("dashPendentes");if(!bt)return;
+    function vai(){abrirVendasPendentes(quem);}
     bt.onclick=vai;
     bt.onkeydown=function(ev){if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();vai();}};
   })();
@@ -48008,6 +48077,11 @@ function ligar(){
 
   $("pedBusca").oninput=renderPedidos;
   $("pedVend").onchange=renderPedidos;$("pedSit").onchange=renderPedidos;
+  if($("pedPendentes"))$("pedPendentes").onclick=function(){
+    var sit=$("pedSit");
+    sit.value=(sit.value==="pendente"?"":"pendente");
+    renderPedidos();
+  };
   ["pedDe","pedAte"].forEach(function(id){$(id).onchange=function(){
     pedPeriodo="livre";
     Array.prototype.forEach.call($("pedPer").querySelectorAll("button"),function(x){
