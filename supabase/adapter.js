@@ -1183,7 +1183,7 @@
          - ultimo_acesso: a tela de usuários mostra "nunca acessou" sem ele. */
       var r = conferir(
         await sb.from("perfis")
-          .select("user_id,nome,funcao,loja,ativo,jornada,ultimo_acesso,consentiu_facial_em,criado_em")
+          .select("user_id,nome,funcao,loja,ambas,ativo,jornada,ultimo_acesso,consentiu_facial_em,criado_em")
           .eq("user_id", id).maybeSingle(),
         "ler perfil"
       );
@@ -1193,7 +1193,9 @@
     /* toda a equipe (alimenta USUARIOS/EQUIPE no lugar de config/usuarios).
        jornada vai junto: é ela que o cartão de ponto usa em jornadaDe(nome). */
     adapter.perfis = async function (somenteAtivos) {
-      var q = sb.from("perfis").select("user_id,nome,funcao,loja,ativo,jornada").order("nome", { ascending: true });
+      /* `ambas` é a marca de quem entra nas DUAS empresas (26/10): sem ela o sistema
+         não sabia que o Administrador pertence às duas e o tirava da lista da WF. */
+      var q = sb.from("perfis").select("user_id,nome,funcao,loja,ambas,ativo,jornada").order("nome", { ascending: true });
       if (somenteAtivos !== false) q = q.eq("ativo", true);
       var r = conferir(await q, "ler perfis");
       return r.data || [];
