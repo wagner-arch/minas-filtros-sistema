@@ -13426,6 +13426,8 @@ window.__opcoesProdutoMF=function(){return opcoesProduto();};
 window.__hojeMF=function(){return hojeISO();};
 window.__abrirOSMF=function(o){ir("os");return abrirOS(o);};
 window.__negociosMF=function(){return negocios;};
+window.__jaTemCartaoMF=movimentoJaTemCartao;
+window.__atualizarFunilMF=atualizarFunilCliente;
 window.__renderFunilMF=function(){return renderFunil();};
 window.__funilClienteMF=function(cid,m,q){return atualizarFunilCliente(cid,m,q);};
 window.__funilCobertoMF=function(c,u){return funilJaCoberto(c,u);};
@@ -38470,6 +38472,41 @@ function respPeloMovimento(c,desde){
    mais lead criava sem trava nenhuma, e etapaPelosDados levava o cartão de volta para Venda.
    A regra da v277 continua: movimento NOVO (pedido, orçamento ou contato depois do
    fechamento) faz nascer outro cartão — o que não nasce mais é a cópia do mesmo movimento. */
+/* O MOVIMENTO JÁ ESTÁ NUM CARTÃO? (26/10)
+   A trava da v398 pergunta "houve movimento novo depois do último cartão fechado?" — e
+   houve: o atendimento que levou à MESMA venda. O cartão novo nascia e o `etapaPelosDados`
+   o levava para "venda" PELO MESMO PEDIDO do cartão anterior, ou seja, a mesma venda duas
+   vezes no quadro. Medido no banco dele em 26/10: CRISTAULAT com 3 cartões ativos (os dois
+   novos nascidos no MESMO SEGUNDO, apontando para o pedido 20827 do cartão antigo) e
+   GUIMARAES ROSA com 2 (os dois no pedido 20829).
+   Aqui a pergunta é outra, e é a que faltava: o pedido (ou o orçamento) que DARIA a etapa
+   do cartão novo já é o de algum cartão deste cliente? Sendo, o movimento já está
+   representado e não nasce outro. Conta cartão desativado também: o pedido já está num,
+   e criar outro para ele seria duplicar de novo.
+   Isto resolve junto o caso das DUAS ABAS: a trava de "uma varredura por vez" é por aba,
+   e os dois cartões da CRISTAULAT cairiam no mesmo pedido. */
+function movimentoJaTemCartao(c,desde){
+  if(!c)return false;
+  var d=String(desde||"").slice(0,10)||"0000-00-00";
+  function emAlgumCartao(campo,id){
+    return negocios.some(function(n){
+      return n.clienteId===c.id&&n.loja===lojaAtual&&n[campo]===id;});
+  }
+  /* TODO pedido e TODO orçamento do período, não só o que o `etapaPelosDados` escolheu:
+     com dois pedidos no mesmo dia ele devolve um deles, e se for justamente o que já tem
+     cartão a trava barrava o OUTRO, que é venda nova de verdade (o caso da CONSTRUMELO,
+     com os pedidos 20830 e 20831). Basta UM movimento sem cartão para o cartão nascer. */
+  var peds=pedidos.filter(function(p){
+    return p.clienteId===c.id&&p.loja===lojaAtual&&p.status!=="Cancelada"&&!p.cancelada&&
+      String(p.data||"")>=d;});
+  if(peds.some(function(p){return !emAlgumCartao("pedidoId",p.id);}))return false;
+  var orcs=orcamentos.filter(function(o){
+    return o.clienteId===c.id&&o.loja===lojaAtual&&String(o.data||"")>=d&&o.situacao!=="perdido";});
+  if(orcs.some(function(o){return !emAlgumCartao("orcamentoId",o.id);}))return false;
+  /* nenhum movimento novo de venda: só trava se havia algum (senão quem decide é o
+     funilJaCoberto, que trata o contato) */
+  return peds.length>0||orcs.length>0;
+}
 function funilJaCoberto(c,ult){
   if(!ult||!etapaFechada(ult.etapa))return false;
   /* A CONTA É PELO INSTANTE EM QUE O CARTÃO FOI CRIADO (medido no id, regra da v387).
@@ -38511,6 +38548,9 @@ async function atualizarFunilCliente(cid,motivo,quem){
     var ult=ultimoNegocio(cid);
     var temOrcNovo=orcamentos.some(function(o){return o.clienteId===cid&&o.loja===lojaAtual&&(!ult||String(o.data||"")>=String(ult.etapaEm||ult.criadoEm).slice(0,10))&&o.situacao!=="perdido"&&o.situacao!=="convertido";});
     var desdeUlt=ult?String(ult.etapaEm||ult.criadoEm).slice(0,10):"";
+    /* o movimento que daria a etapa do cartão novo já está num cartão? então não nasce
+       outro — vale para lead e para quem já comprou (26/10) */
+    if(movimentoJaTemCartao(c,desdeUlt))return null;
     if(ehLead(c)){
       if(ult&&ult.etapa==="venda")return null;
       if(ult&&ult.etapa==="perdido"&&motivo!=="atendimento"&&!temOrcNovo)return null;
