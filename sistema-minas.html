@@ -11577,6 +11577,14 @@ window.__esItensMF=function(l){if(l){esItens=l;try{renderEsItens();}catch(e){}}r
 window.__confirmarRepMF=function(r,idx){repPend={r:r,idx:idx};return confirmarReposicaoItens();};
 window.__itensDeEstoqueMF=function(p){return itensDeEstoque(p);};
 window.__aprovarVendaMF=function(p,cx){return aprovarVenda(p,cx);};
+window.__pedeCreditoMF=vendaPedeCredito;
+window.__htmlCreditoMF=htmlCreditoVenda;
+window.__etapaVendaMF=function(p){return etapaVenda(p);};
+window.__veiculosMF=function(){return veiculos;};
+window.__podeCreditoMF=podeAprovarCredito;
+window.__veiculosVisiveisMF=veiculosVisiveis;
+window.__renderVeicMF=function(){return renderVeiculos();};
+window.__renderRemMF=function(){return renderExtratoRem();};
 window.__lancarMovMF=function(pid,q,o,d,doc,obs,data,c){return lancarMov(pid,q,o,d,doc,obs,data,c);};
 window.__finalizarVendaMF=function(){return salvarPedido();};
 window.__irEtapaMF=function(n){return irEtapa(n);};
@@ -19481,11 +19489,30 @@ function localDaVenda(p){
 /* venda de treinamento NÃO é venda pendente: não reserva estoque e não entra na fila do
    financeiro (v376) */
 function vendaPendente(p){return !ehTeste(p)&&p.status!=="Cancelada"&&!p.aprovado&&!(p.aprovado===undefined&&p.encerrada);}
+/* as formas que sao RISCO DE CREDITO: o dinheiro entra depois e pode nao entrar.
+   Cartao nao entra aqui — a operadora garante o recebimento. */
+function ehFormaCredito(tipo){
+  return /cheque|boleto/i.test(String(tipo||""));
+}
+function formasCreditoDaVenda(p){
+  return ((p&&p.formas)||[]).filter(function(f){
+    return ehFormaCredito(f.tipo)&&(+f.valor||0)>0;
+  }).map(function(f){return f.tipo;});
+}
+function vendaPedeCredito(p){return formasCreditoDaVenda(p).length>0;}
+/* quem aprova credito: o DEPARTAMENTO FINANCEIRO. A conta e pelo PERFIL, nao pela acao
+   aprovarFinanceiro — ela pode ser dada a outra funcao, e a regra dele nomeia o posto. */
+var PERFIS_CREDITO=["Financeiro","Administrador"];
+function podeAprovarCredito(quem){
+  return PERFIS_CREDITO.indexOf(perfilDe(quem||usuarioAtual))>=0;
+}
 function etapaVenda(p){
   /* cliente de teste: a venda para aqui, com o status dizendo o que ela é (v376) */
   if(ehTeste(p))return STATUS_TESTE;
   if(p.abaixoTabela&&!p.descontoAutorizado)return p.descontoRecusado?"Venda com desconto recusado":"Aguardando aprovação de desconto";
   if(p.instalacao&&!p.instaladoEm)return "Aguardando instalação";
+  /* cheque e boleto: o status diz na lista que aquela venda espera o crédito */
+  if(vendaPedeCredito(p)&&!p.creditoAprovadoEm)return "Aguardando aprovação de crédito";
   return "Aguardando aprovação financeira";
 }
 /* o que já saiu do estoque por este pedido, líquido de estornos e ajustes, por produto e local */
@@ -23006,11 +23033,24 @@ function multasDoVeic(id){
   return multas.filter(function(m){return m.veiculoId===id;})
     .sort(function(a,b){return String(b.dataHora||"").localeCompare(String(a.dataHora||""));});
 }
+/* os veiculos que a pessoa enxerga: a gestao ve a frota, o colaborador ve o que esta
+   com ele (pela posse aceita de hoje, ou pelo condutor do cadastro) */
+function veiculosVisiveis(){
+  var todos=veiculosDaLoja();
+  if(ehGestor())return todos;
+  return todos.filter(function(v){
+    try{ if(condutorAtual(v.id)===usuarioAtual)return true; }catch(e){}
+    return (v.condutor||"")===usuarioAtual;
+  });
+}
 function renderVeiculos(){
   if(!$("vcBody"))return;
+  /* o colaborador nao cadastra veiculo nem lanca custo da frota: a tela e de consulta */
+  var soMeu=!ehGestor();
+  if($("vcNovo"))$("vcNovo").hidden=soMeu;
   var q=($("vcBusca").value||"").toLowerCase(),f=$("vcFiltro").value;
   var ini=iso(new Date(new Date().getFullYear(),new Date().getMonth(),1));
-  var lista=veiculosDaLoja().filter(function(v){
+  var lista=veiculosVisiveis().filter(function(v){
     if(q&&((v.placa||"")+" "+(v.marca||"")+" "+(v.modelo||"")+" "+(v.condutor||"")).toLowerCase().indexOf(q)<0)return false;
     if(f==="inativo")return v.status==="inativo";
     if(f==="alerta")return alertasVeic(v).length>0;
@@ -23019,12 +23059,13 @@ function renderVeiculos(){
   }).sort(function(a,b){return String(a.placa||"").localeCompare(String(b.placa||""),"pt-BR");});
   $("vcCount").textContent=lista.length+(lista.length===1?" veículo":" veículos");
 
-  var todos=veiculosDaLoja().filter(function(v){return v.status!=="inativo";});
+  var todos=veiculosVisiveis().filter(function(v){return v.status!=="inativo";});
   var custoMes=todos.reduce(function(s,v){return s+custoVeic(v.id,ini,hojeISO()).total;},0);
   var kmMes=todos.reduce(function(s,v){return s+kmRodadoVeic(v.id,ini,hojeISO());},0);
   var pend=todos.reduce(function(s,v){return s+(alertasVeic(v).length?1:0);},0);
   $("vcKpis").innerHTML=
-    '<div class="kpi"><div class="l">Veículos em uso</div><div class="v">'+todos.length+"</div></div>"+
+    '<div class="kpi"><div class="l">'+(soMeu?"Veículo sob sua responsabilidade":"Veículos em uso")+
+      '</div><div class="v">'+todos.length+"</div></div>"+
     '<div class="kpi"><div class="l">Custo do mês</div><div class="v" style="color:var(--crit)">'+BRL(custoMes)+"</div></div>"+
     '<div class="kpi"><div class="l">Km rodados no mês</div><div class="v">'+kmMes.toLocaleString("pt-BR")+"</div></div>"+
     '<div class="kpi"><div class="l">Custo por km</div><div class="v">'+(kmMes?BRL(custoMes/kmMes):"—")+"</div></div>"+
@@ -32456,6 +32497,35 @@ function garantiaServicoVigente(equipId,exceto){
    As funcoes ja estao gravadas no banco dele, entao acrescentar a tela no codigo nao muda nada
    la - e preciso regravar, uma vez, como foi feito com as categorias e os centros de custo. */
 var PERFIS_TELA_OS=["Vendedor","Prospector","Estoquista"];
+var TELAS_COMERCIAL_25={
+  "Vendedor":["os","fatur","veiculos"],
+  "Instalador":["os","fatur","veiculos"],   /* o instalador perdeu a OS no banco: devolvida */
+  "Gerente":["os"],
+  "Financeiro":["os"]
+};
+async function liberarTelasComercial(){
+  if(!db||!ehAdministrador())return 0;
+  var doc=null,antes={};
+  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
+  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.telasComercial25)return 0;}
+  var n=0,quais=[];
+  Object.keys(TELAS_COMERCIAL_25).forEach(function(nome){
+    var f=funcoes.filter(function(x){return x.nome===nome;})[0];
+    if(!f)return;
+    f.telas=f.telas||[];
+    TELAS_COMERCIAL_25[nome].forEach(function(t){
+      if(f.telas.indexOf(t)<0){f.telas.push(t);n++;quais.push(nome+"·"+t);}
+    });
+  });
+  if(n){try{await gravarFuncoes();}catch(e){console.warn("liberar telas comercial",e);return 0;}}
+  antes.telasComercial25={quando:hojeISO(),por:usuarioAtual,liberadas:n,quais:quais};
+  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador das telas",e);}
+  if(n){
+    try{render();}catch(e){}
+    toast("Liberado: "+n+" acesso(s) — "+quais.join(", ")+".");
+  }
+  return n;
+}
 async function liberarTelaOS(){
   if(!db||!ehAdministrador())return 0;
   var doc=null,antes={};
@@ -36326,6 +36396,7 @@ function renderPedDet(){
        responsável pelo estoque ou recusada —, porque é ela que trava a aprovação do financeiro
        (regra dele, 20/09, v175). Retirada já aceita some da ficha (regra dele, 24/09: "tirar essa
        opção também"); ela continua em Estoque Empresa › Requisições e na venda completa. */
+    htmlCreditoVenda(p)+
     (retiradaPendentePedido(p)||verRemun?htmlRetiradasPedido(p):"");
 
   /* avisos e ações conforme o estado */
@@ -36665,8 +36736,18 @@ function htmlCaixasDaVenda(fs){
 }
 async function aprovarVenda(p,caixaId){
   if(!pode("aprovarFinanceiro")){toast("Só quem tem a permissão de aprovar no financeiro aprova o recebimento.");return false;}
+  /* venda no cheque ou no boleto: só o departamento financeiro libera (regra dele, 25/10).
+     Aqui é só a RECUSA — o registro de quem aprovou entra junto com a aprovação, lá
+     embaixo, senão uma venda recusada por outro motivo ficaria com o crédito gravado. */
+  if(vendaPedeCredito(p)&&!p.creditoAprovadoEm&&!podeAprovarCredito()){
+    toast("Venda em "+formasCreditoDaVenda(p).join(" e ")+": só o departamento financeiro "+
+      "aprova o crédito. Quem está no posto hoje: "+
+      (EQUIPE.filter(podeAprovarCredito).join(", ")||"ninguém")+".");
+    return false;
+  }
   if(!vendaPendente(p)){toast("O pedido "+p.numero+" já foi aprovado ou está cancelado.");return false;}
-  if(p.status!=="Aguardando aprovação financeira"){toast("O pedido "+p.numero+" ainda está em: "+p.status+".");return false;}
+  if(p.status!=="Aguardando aprovação financeira"&&p.status!=="Aguardando aprovação de crédito"){
+    toast("O pedido "+p.numero+" ainda está em: "+p.status+".");return false;}
   /* retirada de estoque ainda não aceita pelo responsável pelo estoque: não aprova (regra do Wagner, 14/09) */
   var retNaoAceita=requisicoes.filter(function(r){return r.tipo==="retirada"&&r.pedidoId===p.id&&(r.status==="pendente"||r.status==="recusada");});
   if(retNaoAceita.length){
@@ -36721,6 +36802,14 @@ async function aprovarVenda(p,caixaId){
     /* 4. comissão: entra no mês da primeira aprovação */
     p.aprovado=true;if(!p.aprovadoEm)p.aprovadoEm=hojeISO();
     p.aprovadoPor=usuarioAtual;p.caixaDestino=caixaId||"";
+    /* cheque e boleto: quem liberou o crédito fica registrado no pedido */
+    if(vendaPedeCredito(p)&&!p.creditoAprovadoEm){
+      p.creditoAprovadoPor=usuarioAtual;
+      p.creditoAprovadoEm=hojeISO();
+      p.creditoAprovadoHora=agoraHM();
+      p.creditoFormas=formasCreditoDaVenda(p);
+      registrarEvento(p,"Crédito aprovado por "+usuarioAtual+" · "+p.creditoFormas.join(" e "));
+    }
     p.encerrada=true;p.status="Aprovada";p.devolucaoFin=null;
     registrarEvento(p,"Recebimento aprovado · "+BRL(p.total)+" · baixa no estoque de "+nomeLocal(loc)+
       (baixou.length?"":" (já estava baixado)"));
@@ -39557,6 +39646,22 @@ function ligarAssinaturaDoc(){
 function limparAssinaturaDoc(){var c=$("docv_sig");if(c)c.getContext("2d").clearRect(0,0,c.width,c.height);docSigFeita=false;}
 function fecharDocVenda(){$("docVenda").hidden=true;docOSAberta=null;document.body.classList.remove("doc-aberta","doc-os");}
 var finFoco="";
+/* o aviso do crédito, do jeito que a tela precisa dizer em cada momento:
+   esperando o financeiro, ou já liberado e por quem */
+function htmlCreditoVenda(p){
+  if(!vendaPedeCredito(p))return "";
+  var f=formasCreditoDaVenda(p).join(" e ");
+  if(p.creditoAprovadoEm){
+    return '<div class="note ok" style="margin:6px 0"><b>Crédito aprovado</b> por '+
+      esc(p.creditoAprovadoPor||"—")+" em "+esc(dataBR(p.creditoAprovadoEm))+
+      (p.creditoAprovadoHora?" às "+esc(p.creditoAprovadoHora):"")+" · "+esc(f)+"</div>";
+  }
+  var postos=EQUIPE.filter(podeAprovarCredito);
+  return '<div class="note warn" style="margin:6px 0"><b>Venda em '+esc(f)+
+    " — precisa da aprovação de crédito.</b> O dinheiro entra depois, então quem libera é o "+
+    "departamento financeiro"+(postos.length?" ("+esc(postos.join(", "))+")":"")+
+    ". Quem aprovar fica registrado no pedido.</div>";
+}
 function cartaoFin(p,podeAprovar,cxs,cxPadrao){
   var dd=diasDe(p.data);
   var formas=(p.formas||[]).filter(function(f){return +f.valor>0;});
@@ -39568,6 +39673,7 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
       (p.instalacao?" · instalação "+esc(respInstalacao(p)||"—")+(p.instaladoEm?" em "+esc(dataBR(p.instaladoEm)):""):" · sem instalação")+"</div>"+
     '<div style="margin:0 0 8px"><button class="btn ghost sm" type="button" data-finver="'+p.id+'">Ver a venda completa</button></div>'+
     htmlRetiradasPedido(p)+
+    htmlCreditoVenda(p)+
     (p.devolucaoFin?'<div class="note warn"><b>Devolvida</b> por '+esc(p.devolucaoFin.por)+" em "+
       esc(dataBR(p.devolucaoFin.quando))+": "+esc(p.devolucaoFin.motivo)+"</div>":"")+
     (p.obsInstalacao?'<div class="note" style="margin:6px 0"><b>Instalação</b> ('+esc(p.instaladoPor||"—")+", "+
@@ -41000,7 +41106,11 @@ var TODAS_TELAS=GRUPOS_TELA.reduce(function(a,g){return a.concat(g.telas.map(fun
 /* as telas do dia a dia, que as funções padrão recebem. NÃO é o grupo do menu: o grupo
    "Operações" deixou de existir em 16/10 e virou parte de Comercial — esta lista é de
    permissão, e mexer nela mudaria o que cada função enxerga. */
-var TELAS_OPERACAO=["dash","agenda","ponto","metasop","ativ","atend","orcam","pedidos","leads","clientes","produtos","manut","estColab"];
+var TELAS_OPERACAO=["dash","agenda","ponto","metasop","ativ","atend","orcam","pedidos",
+  "leads","clientes","produtos","manut","estColab",
+  /* 25/10: o vendedor da casa tambem e tecnico e cuida de um veiculo.
+     As tres se travam sozinhas no proprio usuario — ver veiculosVisiveis e renderExtratoRem. */
+  "os","fatur","veiculos"];
 var funcoes=[];
 var SEED_FUNCOES=[
   {nome:"Administrador",desc:"Enxerga e aprova tudo",telas:TODAS_TELAS.slice(),
@@ -48868,6 +48978,8 @@ async function continuarBoot(){
   /* a aba Ordens de Serviço liberada para Vendedor, Prospector e Estoquista (decisão dele, 05/10):
      as funções já estão gravadas no banco, então o código novo só vale depois de regravar uma vez */
   await passoBoot("liberar a tela de OS",liberarTelaOS);
+  /* OS, Remunerações e Veículos para o vendedor, que também é técnico (25/10) */
+  await passoBoot("acessos do comercial",liberarTelasComercial);
   /* os 12 status novos passaram a conduzir a tela: as OS já gravadas ganham o status certo, uma
      vez só, deduzido da lista antiga (pedido dele, 09/10) */
   await passoBoot("acerto do status das OS",ajustarSitOS);
