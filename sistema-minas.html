@@ -13957,6 +13957,10 @@ window.__equipeMF=function(){return EQUIPE.slice();};
 window.__usuariosMF=function(){return USUARIOS;};
 window.__porUsuariosMF=function(l){USUARIOS=l;};
 window.__porDbMF=function(d){db=d;};
+window.__abrirUsuarioPorNomeMF=function(n){
+  var i=-1;USUARIOS.forEach(function(u,k){if(u.nome===n)i=k;});
+  if(i<0)return false;abrirUsuario(i);return true;};
+window.__salvarUsuarioMF=function(){$("usSalvar").click();};
 window.__dbTesteMF=function(){return db;};
 /* o teste do cofre troca o banco por um de mentira e inspeciona o que foi usado */
 window.__dbPorMF=function(x){db=x;return db;};
@@ -20472,7 +20476,9 @@ var USUARIOS_OUTRAS=[];
 function listaUsuariosParaGravar(){
   var fora=(USUARIOS_OUTRAS||[]).filter(function(u){
     return !USUARIOS.some(function(x){return x.nome===u.nome;});});
-  return USUARIOS.concat(fora);
+  /* o colaborador que o "Adicionar" montou e ninguém salvou ainda NÃO vai ao banco (26/10):
+     a trava fica aqui, na raiz, porque qualquer gravação de outra coisa o levaria junto */
+  return USUARIOS.filter(function(u){return u!==usNovoPendente;}).concat(fora);
 }
 async function gravarUsuarios(){if(!db)return;try{await db.doc("config/usuarios").set({lista:listaUsuariosParaGravar()});}catch(e){console.warn(e);}}
 async function gravarOrigens(){if(!db)return;try{await db.doc("config/origens").set({lista:ORIGENS});}catch(e){console.warn(e);}}
@@ -20667,6 +20673,15 @@ function renderMatriz(){
 }
 
 var editandoUs=null;
+/* o colaborador que o "Adicionar" montou e o Salvar ainda não gravou (26/10) */
+var usNovoPendente=null;
+function descartarUsuarioPendente(){
+  if(!usNovoPendente)return;
+  var i=USUARIOS.indexOf(usNovoPendente);
+  if(i>=0)USUARIOS.splice(i,1);
+  usNovoPendente=null;
+  try{sincronizarEquipe();renderUsuarios();}catch(e){}
+}
 function renderUsuarios(){
   try{if($("usMinhaSenha"))$("usMinhaSenha").hidden=!modoBanco();}catch(e){}
   /* o select de adição rápida acompanha as funções cadastradas, não uma lista fixa */
@@ -20975,9 +20990,16 @@ function lerEstoquesDoForm(u){
 /* a lista de empresas do cadastro, e o aviso do que a escolha muda */
 function montarEmpresaUsuario(u){
   var s=$("u_empresa");if(!s)return;
-  if(!s.options.length)LOJAS.forEach(function(l){
-    var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;s.appendChild(o);});
-  s.value=(u&&u.loja)||lojaAtual;
+  /* "— ESCOLHA —" NA FRENTE (26/10). Antes o campo caía em `lojaAtual` quando o cadastro
+     estava sem empresa, e aí ele MOSTRAVA "Minas Filtros" como se alguém tivesse escolhido —
+     o Erico, a Flavia e o Gustavo estavam assim, sem empresa nenhuma gravada. Campo que
+     mostra uma escolha que não existe faz a pessoa salvar sem saber o que está salvando. */
+  if(!s.options.length){
+    var oz=document.createElement("option");oz.value="";oz.textContent="— escolha —";s.appendChild(oz);
+    LOJAS.forEach(function(l){
+      var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;s.appendChild(o);});
+  }
+  s.value=(u&&u.loja)||"";
   /* só Administrador e Gerente mudam a empresa de alguém */
   s.disabled=!ehGestor();
   /* o acesso entra na MESMA empresa: o campo de lá é o espelho deste */
@@ -20985,10 +21007,20 @@ function montarEmpresaUsuario(u){
   if(sl){
     if(!sl.options.length)LOJAS.forEach(function(l){
       var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;sl.appendChild(o);});
+    if(!sl.querySelector('option[value=""]')){
+      var oz2=document.createElement("option");oz2.value="";oz2.textContent="— escolha —";
+      sl.insertBefore(oz2,sl.firstChild);
+    }
     sl.value=s.value;sl.disabled=true;
   }
   s.onchange=function(){var x=$("u_acLoja");if(x)x.value=s.value;};
   var nota=$("u_empresaNota");
+  if(nota&&ehGestor()&&!s.value){
+    nota.innerHTML='<span style="color:var(--crit)"><b>Falta escolher a empresa.</b> '+
+      'Sem ela o colaborador não aparece nas listas de nenhuma das duas, e o acesso não sabe '+
+      'onde ele entra.</span>';
+    return;
+  }
   if(nota)nota.innerHTML=ehGestor()
     ? ("Ele entra <b>só nesta empresa</b> e aparece nas listas dela. Mudando a empresa, o histórico que ele já tem "+
        "<b>continua onde está</b> — o que muda é onde ele trabalha daqui para a frente.")
@@ -46947,14 +46979,21 @@ function ligar(){
   $("plCancelar").onclick=function(){$("plForm").hidden=true;$("plLista").hidden=false;$("srCard").hidden=false;editandoPlano=null;};
 
   /* ---- Gestão Administrativa ---- */
-  $("usAdd").onclick=async function(){
+  $("usAdd").onclick=function(){
     var n=$("usNome").value.trim();
     if(!n){toast("Escreva o nome.");return;}
     if(USUARIOS.some(function(u){return u.nome===n;})){toast("Esse usuário já existe.");return;}
-    USUARIOS.push({nome:n,perfil:$("usPerfil").value,ativo:true,cadastradoEm:hojeISO()});
-    await gravarUsuarios();sincronizarEquipe();$("usNome").value="";
-    renderUsuarios();abrirUsuario(USUARIOS.length-1);toast("Usuário criado — complete o cadastro.");};
-  $("usCancelar").onclick=function(){$("usForm").hidden=true;$("usLista").hidden=false;editandoUs=null;};
+    /* O CADASTRO NÃO É MAIS GRAVADO AQUI (26/10). Ele nascia SEM EMPRESA e ia direto para o
+       banco, antes de a ficha abrir — foi assim que o Erico (19/10), a Flavia e o Gustavo
+       (20/09) ficaram sem empresa nenhuma. Agora ele é montado na memória, a ficha abre
+       pedindo a empresa, e quem grava é o "Salvar colaborador". Desistindo, ele sai da lista. */
+    usNovoPendente={nome:n,perfil:$("usPerfil").value,ativo:true,cadastradoEm:hojeISO()};
+    USUARIOS.push(usNovoPendente);
+    sincronizarEquipe();$("usNome").value="";
+    renderUsuarios();abrirUsuario(USUARIOS.length-1);
+    toast("Complete o cadastro e escolha a empresa para salvar.");};
+  $("usCancelar").onclick=function(){descartarUsuarioPendente();
+    $("usForm").hidden=true;$("usLista").hidden=false;editandoUs=null;};
   ["u_entrada","u_almocoIni","u_almocoFim","u_saida","u_tolerancia"].forEach(function(id){$(id).onchange=notaJornada;});
   ["u_salario","u_vr","u_assiduidade","u_desempenho"].forEach(function(id){$(id).oninput=notaRemuneracao;});
   $("u_editarMetas").onclick=function(){
@@ -47017,9 +47056,22 @@ function ligar(){
     var u=editandoUs||{ativo:true,cadastradoEm:hojeISO()};
     var nomeAntigo=u.nome;
     u.nome=n;u.perfil=$("u_perfil").value;u.ativo=($("u_ativo").value==="sim");
-    /* a empresa do colaborador (23/10): só a gestão muda; quem não é mantém a que estava */
+    /* A EMPRESA É OBRIGATÓRIA (26/10): sem ela o colaborador não entra na lista de nenhuma
+       das duas empresas. A exigência vale para quem PODE escolher (a gestão); quem não é
+       gestão tem o campo travado, então mantém a empresa que estava — e, não havendo
+       nenhuma, cai na empresa aberta, como era antes (senão ele não salvaria a própria
+       ficha e ficaria sem saída na tela). */
     var emp=$("u_empresa");
-    if(emp&&ehGestor())u.loja=emp.value||lojaAtual;
+    if(emp&&ehGestor()){
+      if(!emp.value){
+        avisoUsuario('<div class="note crit"><b>Escolha a empresa deste colaborador.</b> '+
+          'Sem ela ele não aparece nas listas da Minas Filtros nem da WF Filtros, e o acesso '+
+          'ao sistema não sabe onde ele entra.</div>');
+        try{emp.focus();}catch(e){}
+        return;
+      }
+      u.loja=emp.value;
+    }
     else if(!u.loja)u.loja=lojaAtual;
     /* os estoques que ele responde (23/10): a trava do gestor vale dentro da função */
     try{u.estoques=lerEstoquesDoForm(u);}catch(e){}
@@ -47033,7 +47085,8 @@ function ligar(){
     u.facial=usFacial;u.facialSig=usFacialSig;
     /* o Administrador também pode cadastrar a foto de alguém: vai para o documento da pessoa */
     try{if(usFacial)await salvarFacialDoc(n,{foto:usFacial,sig:usFacialSig,quando:hojeISO()+" "+agoraHM(),por:usuarioAtual});}catch(eFc){console.warn("facial",eFc);}
-    if(!editandoUs)USUARIOS.push(u);
+    if(u===usNovoPendente)usNovoPendente=null;   /* já está na lista, e agora foi gravado */
+    if(!editandoUs&&USUARIOS.indexOf(u)<0)USUARIOS.push(u);
     if(nomeAntigo&&nomeAntigo!==n){
       /* renomear mantém o histórico ligado */
       atendimentos.forEach(function(a){if(a.colaborador===nomeAntigo)a.colaborador=n;});
