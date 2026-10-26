@@ -6246,6 +6246,16 @@ img{max-width:100%}
       <b>aparelho do cliente</b> com a data da última compra e a data da próxima troca — é isso que alimenta
       esta tela. <b>Nenhum pedido de venda é criado</b>: compra antiga não pode gerar comissão, título a
       receber nem baixa de estoque.</div>
+    <div class="note" id="im_corrBox" style="margin:12px 0 4px">
+      <b>Arquivo de correção (.json)</b> — é o arquivo que o Oráculo prepara quando a lista inteira
+      precisa ser refeita: nele cada aparelho já vem com o <b>cadastro certo do cliente</b> e os clientes
+      novos já vêm montados, sem repetição. O sistema confere o arquivo, mostra o que vai gravar e
+      pergunta antes. <b>Só o Administrador.</b>
+      <div class="actions" style="justify-content:flex-start;margin:8px 0 0">
+        <button class="btn" type="button" id="im_corrBt">Escolher o arquivo de correção…</button>
+        <input type="file" id="im_corr" accept=".json" class="os-foto-in">
+      </div>
+    </div>
     <div class="actions" style="justify-content:flex-start;margin:14px 0 10px">
       <button class="btn ghost" type="button" id="im_arqBt">Escolher o arquivo…</button>
       <input type="file" id="im_arq" accept=".csv,.txt" class="os-foto-in">
@@ -12994,6 +13004,61 @@ function ajustarBotaoCopias(){
   bt.hidden=!n;
   if(n)bt.textContent="Aparelhos repetidos pela sincronizacao ("+n+")";
 }
+/* ARQUIVO DE CORREÇÃO (v417, 26/10). A lista importada em 02/10 ligou 9.978 aparelhos ao cliente
+   errado: o importador da v256 casava pelo CÓDIGO do sistema antigo, e a numeração do relatório
+   de manutenção não é a mesma do cadastro. O arquivo de correção é montado fora do sistema, com o
+   cliente certo de cada linha já resolvido (nome + telefone ou cidade), e aqui só é CONFERIDO e
+   GRAVADO. Regras: só o Administrador; o arquivo tem de ser desta empresa; todo aparelho tem de
+   apontar para um cadastro que existe (no sistema ou no próprio arquivo); o que já existe pelo id
+   é pulado, então escolher o mesmo arquivo duas vezes não duplica nada. */
+async function importarArquivoCorrecao(texto,nomeArq){
+  var al=$("im_alerta");
+  function aviso(h){al.innerHTML=h;try{al.scrollIntoView({block:"nearest"});}catch(e){}}
+  if(!ehAdministrador()){aviso('<div class="note crit">Só o Administrador grava o arquivo de correção.</div>');return;}
+  if(clientesCarregando){aviso('<div class="note warn">Os cadastros ainda estão carregando. Espere um instante e escolha o arquivo de novo.</div>');return;}
+  var d;try{d=JSON.parse(texto);}catch(e){aviso('<div class="note crit">Este arquivo não é um arquivo de correção (não deu para ler).</div>');return;}
+  if(!d||d.formato!=="mf-manutencao-correcao-v1"||!Array.isArray(d.clientes)||!Array.isArray(d.aparelhos)){
+    aviso('<div class="note crit">Este arquivo não é um arquivo de correção da Manutenção Periódica.</div>');return;}
+  if(d.loja!==lojaAtual){aviso('<div class="note crit">Este arquivo é da empresa <b>'+esc(d.loja)+'</b>. Entre nela para gravá-lo.</div>');return;}
+  var idsCli={};clientes.forEach(function(c){idsCli[c.id]=1;});
+  var idsEq={};equipamentos.forEach(function(e){idsEq[e.id]=1;});
+  var novosCli=d.clientes.filter(function(c){return c&&c.id&&!idsCli[c.id];});
+  novosCli.forEach(function(c){idsCli[c.id]=1;});
+  var erros=[];
+  d.clientes.forEach(function(c){if(!c||!c.id||!c.nome||c.loja!==lojaAtual)erros.push("cliente sem id, nome ou empresa");});
+  var novosEq=d.aparelhos.filter(function(e){return e&&e.id&&!idsEq[e.id];});
+  novosEq.forEach(function(e){if(!e.clienteId||!idsCli[e.clienteId])erros.push("aparelho "+e.id+" aponta para um cadastro que não existe");
+    if(e.loja!==lojaAtual)erros.push("aparelho "+e.id+" de outra empresa");});
+  if(erros.length){aviso('<div class="note crit"><b>O arquivo não foi gravado.</b> '+erros.length+' problema(s), o primeiro: '+esc(erros[0])+'</div>');return;}
+  if(!novosCli.length&&!novosEq.length){aviso('<div class="note">Nada para gravar: tudo o que está neste arquivo já está no sistema.</div>');return;}
+  if(!confirm("Gravar o arquivo de correção "+(nomeArq||"")+"?\n\n"+novosCli.length+" cliente(s) novo(s)\n"+
+    novosEq.length+" aparelho(s)\n\n"+(d.resumo||"")))return;
+  $("im_ok").disabled=true;$("im_fechar").disabled=true;$("im_corrBt").disabled=true;
+  var feitoC=0,feitoE=0;
+  try{
+    for(var i=0;i<novosCli.length;i+=200){
+      var b=novosCli.slice(i,i+200);
+      if(db)await db.gravarVarios("clientes",b,{bloco:200});
+      b.forEach(function(c){clientes.push(c);});feitoC+=b.length;
+      aviso('<div class="note">Gravando os clientes: '+feitoC+' de '+novosCli.length+'…</div>');
+    }
+    for(var j=0;j<novosEq.length;j+=250){
+      var be=novosEq.slice(j,j+250);
+      if(db)await db.gravarVarios("equipamentos",be,{bloco:250});
+      be.forEach(function(e){equipamentos.push(e);});feitoE+=be.length;
+      aviso('<div class="note">Gravando os aparelhos: '+feitoE+' de '+novosEq.length+'…</div>');
+    }
+    aviso('<div class="note ok"><b>Arquivo gravado.</b> '+feitoC+' cliente(s) novo(s) e '+feitoE+' aparelho(s). '+
+      'Avise o Oráculo para terminar a troca da lista (tirar a lista antiga e conferir os números).</div>');
+  }catch(e){
+    aviso('<div class="note crit"><b>Parou no meio:</b> '+esc(e&&e.message||String(e))+'. Gravados até aqui: '+
+      feitoC+' cliente(s) e '+feitoE+' aparelho(s). Escolher o mesmo arquivo de novo continua de onde parou.</div>');
+  }
+  $("im_ok").disabled=false;$("im_fechar").disabled=false;$("im_corrBt").disabled=false;
+  try{esquecerManutCli&&esquecerManutCli();}catch(e){}
+  render();
+}
+window.__importarCorrecaoMF=importarArquivoCorrecao;
 /* importador das manutenções periódicas (v256) — mesmo desenho do de clientes */
 function ligarImportManut(){
   var bt=$("mpImportar");if(!bt||bt.__ligado)return;
@@ -13008,6 +13073,15 @@ function ligarImportManut(){
   $("im_ok").onclick=importarManutencoes;
   $("im_parar").onclick=function(){impmParar=true;this.textContent="Parando…";};
   $("im_texto").oninput=previaImportManut;
+  if($("im_corrBox"))$("im_corrBox").hidden=!ehAdministrador();
+  $("im_corrBt").onclick=function(){$("im_corr").click();};
+  $("im_corr").onchange=function(){
+    var f=this.files&&this.files[0];if(!f)return;
+    var r=new FileReader();
+    r.onload=function(){importarArquivoCorrecao(String(r.result||""),f.name);};
+    r.readAsText(f,"utf-8");
+    this.value="";
+  };
   $("im_arqBt").onclick=function(){$("im_arq").click();};
   $("im_arq").onchange=function(){
     var f=this.files&&this.files[0];if(!f)return;
