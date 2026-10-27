@@ -2646,7 +2646,7 @@ img{max-width:100%}
                 <label>Este aparelho continua instalado em:</label>
                 <div class="note" id="v_eqEndAtual"></div>
                 <div class="chips" id="v_eqEndChips">
-                  <button type="button" data-vee="sim" aria-pressed="true">Sim, continua lá</button>
+                  <button type="button" data-vee="sim" aria-pressed="false">Sim, continua lá</button>
                   <button type="button" data-vee="nao" aria-pressed="false">Não, mudou de endereço</button>
                 </div>
               </div>
@@ -3831,7 +3831,7 @@ img{max-width:100%}
           <p class="help">Marque um ou mais. Cadastre novos em Configurações › Tipos de Atendimento.</p>
           <p class="sect-t" style="margin-top:22px">Quem procurou quem</p>
           <div class="chips" id="at_iniciativa">
-            <button type="button" data-i="passivo" aria-pressed="true">Passivo — o cliente nos procurou</button>
+            <button type="button" data-i="passivo" aria-pressed="false">Passivo — o cliente nos procurou</button>
             <button type="button" data-i="ativo" aria-pressed="false">Ativo — nós procuramos o cliente</button>
           </div>
         </div>
@@ -6788,7 +6788,7 @@ img{max-width:100%}
     <div class="fld" style="margin-bottom:14px">
       <label>Este aparelho será instalado no endereço do cadastro?</label>
       <div class="chips" id="ea_mesmo">
-        <button type="button" data-ea="sim" aria-pressed="true">Sim, o do cadastro</button>
+        <button type="button" data-ea="sim" aria-pressed="false">Sim, o do cadastro</button>
         <button type="button" data-ea="nao" aria-pressed="false">Não, é outro endereço</button>
       </div>
       <p class="help" id="ea_doCadastro"></p>
@@ -8017,7 +8017,7 @@ img{max-width:100%}
     <div class="sect" style="margin-top:18px">
       <p class="sect-t">Precisa de um retorno?</p>
       <div class="chips" id="fm_retorno">
-        <button type="button" data-r="nao" aria-pressed="true">Não, está resolvido</button>
+        <button type="button" data-r="nao" aria-pressed="false">Não, está resolvido</button>
         <button type="button" data-r="sim" aria-pressed="false">Sim, agendar novo contato</button>
       </div>
     </div>
@@ -15009,7 +15009,14 @@ function renderEndDoEquipVenda(){
     (a.contatoNome?("<br>Quem recebe: <b>"+esc(a.contatoNome)+"</b>"+
       (a.contatoTel?(" · "+esc(a.contatoTel)):"")):"")+
     (a.horario?("<br>Horário: "+esc(a.horario)):"");
-  marcarEqEnd("sim");
+  /* nasce SEM resposta (27/10): marca só o que o vendedor já respondeu para este aparelho */
+  marcarEqEnd(eqEndResp[e.id]||"");
+}
+/* a resposta de "continua instalado em…?" por aparelho, enquanto o pedido está sendo montado */
+var eqEndResp={};
+function faltaRespEqEnd(){
+  var w=$("v_eqEndWrap"),id=($("v_equip")||{}).value||"";
+  return !!(w&&!w.hidden&&id&&!eqEndResp[id]);
 }
 function marcarEqEnd(v){
   var g=$("v_eqEndChips");if(!g)return;
@@ -15022,15 +15029,16 @@ function ligarEndDoEquipVenda(){
   Array.prototype.forEach.call(g.querySelectorAll("[data-vee]"),function(b){
     b.onclick=function(){
       var v=b.getAttribute("data-vee");
-      if(v==="sim"){marcarEqEnd("sim");return;}
       var e=equipPorId(($("v_equip")||{}).value||"");
-      if(!e){marcarEqEnd("sim");return;}
+      if(v==="sim"){if(e)eqEndResp[e.id]="sim";marcarEqEnd("sim");return;}
+      if(!e)return;
       var c=clienteDaVenda();
       abrirEndAparelho({cliente:c,atual:e.endInst||null,
         titulo:"Para onde este aparelho mudou?",
         sub:rotuloEquip(e),
         aoEscolher:async function(x){
           var ok=await gravarEndAparelho(e,x,"Aparelho mudou de endereço (informado na venda)");
+          if(ok)eqEndResp[e.id]="nao";
           if(ok)toast(x?("Endereço do aparelho atualizado. A próxima manutenção vai para "+
             enderecoDoAparelho({endInst:x}).texto):"O aparelho voltou para o endereço do cadastro.");
           renderEndDoEquipVenda();
@@ -15212,6 +15220,11 @@ function addItem(){
   var gar=$("v_gar").value, serie=pedeSerieProduto(p)?$("v_serie").value.trim():"", qtd=parseInt($("v_qtd").value,10)||0;
   if(!(qtd>=1)){toast("Informe a quantidade.");try{$("v_qtd").focus();}catch(e){}return;}
   var equipId=($("v_equip")&&!$("v_equipWrap").hidden)?$("v_equip").value:"";
+  if(faltaRespEqEnd()){
+    toast("Falta responder: este aparelho continua instalado no endereço mostrado?");
+    try{$("v_eqEndChips").scrollIntoView({block:"center"});}catch(e){}
+    return;
+  }
   var local=($("v_local")&&!$("v_localWrap").hidden)?$("v_local").value.trim():"";
   /* o contrato de garantia estendida é um documento: exige a série */
   if(gar!=="Bronze"&&!serie){toast("Plano "+gar+" gera contrato e exige o número de série.");return;}
@@ -16903,6 +16916,17 @@ function faltaLocalInstalacao(){
     return itemPedeLocal(x.i)&&!String(x.i.local||"").trim();
   });
 }
+/* "Falta responder: REFIL X — onde será instalado e o local dentro do imóvel." (27/10, pedido
+   dele: a mensagem antiga repetia o nome do item em duas frases soltas). Um item por linha. */
+function textoFaltaInstalacao(fe,fl){
+  var ord=[],por={};
+  function marca(x,k){var c=String(x.ix);if(!por[c]){por[c]={nome:x.i.nome};ord.push(c);}por[c][k]=true;}
+  fe.forEach(function(x){marca(x,"end");});fl.forEach(function(x){marca(x,"loc");});
+  return ord.map(function(c){var r=por[c];
+    var oq=r.end&&r.loc?"onde será instalado e o local dentro do imóvel":r.end?"onde será instalado":"o local dentro do imóvel";
+    return "<b>Falta responder:</b> "+esc(r.nome)+" — "+oq+".";
+  }).join("<br>");
+}
 function htmlEndRevisao(c){
   var l=purificadoresDaVenda();
   if(!l.length)return "";
@@ -16931,22 +16955,21 @@ function htmlEndRevisao(c){
       }
       return '<div class="note'+(resp?"":" crit")+'" style="margin-bottom:8px" data-enditem="'+ch+'"><b>'+esc(x.i.nome)+"</b>"+
         (q>1?(" · "+q+" unidades, todas neste endereço"):"")+"<br>"+
-        (!resp
-          ? ('<span class="pill p-crit">falta responder</span> Este aparelho será instalado no endereço do cadastro?'+
-             '<div class="help" style="margin-top:4px">Cadastro: '+esc(cad)+"</div>"+
-             '<div class="actions" style="margin-top:8px">'+
-             '<button class="btn sm" type="button" data-rvok="'+ch+'">É o endereço do cadastro</button> '+
-             '<button class="btn ghost sm" type="button" data-rvend="'+ch+'">É outro endereço</button></div>')
-          : ((esc0?('<span class="pill p-warn">outro endereço</span> '+
+        /* OS DOIS BOTÕES NASCEM IGUAIS (27/10, regra dele): antes o "É o endereço do cadastro"
+           saía azul, com cara de escolhido, e o vendedor confirmava sem ter respondido. Agora os
+           dois são brancos até alguém tocar; o escolhido fica azul com ✓ e dá para trocar. */
+        (!resp?'<span class="pill p-crit">falta responder</span> ':"")+
+        "Este aparelho será instalado no endereço do cadastro?"+
+        '<div class="help" style="margin-top:4px">Cadastro: '+esc(cad)+"</div>"+
+        '<div class="actions rv-escolha" style="margin-top:8px">'+
+          botaoEscolha(resp&&!esc0,'data-rvok="'+ch+'"',"É o endereço do cadastro")+" "+
+          botaoEscolha(resp&&!!esc0,'data-rvend="'+ch+'"',"É outro endereço")+"</div>"+
+        (resp&&esc0?('<div style="margin-top:8px"><span class="pill p-warn">outro endereço</span> '+
               esc(enderecoDoAparelho({endInst:esc0}).texto)+
               (esc0.contatoNome?("<br>Quem recebe: <b>"+esc(esc0.contatoNome)+"</b>"+
                 (esc0.contatoTel?(" · "+esc(esc0.contatoTel)):"")):"")+
-              (esc0.horario?("<br>Horário: "+esc(esc0.horario)):""))
-              :('<span class="pill p-ok">endereço do cadastro</span> '+esc(cad)))+
-             '<div style="margin-top:8px"><button class="btn ghost sm" type="button" data-rvend="'+
-             ch+'">'+(esc0?"Trocar o endereço":"Instalar em outro endereço")+"</button>"+
-             (esc0?(' <button class="btn mut sm" type="button" data-rvendx="'+ch+
-               '">Usar o do cadastro</button>'):"")+"</div>"))+
+              (esc0.horario?("<br>Horário: "+esc(esc0.horario)):"")+
+              '<div class="help">Para mudar este endereço, toque de novo em "É outro endereço".</div></div>'):"")+
         /* LOCAL DENTRO DA CASA (22/10): só no produto marcado "Pede local da instalação?" */
         (pedeLoc?('<div class="fld" style="margin-top:10px"><label>Local da instalação <span class="req">*</span></label>'+
           '<input class="rv-local'+(loc?"":" campo-falta")+'" data-rvloc="'+x.ix+'" list="dlLocais" value="'+esc(loc)+
@@ -16963,13 +16986,19 @@ function htmlEndRevisao(c){
     (endParaHerdar().divergem?" <b>Neste pedido os aparelhos vão para endereços diferentes</b>, "+
       "então cada refil pergunta o seu.":"")+"</p></div>";
 }
+/* botão de pergunta de duas opções (27/10): branco até ser escolhido; escolhido = azul com ✓.
+   Nada pode parecer escolhido sem ter sido. */
+function botaoEscolha(escolhido,attr,texto){
+  return '<button class="btn sm'+(escolhido?"":" ghost")+'" type="button" '+attr+
+    ' aria-pressed="'+(escolhido?"true":"false")+'">'+(escolhido?"✓ ":"")+texto+"</button>";
+}
 /* a chave que liga a escolha ao item (o vínculo, que é estável, ou a posição) */
 function chaveEndItem(i,ix){return String(i.vinculo||("ix"+ix));}
 function ligarEndRevisao(c){
   Array.prototype.forEach.call($("rv_corpo").querySelectorAll("[data-rvend]"),function(b){
     b.onclick=function(){
       var ch=b.getAttribute("data-rvend");
-      abrirEndAparelho({cliente:c,atual:revEnderecos[ch]||null,
+      abrirEndAparelho({cliente:c,atual:revEnderecos[ch]||null,inicio:"nao",
         titulo:"Onde este aparelho será instalado",
         sub:"A escolha vale para este aparelho do pedido.",
         aoEscolher:function(x){
@@ -18104,6 +18133,7 @@ function retomarRascunho(r){
   toast("Pedido de "+(r.cliente||"cliente")+" retomado na etapa "+(r.etapa||1)+". Finalize quando quiser.");
 }
 function limparPedido(){
+  eqEndResp={};   /* a resposta de "continua instalado em…?" não passa para a venda seguinte */
   revEnderecos={};revRespondido={};   /* a venda nova nao herda as respostas da anterior (21/10, 22/10) */
   rascunhoAberto=null;   /* venda nova não continua o rascunho anterior */
   itens=[];formas=formasIniciais();
@@ -29281,16 +29311,16 @@ function fmAjustarVendido(){
     : (inst?'<div class="note"><b>Instalação do pedido '+esc(pi.numero)+'.</b> Ao concluir, abre a janela da instalação para incluir os produtos usados (cobrados na venda), conferir o pagamento e finalizar — a venda segue para a Aprovação Financeira.</div>':"");
 }
 /* finalizar a atividade sempre pergunta o que aconteceu — sem isso o histórico morre */
-var fmReg=null,fmMotivos=[],fmRetorno="nao";
+var fmReg=null,fmMotivos=[],fmRetorno="";
 function abrirFinalizar(a){
-  fmReg=a;fmMotivos=[];fmRetorno="nao";
+  fmReg=a;fmMotivos=[];fmRetorno="";
   $("fm_sub").textContent=(a.cliente||"—")+" · "+dataCurta(a.data||"")+(a.inicio?" às "+a.inicio:"");
   $("fm_obs").innerHTML=a.obs
     ? "<b>O que estava combinado:</b><br>"+esc(a.obs)
     : "<b>Esta atividade não tinha observação.</b> O que você escrever agora é o que vai aparecer no histórico do cliente.";
   $("fm_texto").value="";$("fm_alerta").innerHTML="";
   Array.prototype.forEach.call($("fm_retorno").querySelectorAll("button"),function(b){
-    b.setAttribute("aria-pressed",String(b.getAttribute("data-r")==="nao"));});
+    b.setAttribute("aria-pressed","false");});   /* nasce sem resposta (27/10) */
   var w=$("fm_motivos");w.innerHTML="";
   /* regra do Wagner (12/09): instalação e serviço também se concluem pela atividade */
   var listaM=motivos.filter(function(m){return motivoAtivo(m)||fmMotivos.indexOf(m)>=0;});
@@ -29315,6 +29345,8 @@ async function confirmarFinalizar(){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Marque o que aconteceu.</b> É esse motivo que alimenta o Dashboard e as metas.</div>';return;}
   if(!txt){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Escreva como foi.</b> Sem isso, quem pegar este cliente amanhã não sabe o que já foi conversado.</div>';return;}
+  if(!fmRetorno){
+    $("fm_alerta").innerHTML='<div class="note crit"><b>Falta responder:</b> precisa de um retorno? Toque em "Não, está resolvido" ou em "Sim, agendar novo contato".</div>';return;}
   if(ehVendido(fmMotivos)){
     /* contato de OS interna sem pedido: a venda é o pedido da OS (itens do técnico, pagamento e entrega) */
     var osV=a.osId?ordens.filter(function(x){return x.id===a.osId;})[0]:null;
@@ -34603,9 +34635,11 @@ function abrirEndAparelho(ops){
   $("ea_alerta").innerHTML="";
   $("ea_doCadastro").innerHTML="Endereço do cadastro: <b>"+
     esc(enderecoCadastroCli(c)||"sem endereço no cadastro")+"</b>";
-  /* começa marcado em Sim, como ele pediu — a não ser que o aparelho já tenha endereço */
+  /* NADA MARCADO DE INÍCIO (27/10, regra dele: "nada pode parecer escolhido sem ter sido").
+     Marca só o que é verdade: o aparelho que já tem endereço próprio está em "outro endereço",
+     e quem abriu pelo botão "É outro endereço" já respondeu. */
   var jaTem=endApCtx.atual&&(endApCtx.atual.rua||endApCtx.atual.cidade);
-  marcarEndMesmo(jaTem?"nao":"sim");
+  marcarEndMesmo(jaTem?"nao":(endApCtx.inicio||""));
   encherEndUsados(c?c.id:"");
   preencherEndForm(jaTem?endApCtx.atual:null);
   $("endApModal").hidden=false;
@@ -34618,7 +34652,7 @@ function marcarEndMesmo(v){
 }
 function endMesmoEscolhido(){
   var b=$("ea_mesmo").querySelector('[aria-pressed="true"]');
-  return b?b.getAttribute("data-ea"):"sim";
+  return b?b.getAttribute("data-ea"):"";
 }
 /* os endereços que o cliente já usou em outros aparelhos: escolher sem redigitar */
 function encherEndUsados(cid){
@@ -34654,6 +34688,10 @@ function lerEndForm(){
 }
 function confirmarEndAparelho(){
   var ctx=endApCtx||{};
+  if(!endMesmoEscolhido()){
+    $("ea_alerta").innerHTML='<div class="note crit"><b>Falta responder:</b> o aparelho fica no endereço do cadastro ou em outro endereço?</div>';
+    return;
+  }
   if(endMesmoEscolhido()==="sim"){
     $("endApModal").hidden=true;
     if(ctx.aoEscolher)ctx.aoEscolher(null);   /* null = usa o do cadastro */
@@ -41691,8 +41729,10 @@ function abrirAtend(a){
      traz o tipo gravado e trava (quem muda PF/PJ é a ficha do cliente) */
   marcarTipoPessoaAt(clienteVinc?(clienteVinc.tipo||"Pessoa Física"):"",!!clienteVinc);
   tiposSel=(v.tipos||[]).slice();
-  /* atendimento que nasce de uma atividade é ativo: nós fomos atrás */
-  iniSel=v.iniciativa||(a&&a.natureza==="atividade"?"ativo":"passivo");
+  /* atendimento que nasce de uma atividade é ativo: nós fomos atrás. O atendimento NOVO nasce
+     sem resposta (27/10, regra dele: "nada pode parecer escolhido sem ter sido") — antes vinha
+     "Passivo" marcado. Registro antigo sem o campo continua lido como passivo, que era a regra. */
+  iniSel=v.iniciativa||(a&&a.natureza==="atividade"?"ativo":(a&&a.id?"passivo":""));
   Array.prototype.forEach.call($("at_iniciativa").querySelectorAll("button"),function(b){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-i")===iniSel));});
   renderChipsTipos();$("at_alerta").innerHTML="";$("at_achou").innerHTML="";$("at_sug").hidden=true;
@@ -42077,6 +42117,8 @@ async function salvarAtend(){
   var nome=$("at_nome").value.trim(),tel=$("at_tel").value.trim();
   if(!nome||!tel){$("at_alerta").innerHTML='<div class="note crit"><b>Nome e telefone são obrigatórios.</b></div>';return;}
   if(!tiposSel.length){$("at_alerta").innerHTML='<div class="note warn"><b>Marque ao menos um tipo</b> de atendimento acima.</div>';return;}
+  if(!iniSel){$("at_alerta").innerHTML='<div class="note crit"><b>Falta responder:</b> quem procurou quem — o cliente nos procurou (passivo) ou nós procuramos o cliente (ativo)?</div>';
+    try{$("at_iniciativa").scrollIntoView({block:"center"});}catch(e){}return;}
   if(!$("at_data").value){toast("Informe a data.");return;}
   var ini=$("at_ini").value,fim=$("at_fim").value;
   if(ini&&fim&&fim<ini){$("at_alerta").innerHTML='<div class="note crit"><b>O fim não pode ser antes do início.</b></div>';return;}
@@ -49489,10 +49531,7 @@ function ligar(){
        por fora da revisão (a regra de sempre: travar na função, não só no botão). */
     var fe=faltaEnderecoInstalacao(),fl=faltaLocalInstalacao();
     if(fe.length||fl.length){
-      $("rv_alerta").innerHTML='<div class="note crit"><b>Falta responder onde o aparelho será instalado.</b> '+
-        (fe.length?("Endereço: "+fe.map(function(x){return esc(x.i.nome);}).join(" · ")+". "):"")+
-        (fl.length?("Local dentro do imóvel: "+fl.map(function(x){return esc(x.i.nome);}).join(" · ")+". "):"")+
-        "</div>";
+      $("rv_alerta").innerHTML='<div class="note crit">'+textoFaltaInstalacao(fe,fl)+"</div>";
       var alvo=$("rv_corpo").querySelector(".note.crit,[data-rvloc].campo-falta");
       if(alvo&&alvo.scrollIntoView)alvo.scrollIntoView({block:"center"});
       return;
