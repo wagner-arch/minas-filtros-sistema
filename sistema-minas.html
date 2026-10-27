@@ -9973,11 +9973,24 @@ async function juntarTodosDupCli(){
       (n.motivo?" Motivo do banco: "+n.motivo:"")
     : n.juntados+" cadastro(s) repetido(s) juntado(s) · "+n.movidos+" registro(s) movido(s).");
 }
+/* DIGITAR SEM TRAVAR (27/10): renderClientes() é o desenho de verdade (os dados mudaram) e
+   esquece o que estava guardado; a busca, os filtros e a página chamam renderClientesFiltro(),
+   que reaproveita a lista já filtrada e ORDENADA por nome — a busca só filtra o texto, e a ordem
+   não muda. Antes cada letra refazia as listas de estado/cidade/bairro/rua e reordenava os 22 mil. */
+var cliVer=0,CACHE_CLI=null,barraCliVer=-1;
+var COLADOR_PT=(typeof Intl!=="undefined"&&Intl.Collator)?new Intl.Collator("pt-BR"):null;
+function compNomePT(a,b){return COLADOR_PT?COLADOR_PT.compare(a,b):a.localeCompare(b,"pt-BR");}
 function renderClientes(){
-  /* o cadastro de cliente é da LOJA e aparece para todos dela (regra dele, 22/09: "os clientes
-     devem aparecer para todos; a única coisa que tem que separar é a loja"). O que continua
-     restrito a quem fez é o MOVIMENTO: atividades, atendimentos, agenda, pedidos, orçamentos,
-     OS e funil. A separação por loja já vem do c.loja em toda lista e na busca. */
+  cliVer++;CACHE_CLI=null;
+  return renderClientesFiltro();
+}
+function sigFiltrosCli(){
+  return [lojaAtual,cliVer,clientes.length,clientesCarregando?1:0,
+    (multiSel.cliUF||[]).join(","),(multiSel.cliCidade||[]).join(","),(multiSel.cliBairro||[]).join(","),
+    ($("cliRua")||{}).value,($("cliQual")||{}).value].join("|");
+}
+function montarPreClientes(){
+  var C={};
   var base=clientes.filter(function(c){return c.loja===lojaAtual&&clientePermitido(c);});
   /* os filtros de endereço se encadeiam: bairro só mostra os da cidade escolhida, e assim por diante */
   /* cidade e estado aceitam MAIS DE UM (04/10); nada marcado = todos */
@@ -9990,24 +10003,36 @@ function renderClientes(){
   var nivel2=nivel1.filter(function(c){return multiCasa("cliBairro",c.bairro);});
   encherFiltro("cliRua",unicos(nivel2,"rua"),"Todas as ruas");
   var rua=$("cliRua").value,qual=$("cliQual").value;
-
-  var q=semAcento($("cliBusca").value||"");
-  var num=q.replace(/\D/g,"");
-  var lista=nivel2.filter(function(c){return !rua||c.rua===rua;})
-    .filter(function(c){
+  C.base=base;
+  C.pre=nivel2.filter(function(c){
+      if(rua&&c.rua!==rua)return false;
       if(qual==="cliente"&&ehLead(c))return false;
       if(qual==="lead"&&!ehLead(c))return false;
       if(qual==="incompleto"&&!faltantes(c).length)return false;
-      if(!q)return true;
+      return true;})
+    .sort(function(a,b){return compNomePT(a.nome||"",b.nome||"");});
+  C.nLead=C.pre.filter(ehLead).length;
+  return C;
+}
+function renderClientesFiltro(){
+  /* o cadastro de cliente é da LOJA e aparece para todos dela (regra dele, 22/09). O que continua
+     restrito a quem fez é o MOVIMENTO: atividades, atendimentos, agenda, pedidos, orçamentos,
+     OS e funil. A separação por loja já vem do c.loja em toda lista e na busca. */
+  var sig=sigFiltrosCli();
+  if(!CACHE_CLI||CACHE_CLI.sig!==sig){CACHE_CLI=montarPreClientes();CACHE_CLI.sig=sigFiltrosCli();}
+  var base=CACHE_CLI.base;
+  var q=semAcento($("cliBusca").value||"");
+  var num=q.replace(/\D/g,"");
+  /* a busca só FILTRA a lista já ordenada por nome */
+  var lista=!q?CACHE_CLI.pre:CACHE_CLI.pre.filter(function(c){
       if(textoBusca(c).indexOf(q)>=0)return true;
       if(num.length>=3){
         if((c.doc||"").replace(/\D/g,"").indexOf(num)>=0)return true;
         if((c.tel||"").replace(/\D/g,"").indexOf(num)>=0)return true;
         if((c.cep||"").replace(/\D/g,"").indexOf(num)>=0)return true;
       }
-      return false;})
-    .sort(function(a,b){return (a.nome||"").localeCompare(b.nome||"","pt-BR");});
-  var nLead=lista.filter(ehLead).length;
+      return false;});
+  var nLead=!q?CACHE_CLI.nLead:lista.filter(ehLead).length;
   /* registros por página, como no sistema antigo (pedido dele, 18/09): com 22 mil cadastros,
      desenhar tudo de uma vez trava o navegador */
   var total=lista.length;
@@ -10019,7 +10044,8 @@ function renderClientes(){
   lista=lista.slice(ini,ini+porPag);
   /* enquanto o resto não chega, a conta diz que ela ainda vai crescer — senão a pessoa lê
      "1.000 cadastros" e acha que perdeu a base (foi o susto da v309/v310) */
-  try{renderBotaoLimparTeste();}catch(eT){}   /* v376 */
+  var barraCli=(barraCliVer!==cliVer);barraCliVer=cliVer;
+  if(barraCli){try{renderBotaoLimparTeste();}catch(eT){}}   /* v376 — só quando os dados mudam (27/10) */
   $("cliCount").textContent=total+(total===1?" cadastro":" cadastros")+
     (nLead?" · "+nLead+" lead"+(nLead===1?"":"s"):"")+
     ((clientesCarregando&&clientesTotal>base.length)
@@ -10036,6 +10062,7 @@ function renderClientes(){
   if(!total){
     b.innerHTML='<tr><td colspan="3">'+htmlListaClienteVazia(base.length)+"</td></tr>";
     var bt=$("cliRecarregar");if(bt)bt.onclick=function(){lerClientesDoBanco();};
+    if(barraCli){try{atualizarBotaoCidades();avisarCidadesCliente();}catch(e){}}
     return;}
   /* TRÊS COLUNAS (13/10). Saíram mídia de origem, indicações e o "faltam N dados" — as duas
      últimas não eram só largura de tela: `estrelasDe` e `indicadosPor` varrem os cadastros
@@ -10053,7 +10080,7 @@ function renderClientes(){
   });
   /* o botao "Cidades a conferir" acompanha a lista (a analise fica guardada: ela so e
      refeita quando a lista de clientes muda de tamanho ou a loja troca) */
-  try{atualizarBotaoCidades();avisarCidadesCliente();}catch(e){}
+  if(barraCli){try{atualizarBotaoCidades();avisarCidadesCliente();}catch(e){}}
 }
 /* obrigatórios do LEAD (primeiro atendimento) — regra do Wagner: nome e sobrenome,
    telefone e cidade. CPF, identidade, nascimento, sexo e endereço ficam para a venda. */
@@ -31417,7 +31444,9 @@ function atividadeAbertaDoAparelho(e){
    O status é calculado da agenda, então nunca fica desencontrado dela. */
 var JANELA_CONTATO=30,atendManutEq=null;
 function visitasDoEquip(e){
-  return atendimentos.filter(function(a){
+  /* durante a montagem da Manutenção, as visitas saem de um índice por aparelho (27/10) */
+  var fonte=IDX_VISITAS?(IDX_VISITAS[e.id]||[]):atendimentos;
+  return fonte.filter(function(a){
     return a.equipId===e.id&&(a.natureza==="atividade"||a.eraAtividade)&&a.situacao!=="reagendada";});
 }
 /* "com venda" = venda de produto com "Manutenção (dias)" no cadastro (regra do Wagner, 14/09):
@@ -32010,27 +32039,96 @@ function renderManutCli(c,rotAba){
       var e=equipPorId(bt.getAttribute("data-mcok"));
       if(e)abrirTrocaFeita(e);};});
 }
+/* ===== DIGITAR SEM TRAVAR (27/10, relato dele: a lentidão aparece na busca de Clientes e da
+   Manutenção Periódica). Medido com a base no tamanho do banco dele (22.339 clientes, 16.387
+   aparelhos), cada LETRA na busca da Manutenção custava 1,3 a 4,2 s: ela refazia as listas de
+   cidade/bairro/rua, os seis cartões de cima (statusManut de 16 mil aparelhos, cada um varrendo
+   TODOS os atendimentos e pedidos, e duas vezes) e uma ordenação que recalculava a próxima troca
+   ~230 mil vezes. Agora:
+   (1) renderManut() é o desenho "de verdade" (dados mudaram): esquece o que estava guardado;
+   (2) a busca, os filtros, a página e a ordem chamam renderManutFiltro(), que REAPROVEITA o que
+       não depende deles — a lista antes da busca, os cartões, a ordenação — e só filtra o texto;
+   (3) a busca espera a pessoa parar de digitar (BUSCA_ESPERA ms); a letra aparece na hora;
+   (4) cada conta por aparelho (próxima troca, situação, status, plano, mês) é feita uma vez por
+       desenho (memoMP), e as visitas de cada aparelho saem de um índice montado uma vez. */
+var BUSCA_ESPERA=350;
+var mpVer=0,MEMO_MP=null,CACHE_MP=null,IDX_VISITAS=null,barraMpVer=-1;
+function memoMP(){
+  if(!MEMO_MP||MEMO_MP.ver!==mpVer)MEMO_MP={ver:mpVer,px:{},sit:{},st:{},pl:{},mes:{},mesK:""};
+  return MEMO_MP;
+}
+function pxM(e){var m=memoMP();if(!(e.id in m.px))m.px[e.id]=proximaDe(e);return m.px[e.id];}
+function sitM(e){var m=memoMP();if(!(e.id in m.sit))m.sit[e.id]=sitEq(e);return m.sit[e.id];}
+function stM(e){var m=memoMP();if(!(e.id in m.st))m.st[e.id]=statusManut(e);return m.st[e.id];}
+function plM(e){var m=memoMP();if(!(e.id in m.pl))m.pl[e.id]=planoAtivoEquip(e);return m.pl[e.id];}
+function mesM(e,j){var m=memoMP();if(m.mesK!==j.ini){m.mes={};m.mesK=j.ini;}
+  if(!(e.id in m.mes))m.mes[e.id]=situacaoMesManut(e,j);return m.mes[e.id];}
+/* o texto da busca de cada aparelho, guardado no próprio objeto (fora do banco, como o __bt) */
+function textoBuscaEquip(e){
+  var k=(e.serie||"")+"|"+(e.produto||"")+"|"+(e.cliente||""),c=e._c||{};
+  if(e.__mbk!==k){
+    var t=semAcento((e.serie||"")+" "+(e.produto||"")+" "+(e.cliente||""));
+    try{Object.defineProperty(e,"__mbt",{value:t,writable:true,enumerable:false,configurable:true});
+        Object.defineProperty(e,"__mbk",{value:k,writable:true,enumerable:false,configurable:true});}
+    catch(x){return textoBusca(c)+" "+t;}
+  }
+  return textoBusca(c)+" "+e.__mbt;
+}
+function sigFiltrosManut(){
+  var v=[lojaAtual,mpVer,mpMesRef,equipamentos.length,clientes.length];
+  FILTROS_MANUT.concat(["mpMostrar","mpAtrasoMax"]).forEach(function(id){
+    var el=$(id);v.push(id+"="+((multiSel[id]||[]).join(","))+"/"+(el?el.value:""));});
+  return v.join("|");
+}
+/* a busca espera a pausa na digitação; Enter roda na hora */
+var timersBusca={};
+function buscaComEspera(chave,fn){
+  clearTimeout(timersBusca[chave]);
+  timersBusca[chave]=setTimeout(function(){timersBusca[chave]=null;fn();},BUSCA_ESPERA);
+}
+function buscaAgora(chave,fn){clearTimeout(timersBusca[chave]);timersBusca[chave]=null;fn();}
 function renderManut(){
+  mpVer++;CACHE_MP=null;
+  return renderManutFiltro();
+}
+function ordenarManut(lista,porEndereco){
+  function ordEndVazio(x,y){
+    x=String(x||"").trim();y=String(y||"").trim();
+    if(!x&&!y)return 0;if(!x)return 1;if(!y)return -1;
+    return ordAZ(x,y);}
+  return lista.slice().sort(function(a,b){
+      /* COM FILTRO, A ORDEM É DO ENDEREÇO (26/10, regra dele: "quando tiver algum filtro selecionado…
+         colocar em ordem alfabética por bairro, depois ordem alfabética por rua sempre, qualquer tipo
+         de filtro"). É a ordem de quem sai para a rua: os vizinhos ficam juntos. Dentro da mesma rua,
+         o número da casa; depois o cliente e a data. Bairro ou rua em branco vão para o fim. */
+      if(porEndereco){
+        var r=ordEndVazio(a._c.bairro,b._c.bairro)||ordEndVazio(a._c.rua,b._c.rua);
+        if(r)return r;
+        var na=parseInt(String(a._c.num||"").replace(/[^0-9]/g,""),10),nb=parseInt(String(b._c.num||"").replace(/[^0-9]/g,""),10);
+        if(isNaN(na))na=1e9;if(isNaN(nb))nb=1e9;
+        if(na!==nb)return na-nb;
+        return ordAZ(a.cliente,b.cliente)||(pxM(a)||"").localeCompare(pxM(b)||"")||ordAZ(a.produto,b.produto);
+      }
+      /* ORDEM PELA DATA DA PRÓXIMA TROCA (22/10, pedido dele: "os mais novos primeiro").
+         O botão "Mais recentes primeiro / Quem vence primeiro" inverte num toque, porque a ordem
+         CRESCENTE é a de trabalho: com ela os vencidos vêm na frente (regra dele de 09/10). */
+      var pa=pxM(a)||"9999-12-31",pb=pxM(b)||"9999-12-31";
+      if(pa!==pb)return mpDesc?pb.localeCompare(pa):pa.localeCompare(pb);
+      return ordAZ(a.cliente,b.cliente)||ordAZ(a.produto,b.produto);});
+}
+/* tudo o que NÃO depende da busca: a lista filtrada, os cartões e as listas dos filtros */
+function montarPreManut(modoMes,jmes,tetoAtr,limiteAtr,perDatas){
+  var C={};
   /* aparelho de outra marca, criado por uma OS, só entra nesta lista depois que alguém clicar em
-     "Acompanhar este aparelho" na ficha dele (decisão dele, 05/10) — senão o sistema passaria a
-     cobrar troca de refil de aparelho que não é nosso, no meio dos 16 mil que ele já tem aqui. */
+     "Acompanhar este aparelho" na ficha dele (decisão dele, 05/10) */
   var base=equipamentos.filter(function(e){return e.loja===lojaAtual&&aparelhoAcompanhado(e);});
-  var idxZap=indiceContatoZap();   /* o último WhatsApp de cada cliente, uma vez por desenho (27/10) */
-  /* o período por data vem ANTES de ler o modo de mês: escolhida uma data, é ela que manda */
-  var perDatas=ajustarDatasManut();
-  /* TROCAS DO MÊS (09/10): o mês escolhido na barra de cima, o modo e o teto de atraso */
-  var modoMes=modoMesManut(),jmes=janelaMesManut(),tetoAtr=tetoAtrasoManut();
-  var limiteAtr=limiteAtrasoManut(jmes,tetoAtr);
-  if($("mpMesRot"))$("mpMesRot").textContent=jmes.rot.charAt(0).toUpperCase()+jmes.rot.slice(1);
-  if($("mpAtrasoMax"))$("mpAtrasoMax").hidden=(modoMes!=="atraso"&&modoMes!=="ambos");
-  if($("mpExportar"))$("mpExportar").hidden=!podeExportar();
-  /* endereço vem do cadastro do cliente, para os filtros encadearem.
-     ÍNDICE POR ID (16/10): aqui estava o travamento da aba — um filter sobre os 22.339 clientes
-     para CADA um dos 16.387 aparelhos, 366 milhões de comparações a cada render(). Medido:
-     7.817 ms antes, 13 ms agora. */
-  base.forEach(function(e){
-    e._c=cliPorId(e.clienteId)||{};
-  });
+  /* as visitas de cada aparelho, de uma vez (antes: um filtro sobre todos os atendimentos POR aparelho) */
+  IDX_VISITAS={};
+  atendimentos.forEach(function(a){if(a.equipId)(IDX_VISITAS[a.equipId]||(IDX_VISITAS[a.equipId]=[])).push(a);});
+  try{
+  C.idxZap=indiceContatoZap();   /* o último WhatsApp de cada cliente, uma vez por desenho (27/10) */
+  /* endereço vem do cadastro do cliente, para os filtros encadearem (índice por id, v352) */
+  base.forEach(function(e){e._c=cliPorId(e.clienteId)||{};});
   encherMulti("mpUF",unicos(base.map(function(e){return e._c;}),"uf"),"Todos os estados","estados");
   var baseUF=base.filter(function(e){return multiCasa("mpUF",e._c.uf);});
   encherMulti("mpCidade",unicos(baseUF.map(function(e){return e._c;}),"cidade"),"Todas as cidades","cidades");
@@ -32041,18 +32139,16 @@ function renderManut(){
   encherFiltro("mpRua",unicos(n2.map(function(e){return e._c;}),"rua"),"Todas as ruas");
   var rua=$("mpRua").value,sit=$("mpSit").value;
   var n3=n2.filter(function(e){return !rua||e._c.rua===rua;});
-
   /* produto e grupo saem dos próprios equipamentos da lista */
-  var grupos=[],prods=[];
+  var grupos=[],prods=[],gVisto={},pVisto={};
   n3.forEach(function(e){
     var p=prodPorId(e.produtoId)||{};
-    /* o grupo do produto e so para o filtro desta tela: entra como propriedade NAO ENUMERAVEL
-       para nao ir ao banco junto com o aparelho (ele apareceu gravado como "_g" nos registros
-       que ele conferiu no Supabase — mesmo caminho do __bt da lista de clientes, v148) */
+    /* o grupo do produto é só para o filtro desta tela: propriedade NÃO ENUMERÁVEL, para não ir
+       ao banco junto com o aparelho (v325) */
     try{Object.defineProperty(e,"_g",{value:p.grupo||"",writable:true,enumerable:false,configurable:true});}
     catch(x){e._g=p.grupo||"";}
-    if(e.produto&&prods.indexOf(e.produto)<0)prods.push(e.produto);
-    if(e._g&&grupos.indexOf(e._g)<0)grupos.push(e._g);
+    if(e.produto&&!pVisto[e.produto]){pVisto[e.produto]=1;prods.push(e.produto);}
+    if(e._g&&!gVisto[e._g]){gVisto[e._g]=1;grupos.push(e._g);}
   });
   encherFiltro("mpGrupo",grupos.sort(),"Todos os grupos");
   var grp=$("mpGrupo").value;
@@ -32060,15 +32156,13 @@ function renderManut(){
   encherFiltro("mpProd",prods.sort(),"Todos os produtos");
   var prodSel=$("mpProd").value;
   var n5=n4.filter(function(e){return !prodSel||e.produto===prodSel;});
-
-  /* idade do cliente e janela de vencimento */
+  /* idade do cliente de tal a tal (04/10) e janela de vencimento */
   var faixa=$("mpIdade").value,de=perDatas.de,ate=perDatas.ate;
-  /* idade do cliente de tal a tal (04/10): os dois campos são independentes —
-     só "de" é a partir dali, só "até" é no máximo aquilo */
   var idDe=$("mpIdadeDe")&&$("mpIdadeDe").value!==""?+$("mpIdadeDe").value:null;
   var idAte=$("mpIdadeAte")&&$("mpIdadeAte").value!==""?+$("mpIdadeAte").value:null;
   if(idDe!=null&&idAte!=null&&idDe>idAte){var tmpI=idDe;idDe=idAte;idAte=tmpI;}
-  var n6=n5.filter(function(e){
+  var pf=$("mpPlano")?$("mpPlano").value:"",fs=$("mpStatus")?$("mpStatus").value:"";
+  C.pre=n5.filter(function(e){
     var a=idadeDe(e._c.nasc);
     if(faixa==="sem")return a==null;
     if(idDe==null&&idAte==null)return true;
@@ -32078,7 +32172,7 @@ function renderManut(){
     return true;
   }).filter(function(e){
     if(!de&&!ate)return true;
-    var px=proximaDe(e);
+    var px=pxM(e);
     if(!px)return false;
     if(de&&px<de)return false;
     if(ate&&px>ate)return false;
@@ -32086,94 +32180,82 @@ function renderManut(){
   }).filter(function(e){
     /* TROCAS DO MÊS (09/10): vazio = a tela como sempre foi, com todos os aparelhos. */
     if(!modoMes)return true;
-    var sm=situacaoMesManut(e,jmes);
+    var sm=mesM(e,jmes);
     if(!sm)return false;
     /* o teto é uma DATA: o dia 1º do mês escolhido menos N meses de calendário (09/10) */
     var cabe=(!limiteAtr||sm.prox>=limiteAtr);
     if(modoMes==="mes")return sm.k==="no_periodo";
     if(modoMes==="atraso")return sm.k==="atrasada"&&cabe;
     return sm.k==="no_periodo"||cabe;   /* mês + atrasadas */
-  });
-
-  var q=semAcento($("mpBusca").value||""),num=q.replace(/\D/g,"");
-  /* qualquer filtro ligado (inclusive a busca e o modo de mês) manda a lista para a ordem do endereço */
-  var ordemEndManut=contarFiltrosManut()>0||!!modoMes||!!q;
-  function ordEndVazio(x,y){
-    x=String(x||"").trim();y=String(y||"").trim();
-    if(!x&&!y)return 0;if(!x)return 1;if(!y)return -1;
-    return ordAZ(x,y);}
-  if($("mpOrdem"))$("mpOrdem").hidden=ordemEndManut;
-  var lista=n6
-    .filter(function(e){
-      var s=sitEq(e);
+  }).filter(function(e){
+      var s=sitM(e);
       if(sit==="vencida")return s.k==="vencida";
       if(sit==="semana")return s.k==="semana"||s.k==="vencida";
       if(sit==="mes")return s.k==="mes"||s.k==="semana"||s.k==="vencida";
       if(sit==="emdia")return s.k==="emdia";
       return e.ativo!==false;})
-    /* com plano / sem plano / todos (pedido do Wagner, 16/09): "com" = plano Premium vigente hoje */
+    /* com plano / sem plano / todos (16/09): "com" = plano Premium vigente hoje */
     .filter(function(e){
-      var pf=$("mpPlano")?$("mpPlano").value:"";
       if(!pf)return true;
-      var at=planoAtivoEquip(e);
+      var at=plM(e);
       return pf==="com"?at:!at;})
     .filter(function(e){
-      if(!q)return true;
-      var alvo=textoBusca(e._c)+" "+semAcento((e.serie||"")+" "+(e.produto||"")+" "+(e.cliente||""));
-      if(alvo.indexOf(q)>=0)return true;
+      if(!fs)return true;
+      var sm=stM(e),k=sm.k;
+      if(fs==="revisita")return k==="aguardando"&&!!sm.revisita;
+      if(fs==="semretorno"){var ez=etiquetaContatoZap(e.clienteId,C.idxZap);return !!ez&&ez.k==="semretorno";}
+      return fs==="realizada"?(k==="comvenda"||k==="semvenda"):k===fs;});
+  /* OS CARTÕES DE CIMA: contados sobre os aparelhos ATIVOS da loja, não sobre a lista filtrada —
+     então não mudam com a busca nem com os filtros, e são feitos uma vez por desenho */
+  var ativos=base.filter(function(e){return e.ativo!==false;});
+  var K={ativos:ativos.length,venc:0,plano:0,ag:0,agd:0,com:0,sem:0,rev:0,semRet:0,noMes:0,atr:0};
+  ativos.forEach(function(e){
+    if(sitM(e).k==="vencida")K.venc++;
+    if(plM(e))K.plano++;
+    var sm=stM(e);
+    if(sm.k==="aguardando"){K.ag++;if(sm.revisita)K.rev++;}
+    else if(sm.k==="agendado")K.agd++;
+    else if(sm.k==="comvenda")K.com++;
+    else if(sm.k==="semvenda")K.sem++;
+    var ez=etiquetaContatoZap(e.clienteId,C.idxZap);if(ez&&ez.k==="semretorno")K.semRet++;
+    var mm=mesM(e,jmes);
+    if(mm){if(mm.k==="no_periodo")K.noMes++;else if(!limiteAtr||mm.prox>=limiteAtr)K.atr++;}
+  });
+  C.K=K;C.ord={};
+  }finally{IDX_VISITAS=null;}
+  return C;
+}
+function renderManutFiltro(){
+  /* o período por data vem ANTES de ler o modo de mês: escolhida uma data, é ela que manda */
+  var perDatas=ajustarDatasManut();
+  /* TROCAS DO MÊS (09/10): o mês escolhido na barra de cima, o modo e o teto de atraso */
+  var modoMes=modoMesManut(),jmes=janelaMesManut(),tetoAtr=tetoAtrasoManut();
+  var limiteAtr=limiteAtrasoManut(jmes,tetoAtr);
+  if($("mpMesRot"))$("mpMesRot").textContent=jmes.rot.charAt(0).toUpperCase()+jmes.rot.slice(1);
+  if($("mpAtrasoMax"))$("mpAtrasoMax").hidden=(modoMes!=="atraso"&&modoMes!=="ambos");
+  if($("mpExportar"))$("mpExportar").hidden=!podeExportar();
+  var sig=sigFiltrosManut();
+  if(!CACHE_MP||CACHE_MP.sig!==sig){CACHE_MP=montarPreManut(modoMes,jmes,tetoAtr,limiteAtr,perDatas);CACHE_MP.sig=sigFiltrosManut();}
+  var C=CACHE_MP,K=C.K,idxZap=C.idxZap;
+  var q=semAcento($("mpBusca").value||""),num=q.replace(/\D/g,"");
+  /* qualquer filtro ligado (inclusive a busca e o modo de mês) manda a lista para a ordem do endereço */
+  var ordemEndManut=contarFiltrosManut()>0||!!modoMes||!!q;
+  if($("mpOrdem"))$("mpOrdem").hidden=ordemEndManut;
+  var chOrd=ordemEndManut?"end":("data"+(mpDesc?"d":"c"));
+  if(!C.ord[chOrd])C.ord[chOrd]=ordenarManut(C.pre,ordemEndManut);
+  /* a busca só FILTRA a lista já ordenada — a ordem não muda, então não precisa ordenar de novo */
+  var lista=!q?C.ord[chOrd]:C.ord[chOrd].filter(function(e){
+      if(textoBuscaEquip(e).indexOf(q)>=0)return true;
       if(num.length>=3){
         if((e._c.doc||"").replace(/\D/g,"").indexOf(num)>=0)return true;
         if((e._c.tel||"").replace(/\D/g,"").indexOf(num)>=0)return true;}
-      return false;})
-    .filter(function(e){
-      var fs=$("mpStatus")?$("mpStatus").value:"";
-      if(!fs)return true;
-      var sm=statusManut(e),k=sm.k;
-      if(fs==="revisita")return k==="aguardando"&&!!sm.revisita;
-      if(fs==="semretorno"){var ez=etiquetaContatoZap(e.clienteId,idxZap);return !!ez&&ez.k==="semretorno";}
-      return fs==="realizada"?(k==="comvenda"||k==="semvenda"):k===fs;})
-    /* ORDEM PELA DATA DA PRÓXIMA TROCA (22/10, pedido dele: "os mais novos primeiro").
-       Antes era alfabética pelo cliente fora do modo de mês (regra dele de 20/09) — data
-       nenhuma mandava na lista. O botão "Mais recentes primeiro / Quem vence primeiro"
-       inverte num toque, porque a ordem CRESCENTE é a de trabalho: com ela os vencidos vêm
-       na frente (regra dele de 09/10, que vale no modo Trocas do mês). */
-    .sort(function(a,b){
-      /* COM FILTRO, A ORDEM É DO ENDEREÇO (26/10, regra dele: "quando tiver algum filtro selecionado…
-         colocar em ordem alfabética por bairro, depois ordem alfabética por rua sempre, qualquer tipo
-         de filtro"). É a ordem de quem sai para a rua: os vizinhos ficam juntos. Dentro da mesma rua,
-         o número da casa; depois o cliente e a data. Bairro ou rua em branco vão para o fim. */
-      if(ordemEndManut){
-        var r=ordEndVazio(a._c.bairro,b._c.bairro)||ordEndVazio(a._c.rua,b._c.rua);
-        if(r)return r;
-        var na=parseInt(String(a._c.num||"").replace(/[^0-9]/g,""),10),nb=parseInt(String(b._c.num||"").replace(/[^0-9]/g,""),10);
-        if(isNaN(na))na=1e9;if(isNaN(nb))nb=1e9;
-        if(na!==nb)return na-nb;
-        return ordAZ(a.cliente,b.cliente)||(proximaDe(a)||"").localeCompare(proximaDe(b)||"")||ordAZ(a.produto,b.produto);
-      }
-      var pa=proximaDe(a)||"9999-12-31",pb=proximaDe(b)||"9999-12-31";
-      if(pa!==pb)return mpDesc?pb.localeCompare(pa):pa.localeCompare(pb);
-      return ordAZ(a.cliente,b.cliente)||ordAZ(a.produto,b.produto);});
+      return false;});
   /* a lista inteira, antes de cortar em páginas: é ela que o Exportar baixa (09/10) */
   mpListaAtual=lista;
-  var ativos=base.filter(function(e){return e.ativo!==false;});
-  var venc=ativos.filter(function(e){return sitEq(e).k==="vencida";});
-  if($("mpStatus")&&!$("mpStatus").__ligado){$("mpStatus").__ligado=true;$("mpStatus").onchange=function(){mpPag=1;renderManut();};}
-  if($("mpPlano")&&!$("mpPlano").__ligado){$("mpPlano").__ligado=true;$("mpPlano").onchange=function(){mpPag=1;renderManut();};}
-  var nPlano=ativos.filter(planoAtivoEquip).length;
-  var stAtivos=ativos.map(function(e){return statusManut(e).k;});
-  function contaSt(k){return stAtivos.filter(function(x){return x===k;}).length;}
-  var nAg=contaSt("aguardando"),nAgd=contaSt("agendado"),nCom=contaSt("comvenda"),nSem=contaSt("semvenda");
-  var nRev=ativos.filter(function(e){var sm=statusManut(e);return sm.k==="aguardando"&&!!sm.revisita;}).length;
-  var nSemRet=ativos.filter(function(e){var ez=etiquetaContatoZap(e.clienteId,idxZap);return !!ez&&ez.k==="semretorno";}).length;
-  /* TROCAS DO MÊS: os números do mês escolhido saem mesmo com o filtro desligado — é o convite
-     do botão. Contados sobre os aparelhos ATIVOS da loja, não sobre a lista já filtrada. */
-  var noMes=0,atrasadas=0;
-  ativos.forEach(function(e){
-    var sm=situacaoMesManut(e,jmes);
-    if(!sm)return;
-    if(sm.k==="no_periodo")noMes++;
-    else if(!limiteAtr||sm.prox>=limiteAtr)atrasadas++;
-  });
+  if($("mpStatus")&&!$("mpStatus").__ligado){$("mpStatus").__ligado=true;$("mpStatus").onchange=function(){mpPag=1;renderManutFiltro();};}
+  if($("mpPlano")&&!$("mpPlano").__ligado){$("mpPlano").__ligado=true;$("mpPlano").onchange=function(){mpPag=1;renderManutFiltro();};}
+  var nPlano=K.plano,nAg=K.ag,nAgd=K.agd,nCom=K.com,nSem=K.sem,nRev=K.rev,nSemRet=K.semRet;
+  var noMes=K.noMes,atrasadas=K.atr,venc={length:K.venc},ativos={length:K.ativos};
   var semTel=lista.filter(function(e){return !telDoAparelho(e);}).length;
   if($("mpTrocasMes"))
     $("mpTrocasMes").textContent="Trocas de "+String(jmes.rot).split(" de ")[0]+" ("+(noMes+atrasadas)+")";
@@ -32218,7 +32300,7 @@ function renderManut(){
   var b=$("mpBody");b.innerHTML="";
   if(!totalMp){b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum equipamento nesta visão</div>Vendas de produto com "Manutenção (dias)" no cadastro entram aqui sozinhas.</div></td></tr>';return;}
   lista.forEach(function(e){
-    var s=sitEq(e),c=e._c,px=proximaDe(e),st=statusManut(e);
+    var s=sitM(e),c=e._c,px=pxM(e),st=stM(e);
     var tr=document.createElement("tr");tr.className="clickable";
     /* v257: a lista ficou com NOME · PRODUTO · PRÓXIMA TROCA. Endereço, compra, valor pago, forma
        de pagamento, última troca e o status de contato continuam na ficha do aparelho — é só clicar
@@ -32230,7 +32312,7 @@ function renderManut(){
        coluna, não como colunas novas: a lista enxuta da v257 continua, e a largura não muda. */
     var ativAberta=atividadeAbertaDoAparelho(e);
     var ezap=etiquetaContatoZap(e.clienteId,idxZap);
-    var smes=modoMes?situacaoMesManut(e,jmes):null;
+    var smes=modoMes?mesM(e,jmes):null;
     var telNum=telDoAparelho(e),telTxt=String(c.tel||"").trim();
     var ondeTxt=[c.cidade,c.bairro].filter(Boolean).join(" · ");
     /* a etiqueta da data: no modo trocas do mês ela fala do mês escolhido; fora dele continua a
@@ -32317,7 +32399,8 @@ function renderManut(){
     bt.onclick=function(ev){ev.stopPropagation();
       var e=equipPorId(bt.getAttribute("data-mptel"));
       if(e)abrirLigarManut(e);};});
-  try{ajustarBotaoEquipRepetidos();ajustarBotaoCopias();encherLocaisAparelho();}catch(e){}
+  /* os botões da barra varrem a base inteira e não dependem da busca nem dos filtros: só quando os dados mudam */
+  if(barraMpVer!==mpVer){barraMpVer=mpVer;try{ajustarBotaoEquipRepetidos();ajustarBotaoCopias();encherLocaisAparelho();}catch(e){}}
   /* o número no botão "Filtros" acompanha o que está ligado (celular, 09/10) */
   try{atualizarBotaoFiltrosManut();}catch(e){}
 }
@@ -38060,8 +38143,12 @@ function dataBR(s){
    registro do dia a dia (atendimentos, pedidos, movimentações) continua na ordem do tempo, e os
    caixas continuam pelo código da conta, que foi regra dele em 16/09.
    Ignora maiúsculas e acentos e entende número dentro do texto (Refil 2 antes de Refil 10). */
+/* o comparador fica GUARDADO (27/10): localeCompare com opções monta um comparador novo a cada
+   chamada, e ordenar 16 mil aparelhos levava ~1,5 s só nisso. Mesmas regras, mesmo resultado. */
+var COL_AZ=(typeof Intl!=="undefined"&&Intl.Collator)?new Intl.Collator("pt-BR",{sensitivity:"base",numeric:true}):null;
 function ordAZ(a,b){
-  return String(a==null?"":a).localeCompare(String(b==null?"":b),"pt-BR",{sensitivity:"base",numeric:true});
+  a=String(a==null?"":a);b=String(b==null?"":b);
+  return COL_AZ?COL_AZ.compare(a,b):a.localeCompare(b,"pt-BR",{sensitivity:"base",numeric:true});
 }
 function porNomeAZ(l){return (l||[]).slice().sort(function(a,b){return ordAZ(a&&a.nome,b&&b.nome);});}
 /* valor em reais por extenso: 622,12 → "Seiscentos e vinte e dois reais e doze centavos" */
@@ -48832,10 +48919,14 @@ function ligar(){
 
   /* ---- Manutenção periódica ---- */
   /* qualquer filtro volta para a primeira página (v257) */
-  function mpFiltrou(){mpPag=1;renderManut();}
-  $("mpBusca").oninput=mpFiltrou;
+  /* filtro e página reaproveitam o que não mudou (renderManutFiltro, 27/10); o texto digitado
+     espera a pausa na digitação — a letra aparece na hora, e Enter filtra na hora */
+  function mpFiltrou(){mpPag=1;buscaAgora("mp",renderManutFiltro);}
+  function mpDigitou(){mpPag=1;buscaComEspera("mp",renderManutFiltro);}
+  $("mpBusca").oninput=mpDigitou;
+  $("mpBusca").addEventListener("keydown",function(ev){if(ev.key==="Enter")mpFiltrou();});
   ["mpUF","mpCidade","mpBairro","mpRua","mpSit","mpProd","mpGrupo","mpIdade","mpIdadeDe","mpIdadeAte","mpDe","mpAte"]
-    .forEach(function(id){var el=$(id);if(el){el.onchange=mpFiltrou;if(/IdadeDe|IdadeAte/.test(id))el.oninput=mpFiltrou;}});
+    .forEach(function(id){var el=$(id);if(el){el.onchange=mpFiltrou;if(/IdadeDe|IdadeAte/.test(id))el.oninput=mpDigitou;}});
   /* ---- Trocas do mês (09/10) ---- */
   ["mpMostrar","mpAtrasoMax"].forEach(function(id){var el=$(id);if(el)el.onchange=mpFiltrou;});
   if($("mpMesAnt"))$("mpMesAnt").onclick=function(){andarMesManut(-1);mpFiltrou();};
@@ -48875,7 +48966,7 @@ function ligar(){
   if($("mpOrdem"))$("mpOrdem").onclick=function(){
     mpDesc=!mpDesc; mpPag=1;
     this.textContent=mpDesc?"Mais recentes primeiro":"Quem vence primeiro";
-    renderManut();
+    renderManutFiltro();
   };
   /* (14/09) sem "Registrar manutenção": a manutenção é feita pelo atendimento (dois cliques no nome) → pedido com
      a atividade futura (instalação) → aprovação financeira, que dá a baixa (regra do Wagner) */
@@ -49033,20 +49124,22 @@ function ligar(){
   if($("cliCidades"))$("cliCidades").onclick=abrirCidadesConferir;
   if($("cid_fechar"))$("cid_fechar").onclick=function(){$("cidModal").hidden=true;};
   if($("cid_todas"))$("cid_todas").onclick=aplicarTodasSugestoes;
-  $("cliBusca").oninput=function(){cliPag=1;renderClientes();};
+  /* a letra aparece na hora e a lista espera a pausa na digitação (27/10); Enter filtra na hora */
+  $("cliBusca").oninput=function(){cliPag=1;buscaComEspera("cli",renderClientesFiltro);};
+  $("cliBusca").addEventListener("keydown",function(ev){if(ev.key==="Enter"){cliPag=1;buscaAgora("cli",renderClientesFiltro);}});
   ["cliUF","cliCidade","cliBairro","cliRua","cliQual","cliPorPag"].forEach(function(id){
-    $(id).onchange=function(){cliPag=1;renderClientes();};});
-  $("cliPrimeira").onclick=function(){cliPag=1;renderClientes();};
-  $("cliAnt").onclick=function(){cliPag--;renderClientes();};
-  $("cliProx").onclick=function(){cliPag++;renderClientes();};
-  $("cliUltima").onclick=function(){cliPag=1e9;renderClientes();};
+    $(id).onchange=function(){cliPag=1;buscaAgora("cli",renderClientesFiltro);};});
+  $("cliPrimeira").onclick=function(){cliPag=1;renderClientesFiltro();};
+  $("cliAnt").onclick=function(){cliPag--;renderClientesFiltro();};
+  $("cliProx").onclick=function(){cliPag++;renderClientesFiltro();};
+  $("cliUltima").onclick=function(){cliPag=1e9;renderClientesFiltro();};
   /* paginação da Manutenção Periódica (v257) */
   if($("mpPrimeira")){
-    $("mpPrimeira").onclick=function(){mpPag=1;renderManut();};
-    $("mpAnt").onclick=function(){mpPag--;renderManut();};
-    $("mpProx").onclick=function(){mpPag++;renderManut();};
-    $("mpUltima").onclick=function(){mpPag=1e9;renderManut();};
-    $("mpPorPag").onchange=function(){mpPag=1;renderManut();};
+    $("mpPrimeira").onclick=function(){mpPag=1;renderManutFiltro();};
+    $("mpAnt").onclick=function(){mpPag--;renderManutFiltro();};
+    $("mpProx").onclick=function(){mpPag++;renderManutFiltro();};
+    $("mpUltima").onclick=function(){mpPag=1e9;renderManutFiltro();};
+    $("mpPorPag").onchange=function(){mpPag=1;renderManutFiltro();};
   }
   $("c_temconj").onchange=toggleConj;
   /* CPF/CNPJ conferido enquanto digita: cadastro, cônjuge, orçamento e OS */
