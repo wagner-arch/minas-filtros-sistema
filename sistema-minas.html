@@ -32,6 +32,7 @@
     --marca:#0B9BDD;
     --ok:#128A55; --ok-bg:#E1F5EC;
     --warn:#9A6206; --warn-bg:#FCEFDA;
+    --laranja:#A84300; --laranja-bg:#FFE3CC;
     --crit:#B32A1C; --crit-bg:#FCE7E4;
     --shadow:0 1px 2px rgba(21,34,56,.05), 0 4px 14px rgba(21,34,56,.06);
     --shadow-lg:0 2px 6px rgba(21,34,56,.07), 0 12px 32px rgba(21,34,56,.11);
@@ -47,6 +48,7 @@
     --marca:#4FC3F0;
     --ok:#6FC496; --ok-bg:#15291F;
     --warn:#E3B166; --warn-bg:#2E2415;
+    --laranja:#FFB27A; --laranja-bg:#3A2212;
     --crit:#F2958A; --crit-bg:#33191A;
     --shadow:0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
     --shadow-lg:0 2px 6px rgba(0,0,0,.35), 0 12px 32px rgba(0,0,0,.4);
@@ -60,6 +62,7 @@
     --marca:#4FC3F0;
     --ok:#6FC496; --ok-bg:#15291F;
     --warn:#E3B166; --warn-bg:#2E2415;
+    --laranja:#FFB27A; --laranja-bg:#3A2212;
     --crit:#F2958A; --crit-bg:#33191A;
     --shadow:0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
     --shadow-lg:0 2px 6px rgba(0,0,0,.35), 0 12px 32px rgba(0,0,0,.4);
@@ -871,6 +874,8 @@
   .p-crit{color:var(--crit);background:var(--crit-bg)}
   .p-acc{color:var(--accent);background:var(--accent-2)}
   .p-mut{color:var(--ink-3);background:var(--bg)}
+  /* sem retorno do WhatsApp há 3 dias úteis ou mais (27/10) */
+  .p-laranja{color:var(--laranja);background:var(--laranja-bg);font-weight:600}
   /* valor do item, editável na própria lista (v161) */
   .v-unit{width:118px;max-width:100%;text-align:right;padding:7px 9px;font:inherit;font-variant-numeric:tabular-nums;
     border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink)}
@@ -3088,6 +3093,7 @@ img{max-width:100%}
           <select id="anSit" style="max-width:230px">
             <option value="pendente" selected>A contatar</option>
             <option value="contatados">Contactados neste ano</option>
+            <option value="parabens">Parabéns enviados pelo WhatsApp neste ano</option>
             <option value="semcontato">Passaram sem contato neste ano</option>
             <option value="todos">Todos deste ano</option>
           </select>
@@ -3945,6 +3951,7 @@ img{max-width:100%}
               <option value="realizada">Visita realizada</option>
               <option value="comvenda">Visita realizada · com venda</option>
               <option value="semvenda">Visita realizada · sem venda</option>
+              <option value="semretorno">Sem retorno há 3 dias ou mais</option>
             </select>
             <select id="mpProd" style="max-width:200px"></select>
             <select id="mpGrupo" style="max-width:170px"></select>
@@ -7018,8 +7025,8 @@ img{max-width:100%}
       <div class="chips" id="zp_modelos"></div></div>
     <div class="fld" style="margin-top:12px"><label for="zp_msg">Mensagem (dá para editar antes de abrir)</label>
       <textarea id="zp_msg" rows="5"></textarea></div>
-    <label class="fld" id="zp_regWrap" style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-direction:row">
-      <input type="checkbox" id="zp_reg" checked style="width:auto"> <span>Anotar no histórico do cliente que o WhatsApp foi aberto</span></label>
+    <!-- a caixinha "Anotar no histórico" saiu (27/10): abrir o WhatsApp registra o atendimento sozinho -->
+    <p class="help" id="zp_regNota" hidden style="margin-top:10px"></p>
     <!-- follow-up programado (pedido dele, 04/10): deixa a mensagem pronta para um dia e uma
          hora. O envio sozinho, sem ninguém clicar, não existe pelo navegador — na hora marcada
          o sistema avisa no sino e o botão abre o WhatsApp com a mensagem já escrita. -->
@@ -28994,7 +29001,7 @@ function abrirDetalhes(a){
   if(ativ&&atrasou&&a.status!=="finalizado")sit={n:"Atrasada",cls:"p-crit"};
   $("dt_sit").textContent=sit.n;
   $("dt_sit").className="pill "+sit.cls;
-  $("dt_sub").textContent=(a.tipo||"sem tipo")+" · responsável: "+(a.colaborador||"—");
+  $("dt_sub").textContent=(a.assunto?"Assunto: "+a.assunto+" · ":"")+(a.tipo||"sem tipo")+" · responsável: "+(a.colaborador||"—");
 
   var obs=(a.obs||"").trim();
   $("dt_obs").className=obs?"obs-box":"obs-box vazio";
@@ -29280,7 +29287,7 @@ async function confirmarFinalizar(){
   toast("Atividade de "+(a.cliente||"")+" concluída.");
   /* OS interna: o cliente ficou de pensar ou de passar na loja → OS aguardando retorno do cliente (regra do Wagner, 14/09) */
   var osRet=null;
-  if(a.osId&&(a.motivos||[]).indexOf(MOT_RETORNO_OS)>=0){
+  if(a.osId&&temMotivoRetorno(a)){
     osRet=ordens.filter(function(x){return x.id===a.osId;})[0]||null;
     if(osRet&&!osRet.pedidoId&&["entregue","cancelada"].indexOf(osRet.status)<0){
       osRet.status="retorno";osRet.aguardandoRetornoEm=hojeISO();osRet.aguardandoRetornoPor=usuarioAtual;osRet.retornoObs=txt;
@@ -29443,7 +29450,9 @@ var pedOrigemAtiv=null,orcOrigemAtiv=null;
       finalizado o pedido segue a finalização de sempre da atividade (o que aconteceu + agendar outra). */
 /* orçamento que gerou a venda que está sendo montada: o vínculo é feito ao SALVAR o pedido */
 var pedOrigemOrc=null;
-var pedOrigemOS=null,pedOSModo="",pedOSAtiv=null,pedOSServAtend=false,TIPO_CONTATO_OS="Contactar Cliente OS",MOT_RETORNO_OS="Aguardando Retorno Cliente";
+var pedOrigemOS=null,pedOSModo="",pedOSAtiv=null,pedOSServAtend=false,TIPO_CONTATO_OS="Contactar Cliente OS",MOT_RETORNO_OS="Aguardando retorno do cliente",MOT_RETORNO_ANTIGO="Aguardando Retorno Cliente";
+/* o motivo foi renomeado em 27/10 (decisão dele) — o nome antigo continua valendo onde aparecer */
+function temMotivoRetorno(a){var m=(a&&a.motivos)||[];return m.indexOf(MOT_RETORNO_OS)>=0||m.indexOf(MOT_RETORNO_ANTIGO)>=0;}
 function produtoServicoAtendimento(){
   return produtos.filter(function(p){return p.cod==="SRV-ATEND";})[0]||
     produtos.filter(function(p){return /servi[cç]o de atendimento/i.test(p.nome||"");})[0]||null;
@@ -30509,7 +30518,8 @@ function renderAtividades(){
     var tr=document.createElement("tr");tr.className=(trava||!podeEd)?"travada":"clickable";
     tr.innerHTML='<td><div class="t-main">'+esc(dataBR(a.data))+'</div><div class="t-sub">'+esc(a.inicio||"sem horário")+"</div></td>"+
       "<td>"+esc(a.cliente||"—")+"</td>"+
-      "<td>"+((a.tipos||[]).map(function(t){return '<span class="pill p-mut" style="margin-right:4px">'+esc(t)+"</span>";}).join("")||"—")+"</td>"+
+      "<td>"+((a.tipos||[]).map(function(t){return '<span class="pill p-mut" style="margin-right:4px">'+esc(t)+"</span>";}).join("")||"—")+
+        (a.assunto?'<div class="t-sub">Assunto: <b>'+esc(a.assunto)+"</b></div>":"")+"</td>"+
       "<td>"+esc(a.colaborador||"—")+"</td>"+
       '<td><div class="lin3" title="'+esc(a.obs||"")+'">'+esc(a.obs||"—")+"</div></td>"+
       "<td>"+sit+"</td>"+
@@ -30713,7 +30723,7 @@ function hcEventos(c){
     ev.push({chave:"ate:"+a.id,tipo:ativ?"atv":"ate",
       quando:((ativ&&feita&&a.concluidaEm)?a.concluidaEm:(a.data||""))+" "+hm(a.inicio),
       rotulo:ativ?(feita?"Atividade realizada":"Atividade agendada"):"Atendimento",
-      titulo:(a.tipo||"sem tipo")+(ativ&&!feita?" · para "+dataCurta(a.data)+(a.inicio?" às "+hm(a.inicio):""):""),
+      titulo:(a.assunto?a.assunto+" · ":"")+(a.tipo||"sem tipo")+(ativ&&!feita?" · para "+dataCurta(a.data)+(a.inicio?" às "+hm(a.inicio):""):""),
       por:a.colaborador||"",
       texto:(feita&&a.resultado)?a.resultado:(a.obs||""),
       motivo:(a.motivos||[]).join(" · "),
@@ -31968,6 +31978,7 @@ function renderManut(){
      "Acompanhar este aparelho" na ficha dele (decisão dele, 05/10) — senão o sistema passaria a
      cobrar troca de refil de aparelho que não é nosso, no meio dos 16 mil que ele já tem aqui. */
   var base=equipamentos.filter(function(e){return e.loja===lojaAtual&&aparelhoAcompanhado(e);});
+  var idxZap=indiceContatoZap();   /* o último WhatsApp de cada cliente, uma vez por desenho (27/10) */
   /* o período por data vem ANTES de ler o modo de mês: escolhida uma data, é ela que manda */
   var perDatas=ajustarDatasManut();
   /* TROCAS DO MÊS (09/10): o mês escolhido na barra de cima, o modo e o teto de atraso */
@@ -32082,6 +32093,7 @@ function renderManut(){
       if(!fs)return true;
       var sm=statusManut(e),k=sm.k;
       if(fs==="revisita")return k==="aguardando"&&!!sm.revisita;
+      if(fs==="semretorno"){var ez=etiquetaContatoZap(e.clienteId,idxZap);return !!ez&&ez.k==="semretorno";}
       return fs==="realizada"?(k==="comvenda"||k==="semvenda"):k===fs;})
     /* ORDEM PELA DATA DA PRÓXIMA TROCA (22/10, pedido dele: "os mais novos primeiro").
        Antes era alfabética pelo cliente fora do modo de mês (regra dele de 20/09) — data
@@ -32115,6 +32127,7 @@ function renderManut(){
   function contaSt(k){return stAtivos.filter(function(x){return x===k;}).length;}
   var nAg=contaSt("aguardando"),nAgd=contaSt("agendado"),nCom=contaSt("comvenda"),nSem=contaSt("semvenda");
   var nRev=ativos.filter(function(e){var sm=statusManut(e);return sm.k==="aguardando"&&!!sm.revisita;}).length;
+  var nSemRet=ativos.filter(function(e){var ez=etiquetaContatoZap(e.clienteId,idxZap);return !!ez&&ez.k==="semretorno";}).length;
   /* TROCAS DO MÊS: os números do mês escolhido saem mesmo com o filtro desligado — é o convite
      do botão. Contados sobre os aparelhos ATIVOS da loja, não sobre a lista já filtrada. */
   var noMes=0,atrasadas=0;
@@ -32140,7 +32153,8 @@ function renderManut(){
       semTel+" sem telefone nesta lista</div></div>"+
     '<div class="kpi"><div class="l">Vencidas</div><div class="v" style="color:'+(venc.length?"var(--crit)":"inherit")+'">'+venc.length+"</div></div>"+
     '<div class="kpi"><div class="l">Aguardando contato</div><div class="v" style="color:'+(nAg?"var(--warn)":"inherit")+'">'+nAg+"</div>"+
-      '<div class="l" style="margin-top:4px">'+nRev+" já visitado"+(nRev===1?"":"s")+" sem venda</div></div>"+
+      '<div class="l" style="margin-top:4px">'+nRev+" já visitado"+(nRev===1?"":"s")+" sem venda</div>"+
+      (nSemRet?'<div class="l" style="margin-top:2px;color:var(--laranja)">'+nSemRet+" sem retorno do WhatsApp há 3 dias úteis</div>":"")+"</div>"+
     '<div class="kpi"><div class="l">Agendado visita</div><div class="v">'+nAgd+"</div></div>"+
     '<div class="kpi"><div class="l">Visita realizada</div><div class="v">'+(nCom+nSem)+'</div><div class="l" style="margin-top:4px">'+
       nCom+" com venda · "+nSem+" sem venda</div></div>";
@@ -32178,6 +32192,7 @@ function renderManut(){
        e manda WhatsApp daqui, sem abrir a ficha de cada um. Eles entram na linha DE BAIXO de cada
        coluna, não como colunas novas: a lista enxuta da v257 continua, e a largura não muda. */
     var ativAberta=atividadeAbertaDoAparelho(e);
+    var ezap=etiquetaContatoZap(e.clienteId,idxZap);
     var smes=modoMes?situacaoMesManut(e,jmes):null;
     var telNum=telDoAparelho(e),telTxt=String(c.tel||"").trim();
     var ondeTxt=[c.cidade,c.bairro].filter(Boolean).join(" · ");
@@ -32191,7 +32206,9 @@ function renderManut(){
     tr.innerHTML='<td><div class="t-main"><button type="button" class="lnk-cli" title="Dois cliques abrem o atendimento deste cliente" data-mpeq="'+esc(e.id)+'" data-mpcli="'+esc(e.clienteId||"")+'">'+esc(e.cliente||c.nome||"—")+"</button></div>"+
         ((telTxt||ondeTxt)?'<div class="t-sub">'+
           (telTxt?esc(telTxt):'<span class="pill p-warn">sem telefone</span>')+
-          (ondeTxt?(telTxt?" · ":"")+esc(ondeTxt):"")+"</div>":"")+"</td>"+
+          (ondeTxt?(telTxt?" · ":"")+esc(ondeTxt):"")+"</div>":"")+
+        /* etiqueta do WhatsApp (27/10): só informa, não esconde de filtro e não conta como troca */
+        (ezap?'<div class="t-sub mp-zap" data-mpzap="'+ezap.k+'"><span class="pill '+ezap.cls+'">'+esc(ezap.n)+"</span></div>":"")+"</td>"+
       '<td><div class="t-main">'+esc(e.produto||"—")+"</div>"+
         /* a série identifica o aparelho quando o cliente tem mais de um, então ela fica — mas só
            quando existe: o "sem série" encheria a tela depois da importação da base antiga (v257).
@@ -32424,6 +32441,16 @@ function renderHistEq(){
   var e=editandoEq;
   /* uso do plano na vigência vem antes do histórico (regra do Wagner, 14/09) */
   var plano=e?htmlUsoPlano(e):"";
+  /* os contatos registrados ligados a este aparelho (27/10) — não são manutenção, por isso
+     ficam numa seção própria e não entram na conta de "manutenção(ões) no histórico" */
+  var contatosEq=e?atendimentos.filter(function(a){return a.manutEquipId===e.id&&a.natureza!=="atividade";})
+    .sort(function(x,y){return instanteZap(y)-instanteZap(x);}):[];
+  if(contatosEq.length)plano+='<div class="sect"><p class="sect-t">Contatos registrados deste aparelho</p><div class="linha-tempo">'+
+    contatosEq.slice(0,20).map(function(a){
+      return '<div class="lt"><div class="cab"><b>'+esc(dataCurta(a.data))+"</b>"+(a.inicio?" "+esc(a.inicio):"")+" · "+esc(a.colaborador||"")+
+        (a.assunto?' · <span class="pill p-mut">'+esc(a.assunto)+"</span>":"")+
+        ((a.motivos||[]).length?' · <span class="pill p-acc">'+esc(a.motivos.join(", "))+"</span>":"")+"</div>"+
+        '<div class="txt">'+esc(a.obs||a.tipo||"—")+"</div></div>";}).join("")+"</div></div>";
   if(!e||!(e.historico||[]).length){$("mp_hist").innerHTML=plano;return;}
   $("mp_hist").innerHTML=plano+'<div class="sect"><p class="sect-t">Histórico deste equipamento</p><div class="linha-tempo">'+
     e.historico.slice().reverse().map(function(h){
@@ -38993,7 +39020,7 @@ function etapaPelosDados(n,c){
     .sort(function(a,b){return String(b.data).localeCompare(String(a.data));})[0];
   if(orc)return {k:"orcamento",orc:orc};
   var contatos=atendimentos.filter(function(a){
-    if(a.clienteId!==c.id)return false;
+    if(a.clienteId!==c.id||a.zapAuto)return false;   /* WhatsApp automático não entra no funil (27/10) */
     var d=String(a.data||a.criadoEm||"").slice(0,10);if(d<desde)return false;
     return a.natureza!=="atividade"||a.status==="finalizado";});
   if(contatos.length>=2||contatos.some(function(a){return a.natureza==="atividade";}))return {k:"atendimento"};
@@ -39012,7 +39039,7 @@ function respPeloMovimento(c,desde){
   var orc=maisNovo(orcamentos.filter(function(x){return x.clienteId===c.id&&x.loja===lojaAtual&&x.situacao!=="perdido"&&String(x.data||"")>=d;}));
   if(orc)return orc.vendedor||orc.colaborador||orc.criadoPor||"";
   var at=maisNovo(atendimentos.filter(function(x){
-    if(x.clienteId!==c.id||(x.loja&&x.loja!==lojaAtual))return false;
+    if(x.clienteId!==c.id||(x.loja&&x.loja!==lojaAtual)||x.zapAuto)return false;
     if(x.natureza==="atividade"&&x.status!=="finalizado")return false;   /* compromisso futuro não conta */
     return String(x.data||x.criadoEm||"").slice(0,10)>=d;}));
   if(at)return at.colaborador||at.criadoPor||"";
@@ -39078,7 +39105,7 @@ function funilJaCoberto(c,ult){
   if(orcNovo)return false;
   /* contato de verdade: atendimento, ou atividade já realizada (o mesmo critério do
      etapaPelosDados — um critério só para a mesma coisa, lição da v326) */
-  var contato=atendimentos.some(function(x){return x.clienteId===c.id&&(!x.loja||x.loja===lojaAtual)&&
+  var contato=atendimentos.some(function(x){return x.clienteId===c.id&&!x.zapAuto&&(!x.loja||x.loja===lojaAtual)&&
     (x.natureza!=="atividade"||x.status==="finalizado")&&depois(x);});
   return !contato;
 }
@@ -39156,7 +39183,7 @@ async function sincronizarFunil(){
   var mov={};
   orcamentos.forEach(function(o){if(o.clienteId&&String(o.data||"")>=limite)mov[o.clienteId]=true;});
   atendimentos.forEach(function(a){
-    if(a.clienteId&&a.natureza!=="atividade"&&String(a.data||"").slice(0,10)>=limite)mov[a.clienteId]=true;});
+    if(a.clienteId&&!a.zapAuto&&a.natureza!=="atividade"&&String(a.data||"").slice(0,10)>=limite)mov[a.clienteId]=true;});
   /* venda recente também é movimento (03/10): quem comprou na primeira conversa não tinha cartão
      nenhum, e a venda não aparecia no quadro */
   pedidos.forEach(function(p){
@@ -39654,7 +39681,7 @@ function modelosZap(ctx){
       (a.data?" em "+dataCurta(a.data):"")+(a.inicio?" às "+a.inicio:"")+". Está tudo certo para você?"});}
   if(c.id&&!ehLead(c))m.push({k:"posvenda",n:"Pós-venda",t:oi+"Tudo certo com o seu purificador? Se precisar de qualquer coisa, conte com a gente."});
   else m.push({k:"retorno",n:"Retorno do atendimento",t:oi+"Estou retornando sobre o seu atendimento. Posso te ajudar a escolher o melhor purificador?"});
-  if(ctx.mensagem)m.unshift({k:"pronta",n:"Mensagem sugerida",t:ctx.mensagem});
+  if(ctx.mensagem)m.unshift(ctx.aniv?{k:"parabens",n:"Parabéns",t:ctx.mensagem}:{k:"pronta",n:"Mensagem sugerida",t:ctx.mensagem});
   return m;
 }
 /* ctx: {tel, cliente (obj ou id), nome, mensagem, titulo, equip, ativ, origem} */
@@ -39750,7 +39777,15 @@ function abrirWhatsApp(ctx){
   $("zp_modelos").innerHTML=mods.map(function(x,i){
     return '<button type="button" data-zpm="'+i+'" aria-pressed="'+(i===(ctx.mensagem?0:1)?"true":"false")+'">'+esc(x.n)+"</button>";}).join("");
   $("zp_msg").value=mods[ctx.mensagem?0:1].t;
-  $("zp_reg").checked=!!c.id;$("zp_regWrap").hidden=!c.id;
+  zapCtx.modeloIdx=ctx.mensagem?0:1;
+  /* o atendimento é registrado SOZINHO ao abrir o WhatsApp (27/10) — a caixinha de anotar saiu */
+  var rn=$("zp_regNota");
+  if(rn){
+    rn.hidden=!c.id||!!ctx.followup;
+    rn.innerHTML="Ao abrir o WhatsApp (ao lado, no aplicativo ou em nova aba), o sistema <b>registra o atendimento</b> no histórico "+
+      (ctx.equip?"do cliente e deste aparelho":"do cliente")+", finalizado como <b>"+esc(MOT_RETORNO_OS)+"</b>. Copiar a mensagem não registra.";
+  }
+  ["zp_lado","zp_app","zp_aba"].forEach(function(id){if($(id))$(id).disabled=false;});
   var cel=ehCelularZap();
   /* no computador o aplicativo do WhatsApp também entra: ele usa o programa JÁ ABERTO,
      sem abrir aba nenhuma no navegador (regra dele, 03/10) */
@@ -39769,7 +39804,9 @@ function abrirWhatsApp(ctx){
   setTimeout(function(){try{$("zp_msg").focus();}catch(e){}},50);
 }
 async function confirmarWhatsApp(modo){
-  var ctx=zapCtx;if(!ctx)return;
+  var ctx=zapCtx;if(!ctx||ctx.__enviando)return;
+  /* UM REGISTRO POR ENVIO (27/10): o botão fica desligado enquanto grava */
+  if(modo!=="copiar"){ctx.__enviando=true;["zp_lado","zp_app","zp_aba"].forEach(function(id){if($(id))$(id).disabled=true;});}
   var msg=$("zp_msg").value.trim();
   /* "copiar" não abre nada (19/10): quem já tem o WhatsApp Web numa aba cola na conversa que
      está lá, sem a aba nova derrubar a sessão dele */
@@ -39784,16 +39821,116 @@ async function confirmarWhatsApp(modo){
     abrirJanelaWhatsApp(ctx.telUsado,msg,modo);
   }
   $("zapModal").hidden=true;
-  var c=ctx.cliente;
-  if(c&&c.id&&$("zp_reg").checked){
-    var txt="💬 WhatsApp aberto por "+usuarioAtual+(ctx.origem?" ("+ctx.origem+")":"")+(msg?": "+(msg.length>160?msg.slice(0,157)+"…":msg):"");
-    c.notas=(c.notas||[]).concat([{id:uid(),texto:txt,quando:iso(new Date())+" "+agoraHM(),por:usuarioAtual,whatsapp:true}]);
-    await grava("clientes",c);
-    try{if(editandoCli&&editandoCli.id===c.id)renderHistoricoCli(c);}catch(e){}
+  /* ATENDIMENTO REGISTRADO SOZINHO (27/10, decisão dele): os botões que ABREM o WhatsApp
+     (ao lado, aplicativo e nova aba) registram; "Copiar a mensagem" não. Follow-up programado
+     já se encerra sozinho, e telefone sem cadastro não tem a quem ligar o registro. */
+  if(modo!=="copiar"&&!ctx.followup){
+    try{await registrarAtendZap(ctx,msg,modo);}catch(eZ){console.warn("atendimento do WhatsApp",eZ);}
   }
   /* veio de um follow-up programado: a atividade se encerra ao enviar (04/10) */
   if(ctx.followup){try{await marcarFollowupEnviado(ctx.followup);}catch(e){console.warn("follow-up",e);}}
-  zapCtx=null;
+  ctx.__enviando=false;
+  ["zp_lado","zp_app","zp_aba"].forEach(function(id){if($(id))$(id).disabled=false;});
+  if(zapCtx===ctx)zapCtx=null;
+}
+/* ===== ATENDIMENTO DO WHATSAPP (27/10, decisão dele) =========================================
+   Abrir a conversa pelo sistema já é um contato com o cliente: ele vira um atendimento do tipo
+   WhatsApp, no nome de quem clicou, FINALIZADO como "Aguardando retorno do cliente", com a
+   mensagem nas observações e o ASSUNTO pelo modelo de mensagem escolhido.
+   Três coisas que ele NÃO faz, de propósito: não abre cartão no funil (zapAuto fica fora de
+   etapaPelosDados, respPeloMovimento, funilJaCoberto e sincronizarFunil), não trava o cliente
+   para os colegas, e NÃO mexe na Manutenção Periódica — nem tira o aparelho da lista, nem muda
+   a data da troca. Ele se liga ao aparelho por manutEquipId, que não é visita (visitasDoEquip
+   só conta atividade). Quem tira o aparelho da lista continua sendo a venda aprovada. */
+var ASSUNTOS_ZAP={manut:"Troca de refil / Manutenção periódica",retorno:"Retorno",livre:"Contato por WhatsApp",
+  oi:"Contato por WhatsApp",pronta:"Contato por WhatsApp",cobranca:"Cobrança",visita:"Confirmação de horário",
+  posvenda:"Pós-venda",parabens:"Parabéns de aniversário"};
+function assuntoZap(ctx){
+  var m=((ctx&&ctx.modelos)||[])[ctx&&ctx.modeloIdx]||{};
+  return ASSUNTOS_ZAP[m.k]||"Contato por WhatsApp";
+}
+function instanteZap(a){return Date.parse(a.zapUltimoEm||a.zapEm||"")||instanteDoRegistro(a);}
+var ZAP_REPETE_MS=10*60000;
+async function registrarAtendZap(ctx,msg,modo){
+  var c=ctx&&ctx.cliente;
+  if(!c||!c.id||ctx.followup)return null;
+  var eq=ctx.equip||null,assunto=assuntoZap(ctx),agoraMs=new Date().getTime(),carimbo=new Date().toISOString();
+  var comoAbriu={lado:"WhatsApp Web ao lado do sistema",aba:"WhatsApp Web em nova aba",app:"aplicativo do WhatsApp"}[modo]||"WhatsApp";
+  var linha=agoraCarimbo()+" · "+usuarioAtual+" abriu o WhatsApp ("+comoAbriu+") · "+assunto;
+  /* o mesmo cliente, pela mesma pessoa (e o mesmo aparelho), em até 10 minutos: não cria outro */
+  var ja=atendimentos.filter(function(a){
+    return a.zapAuto&&a.clienteId===c.id&&a.colaborador===usuarioAtual&&(!a.loja||a.loja===lojaAtual)&&
+      (a.manutEquipId||"")===(eq?eq.id:"")&&!!a.aniversario===!!ctx.aniv&&agoraMs-instanteZap(a)<=ZAP_REPETE_MS;})
+    .sort(function(x,y){return instanteZap(y)-instanteZap(x);})[0];
+  if(ja){
+    ja.historico=(ja.historico||[]).concat([{quando:agoraCarimbo(),por:usuarioAtual,texto:"WhatsApp aberto de novo ("+comoAbriu+")"+(msg?": "+msg:"")}]);
+    ja.zapUltimoEm=carimbo;
+    try{await gravaConf("atendimentos",ja);}catch(e){toast("O WhatsApp abriu, mas o banco não aceitou atualizar o atendimento: "+((e&&e.message)||e));}
+    try{render();}catch(e){}
+    return ja;
+  }
+  var tiposZ=ctx.aniv?[TIPO_ANIV,"WhatsApp"]:["WhatsApp"];
+  var a={id:uid(),loja:lojaAtual,natureza:"atendimento",clienteId:c.id,cliente:c.nome||ctx.nome||"",
+    tel:ctx.telUsado||c.tel||"",doc:c.doc||"",cidade:c.cidade||"",uf:c.uf||"",origem:c.origem||"",
+    colaborador:usuarioAtual,tipos:tiposZ,tipo:tiposZ.join(" · "),data:hojeISO(),inicio:agoraHM(),fim:agoraHM(),
+    obs:"Mensagem enviada pelo WhatsApp:\n"+(msg||"(sem texto)"),
+    assunto:assunto,status:"finalizado",completo:"",motivos:[MOT_RETORNO_OS],iniciativa:"ativo",
+    zapAuto:true,zapEm:carimbo,zapModo:modo||"",zapOrigem:ctx.origem||"",
+    criadoEm:iso(new Date()),criadoPor:usuarioAtual,historico:[{quando:agoraCarimbo(),por:usuarioAtual,texto:linha}]};
+  if(eq)a.manutEquipId=eq.id;
+  if(ctx.aniv)a.aniversario={ano:ctx.aniv.ano,data:ctx.aniv.data,origem:"aniversariantes",parabens:true};
+  if(marcaTeste(c))a.teste=true;
+  atendimentos.push(a);
+  try{await gravaConf("atendimentos",a);}
+  catch(e){
+    atendimentos=atendimentos.filter(function(x){return x!==a;});
+    toast("O WhatsApp abriu, mas o banco não aceitou registrar o atendimento: "+((e&&e.message)||e));
+    return null;
+  }
+  try{render();}catch(e){}
+  try{if(editandoCli&&editandoCli.id===c.id)renderHistoricoCli(c);}catch(e){}
+  try{if(typeof editandoEq!=="undefined"&&editandoEq&&eq&&editandoEq.id===eq.id)renderHistEq();}catch(e){}
+  toast("Atendimento registrado: "+assunto+" · "+(c.nome||"")+" · aguardando retorno do cliente.");
+  return a;
+}
+/* ETIQUETA DE CONTATO (27/10): o último WhatsApp mandado ao cliente, enquanto nada mais
+   aconteceu com ele — atividade marcada, atendimento novo, orçamento ou venda apagam a etiqueta.
+   Só informa: não esconde o aparelho de filtro nenhum e não conta como troca.
+   O parabéns de aniversário fica de fora: ele não fala de manutenção. */
+function indiceContatoZap(){
+  var ult={};
+  atendimentos.forEach(function(a){
+    if(!a.zapAuto||!a.clienteId||a.aniversario||(a.loja&&a.loja!==lojaAtual))return;
+    var t=instanteZap(a),u=ult[a.clienteId];
+    if(!u||t>u.t)ult[a.clienteId]={a:a,t:t};
+  });
+  function marca(cid,t){var u=ult[cid];if(u&&t>u.t)u.respondido=true;}
+  atendimentos.forEach(function(a){if(!a.zapAuto&&a.clienteId&&ult[a.clienteId])marca(a.clienteId,instanteDoRegistro(a));});
+  orcamentos.forEach(function(o){if(o.clienteId&&ult[o.clienteId])marca(o.clienteId,instanteDoRegistro(o));});
+  pedidos.forEach(function(p){if(p.clienteId&&ult[p.clienteId]&&p.status!=="Cancelada"&&!p.cancelada)marca(p.clienteId,instanteDoRegistro(p));});
+  return ult;
+}
+/* dias úteis (segunda a sexta) depois de "de", até "ate" inclusive */
+function diasUteisEntre(de,ate){
+  var n=0,d=new Date(de+"T12:00:00"),fim=new Date(ate+"T12:00:00");
+  for(var i=0;i<400&&d<fim;i++){d.setDate(d.getDate()+1);var w=d.getDay();if(w!==0&&w!==6)n++;}
+  return n;
+}
+var ZAP_UTEIS_LARANJA=3;
+function etiquetaContatoZap(cid,idx){
+  var u=(idx||indiceContatoZap())[cid];
+  if(!u||u.respondido)return null;
+  var d0=iso(new Date(u.t)),h=hojeISO(),dias=Math.max(0,diasEntre(d0,h)),uteis=diasUteisEntre(d0,h);
+  var quem=u.a.colaborador||"";
+  if(dias===0)return {k:"hoje",cls:"p-acc",a:u.a,dias:0,uteis:0,n:"Contatado hoje · aguardando retorno"+(quem?" · "+quem:"")};
+  if(uteis>=ZAP_UTEIS_LARANJA)return {k:"semretorno",cls:"p-laranja",a:u.a,dias:dias,uteis:uteis,
+    n:"Sem retorno há "+dias+" dia"+(dias===1?"":"s")+" · chamar de novo"};
+  return {k:"contatado",cls:"p-mut",a:u.a,dias:dias,uteis:uteis,
+    n:"Contatado há "+dias+" dia"+(dias===1?"":"s")+" · sem retorno"+(quem?" · "+quem:"")};
+}
+function msgParabens(c){
+  return "Olá, "+primeiroNome(c.nome)+"! Toda a equipe da "+(EMPRESA.razao||"Minas Filtros")+
+    " deseja um feliz aniversário! 🎉 Que seja um ano cheio de saúde. Conte sempre com a gente.";
 }
 function ligarWhatsApp(){
   $("zp_fechar").onclick=function(){$("zapModal").hidden=true;zapCtx=null;};
@@ -39807,14 +39944,21 @@ function ligarWhatsApp(){
   $("zp_modelos").onclick=function(ev){
     var b=ev.target.closest("[data-zpm]");if(!b||!zapCtx)return;
     var m=zapCtx.modelos[+b.getAttribute("data-zpm")];if(!m)return;
+    zapCtx.modeloIdx=+b.getAttribute("data-zpm");
     Array.prototype.forEach.call($("zp_modelos").querySelectorAll("button"),function(x){x.setAttribute("aria-pressed",String(x===b));});
     $("zp_msg").value=m.t;$("zp_msg").focus();
   };
   /* todo link antigo "wa.me" do sistema e todo botão novo passam pela mesma janela */
   document.addEventListener("click",function(ev){
-    var alvo=ev.target.closest?ev.target.closest('a[href*="wa.me/"],[data-zapcli],[data-zaptit],[data-zapeq],[data-zapativ]'):null;
+    var alvo=ev.target.closest?ev.target.closest('a[href*="wa.me/"],[data-zapcli],[data-zaptit],[data-zapeq],[data-zapativ],[data-zapaniv]'):null;
     if(!alvo||alvo.closest("#zapModal"))return;
     ev.preventDefault();ev.stopPropagation();
+    /* o Acesso rápido fecha sozinho também no WhatsApp (27/10): este clique é pego aqui, em
+       captura, e o ouvinte do próprio botão — que fechava a janela — nunca chegava a rodar */
+    var mqa=alvo.closest("#mqaModal");if(mqa)mqa.hidden=true;
+    if(alvo.hasAttribute("data-zapaniv")){
+      var pz=String(alvo.getAttribute("data-zapaniv")).split("|"),ca=cliPorId(pz[0]);if(!ca)return;
+      abrirWhatsApp({cliente:ca,mensagem:msgParabens(ca),aniv:{ano:+pz[1],data:pz[2]},origem:"aniversariantes"});return;}
     if(alvo.hasAttribute("data-zapcli")){abrirWhatsApp({cliente:alvo.getAttribute("data-zapcli"),origem:"ficha do cliente"});return;}
     if(alvo.hasAttribute("data-zaptit")){
       var t=titulos.filter(function(x){return x.id===alvo.getAttribute("data-zaptit");})[0];if(!t)return;
@@ -40813,7 +40957,7 @@ function renderTipos(){
 }
 
 /* ---------- motivos de finalização ---------- */
-var SEED_MOTIVOS=["Vendido","Instalação concluída","Serviço realizado","Vai pensar","Vai comprar depois (data combinada)","Preço alto","Sem crédito / não aprovado","Fechou com concorrente","Sem interesse","Não atendeu o telefone","Não estava no endereço (visita)","Telefone errado / não existe","Pediu para não receber contato","Reagendou visita","Já tem purificador","Fora da área de atendimento","Aniversariante Contatado com sucesso","Aniversariante sem contato","Aguardando Retorno Cliente","Cliente Autorizou o Serviço"];
+var SEED_MOTIVOS=["Vendido","Instalação concluída","Serviço realizado","Vai pensar","Vai comprar depois (data combinada)","Preço alto","Sem crédito / não aprovado","Fechou com concorrente","Sem interesse","Não atendeu o telefone","Não estava no endereço (visita)","Telefone errado / não existe","Pediu para não receber contato","Reagendou visita","Já tem purificador","Fora da área de atendimento","Aniversariante Contatado com sucesso","Aniversariante sem contato","Aguardando retorno do cliente","Cliente Autorizou o Serviço"];
 /* ---------- acerto da lista de motivos decidido com ele em 03/10 ----------
    Os cinco de baixo faltavam para o motivo da perda não virar sempre "não tem interesse"; os dois
    renomeados eram confundidos na tela (um é ligação, o outro é visita); "Orçamento enviado" saiu
@@ -41460,7 +41604,8 @@ function renderAtend(){
     var tr=document.createElement("tr");tr.className=(trava||!podeEd)?"travada":"clickable";
     var sO2=situacaoDe(a);
     var sit=a.natureza==="atendimento"
-      ? (a.status==="finalizado"?'<span class="pill p-ok">Finalizado</span>':'<span class="pill p-warn">Em aberto</span>')
+      ? (a.status==="finalizado"?'<span class="pill p-ok">Finalizado</span>'+
+          (a.motivos&&a.motivos.length?'<div class="t-sub">'+esc(a.motivos.join(", "))+"</div>":""):'<span class="pill p-warn">Em aberto</span>')
       : (a.status==="finalizado"
         ? '<span class="pill p-ok">'+(a.situacao==="reagendada"?"Reagendada":"Concluída")+"</span>"+
           (a.motivos&&a.motivos.length?'<div class="t-sub">'+esc(a.motivos.join(", "))+"</div>":"")
@@ -41471,7 +41616,8 @@ function renderAtend(){
     tr.innerHTML='<td><div class="t-main">'+esc(dataBR(a.data))+'</div><div class="t-sub">'+esc(a.inicio||"")+(a.fim?" – "+esc(a.fim):"")+"</div>"+
       (lanc?'<div class="t-sub">lançado '+esc(lanc)+"</div>":"")+"</td>"+
       "<td>"+esc(a.cliente||"—")+"</td>"+
-      "<td>"+((a.tipos||[]).map(function(t){return '<span class="pill p-mut" style="margin-right:4px">'+esc(t)+"</span>";}).join("")||"—")+"</td>"+
+      "<td>"+((a.tipos||[]).map(function(t){return '<span class="pill p-mut" style="margin-right:4px">'+esc(t)+"</span>";}).join("")||"—")+
+        (a.assunto?'<div class="t-sub">Assunto: <b>'+esc(a.assunto)+"</b></div>":"")+"</td>"+
       "<td>"+esc(a.colaborador||"—")+"</td>"+
       "<td>"+sit+"</td>"+
       '<td class="num"><button class="btn '+(trava||!podeEd?"mut":"ghost")+' sm" type="button" data-real="'+a.id+'">Ver detalhes</button>'+
@@ -45661,7 +45807,10 @@ function garantirAniversarioCfg(){
   if(tipos.indexOf(TIPO_TROCA_REFIL)<0){tipos.push(TIPO_TROCA_REFIL);mud.t=true;}
   [MOT_ANIV_OK,MOT_ANIV_NAO].forEach(function(m){if(motivos.indexOf(m)<0){motivos.push(m);mud.m=true;}});
   /* OS interna: cliente vai pensar ou passar na loja (regra do Wagner, 14/09) */
-  if(motivos.indexOf("Aguardando Retorno Cliente")<0){motivos.push("Aguardando Retorno Cliente");mud.m=true;}
+  /* renomeado em 27/10: "Aguardando Retorno Cliente" passou a "Aguardando retorno do cliente" */
+  var iAnt=motivos.indexOf(MOT_RETORNO_ANTIGO);
+  if(iAnt>=0){if(motivos.indexOf(MOT_RETORNO_OS)<0)motivos[iAnt]=MOT_RETORNO_OS;else motivos.splice(iAnt,1);mud.m=true;}
+  if(motivos.indexOf(MOT_RETORNO_OS)<0){motivos.push(MOT_RETORNO_OS);mud.m=true;}
   if(motivos.indexOf("Cliente Autorizou o Serviço")<0){motivos.push("Cliente Autorizou o Serviço");mud.m=true;}
   if(!metaTipos.aniversario)metaTipos.aniversario=[];
   if(metaTipos.aniversario.indexOf(TIPO_ANIV)<0){metaTipos.aniversario.push(TIPO_ANIV);mud.mt=true;}
@@ -45698,6 +45847,7 @@ function cicloAnivAtend(a,c){
   return {ano:Y,data:an.data};
 }
 function sucessoAniv(a){return (a.motivos||[]).indexOf(MOT_ANIV_OK)>=0;}
+function parabensAniv(a){return !!(a.aniversario&&a.aniversario.parabens);}
 function contatosAnivCiclo(c,ano){
   return atendsDe(c.id).filter(function(a){
     if(a.status!=="finalizado"||!ehAtendAniv(a))return false;
@@ -45707,9 +45857,12 @@ function contatosAnivCiclo(c,ano){
 function situacaoAniv(c,h){
   var Y0=+h.slice(0,4),an0=aniversarioNoAno(c.nasc,Y0);if(!an0)return null;
   var l0=contatosAnivCiclo(c,Y0),ok0=l0.filter(sucessoAniv)[0]||null,passou=an0.data<h;
-  var Yp=(ok0||passou)?Y0+1:Y0,anP=(Yp===Y0)?an0:aniversarioNoAno(c.nasc,Yp);
+  /* PARABÉNS PELO WHATSAPP (27/10, decisão dele): tira o cliente da lista "a contatar" do ano,
+     com o selo próprio — e conta separado de "contatado com sucesso" */
+  var pb0=ok0?null:(l0.filter(parabensAniv)[0]||null);
+  var Yp=(ok0||pb0||passou)?Y0+1:Y0,anP=(Yp===Y0)?an0:aniversarioNoAno(c.nasc,Yp);
   var lP=(Yp===Y0)?l0:contatosAnivCiclo(c,Yp);
-  return {c:c,an0:an0,ok0:ok0,semContato0:passou&&!ok0,
+  return {c:c,an0:an0,ok0:ok0,parabens0:pb0,semContato0:passou&&!ok0&&!pb0,
     tent0:l0.filter(function(a){return !sucessoAniv(a);}),
     prox:anP,proxAno:Yp,tentProx:lP.filter(function(a){return !sucessoAniv(a);}),dias:diasEntre(h,anP.data)};
 }
@@ -45734,6 +45887,8 @@ function atenderAniv(id){
   var c=cliPorId(id);if(!c)return;
   var h=hojeISO(),s=situacaoAniv(c,h);if(!s)return;
   if(s.ok0){toast((c.nome||"")+" já foi contactado em "+h.slice(0,4)+" ("+dataCurta(s.ok0.data)+"). O próximo contato é em "+dataCurta(s.prox.data)+".");return;}
+  /* parabéns já mandado e o cliente respondeu: o atendimento é do aniversário DESTE ano */
+  if(s.parabens0&&s.an0)return abrirAtendAniv(c,{proxAno:+h.slice(0,4),prox:s.an0});
   abrirAtendAniv(c,s);
 }
 function perguntarContatoAniv(){
@@ -45803,8 +45958,10 @@ function renderAniversariantes(){
     '<div class="kpi"><div class="l">A contatar hoje</div><div class="v" style="color:'+(nHoje?"var(--accent)":"inherit")+'">'+nHoje+"</div></div>"+
     '<div class="kpi"><div class="l">A contatar em 7 dias</div><div class="v">'+base.filter(function(s){return s.dias>=0&&s.dias<=7;}).length+"</div></div>"+
     '<div class="kpi"><div class="l">Contactados em '+Y0+'</div><div class="v">'+base.filter(function(s){return !!s.ok0;}).length+"</div></div>"+
+    '<div class="kpi"><div class="l">Parabéns pelo WhatsApp em '+Y0+'</div><div class="v">'+base.filter(function(s){return !!s.parabens0;}).length+
+      '</div><div class="l" style="margin-top:4px">aguardando retorno</div></div>'+
     '<div class="kpi"><div class="l">Passaram sem contato em '+Y0+'</div><div class="v">'+base.filter(function(s){return s.semContato0;}).length+"</div></div>";
-  var lista=base.filter(function(s){return sit==="contatados"?!!s.ok0:(sit==="semcontato"?s.semContato0:true);})
+  var lista=base.filter(function(s){return sit==="contatados"?!!s.ok0:(sit==="parabens"?!!s.parabens0:(sit==="semcontato"?s.semContato0:true));})
     .map(function(s){var doProx=(sit==="pendente");var an=doProx?s.prox:s.an0;return {s:s,an:an,ano:doProx?s.proxAno:Y0,doProx:doProx,dias:diasEntre(h,an.data)};})
     .filter(function(x){return noPeriodo(x.an.data,per);})
     .filter(function(x){return !tipo||(tipo==="lead"?ehLead(x.s.c):!ehLead(x.s.c));})
@@ -45820,6 +45977,8 @@ function renderAniversariantes(){
   function situacao(x){
     var s=x.s;
     if(s.ok0)return '<span class="pill p-ok">Contactado em '+Y0+'</span><div class="t-sub">'+quemQuando(s.ok0)+" · próximo contato "+esc(dataCurta(s.prox.data))+"</div>";
+    if(s.parabens0&&!x.doProx)return '<span class="pill p-acc">Parabéns enviado pelo WhatsApp em '+esc(String(dataCurta(s.parabens0.data)).slice(0,5))+
+      " · aguardando retorno</span>"+'<div class="t-sub">'+quemQuando(s.parabens0)+" · próximo contato "+esc(dataCurta(s.prox.data))+"</div>";
     if(s.semContato0&&!x.doProx)return '<span class="pill p-crit">Passou sem contato</span><div class="t-sub">'+
       (s.tent0.length?s.tent0.length+(s.tent0.length===1?" tentativa":" tentativas")+", última "+quemQuando(s.tent0[0]):"nenhuma tentativa")+
       " · próximo contato "+esc(dataCurta(s.prox.data))+"</div>";
@@ -45833,7 +45992,6 @@ function renderAniversariantes(){
     var rel=dias===0?'<span class="pill p-acc">hoje 🎂</span>':(dias>0?"em "+dias+" dia"+(dias===1?"":"s"):"foi há "+(-dias)+" dia"+(dias===-1?"":"s"));
     var vs=vendasDe(c.id).filter(function(p){return p.status!=="Cancelada";}).sort(function(a,b){return String(b.data||"").localeCompare(String(a.data||""));});
     var ult=vs[0],tw=telWhatsApp(c.tel);
-    var msg="Olá, "+primeiroNome(c.nome)+"! Toda a equipe da "+(EMPRESA.razao||"Minas Filtros")+" deseja um feliz aniversário! 🎉 Que seja um ano cheio de saúde. Conte sempre com a gente.";
     return "<tr>"+
       '<td><div class="t-main">'+esc(String(x.an.dia).padStart(2,"0")+"/"+String(x.an.mes+1).padStart(2,"0")+(x.ano!==Y0?"/"+x.ano:""))+
         '</div><div class="t-sub">'+esc(WD[dt.getDay()])+" · "+rel+"</div></td>"+
@@ -45845,7 +46003,8 @@ function renderAniversariantes(){
         :'<span class="t-sub">sem compra'+(vendedorDoCliente(c)?" · "+esc(vendedorDoCliente(c)):"")+"</span>")+"</td>"+
       "<td>"+situacao(x)+"</td>"+
       '<td class="num" style="white-space:nowrap">'+
-        (tw?'<a class="btn zap sm" target="_blank" rel="noopener" href="https://wa.me/'+tw+"?text="+encodeURIComponent(msg)+'">WhatsApp</a> ':"")+
+        /* o parabéns pelo WhatsApp vira atendimento ligado a ESTE aniversário (27/10) */
+        (tw?'<button class="btn zap sm" type="button" data-zapaniv="'+esc(c.id+"|"+x.ano+"|"+x.an.data)+'">WhatsApp</button> ':"")+
         (!x.s.ok0?'<button class="btn sm" type="button" data-anat="'+esc(c.id)+'">Atendimento</button> ':"")+
         '<button class="btn ghost sm" type="button" data-anfi="'+esc(c.id)+'">Ficha</button></td>'+
     "</tr>";
