@@ -972,6 +972,10 @@
   .kpi-bt{cursor:pointer;border:1px solid transparent;transition:border-color .12s,transform .12s}
   .kpi-bt:hover,.kpi-bt:focus-visible{border-color:var(--accent);transform:translateY(-1px)}
   .kpi-bt.crit{border-color:var(--crit)}
+  .kpi .kpi-ver{margin-top:4px;color:var(--accent)}
+  .dash-faixa{padding:12px 16px}
+  .dash-faixa .note{margin:0;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+  #pedLista>.dash-faixa{padding:0 0 16px}
   .kpi-bt.crit:hover,.kpi-bt.crit:focus-visible{border-color:var(--crit);box-shadow:0 6px 18px rgba(196,70,62,.22)}
   .kpi .l{font-size:13.5px;color:var(--ink-3)}
   /* o valor do KPI não quebra em duas linhas ("R$" numa, o número na outra) — v172, 04/10 */
@@ -3623,6 +3627,7 @@ img{max-width:100%}
     <section class="screen" id="s-pedidos" hidden>
       <div class="page-head"><h1>Pedidos</h1><p>Com valor, depreciado e base de comissão — o que a lista atual não mostra.</p></div>
       <div id="pedLista">
+        <div id="pedDashFiltro" class="dash-faixa" hidden></div>
         <div class="card" style="padding:16px 22px;margin-bottom:20px">
           <div class="toolbar" style="padding:0">
             <input id="pedBusca" placeholder="Buscar por cliente, número ou vendedor" style="max-width:280px">
@@ -3735,6 +3740,7 @@ img{max-width:100%}
       <div class="page-head"><h1>Atendimentos e Atividades</h1><p><b>Atividade</b> é o contato a fazer. <b>Atendimento</b> é o contato já feito — presencial, telefone, WhatsApp ou Instagram. A lista abre pelo <b>último que foi lançado</b>.</p></div>
 
       <div class="card flush" id="atendLista">
+        <div id="atendDashFiltro" class="dash-faixa" hidden></div>
         <div class="toolbar">
           <input id="atendBusca" placeholder="Buscar por cliente">
           <select id="atendFiltro" style="max-width:190px">
@@ -18378,6 +18384,7 @@ function vendasPendentes(quem){
 }
 /* abre a tela de Pedidos ja com as pendentes na tela */
 function abrirVendasPendentes(quem){
+  filtroDash=null;
   ir("pedidos");
   if($("pedBusca"))$("pedBusca").value="";
   if($("pedSit"))$("pedSit").value="pendente";
@@ -18412,8 +18419,15 @@ function renderPedidos(){
   $("pedDe").disabled=semPeriodo;$("pedAte").disabled=semPeriodo;
   [].slice.call(document.querySelectorAll("#pedPer button")).forEach(function(b){
     b.disabled=semPeriodo;});
+  var fdP=filtroDashDe("pedidos");
   var lista=pedidos.filter(function(p){return p.loja===lojaAtual&&meuPedido(p);})
     .filter(function(p){
+      if(fdP){
+        if(!fdP.ids[p.id])return false;
+        if(q){var alvoD=semAcento(String(p.numero)+" "+(p.cliente||"")+" "+(p.vendedor||"")+" "+(p.prospector||""));
+          if(alvoD.indexOf(q)<0)return false;}
+        return true;
+      }
       if(!semPeriodo){
         if(j.de&&p.data<j.de)return false;
         if(j.ate&&p.data>j.ate)return false;
@@ -18432,7 +18446,8 @@ function renderPedidos(){
       return true;})
     .sort(maisNovoPrimeiro);
   $("pedCount").textContent=lista.length+(lista.length===1?" pedido":" pedidos")+
-    (semPeriodo?" · vendas pendentes de qualquer data (o período não se aplica)":"");
+    (fdP?" · do Dashboard":(semPeriodo?" · vendas pendentes de qualquer data (o período não se aplica)":""));
+  faixaFiltroDash("pedidos",lista.length);
   /* o botao mostra quantas estao esperando, e vira a saida quando o filtro esta ligado */
   (function(){
     var bt=$("pedPendentes");if(!bt)return;
@@ -18448,7 +18463,7 @@ function renderPedidos(){
   /* pedidos guardados pela metade aparecem em cima, marcados Incompleto (03/10). Eles não entram
      na contagem nem nos KPIs: ainda não são venda. */
   var meus=rascunhos.filter(function(r){
-    return r.loja===lojaAtual&&(!soMeus()||r.vendedor===usuarioAtual||r.criadoPor===usuarioAtual);})
+    return !fdP&&r.loja===lojaAtual&&(!soMeus()||r.vendedor===usuarioAtual||r.criadoPor===usuarioAtual);})
     .filter(function(r){return !q||((r.cliente||"")+" "+(r.vendedor||"")).toLowerCase().indexOf(q)>=0;})
     .sort(function(x,y){return String(y.salvoEm||"").localeCompare(String(x.salvoEm||""));});
   meus.forEach(function(r){
@@ -28853,6 +28868,92 @@ function dadosDash(quem){
     pass:pass,ativo:ativo,
     fat:vds.reduce(function(a,p){return a+(+p.total||0);},0)};
 }
+/* FILTRO DO DASHBOARD (27/10, pedido dele: "clicar em cada quadro e ir direto para o filtro
+   desses quadros"). A lista que abre é EXATAMENTE a que o cartão contou — os ids vêm de
+   dadosDash, então o número da tela de destino bate com o do cartão, sem segunda conta.
+   Fica uma faixa no alto dizendo de onde veio, com "Ver todos" para voltar à lista normal.
+   Mexer em qualquer filtro da tela também solta o filtro do Dashboard. */
+var filtroDash=null;
+var DASH_ALVOS={
+  ats:{tela:"atend",t:"Atendimentos realizados",l:"ats"},
+  criadas:{tela:"atend",t:"Atividades criadas",l:"criadas"},
+  feitas:{tela:"atend",t:"Atividades realizadas",l:"feitas"},
+  vds:{tela:"pedidos",t:"Vendas realizadas",l:"vds"},
+  fat:{tela:"pedidos",t:"Faturamento",l:"vds"},
+  conv:{tela:"pedidos",t:"Conversão",l:"vds"}
+};
+function abrirFiltroDash(k){
+  var def=DASH_ALVOS[k];if(!def)return;
+  var quem=($("dashQuem")||{}).value||"",d=dadosDash(quem),lista=d[def.l]||[];
+  var ids={};lista.forEach(function(r){ids[r.id]=1;});
+  var extra="";
+  if(k==="fat")extra=" · "+BRL(d.fat)+" faturados";
+  if(k==="conv"){var n=d.ats.length;
+    extra=" · "+(n?Math.round(d.vds.length/n*100):0)+"% de conversão: estas são as vendas, contra "+n+" contato"+(n===1?"":"s")+" no período";}
+  filtroDash={k:k,tela:def.tela,ids:ids,n:lista.length,titulo:def.t,
+    rot:d.j.rot+" · "+(quem||"equipe toda")+extra,de:d.j.de,ate:d.j.ate,quem:quem};
+  if(ir(def.tela)===false){filtroDash=null;return;}
+  if(def.tela==="pedidos"){
+    if($("pedBusca"))$("pedBusca").value="";
+    if($("pedSit"))$("pedSit").value="";
+    /* o período da tela de Pedidos passa a ser o do Dashboard: tirando o filtro, a lista continua coerente */
+    pedPeriodo="livre";$("pedDe").value=d.j.de;$("pedAte").value=d.j.ate;
+    Array.prototype.forEach.call($("pedPer").querySelectorAll("button"),function(x){
+      x.setAttribute("aria-current",String(x.getAttribute("data-p")==="livre"));});
+    var sv=$("pedVend");
+    if(sv&&!soMeus()){
+      if(!sv.options.length)renderPedidos();
+      if(quem&&![].slice.call(sv.options).some(function(o){return o.value===quem;})){
+        var o=document.createElement("option");o.value=quem;o.textContent=quem;sv.appendChild(o);}
+      try{sv.value=quem;}catch(e){}
+    }
+    if($("pedDet"))$("pedDet").hidden=true;
+    if($("pedLista"))$("pedLista").hidden=false;
+    renderPedidos();
+  }else{
+    if($("atendBusca"))$("atendBusca").value="";
+    if($("atendFiltro"))$("atendFiltro").value="";
+    /* a pessoa do Dashboard vira a da tela: tirando o filtro, a lista continua na mesma pessoa */
+    var sa=$("atendVend");
+    if(sa&&!soMeus()){
+      if(!sa.options.length)montarVendAtend();
+      if(quem&&![].slice.call(sa.options).some(function(o){return o.value===quem;})){
+        var oa=document.createElement("option");oa.value=quem;oa.textContent=quem;sa.appendChild(oa);}
+      try{sa.value=quem;}catch(e){}
+    }
+    $("atendForm").hidden=true;if($("atendFecha"))$("atendFecha").hidden=true;$("atendLista").hidden=false;
+    renderAtend();
+  }
+}
+function soltarFiltroDash(){
+  if(!filtroDash)return;
+  var t=filtroDash.tela;filtroDash=null;
+  if(t==="pedidos")renderPedidos();else renderAtend();
+}
+function filtroDashDe(tela){return filtroDash&&filtroDash.tela===tela?filtroDash:null;}
+function faixaFiltroDash(tela,mostrados){
+  var w=$(tela==="pedidos"?"pedDashFiltro":"atendDashFiltro");if(!w)return;
+  var fd=filtroDashDe(tela);
+  if(!fd){w.hidden=true;w.innerHTML="";return;}
+  w.hidden=false;
+  w.innerHTML='<div class="note"><span><b>Do Dashboard: '+esc(fd.titulo)+"</b> · "+esc(fd.rot)+" — "+
+    fd.n+(tela==="pedidos"?(fd.n===1?" pedido":" pedidos"):(fd.n===1?" registro":" registros"))+
+    (mostrados!==fd.n?" ("+mostrados+" com a busca)":"")+"</span>"+
+    '<button class="btn ghost sm" type="button" data-dashsolta>Ver todos</button></div>';
+  var b=w.querySelector("[data-dashsolta]");if(b)b.onclick=soltarFiltroDash;
+}
+/* mexer em qualquer filtro da tela solta o do Dashboard (a busca, não: ela procura dentro dele) */
+document.addEventListener("change",function(ev){
+  var id=ev.target&&ev.target.id;
+  if(filtroDash&&["atendFiltro","atendVend","pedSit","pedVend","pedDe","pedAte"].indexOf(id)>=0)filtroDash=null;
+},true);
+document.addEventListener("click",function(ev){
+  if(!filtroDash||!ev.target||!ev.target.closest)return;
+  if(ev.target.closest("#pedPer button")||ev.target.closest("#pedPendentes"))filtroDash=null;
+},true);
+window.__abrirFiltroDashMF=abrirFiltroDash;
+window.__filtroDashMF=function(){return filtroDash;};
+window.__dadosDashMF=dadosDash;
 function barras(m,total){
   var linhas=[["mensagem","Mensagens"],["ligacao","Ligações"],["abordagem","Abordagens"],["outro","Outros"]];
   var max=Math.max(1,m.mensagem,m.ligacao,m.abordagem,m.outro);
@@ -28883,10 +28984,18 @@ function renderDash(){
   $("dashSub").textContent=quem
     ? "Produtividade de "+quem+" — contatos, atividades, vendas e conversão."
     : "Produtividade da equipe — contatos, atividades, vendas e conversão.";
+  /* TODO CARTÃO ABRE A SUA LISTA (27/10, pedido dele): toque no cartão e a tela certa abre
+     com exatamente os registros que ele contou — mesmo período e mesma pessoa do Dashboard */
+  function kpiVai(k,rot,v,sub){
+    return '<div class="kpi kpi-bt" data-dashk="'+k+'" role="button" tabindex="0" title="Ver a lista">'+
+      '<div class="l">'+rot+'</div><div class="v">'+v+"</div>"+
+      (sub?'<div class="l" style="margin-top:4px">'+sub+"</div>":"")+
+      '<div class="l kpi-ver">toque para ver</div></div>';
+  }
   $("dashTopo").innerHTML=
-    '<div class="kpi"><div class="l">Atendimentos realizados</div><div class="v">'+d.ats.length+"</div></div>"+
-    '<div class="kpi"><div class="l">Atividades criadas</div><div class="v">'+d.criadas.length+"</div></div>"+
-    '<div class="kpi"><div class="l">Atividades realizadas</div><div class="v">'+d.feitas.length+"</div></div>"+
+    kpiVai("ats","Atendimentos realizados",d.ats.length)+
+    kpiVai("criadas","Atividades criadas",d.criadas.length)+
+    kpiVai("feitas","Atividades realizadas",d.feitas.length)+
     /* atrasadas: conta TODAS as vencidas, de qualquer data — não segue o período da tela,
        senão o atraso do mês passado sumiria justamente de quem precisa vê-lo (05/10) */
     (function(){
@@ -28898,7 +29007,7 @@ function renderDash(){
           ? "a mais antiga de "+dataCurta(at[0].data)+" · toque para ver todas"
           : "nenhuma vencida")+"</div></div>";
     })()+
-    '<div class="kpi"><div class="l">Vendas realizadas</div><div class="v">'+d.vds.length+"</div></div>"+
+    kpiVai("vds","Vendas realizadas",d.vds.length)+
     /* vendas pendentes: as que o financeiro ainda nao aprovou, de QUALQUER data —
        pelo mesmo motivo das atrasadas, a pendente do mes passado e a que mais importa */
     (function(){
@@ -28911,9 +29020,15 @@ function renderDash(){
           ? BRL(vl)+" esperando o financeiro · toque para ver"
           : "nada esperando o financeiro")+"</div></div>";
     })()+
-    '<div class="kpi"><div class="l">Faturamento</div><div class="v">'+BRL(d.fat)+"</div></div>"+
-    '<div class="kpi"><div class="l">Conversão</div><div class="v">'+conv+"%</div>"+
-      '<div class="l" style="margin-top:4px">'+d.vds.length+" venda"+(d.vds.length===1?"":"s")+" em "+totalContatos+" contato"+(totalContatos===1?"":"s")+"</div></div>";
+    kpiVai("fat","Faturamento",BRL(d.fat))+
+    kpiVai("conv","Conversão",conv+"%",d.vds.length+" venda"+(d.vds.length===1?"":"s")+" em "+totalContatos+" contato"+(totalContatos===1?"":"s"));
+  (function(){
+    var w=$("dashTopo");if(w.__ligDash)return;w.__ligDash=true;
+    function alvo(ev){var el=ev.target&&ev.target.closest?ev.target.closest("[data-dashk]"):null;return el?el.getAttribute("data-dashk"):"";}
+    w.addEventListener("click",function(ev){var k=alvo(ev);if(k)abrirFiltroDash(k);});
+    w.addEventListener("keydown",function(ev){
+      if(ev.key!=="Enter"&&ev.key!==" ")return;var k=alvo(ev);if(k){ev.preventDefault();abrirFiltroDash(k);}});
+  })();
   /* o card das atrasadas leva para a agenda já na visão "Atrasadas" (05/10) */
   (function(){
     var bt=$("dashAtrasadas");if(!bt)return;
@@ -42015,9 +42130,11 @@ function montarVendAtend(){
 function renderAtend(){
   var q=semAcento($("atendBusca").value||""),f=$("atendFiltro").value;
   var vend=montarVendAtend();
+  var fdA=filtroDashDe("atend");
   var lista=visiveis(atendimentos.filter(function(a){return a.loja===lojaAtual;}))
-    .filter(function(a){return !f||a.natureza===f;})
-    .filter(function(a){return !vend||deOutro(a,CAMPOS_ATEND,vend);})
+    .filter(function(a){return !fdA||!!fdA.ids[a.id];})
+    .filter(function(a){return fdA||!f||a.natureza===f;})
+    .filter(function(a){return fdA||!vend||deOutro(a,CAMPOS_ATEND,vend);})
     .filter(function(a){return !q||semAcento(a.cliente).indexOf(q)>=0;})
     /* O QUE FOI LANÇADO POR ÚLTIMO FICA EM CIMA (23/10, escolha dele).
        Antes mandava a data do compromisso, e com isso a atividade marcada para daqui a duas
@@ -42027,9 +42144,12 @@ function renderAtend(){
       var ta=instanteDoRegistro(a),tb=instanteDoRegistro(b);
       if(ta!==tb)return tb-ta;
       return (b.data+(b.inicio||"")).localeCompare(a.data+(a.inicio||""));});
-  $("atendCount").textContent=lista.length+(lista.length===1?" registro":" registros");
+  $("atendCount").textContent=lista.length+(lista.length===1?" registro":" registros")+(fdA?" · do Dashboard":"");
+  faixaFiltroDash("atend",lista.length);
   var b=$("atendBody");b.innerHTML="";
-  if(!lista.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nada registrado ainda</div>Clique em <b>Registrar</b> para lançar o primeiro.</div></td></tr>';return;}
+  if(!lista.length){b.innerHTML=fdA
+    ? '<tr><td colspan="6"><div class="empty"><div class="big">Nada nesta visão</div>O Dashboard não contou nenhum registro neste período'+(q?" com esta busca":"")+'.</div></td></tr>'
+    : '<tr><td colspan="6"><div class="empty"><div class="big">Nada registrado ainda</div>Clique em <b>Registrar</b> para lançar o primeiro.</div></td></tr>';return;}
   var agora=new Date();
   lista.forEach(function(a){
     var trava=bloqueada(a),d=quando(a),podeEd=podeEditarAtiv(a);
@@ -48006,6 +48126,8 @@ function ir(s,doMenu){
   if(semTel){var dh=$("s-dash");semTel.parentNode.removeChild(semTel);
     if(dh)Array.prototype.forEach.call(dh.querySelectorAll("[data-semtel]"),function(ch){ch.hidden=false;ch.removeAttribute("data-semtel");});}
   var mudou=telaAtual!==s;
+  /* o filtro do Dashboard vale só enquanto a pessoa está na tela que ele abriu; entrar pelo menu solta */
+  if(filtroDash&&(doMenu||s!==filtroDash.tela))filtroDash=null;
   /* saiu do Novo Pedido aberto por uma OS sem salvar: volta ao pedido normal (o "Completar cadastro" mantém) */
   if(mudou&&telaAtual==="venda"&&pedOrigemOS&&!voltaVenda){try{sairModoOS();}catch(e){console.warn(e);}}
   /* saiu da edição de um pedido salvo sem finalizar: a tela volta a ser o Novo Pedido de sempre
