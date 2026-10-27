@@ -98,7 +98,7 @@
      ---------------------------------------------------------------------- */
   /* o id real da configuração no banco: a empresa original fica como está, as outras
      ganham o prefixo da loja. Vale SÓ para a coleção "config". */
-  var CONFIG_GLOBAL = ["usuarios"];
+  var CONFIG_GLOBAL = ["usuarios", "mensagens_zap"];   /* mensagens_zap: os textos do WhatsApp valem nas duas empresas (27/10) */
   function configGlobal(colecao, id) {
     return colecao === "config" && CONFIG_GLOBAL.indexOf(String(id || "")) >= 0;
   }

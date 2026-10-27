@@ -876,6 +876,14 @@
   .p-mut{color:var(--ink-3);background:var(--bg)}
   /* sem retorno do WhatsApp há 3 dias úteis ou mais (27/10) */
   .p-laranja{color:var(--laranja);background:var(--laranja-bg);font-weight:600}
+  .mz-grupo{margin-top:18px}
+  .mz-item{border-top:1px solid var(--line);padding:14px 0}
+  .mz-cab{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+  .mz-item textarea{width:100%;margin-top:6px}
+  .mz-campos{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}
+  .mz-leg{margin-top:4px}
+  .mz-prev{margin-top:8px}
+  .mz-bolha{background:#dcf8c6;color:#111;border-radius:10px;padding:9px 12px;white-space:pre-wrap;word-break:break-word;max-width:560px;font-size:14px;margin-top:4px}
   /* valor do item, editável na própria lista (v161) */
   .v-unit{width:118px;max-width:100%;text-align:right;padding:7px 9px;font:inherit;font-variant-numeric:tabular-nums;
     border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink)}
@@ -2008,6 +2016,7 @@ img{max-width:100%}
     <button data-s="pgto">Formas de Pagamento</button>
     <button data-s="funcoes">Funções</button>
     <button data-s="grupos">Grupos de Produtos</button>
+    <button data-s="mensagenszap">Mensagens do WhatsApp</button>
     <button data-s="metas">Metas e Comissões</button>
     <button data-s="motivos">Motivos de Finalização</button>
     <button data-s="origens">Origens</button>
@@ -5840,6 +5849,18 @@ img{max-width:100%}
       </div>
       <div class="card" id="pmn_exemplos"></div>
     </section>
+    <section class="screen" id="s-mensagenszap" hidden>
+      <div class="page-head"><h1>Mensagens do WhatsApp</h1><p>Os textos que o sistema já deixa escritos quando alguém abre o WhatsApp para o cliente. Valem para as duas empresas. Quem envia ainda pode mudar o texto na hora, antes de mandar.</p></div>
+      <div class="card">
+        <div id="mz_nota"></div>
+        <p class="help">As palavras entre chaves, como <b>{cliente}</b>, o sistema troca sozinho na hora do envio. Toque numa delas, embaixo de cada texto, para pôr no lugar do cursor. Campo que não tiver valor some da frase.</p>
+        <div id="mz_lista"></div>
+        <div id="mz_alerta"></div>
+        <div class="actions">
+          <button class="btn" type="button" id="mzSalvar">Salvar as mensagens</button>
+        </div>
+      </div>
+    </section>
     <section class="screen" id="s-beneficios" hidden>
       <div class="page-head"><h1>Benefícios</h1><p>Prêmio de assiduidade, vale alimentação e prêmio de desempenho: valores e regras que entram na remuneração de todos os colaboradores.</p></div>
       <div class="card">
@@ -8133,7 +8154,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=414"></script>
+<script src="supabase/adapter.js?v=428"></script>
 <script>
 (function(){
 "use strict";
@@ -8552,7 +8573,7 @@ var LEITURAS_BOOT=[
 ];
 var CONFIGS_BOOT=["formas_pagamento","usuarios","funcoes","empresa","origens","tipos_atendimento",
   "motivos_finalizacao","tipos_off","motivos_off","canais_tipo","metas","faixas_comissao",
-  "preco","beneficios","abonos_premio","adiantamentos","celebracoes","padroes_lanc","serie","grupos_produtos"];
+  "preco","beneficios","abonos_premio","adiantamentos","celebracoes","padroes_lanc","serie","grupos_produtos","mensagens_zap"];
 var PRE_BOOT={};
 function pedirJa(chave,fn){
   try{var p=fn();if(p&&p.catch)p.catch(function(){});PRE_BOOT[chave]=p;}catch(e){console.warn("aquecer",chave,e);}
@@ -9263,6 +9284,8 @@ async function carregar(){
       if(em.data()[k]!=null)EMPRESA[k]=em.data()[k];});
     var gsr=await jaPedido("cfg:serie",function(){return db.doc("config/serie").get();});
     if(gsr.exists&&gsr.data()&&Array.isArray(gsr.data().grupos))GRUPOS_SERIE=gsr.data().grupos;
+    var gmz=await jaPedido("cfg:mensagens_zap",function(){return db.doc("config/mensagens_zap").get();});
+    if(gmz.exists&&gmz.data()&&gmz.data().textos)MSG_ZAP={textos:gmz.data().textos||{},quem:gmz.data().quem||{}};
     var gpc=await jaPedido("cfg:preco",function(){return db.doc("config/preco").get();});
     if(gpc.exists&&gpc.data()&&+gpc.data().pctMinimo>0)CFG_PRECO.pctMinimo=+gpc.data().pctMinimo;
     var gbf=await jaPedido("cfg:beneficios",function(){return db.doc("config/beneficios").get();});
@@ -38513,8 +38536,7 @@ function cfgFichaOSWhatsApp(o,p){
   var c=cliPorId(o.clienteId)||{};
   return {chave:"os:"+o.id,gerar:function(){return gerarPdfFichaOS(o,p);},
     tel:o.tel||c.tel,cliente:o.cliente,titulo:"OS "+o.numero,oQue:"da OS "+o.numero,
-    msg:"Olá, "+primeiroNome(o.cliente)+"! Segue a sua ordem de serviço Nº "+o.numero+" da "+
-      (EMPRESA.razao||"Minas Filtros")+", com o serviço executado e a garantia. Qualquer dúvida, estamos à disposição.",
+    msg:textoZap("fichaos",varsBaseZap({nome:o.cliente||""},{numero:o.numero})),
     registrar:async function(como){
       o.historico=o.historico||[];
       o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Ficha da OS enviada ao cliente pelo WhatsApp ("+como+")"});
@@ -39665,22 +39687,230 @@ function clientePorTelZap(tel){
   if(!d)return null;
   return clientes.filter(function(c){return String(c.tel||"").replace(/\D/g,"")===d||String(c.tel2||"").replace(/\D/g,"")===d;})[0]||null;
 }
+/* ================= CONFIGURAÇÕES › MENSAGENS DO WHATSAPP (pedido dele, 27/10) =================
+   "preciso mudar as mensagens de envio do whatsapp" — os textos eram fixos no código. Agora cada
+   modelo tem um texto padrão (o que o sistema sempre mandou) e o Administrador pode trocá-lo.
+   Fica em config/mensagens_zap, que é UMA lista para as duas empresas (CONFIG_GLOBAL do adapter):
+   o nome da empresa entra pelo campo {loja}/{empresa}, então o mesmo texto serve às duas.
+   Campo sem valor some da frase (limparTextoZap), para não sair "Olá, !" nem "()" vazio. */
+var MSG_ZAP={textos:{},quem:{}};
+var CAMPOS_ZAP={
+  saudacao:"a Saudação (o primeiro texto desta tela)",cliente:"primeiro nome do cliente",
+  vendedor:"primeiro nome de quem está enviando",loja:"nome da loja aberta",empresa:"razão social da empresa",
+  produto:"aparelho do cliente",valor:"valor em reais",parcela:"número da parcela (ex.: 2/5)",
+  documento:"documento do título",vencimento:"data do vencimento",atividade:"tipo da atividade",
+  data:"data da atividade",hora:"hora da atividade",numero:"número do pedido ou da OS",link:"endereço para o cliente assinar"};
+var MODELOS_ZAP=[
+  {k:"oi",g:"conversa",n:"Saudação",onde:"Começo das mensagens abaixo que usam {saudacao}, e o modelo Saudação da janela do WhatsApp.",
+    campos:["cliente","vendedor","loja"],padrao:"Olá, {cliente}! Aqui é {vendedor}, da {loja}."},
+  {k:"manut",g:"conversa",n:"Manutenção periódica",onde:"WhatsApp aberto pela Manutenção Periódica.",
+    campos:["saudacao","cliente","vendedor","loja","produto"],
+    padrao:"{saudacao} Está na hora da manutenção do seu {produto} (troca do elemento filtrante). Podemos agendar uma visita? Qual o melhor dia e horário para você?"},
+  {k:"cobranca",g:"conversa",n:"Lembrete de pagamento",onde:"Botão Cobrar no WhatsApp, em Contas a Receber.",
+    campos:["saudacao","cliente","vendedor","loja","parcela","valor","documento","vencimento"],
+    padrao:"{saudacao} Passando para lembrar da parcela {parcela} de {valor} ({documento}), com vencimento em {vencimento}. Qualquer dúvida, estou à disposição."},
+  {k:"visita",g:"conversa",n:"Confirmar horário",onde:"WhatsApp aberto pelos Detalhes de uma atividade marcada.",
+    campos:["saudacao","cliente","vendedor","loja","atividade","data","hora"],
+    padrao:"{saudacao} Confirmando o nosso {atividade} em {data} às {hora}. Está tudo certo para você?"},
+  {k:"posvenda",g:"conversa",n:"Pós-venda",onde:"Cliente que já comprou.",
+    campos:["saudacao","cliente","vendedor","loja"],
+    padrao:"{saudacao} Tudo certo com o seu purificador? Se precisar de qualquer coisa, conte com a gente."},
+  {k:"retorno",g:"conversa",n:"Retorno do atendimento",onde:"Lead que ainda não comprou.",
+    campos:["saudacao","cliente","vendedor","loja"],
+    padrao:"{saudacao} Estou retornando sobre o seu atendimento. Posso te ajudar a escolher o melhor purificador?"},
+  {k:"parabens",g:"conversa",n:"Parabéns de aniversário",onde:"Botão do WhatsApp na tela Aniversariantes.",
+    campos:["cliente","vendedor","loja","empresa"],
+    padrao:"Olá, {cliente}! Toda a equipe da {empresa} deseja um feliz aniversário! 🎉 Que seja um ano cheio de saúde. Conte sempre com a gente."},
+  {k:"pedido",g:"doc",n:"Pedido de venda (com o PDF)",onde:"Enviar o pedido de venda ao cliente.",
+    campos:["cliente","vendedor","loja","empresa","numero"],
+    padrao:"Olá, {cliente}! Segue o seu pedido de venda Nº {numero} da {empresa}. Qualquer dúvida, estamos à disposição."},
+  {k:"linkass",g:"doc",n:"Link para o cliente assinar o pedido",onde:"Venda por telefone: o link de assinatura. O {link} é obrigatório.",
+    campos:["cliente","vendedor","loja","empresa","numero","link"],obrig:["link"],
+    padrao:"Olá, {cliente}! Segue o seu pedido nº {numero} da {empresa} para você conferir e assinar pelo celular:\n\n{link}\n\nÉ só ler, assinar com o dedo e tocar em \"Assinar o pedido\". Qualquer dúvida, fale com a gente."},
+  {k:"orcos",g:"doc",n:"Orçamento da OS",onde:"Enviar o orçamento do conserto para o cliente aprovar.",
+    campos:["cliente","vendedor","loja","empresa","numero","produto","valor"],
+    padrao:"Olá, {cliente}! Segue o orçamento do conserto do seu {produto} (OS Nº {numero}), no valor de {valor}. Confira e, estando de acordo, é só responder aqui que já colocamos o serviço na fila. Qualquer dúvida, estamos à disposição."},
+  {k:"fichaos",g:"doc",n:"OS finalizada (com o PDF)",onde:"Enviar a OS finalizada, com o serviço e a garantia.",
+    campos:["cliente","vendedor","loja","empresa","numero"],
+    padrao:"Olá, {cliente}! Segue a sua ordem de serviço Nº {numero} da {empresa}, com o serviço executado e a garantia. Qualquer dúvida, estamos à disposição."},
+  {k:"comprovos",g:"doc",n:"Comprovante de entrega da OS",onde:"Enviar o comprovante de entrega do equipamento.",
+    campos:["cliente","vendedor","loja","empresa","numero"],
+    padrao:"Olá, {cliente}! Segue o comprovante de entrega da ordem de serviço Nº {numero} da {empresa}. Guarde este comprovante: a retirada do equipamento é feita com ele. Qualquer dúvida, estamos à disposição."}
+];
+function modeloZapDef(k){return MODELOS_ZAP.filter(function(m){return m.k===k;})[0]||null;}
+function textoBaseZap(k){
+  var d=modeloZapDef(k),t=MSG_ZAP.textos&&MSG_ZAP.textos[k];
+  return (t&&String(t).trim())?String(t):(d?d.padrao:"");
+}
+/* tira o que ficou sobrando quando um campo veio vazio: "Olá, !", "()", "em  às ." */
+function limparTextoZap(s){
+  return String(s||"").split("\n").map(function(l){
+    l=l.replace(/[ ]*\([ ]*\)/g,"").replace(/,[ ]*([!?.,;:])/g,"$1").replace(/[ ]{2,}/g," ");
+    for(var i=0;i<3;i++)l=l.replace(/[ ](em|às|de|da|do|no|na|Nº|nº)[ ]*([!?.,;:])/g,"$2");
+    l=l.replace(/[ ](em|no|na)[ ]+às[ ]/g," às ");
+    return l.replace(/[ ]+([!?.,;:])/g,"$1").replace(/^[ ]+|[ ]+$/g,"");
+  }).join("\n");
+}
+function preencherZap(t,vars){
+  return limparTextoZap(String(t||"").replace(/\{([a-z]+)\}/g,function(x,n){
+    if(!Object.prototype.hasOwnProperty.call(CAMPOS_ZAP,n))return x;
+    var v=vars&&vars[n];return v==null?"":String(v);}));
+}
+/* os campos de sempre, que valem em toda mensagem */
+function varsBaseZap(c,extra){
+  c=c||{};
+  var v={cliente:primeiroNome(c.tipo==="Pessoa Jurídica"?(c.respNome||""):(c.nome||"")),
+    vendedor:primeiroNome(usuarioAtual),loja:nomeLoja()||EMPRESA.razao||"Minas Filtros",empresa:EMPRESA.razao||nomeLoja()||"Minas Filtros"};
+  Object.keys(extra||{}).forEach(function(k){if(extra[k]!=null)v[k]=extra[k];});
+  if(v.saudacao==null)v.saudacao=preencherZap(textoBaseZap("oi").replace(/\{saudacao\}/g,""),v);
+  return v;
+}
+function textoZap(k,vars){return preencherZap(textoBaseZap(k),vars||{});}
+/* campos escritos errado (ex.: {clinte}) — não deixa salvar */
+function camposDesconhecidosZap(t){
+  var r=[],re=/\{([^{}]*)\}/g,m;
+  while((m=re.exec(String(t||""))))if(!Object.prototype.hasOwnProperty.call(CAMPOS_ZAP,m[1])&&r.indexOf(m[0])<0)r.push(m[0]);
+  return r;
+}
+function exemploVarsZap(oiTexto){
+  var base={cliente:"Maria",vendedor:primeiroNome(usuarioAtual)||"Wagner",loja:nomeLoja()||"Minas Filtros",
+    empresa:EMPRESA.razao||nomeLoja()||"Minas Filtros",produto:"PURIFICADOR TOP LIFE",valor:BRL(150),
+    parcela:"2/5",documento:"Pedido 20801",vencimento:dataCurta(somaDias(hojeISO(),5)),atividade:"visita",
+    data:dataCurta(somaDias(hojeISO(),1)),hora:"14:00",numero:"20801",
+    link:urlDoSistema()+"assinar.html?t=..."};
+  base.saudacao=preencherZap(String(oiTexto==null?textoBaseZap("oi"):oiTexto).replace(/\{saudacao\}/g,""),base);
+  return base;
+}
+function lerTextosTelaZap(){
+  var r={};
+  Array.prototype.forEach.call(document.querySelectorAll("#mz_lista textarea[data-mzk]"),function(t){r[t.dataset.mzk]=t.value;});
+  return r;
+}
+function textoTelaZap(k){
+  var t=document.querySelector('#mz_lista textarea[data-mzk="'+k+'"]'),d=modeloZapDef(k);
+  return t&&String(t.value).trim()?t.value:(d?d.padrao:"");
+}
+function atualizarPreviaZap(k){
+  var t=document.querySelector('#mz_lista textarea[data-mzk="'+k+'"]');if(!t)return;
+  var d=modeloZapDef(k),txt=textoTelaZap(k);
+  var pv=document.querySelector('[data-mzprev="'+k+'"]');
+  if(pv)pv.textContent=preencherZap(txt,exemploVarsZap(textoTelaZap("oi")));
+  var er=document.querySelector('[data-mzerro="'+k+'"]');
+  if(er){
+    var desc=camposDesconhecidosZap(txt),falta=(d.obrig||[]).filter(function(c){return txt.indexOf("{"+c+"}")<0;});
+    er.innerHTML=(desc.length?'<div class="note crit">O sistema não conhece '+esc(desc.join(", "))+
+        ". Use só os campos listados acima.</div>":"")+
+      (falta.length?'<div class="note crit">Esta mensagem precisa ter '+esc(falta.map(function(c){return "{"+c+"}";}).join(", "))+
+        " — sem ele o cliente não recebe o endereço.</div>":"");
+  }
+  var pl=document.querySelector('[data-mzpill="'+k+'"]');
+  if(pl){var igual=txt===d.padrao;
+    pl.className="pill "+(igual?"p-mut":"p-acc");pl.textContent=igual?"texto padrão":"alterado";}
+  /* a saudação entra nas outras: muda ela, a prévia de todas muda junto */
+  if(k==="oi")MODELOS_ZAP.forEach(function(m){if(m.k!=="oi")atualizarPreviaZap(m.k);});
+}
+function renderMensagensZap(){
+  var lista=$("mz_lista");if(!lista)return;
+  var adm=ehAdministrador();
+  $("mz_nota").innerHTML=adm?"":'<div class="note">Só o Administrador altera estes textos. Aqui você vê como cada mensagem sai.</div>';
+  if($("mzSalvar"))$("mzSalvar").hidden=!adm;
+  var grupos=[["conversa","Conversa com o cliente"],["doc","Envio de documentos"]];
+  lista.innerHTML=grupos.map(function(g){
+    return '<h2 class="mz-grupo">'+g[1]+"</h2>"+MODELOS_ZAP.filter(function(m){return m.g===g[0];}).map(function(m){
+      var salvo=MSG_ZAP.textos&&MSG_ZAP.textos[m.k],val=(salvo&&String(salvo).trim())?salvo:m.padrao;
+      var q=MSG_ZAP.quem&&MSG_ZAP.quem[m.k];
+      return '<div class="mz-item" data-mzitem="'+m.k+'">'+
+        '<div class="mz-cab"><b>'+esc(m.n)+'</b> <span class="pill" data-mzpill="'+m.k+'"></span>'+
+          (q&&salvo?'<span class="help"> · alterado por '+esc(q.por||"")+" em "+esc(dataBR(q.em||""))+"</span>":"")+"</div>"+
+        '<p class="help">'+esc(m.onde)+"</p>"+
+        '<textarea data-mzk="'+m.k+'" rows="'+(m.k==="linkass"?6:3)+'"'+(adm?"":" readonly")+">"+esc(val)+"</textarea>"+
+        (adm?'<div class="mz-campos">'+m.campos.map(function(c){
+          return '<button type="button" class="btn ghost sm" data-mzcampo="'+c+'" data-mzalvo="'+m.k+'" title="'+esc(CAMPOS_ZAP[c])+'">{'+c+"}</button>";
+        }).join("")+'<button type="button" class="btn mut sm" data-mzpadrao="'+m.k+'">Voltar ao texto padrão</button></div>':"")+
+        '<div class="help mz-leg">'+m.campos.map(function(c){return "{"+c+"} = "+esc(CAMPOS_ZAP[c]);}).join(" · ")+"</div>"+
+        '<div data-mzerro="'+m.k+'"></div>'+
+        '<div class="mz-prev"><span class="help">Como o cliente recebe:</span><div class="mz-bolha" data-mzprev="'+m.k+'"></div></div>'+
+      "</div>";
+    }).join("");
+  }).join("");
+  MODELOS_ZAP.forEach(function(m){atualizarPreviaZap(m.k);});
+}
+function ligarMensagensZap(){
+  var lista=$("mz_lista");if(!lista||lista.__lig)return;lista.__lig=true;
+  lista.addEventListener("input",function(ev){var t=ev.target;if(t&&t.dataset&&t.dataset.mzk)atualizarPreviaZap(t.dataset.mzk);});
+  lista.addEventListener("click",function(ev){
+    var b=ev.target&&ev.target.closest&&ev.target.closest("[data-mzcampo],[data-mzpadrao]");if(!b)return;
+    if(b.dataset.mzpadrao){
+      var tp=lista.querySelector('textarea[data-mzk="'+b.dataset.mzpadrao+'"]');
+      if(tp){tp.value=modeloZapDef(b.dataset.mzpadrao).padrao;atualizarPreviaZap(b.dataset.mzpadrao);}
+      return;
+    }
+    var t=lista.querySelector('textarea[data-mzk="'+b.dataset.mzalvo+'"]');if(!t||t.readOnly)return;
+    var ins="{"+b.dataset.mzcampo+"}",i=t.selectionStart!=null?t.selectionStart:t.value.length,f=t.selectionEnd!=null?t.selectionEnd:i;
+    t.value=t.value.slice(0,i)+ins+t.value.slice(f);
+    t.focus();try{t.setSelectionRange(i+ins.length,i+ins.length);}catch(e){}
+    atualizarPreviaZap(b.dataset.mzalvo);
+  });
+  if($("mzSalvar"))$("mzSalvar").onclick=salvarMensagensZap;
+}
+async function salvarMensagensZap(){
+  var al=$("mz_alerta");
+  if(!ehAdministrador()){al.innerHTML='<div class="note crit">Só o Administrador altera estes textos.</div>';return false;}
+  var tela=lerTextosTelaZap(),erros=[];
+  MODELOS_ZAP.forEach(function(m){
+    var t=String(tela[m.k]||"").trim()?tela[m.k]:m.padrao;
+    var desc=camposDesconhecidosZap(t);
+    if(desc.length)erros.push(m.n+": "+desc.join(", ")+" não existe");
+    (m.obrig||[]).forEach(function(c){if(t.indexOf("{"+c+"}")<0)erros.push(m.n+": falta {"+c+"}");});
+  });
+  if(erros.length){al.innerHTML='<div class="note crit"><b>Não foi salvo.</b> '+esc(erros.join(" · "))+"</div>";return false;}
+  var antes=JSON.parse(JSON.stringify(MSG_ZAP)),novo={textos:{},quem:{}};
+  MODELOS_ZAP.forEach(function(m){
+    var t=String(tela[m.k]||"").replace(/\r/g,"");
+    if(!t.trim()||t===m.padrao)return;   /* igual ao padrão: não guarda, segue o padrão */
+    novo.textos[m.k]=t;
+    var mudou=!(antes.textos&&antes.textos[m.k]===t);
+    novo.quem[m.k]=mudou?{por:usuarioAtual,em:hojeISO()}:((antes.quem&&antes.quem[m.k])||{por:usuarioAtual,em:hojeISO()});
+  });
+  MSG_ZAP=novo;
+  try{
+    /* gravação de um clique: confere a resposta do banco (regra da v327) */
+    if(db)await db.doc("config/mensagens_zap").set(MSG_ZAP);
+  }catch(e){
+    MSG_ZAP=antes;
+    al.innerHTML='<div class="note crit"><b>'+RECUSA_BANCO+"</b>"+'<div class="help">'+esc((e&&e.message)||String(e))+"</div></div>";
+    return false;
+  }
+  var n=Object.keys(MSG_ZAP.textos).length;
+  al.innerHTML='<div class="note ok"><b>Salvo.</b> '+(n?n+" mensagem(ns) com texto próprio; as outras seguem o texto padrão.":
+    "Todas as mensagens seguem o texto padrão.")+" Vale nas duas empresas a partir do próximo envio.</div>";
+  toast("Mensagens do WhatsApp salvas.");
+  renderMensagensZap();
+  return true;
+}
+window.__msgZapMF=function(){return MSG_ZAP;};
+window.__textoZapMF=function(k,v){return textoZap(k,v);};
+window.__varsZapMF=function(c,e){return varsBaseZap(c,e);};
+window.__salvarMsgZapMF=salvarMensagensZap;
+window.__renderMsgZapMF=renderMensagensZap;
+window.__abrirWhatsAppMF=function(c){return abrirWhatsApp(c);};
 function modelosZap(ctx){
-  /* empresa: cumprimenta o responsável, nunca "Olá, Clube!" */
-  var c=ctx.cliente||{},nome=primeiroNome(c.tipo==="Pessoa Jurídica"?(c.respNome||""):(c.nome||ctx.nome||"")),eu=primeiroNome(usuarioAtual),loja=nomeLoja()||EMPRESA.razao||"Minas Filtros";
-  var oi="Olá"+(nome?", "+nome:"")+"! Aqui é "+eu+", da "+loja+". ";
+  /* empresa: cumprimenta o responsável, nunca "Olá, Clube!". Os textos vêm de
+     Configurações › Mensagens do WhatsApp (27/10); sem texto próprio, vale o padrão de sempre. */
+  var c=ctx.cliente||{},base=(c.nome||c.respNome)?c:{nome:ctx.nome||""};
+  function vz(extra){return varsBaseZap(base,extra);}
+  var oi=textoZap("oi",vz())+" ";
   var m=[{k:"livre",n:"Mensagem livre",t:""},{k:"oi",n:"Saudação",t:oi}];
   if(ctx.titulo){var t=ctx.titulo;
-    m.push({k:"cobranca",n:"Lembrete de pagamento",t:oi+"Passando para lembrar da parcela"+(t.totalParcelas>1?" "+t.parcela+"/"+t.totalParcelas:"")+
-      " de "+BRL(t.valor)+(t.docRef?" ("+t.docRef+")":"")+", com vencimento em "+dataCurta(t.vencimento)+". Qualquer dúvida, estou à disposição."});}
+    m.push({k:"cobranca",n:"Lembrete de pagamento",t:textoZap("cobranca",vz({parcela:t.totalParcelas>1?t.parcela+"/"+t.totalParcelas:"",
+      valor:BRL(t.valor),documento:t.docRef||"",vencimento:dataCurta(t.vencimento)}))});}
   if(ctx.equip){var e=ctx.equip;
-    m.push({k:"manut",n:"Manutenção periódica",t:oi+"Está na hora da manutenção do seu "+(e.equipamento||e.produto||"purificador")+
-      " (troca do elemento filtrante). Podemos agendar uma visita? Qual o melhor dia e horário para você?"});}
+    m.push({k:"manut",n:"Manutenção periódica",t:textoZap("manut",vz({produto:e.equipamento||e.produto||"purificador"}))});}
   if(ctx.ativ){var a=ctx.ativ;
-    m.push({k:"visita",n:"Confirmar horário",t:oi+"Confirmando o nosso "+(String(a.tipo||"atendimento").toLowerCase())+
-      (a.data?" em "+dataCurta(a.data):"")+(a.inicio?" às "+a.inicio:"")+". Está tudo certo para você?"});}
-  if(c.id&&!ehLead(c))m.push({k:"posvenda",n:"Pós-venda",t:oi+"Tudo certo com o seu purificador? Se precisar de qualquer coisa, conte com a gente."});
-  else m.push({k:"retorno",n:"Retorno do atendimento",t:oi+"Estou retornando sobre o seu atendimento. Posso te ajudar a escolher o melhor purificador?"});
+    m.push({k:"visita",n:"Confirmar horário",t:textoZap("visita",vz({atividade:String(a.tipo||"atendimento").toLowerCase(),
+      data:a.data?dataCurta(a.data):"",hora:a.inicio||""}))});}
+  if(c.id&&!ehLead(c))m.push({k:"posvenda",n:"Pós-venda",t:textoZap("posvenda",vz())});
+  else m.push({k:"retorno",n:"Retorno do atendimento",t:textoZap("retorno",vz())});
   if(ctx.mensagem)m.unshift(ctx.aniv?{k:"parabens",n:"Parabéns",t:ctx.mensagem}:{k:"pronta",n:"Mensagem sugerida",t:ctx.mensagem});
   return m;
 }
@@ -39928,10 +40158,7 @@ function etiquetaContatoZap(cid,idx){
   return {k:"contatado",cls:"p-mut",a:u.a,dias:dias,uteis:uteis,
     n:"Contatado há "+dias+" dia"+(dias===1?"":"s")+" · sem retorno"+(quem?" · "+quem:"")};
 }
-function msgParabens(c){
-  return "Olá, "+primeiroNome(c.nome)+"! Toda a equipe da "+(EMPRESA.razao||"Minas Filtros")+
-    " deseja um feliz aniversário! 🎉 Que seja um ano cheio de saúde. Conte sempre com a gente.";
-}
+function msgParabens(c){return textoZap("parabens",varsBaseZap({nome:(c&&c.nome)||""}));}
 function ligarWhatsApp(){
   $("zp_fechar").onclick=function(){$("zapModal").hidden=true;zapCtx=null;};
   $("zp_lado").onclick=function(){confirmarWhatsApp("lado");};
@@ -40117,8 +40344,7 @@ function cfgVendaWhatsApp(p){
   var c=cliPorId(p.clienteId)||{};
   return {chave:"ped:"+p.id,gerar:function(){return gerarPdfVenda(p);},tel:c.tel,cliente:p.cliente,
     titulo:"Pedido "+p.numero,oQue:"do pedido "+p.numero,
-    msg:"Olá, "+primeiroNome(p.cliente)+"! Segue o seu pedido de venda Nº "+p.numero+" da "+(EMPRESA.razao||"Minas Filtros")+
-      ". Qualquer dúvida, estamos à disposição.",
+    msg:textoZap("pedido",varsBaseZap({nome:p.cliente||""},{numero:p.numero})),
     registrar:async function(como){registrarEvento(p,"Pedido de venda enviado pelo WhatsApp ("+como+")");await gravarPedido(p);}};
 }
 function prepararPdfVenda(p){var cf=cfgVendaWhatsApp(p);return prepararPdf(cf.chave,cf.gerar);}
@@ -40265,10 +40491,7 @@ function enviarOrcamentoOSWhatsApp(o,botao){
       return await pdfDoElemento($("os_folha"),nomeArquivoPdf("Orcamento-OS",o.numero,o.cliente),{mode:["css"]});
     },
     tel:o.tel||c.tel,cliente:o.cliente,titulo:"Orçamento da OS "+o.numero,oQue:"do orçamento da OS "+o.numero,
-    msg:"Olá, "+primeiroNome(o.cliente)+"! Segue o orçamento do conserto do seu "+
-      (o.equipamento||"equipamento")+" (OS Nº "+o.numero+"), no valor de "+BRL(Math.max(0,tot))+". "+
-      "Confira e, estando de acordo, é só responder aqui que já colocamos o serviço na fila. "+
-      "Qualquer dúvida, estamos à disposição.",
+    msg:textoZap("orcos",varsBaseZap({nome:o.cliente||""},{produto:o.equipamento||"equipamento",numero:o.numero,valor:BRL(Math.max(0,tot))})),
     registrar:async function(como){await marcarOrcamentoEnviadoOS(o,como,Math.max(0,tot));}},botao);
 }
 /* mandou o orçamento: a OS passa a esperar a resposta do cliente (09/10). Função própria para
@@ -40301,9 +40524,7 @@ function enviarOSWhatsApp(o,botao){
       finally{if(el&&el.__tmp&&el.__tmp.parentNode)el.__tmp.parentNode.removeChild(el.__tmp);}
     },
     tel:o.tel||c.tel,cliente:o.cliente,titulo:"Comprovante da OS "+o.numero,oQue:"do comprovante da OS "+o.numero,
-    msg:"Olá, "+primeiroNome(o.cliente)+"! Segue o comprovante de entrega da ordem de serviço Nº "+o.numero+" da "+
-      (EMPRESA.razao||"Minas Filtros")+". Guarde este comprovante: a retirada do equipamento é feita com ele. "+
-      "Qualquer dúvida, estamos à disposição.",
+    msg:textoZap("comprovos",varsBaseZap({nome:o.cliente||""},{numero:o.numero})),
     registrar:async function(como){
       o.historico=o.historico||[];
       o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Comprovante de entrega enviado ao cliente pelo WhatsApp ("+como+")"});
@@ -40475,9 +40696,7 @@ async function abrirLinkAssinatura(p,jaEnviar){
   }
 }
 function textoLinkAssinatura(p){
-  return "Olá"+(p&&p.cliente?" "+String(p.cliente).split(" ")[0]:"")+"! Segue o seu pedido nº "+(p?p.numero:"")+
-    " da "+(EMPRESA.razao||nomeLoja())+" para você conferir e assinar pelo celular:\n\n"+lkUrl+
-    "\n\nÉ só ler, assinar com o dedo e tocar em \"Assinar o pedido\". Qualquer dúvida, fale com a gente.";
+  return textoZap("linkass",varsBaseZap({nome:(p&&p.cliente)||""},{numero:p?p.numero:"",link:lkUrl}));
 }
 /* o cliente assinou? a assinatura entra no pedido e vale em todos os De Acordo */
 async function aplicarAssinaturasRecebidas(avisar){
@@ -41973,7 +42192,7 @@ var GRUPOS_TELA=[
     ["prest","Prestadores de Serviço"],["rastreio","Rastreio dos Vendedores"],["relat","Relatórios"],["fatur","Remunerações Colaboradores"],["veiculos","Veículos"]]},
   {g:"Configurações",telas:[["beneficios","Benefícios"],["cadcaixas","Cadastro de Caixas"],["centros","Centros de Custo"],
     ["cfgmetas","Configurações de Meta"],["empresa","Dados da Empresa"],["pgto","Formas de Pagamento"],
-    ["funcoes","Funções"],["grupos","Grupos de Produtos"],["metas","Metas e Comissões"],
+    ["funcoes","Funções"],["grupos","Grupos de Produtos"],["mensagenszap","Mensagens do WhatsApp"],["metas","Metas e Comissões"],
     ["motivos","Motivos de Finalização"],["origens","Origens"],["permissoes","Permissões"],
     ["planos","Planos de Garantia"],["precomin","Preço mínimo"],["tipos","Tipos de Atendimento"],["usuarios","Usuários"]]}
 ];
@@ -47609,6 +47828,7 @@ function ir(s,doMenu){
   if(s==="funil")try{opcoesFunil();renderFunil();}catch(e){console.warn(e);}
   if(s==="solic")try{renderSolic();}catch(e){console.warn(e);}
   if(s==="precomin")try{renderPrecoMin();}catch(e){console.warn(e);}
+  if(s==="mensagenszap")try{renderMensagensZap();}catch(e){console.warn(e);}
   /* conferência leve do que mudou no banco: produtos e clientes (22/10). Uma pergunta por
      coleção, menos de 1 KB, com trava de 30 segundos — nada disso roda na entrada do sistema. */
   if(s==="venda"||s==="produtos"||s==="clientes")
@@ -49929,6 +50149,7 @@ function navegacaoBasica(){
   try{ligarFunil();}catch(e){console.warn("funil",e);}
   try{ligarFerramentas();}catch(e){console.warn("ferramentas",e);}
   if($("pmnSalvar"))$("pmnSalvar").onclick=salvarPrecoMin;
+  try{ligarMensagensZap();}catch(e){console.warn("mensagens whatsapp",e);}
   /* ATUALIZAR SEM FECHAR O APLICATIVO (22/10) */
   [["prodAtualizar"],["cliAtualizar"],["vAtualizar"]].forEach(function(x){
     var b=$(x[0]);if(b)b.onclick=function(){atualizarAgora(x[0]);};
