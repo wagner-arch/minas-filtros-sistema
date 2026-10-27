@@ -1409,6 +1409,7 @@
     padding:16px 18px;font-size:15px;line-height:1.6;color:var(--ink);white-space:pre-wrap}
   .obs-box.vazio{background:var(--bg);border-left-color:var(--line);color:var(--ink-3);font-size:13.5px}
   .acoes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:18px 0}
+  .btn.mp-qa{white-space:nowrap}
   .acoes-grid button{background:var(--card);border:1px solid var(--field-bd);border-radius:12px;
     padding:16px 14px;text-align:left;font:inherit;cursor:pointer;transition:border-color .12s,transform .1s}
   .acoes-grid button:hover:not(:disabled){border-color:var(--accent);transform:translateY(-1px)}
@@ -7682,6 +7683,14 @@ img{max-width:100%}
       <button class="btn mut" type="button" id="oslp_cancelar">Cancelar</button>
       <button class="btn crit" type="button" id="oslp_ok">Apagar as OS listadas</button>
     </div>
+  </div>
+</div>
+<div class="modal" id="mqaModal" hidden>
+  <div class="box" style="width:min(560px,100%)">
+    <h3>Acesso rápido</h3>
+    <div class="sub" id="mqa_sub"></div>
+    <div class="acoes-grid" id="mqa_grid"></div>
+    <div class="actions"><button class="btn ghost" type="button" id="mqa_fechar" onclick="document.getElementById('mqaModal').hidden=true">Fechar</button></div>
   </div>
 </div>
 <div class="modal" id="trocaFeitaModal" hidden>
@@ -31890,15 +31899,13 @@ function renderManut(){
         (ativAberta?' <span class="pill p-acc">Atividade aberta'+
           (ativAberta.data?" · "+esc(dataCurta(ativAberta.data)):"")+"</span>":"")+"</div></td>"+
       '<td class="num">'+
-        (telNum?'<button class="btn zap sm" type="button" data-zapeq="'+e.id+'">WhatsApp</button> ':"")+
-        (telNum?'<button class="btn mut sm" type="button" data-mptel="'+e.id+'" title="Ver o telefone para ligar">Ligar</button> ':"")+
-        '<button class="btn ghost sm" type="button" data-mpok="'+e.id+'" title="Marcar a troca como feita e reagendar a próxima">Troca feita</button> '+
-        '<button class="btn mut sm" type="button" data-mpa="'+e.id+'">Agendar</button> '+
-        /* um toque abre o atendimento ligado ao aparelho, o mesmo dos dois cliques no nome (pedido do Wagner, 26/10) */
-        '<button class="btn sm" type="button" data-mpat="'+e.id+'" title="Abrir um atendimento deste cliente, ligado a este aparelho">Atend.</button></td>';
+        /* ACESSO RÁPIDO (26/10, pedido dele): os cinco botões da linha viraram um só, que abre a
+           janela com WhatsApp, Ligar, Troca feita, Agendar, Atendimento e o Google Maps */
+        '<button class="btn sm mp-qa" type="button" data-mpqa="'+e.id+'">Acesso rápido</button></td>';
     tr.onclick=function(ev){
       if(ev.target.getAttribute("data-mpb")||ev.target.getAttribute("data-mpa")||
-         ev.target.getAttribute("data-mpok")||ev.target.getAttribute("data-mptel")||ev.target.getAttribute("data-mpat"))return;
+         ev.target.getAttribute("data-mpok")||ev.target.getAttribute("data-mptel")||ev.target.getAttribute("data-mpat")||
+         ev.target.getAttribute("data-mpqa"))return;
       abrirEquip(e);};
     b.appendChild(tr);
   });
@@ -31923,6 +31930,10 @@ function renderManut(){
     bt.onclick=function(ev){ev.stopPropagation();
       var e=equipPorId(bt.getAttribute("data-mpa"));
       if(e)agendarVisita(e);};});
+  Array.prototype.forEach.call(b.querySelectorAll("[data-mpqa]"),function(bt){
+    bt.onclick=function(ev){ev.stopPropagation();
+      var e=equipPorId(bt.getAttribute("data-mpqa"));
+      if(e)abrirAcessoRapido(e);};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mpat]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();
       var e=equipPorId(bt.getAttribute("data-mpat"));
@@ -31939,6 +31950,39 @@ function renderManut(){
   /* o número no botão "Filtros" acompanha o que está ligado (celular, 09/10) */
   try{atualizarBotaoFiltrosManut();}catch(e){}
 }
+/* ACESSO RÁPIDO da Manutenção Periódica (26/10). O Google Maps vai ao ponto do APARELHO quando ele
+   está em outro endereço (21/10), senão à geolocalização do cadastro; sem ponto nenhum, procura
+   pelo endereço escrito — e a janela diz isso, para ninguém achar que é o ponto exato. */
+function abrirAcessoRapido(e){
+  var c=cliPorId(e.clienteId)||{},end=enderecoDoAparelho(e,c),tel=telDoAparelho(e);
+  var px=proximaDe(e),pil=sitEq(e);
+  $("mqa_sub").innerHTML="<b>"+esc(e.cliente||c.nome||"")+"</b> · "+esc(e.produto||"")+
+    (px?" · próxima troca <b>"+esc(dataCurta(px))+"</b>":"")+
+    (end.texto?'<div class="t-sub" style="margin-top:4px">'+(end.proprio?'<span class="pill p-warn">outro endereço</span> ':"")+esc(end.texto)+"</div>":"");
+  var mapa="",nota="";
+  if(coordDe(end.geo)){mapa=(window.linkMapaMF?window.linkMapaMF(end.geo):"").replace(/&amp;/g,"&");nota="vai à geolocalização"+(end.proprio?" do aparelho":" do cliente");}
+  else if(end.texto){mapa="https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(end.texto.replace(/ · CEP [0-9-]+/,""));nota="sem geolocalização: procura pelo endereço";}
+  var g=$("mqa_grid");
+  g.innerHTML=
+    '<button type="button" data-zapeq="'+e.id+'" data-mqa="zap"'+(tel?"":" disabled")+'><b>💬 WhatsApp</b><span>'+(tel?"abrir a conversa com o cliente":"sem telefone no cadastro")+'</span></button>'+
+    '<button type="button" data-mqa="tel"'+(tel?"":" disabled")+'><b>📞 Ligar</b><span>'+(tel?esc(c.tel||tel):"sem telefone no cadastro")+'</span></button>'+
+    '<button type="button" data-mqa="mapa"'+(mapa?"":" disabled")+'><b>📍 Google Maps</b><span>'+(mapa?nota:"sem endereço nem geolocalização")+'</span></button>'+
+    '<button type="button" data-mqa="atend"><b>📝 Atendimento</b><span>registrar o contato, ligado a este aparelho</span></button>'+
+    '<button type="button" data-mqa="agendar"><b>📅 Agendar</b><span>marcar a visita na agenda</span></button>'+
+    '<button type="button" data-mqa="troca"><b>✔ Troca feita</b><span>acertar a data e reagendar a próxima</span></button>';
+  Array.prototype.forEach.call(g.querySelectorAll("[data-mqa]"),function(bt){
+    bt.addEventListener("click",function(){
+      var k=bt.getAttribute("data-mqa");
+      $("mqaModal").hidden=true;
+      if(k==="tel")abrirLigarManut(e);
+      else if(k==="mapa"&&mapa)window.open(mapa,"_blank","noopener");
+      else if(k==="atend")abrirAtendManut(e);
+      else if(k==="agendar")agendarVisita(e);
+      else if(k==="troca")abrirTrocaFeita(e);
+    });});
+  $("mqaModal").hidden=false;
+}
+window.__acessoRapidoMF=abrirAcessoRapido;
 function agendarVisita(e){
   var c=cliPorId(e.clienteId)||{};
   var px=proximaDe(e),h=hojeISO();
