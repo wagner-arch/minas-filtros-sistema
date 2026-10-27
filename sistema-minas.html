@@ -523,6 +523,13 @@
   .chips button:hover{border-color:var(--accent)}
   .chips button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
   .chips button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  /* permissões por usuário (27/10): azul = da função · verde = só para ele · vermelho riscado = retirado só dele */
+  .chips button.perm-mais{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
+  .chips button.perm-menos{background:var(--crit-bg);border-color:var(--crit);color:var(--crit);text-decoration:line-through;font-weight:600}
+  .chips button.perm-menos small,.chips button.perm-mais small{font-size:11.5px;opacity:.95}
+  .chips button[disabled]{cursor:default}
+  .perm-leg{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:12.5px;color:var(--muted);margin:6px 0 12px}
+  .perm-leg i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
 
   .auto{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:40;background:var(--card);
     border-radius:var(--r-sm);box-shadow:var(--shadow-lg);max-height:240px;overflow:auto;padding:6px}
@@ -4962,7 +4969,7 @@ img{max-width:100%}
 
       <div class="card">
         <h2>Telas que esta função enxerga</h2>
-        <p class="help">Tela desmarcada some do menu. Se a pessoa estiver nela quando a permissão for tirada, o sistema devolve ao Dashboard.</p>
+        <p class="help">Tela desmarcada some do menu, e os atalhos de outras telas para ela passam a responder “Você não tem acesso”. Toda tela se marca e desmarca — só o Administrador nunca perde Permissões e Usuários. Para mudar só para uma pessoa, use a ficha dela em <b>Configurações › Usuários › Permissões deste usuário</b>.</p>
         <div id="pm_telas" style="margin-top:18px"></div>
       </div>
 
@@ -4975,6 +4982,15 @@ img{max-width:100%}
           <button class="btn" type="button" id="pmSalvar">Salvar permissões</button>
           <button class="btn ghost" type="button" id="pmCopiar">Copiar de outra função</button>
         </div>
+      </div>
+
+      <div class="card flush">
+        <div class="toolbar"><h2 style="margin:0">Histórico de mudanças</h2><span class="sp"></span>
+          <span class="count">quem mudou, quando e o quê</span></div>
+        <div class="tw"><table>
+          <thead><tr><th>Quando</th><th>Quem mudou</th><th>Onde</th><th>O que mudou</th></tr></thead>
+          <tbody id="pmHist"></tbody>
+        </table></div>
       </div>
 
       <div class="card flush">
@@ -5148,6 +5164,24 @@ img{max-width:100%}
           <p class="help">Quem responde por um estoque <b>autoriza a venda que sai dele</b> quando quem vende é outra pessoa, confere a contagem e requisita produto ao almoxarifado. Um estoque pode ter mais de um responsável: <b>qualquer um deles autoriza</b>, e o primeiro que responder decide. Só o Administrador e o Gerente marcam e desmarcam.</p>
           <div id="u_estoques"></div>
           <div id="u_estoquesNota"></div>
+        </div>
+
+        <!-- PERMISSÕES DESTE USUÁRIO (27/10, decisão dele): exceções só desta pessoa por cima das
+             da função. Final = função + acrescentado − retirado. Só o Administrador mexe. -->
+        <div class="sect" id="u_secPerm">
+          <p class="sect-t">Permissões deste usuário</p>
+          <p class="help">Começa com as permissões da função dele. Toque numa tela ou ação para <b>acrescentar só para ele</b> ou <b>retirar só dele</b>, sem mexer em quem tem a mesma função. Só o Administrador muda.</p>
+          <div class="perm-leg"><span><i style="background:var(--accent)"></i>vem da função</span>
+            <span><i style="background:var(--ok)"></i>acrescentado só para ele</span>
+            <span><i style="background:var(--crit-bg);border:1px solid var(--crit)"></i><s>retirado só dele</s></span>
+            <span><i style="background:var(--card);border:1px solid var(--field-bd)"></i>não tem</span></div>
+          <div id="u_permResumo"></div>
+          <div id="u_permTelas"></div>
+          <p class="sect-t" style="margin-top:6px">O que ele pode fazer</p>
+          <div class="chips" id="u_permAcoes"></div>
+          <div id="u_permAviso"></div>
+          <div class="actions" style="margin-top:10px"><button class="btn ghost" type="button" id="u_permPadrao">Voltar ao padrão da função</button></div>
+          <div id="u_permHist"></div>
         </div>
 
         <div class="sect">
@@ -9052,6 +9086,7 @@ async function carregar(){
   /* dicionário de nomes padrão dos lançamentos: vale mesmo sem banco */
   PADROES_LANC=JSON.parse(JSON.stringify(SEED_PADROES));
   funcoes=JSON.parse(JSON.stringify(SEED_FUNCOES));
+  try{migrarPermFlex(funcoes);}catch(e){console.warn(e);}
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
   motivos=SEED_MOTIVOS.slice();
@@ -9271,6 +9306,9 @@ async function carregar(){
     var fu=await jaPedido("cfg:funcoes",function(){return db.doc("config/funcoes").get();});
     if(fu.exists&&fu.data()&&fu.data().lista&&fu.data().lista.length){funcoes=fu.data().lista;}
     else{funcoes=JSON.parse(JSON.stringify(SEED_FUNCOES));await gravarFuncoes();}
+    /* permissões flexíveis (27/10): ANTES de migrarTelasNovas, senão "rastreio" (tela nova na
+       lista) iria para todo mundo que tem "ver tudo" — inclusive o Financeiro */
+    try{permFlexMigradas=migrarPermFlex(funcoes);}catch(eFx){console.warn("permissões flexíveis",eFx);}
     await migrarTelasNovas();
     try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
     /* foto de referência de cada um (coleção própria: cada pessoa grava a sua) */
@@ -10313,13 +10351,15 @@ var APAGAVEIS={
     rotulo:function(o){return "nº "+o.numero+" · "+(o.cliente||"");},
     alerta:function(o){return o.pedidoId?"Esta OS tem pedido lançado; o pedido continua no sistema.":"";}}
 };
+/* 27/10: a lixeira é a ação "Apagar registros" (antes: só o perfil Administrador) */
+function podeApagarRegistros(){return podeAcao("apagarRegistros");}
 function htmlLixeira(tipo,id){
-  if(!ehAdministrador())return "";
+  if(!podeApagarRegistros())return "";
   return ' <button class="lixo-reg" type="button" data-apagar="'+tipo+":"+id+
     '" title="Apagar este registro" aria-label="Apagar este registro">&#128465;</button>';
 }
 async function apagarRegistro(tipo,id){
-  if(!ehAdministrador()){toast("Só o Administrador pode apagar registros.");return;}
+  if(!podeApagarRegistros()){toast("Você não tem a permissão Apagar registros.");return;}
   var cfg=APAGAVEIS[tipo];if(!cfg)return;
   var r=cfg.lista().filter(function(x){return x.id===id;})[0];
   if(!r){toast("Este registro já não existe.");render();return;}
@@ -10393,12 +10433,12 @@ function abrirAcaoAtiv(ativId,ix){
 /* lixeira de UMA linha de "O que nasceu desta atividade" (pedido dele, 20/09) — apaga só o
    registro do histórico; o pedido, a OS ou o orçamento que a linha cita continuam no sistema */
 function htmlLixeiraAcao(ativId,ix){
-  if(!ehAdministrador())return "";
+  if(!podeApagarRegistros())return "";
   return ' <button class="lixo-reg mini" type="button" data-rmacao="'+ativId+"|"+ix+
     '" title="Apagar esta linha do histórico" aria-label="Apagar esta linha do histórico">&#128465;</button>';
 }
 async function apagarAcaoAtiv(ativId,ix){
-  if(!ehAdministrador()){toast("Só o Administrador pode apagar.");return;}
+  if(!podeApagarRegistros()){toast("Você não tem a permissão Apagar registros.");return;}
   var a=atendPorId(ativId);
   if(!a||!a.acoes||!a.acoes[ix]){toast("Esta linha já não existe.");return;}
   var l=a.acoes[ix];
@@ -10445,20 +10485,22 @@ function ligarLixeiras(){
     apagarRegistro(p[0],p.slice(1).join(":"));
   },true);
 }
+/* 27/10: corrigir nome e CPF/CNPJ de cliente é a ação "corrigirCadastro" (antes: só o Administrador) */
+function podeCorrigirCadastro(){return podeAcao("corrigirCadastro");}
 function travarDadosPessoais(c){
-  var cli=clienteTravado(c),adm=ehAdministrador(),bloq=cli&&!adm;
+  var cli=clienteTravado(c),adm=podeCorrigirCadastro(),bloq=cli&&!adm;
   DADOS_TRAVADOS.forEach(function(x){
     var e=$(x[0]);if(!e)return;
     var trava=bloq&&!!String(c[x[1]]||"").trim();
     e.readOnly=trava;
     e.style.opacity=trava?".72":"";
-    e.title=trava?"Dado pessoal de cliente — só o Administrador altera":"";
+    e.title=trava?"Dado pessoal de cliente — só quem tem a permissão Corrigir nome e CPF/CNPJ altera":"";
   });
   $("c_tipo").disabled=bloq;
   $("c_travaNota").hidden=!cli;
   $("c_travaNota").innerHTML=adm
-    ? "<b>Administrador: você pode corrigir nome, CPF/CNPJ e RG deste cliente.</b> Os demais usuários não. A alteração fica registrada na ficha."
-    : "<b>Cliente: nome, CPF/CNPJ e RG só o Administrador altera.</b> Endereço, geolocalização e contato podem ser atualizados.";
+    ? "<b>Você pode corrigir nome, CPF/CNPJ e RG deste cliente.</b> Quem não tem a permissão Corrigir nome e CPF/CNPJ não pode. A alteração fica registrada na ficha."
+    : "<b>Cliente: nome, CPF/CNPJ e RG só quem tem a permissão Corrigir nome e CPF/CNPJ altera.</b> Endereço, geolocalização e contato podem ser atualizados.";
 }
 /* ---------- indicações ---------- */
 function indicadosPor(id){
@@ -17870,6 +17912,10 @@ window.__prestLogadoMF=function(q){return prestadorLogado(q);};
 window.__achaCliMF=function(q){return achaCliente(q);};
 window.__euEstoqueMF=function(){return euNoEstoque();};
 window.__funcoesMF=function(){return funcoes;};
+/* permissões flexíveis (27/10) */
+window.__permissoesDeMF=function(n){return permissoesDe(n);};window.__migrarPermFlexMF=function(l){return migrarPermFlex(l);};
+window.__telaDeEntradaMF=function(q){return telaDeEntrada(q);};window.__podeAcaoMF=function(k,q){return podeAcao(k,q);};
+window.__permLogMF=function(){return permLog;};window.__lerPermUsuarioMF=function(u){return lerPermUsuario(u);};
 window.__veTelaMF=function(s,q){return veTela(s,q);};
 window.__abrirInstMF=function(p){return abrirInstalacao(p);};
 window.__sincEquipeMF=function(){return sincronizarEquipe();};
@@ -18500,7 +18546,9 @@ function podeAutorizarEstoque(loc,quem){
   /* "Administrador e Gerente podem autorizar qualquer um" (regra dele, 23/10). A conta é pelo
      PERFIL, como no rastreio (v345) e nas ferramentas (v388) — e não pela lista de ações, que
      a função Gerente pode não ter; e nunca por ehGestor(), que olha quem está LOGADO. */
-  if(PERFIS_AUT_ESTOQUE.indexOf(perfilDe(q))>=0)return true;
+  /* 27/10: virou a ação "Autorizar venda do estoque de outra pessoa" (antes: os perfis
+     Administrador e Gerente; a migração marcou a ação para exatamente esses dois) */
+  if(podeAcao("autorizarEstoque",q))return true;
   return respondePeloEstoque(q,loc);
 }
 /* o estoque escolhido no campo "Sai de" da linha do item; "meu" é o de quem entrega */
@@ -19661,8 +19709,10 @@ function vendaPedeCredito(p){return formasCreditoDaVenda(p).length>0;}
 /* quem aprova credito: o DEPARTAMENTO FINANCEIRO. A conta e pelo PERFIL, nao pela acao
    aprovarFinanceiro — ela pode ser dada a outra funcao, e a regra dele nomeia o posto. */
 var PERFIS_CREDITO=["Financeiro","Administrador"];
+/* 27/10: virou a ação "Aprovar crédito (cheque e boleto)" (antes: os perfis Financeiro e
+   Administrador). A migração marcou a ação para exatamente esses dois. */
 function podeAprovarCredito(quem){
-  return PERFIS_CREDITO.indexOf(perfilDe(quem||usuarioAtual))>=0;
+  return podeAcao("aprovarCredito",quem);
 }
 function etapaVenda(p){
   /* cliente de teste: a venda para aqui, com o status dizendo o que ela é (v376) */
@@ -20680,11 +20730,46 @@ function renderPermissoes(){
   var n=USUARIOS.filter(function(u){return u.perfil===pmFunc.nome;}).length;
   $("pmResumo").textContent=(pmFunc.desc||"")+" · "+n+" pessoa"+(n===1?"":"s")+" com esta função";
   renderPmChips();renderMatriz();
+  lerLogPerm().then(renderHistPerm);
+}
+/* ---- o que depende de quê (27/10): desmarcar uma tela que outra usa avisa antes ---- */
+var DEP_TELAS=[
+  {tela:"estColab",se:["pedidos","os"],msg:"Sem o <b>Estoque Colaborador</b> a pessoa não consegue aceitar a reposição do estoque nem devolver o purificador da troca — a requisição fica parada."},
+  {tela:"clientes",se:["pedidos","atend","orcam","os"],msg:"Sem <b>Clientes</b> a busca de cliente dentro do pedido, do atendimento e da OS continua; some só a consulta da aba Clientes e os atalhos “Abrir o cadastro”."},
+  {tela:"solic",se:["pedidos","orcam"],msg:"Sem <b>Solicitações</b> a pessoa continua pedindo autorização, mas só fica sabendo da resposta pelo sino."},
+  {tela:"os",se:[],msg:"Sem <b>Ordens de Serviço</b> a pessoa sai da lista de técnicos da OS."},
+  {tela:"agenda",se:["ativ","atend"],msg:"Sem a <b>Agenda</b> as atividades continuam sendo criadas, mas a pessoa não vê o calendário dela."},
+  {tela:"produtos",se:["pedidos","orcam"],msg:"Sem <b>Produtos</b> a lista de produtos da venda e do orçamento continua; some só o cadastro."},
+  {tela:"pedidos",se:["fin"],msg:"Sem <b>Pedidos</b> a pessoa aprova no financeiro, mas não abre a ficha do pedido pela lista."}
+];
+/* avisos para uma lista de telas e ações (a de uma função, ou a final de um usuário) */
+function avisosDePermissao(telas,acoes,perfil){
+  var av=[];
+  DEP_TELAS.forEach(function(d){
+    if(telas.indexOf(d.tela)>=0)return;
+    if(d.se.length&&!d.se.some(function(t){return telas.indexOf(t)>=0;}))return;
+    av.push(d.msg);
+  });
+  if(telas.indexOf("dash")<0){
+    var ent="";
+    for(var i=0;i<GRUPOS_TELA.length&&!ent;i++)GRUPOS_TELA[i].telas.forEach(function(t){
+      if(!ent&&telas.indexOf(t[0])>=0)ent=t[1];});
+    av.push("<b>O Dashboard está desmarcado.</b> Ele é a tela de entrada — sem ele a pessoa entra em "+
+      (ent?"<b>"+esc(ent)+"</b>, a primeira tela liberada do menu":"nenhuma tela (não sobrou nada liberado)")+".");
+  }
+  /* o banco tem regra própria para duas coisas: a tela mostra, mas o banco decide */
+  if(telas.indexOf("rastreio")>=0)av.push("<b>Rastreio dos Vendedores marcado: esta pessoa vai ver a localização da equipe.</b>"+
+    (PERFIS_RASTREIO_ANTES.indexOf(perfil)<0?" Atenção: o banco só entrega a localização para os cargos Administrador e Gerente — com o cargo "+esc(perfil||"")+" a tela abre vazia.":""));
+  if(acoes.indexOf("apagarRegistros")>=0&&PERFIS_GESTAO.indexOf(perfil)<0)
+    av.push("<b>Apagar registros</b> com o cargo "+esc(perfil||"")+": a lixeira aparece, mas o banco só deixa apagar quem é Administrador, Financeiro ou Gerente.");
+  return av;
+}
+function confirmaRastreio(){
+  return confirm("Marcar Rastreio dos Vendedores?\n\nEsta pessoa vai ver a localização da equipe.");
 }
 function renderPmChips(){
   var w=$("pm_telas");w.innerHTML="";
-  /* Leads e Clientes são de todos: sempre marcadas */
-  TELAS_TODOS.forEach(function(t){if(pmSel.telas.indexOf(t)<0)pmSel.telas.push(t);});
+  var adm=pmFunc&&pmFunc.nome==="Administrador";
   GRUPOS_TELA.forEach(function(g){
     var d=document.createElement("div");d.style.marginBottom="18px";
     var todos=g.telas.every(function(t){return pmSel.telas.indexOf(t[0])>=0;});
@@ -20695,12 +20780,14 @@ function renderPmChips(){
     g.telas.forEach(function(t){
       var b=document.createElement("button");b.type="button";b.textContent=t[1];
       b.setAttribute("aria-pressed",String(pmSel.telas.indexOf(t[0])>=0));
-      if(TELAS_TODOS.indexOf(t[0])>=0){
-        b.disabled=true;b.title="Liberada para todos os usuários";b.textContent=t[1]+" · todos";
+      if(adm&&TRAVA_ADMIN.telas.indexOf(t[0])>=0){
+        b.disabled=true;b.title="O Administrador nunca perde esta tela — senão ninguém consegue liberar acesso";
+        b.textContent=t[1]+" · sempre do Administrador";
         c.appendChild(b);return;
       }
       b.onclick=function(){
         var k=pmSel.telas.indexOf(t[0]);
+        if(k<0&&t[0]==="rastreio"&&!confirmaRastreio())return;
         if(k>=0)pmSel.telas.splice(k,1);else pmSel.telas.push(t[0]);
         renderPmChips();};
       c.appendChild(b);
@@ -20710,10 +20797,10 @@ function renderPmChips(){
   Array.prototype.forEach.call(w.querySelectorAll("[data-gt]"),function(bt){
     bt.onclick=function(){
       var g=GRUPOS_TELA.filter(function(x){return x.g===bt.getAttribute("data-gt");})[0];
-      var todos=g.telas.filter(function(t){return TELAS_TODOS.indexOf(t[0])<0;})
-        .every(function(t){return pmSel.telas.indexOf(t[0])>=0;});
+      var todos=g.telas.every(function(t){return pmSel.telas.indexOf(t[0])>=0;});
+      if(!todos&&g.telas.some(function(t){return t[0]==="rastreio"&&pmSel.telas.indexOf("rastreio")<0;})&&!confirmaRastreio())return;
       g.telas.forEach(function(t){
-        if(TELAS_TODOS.indexOf(t[0])>=0)return;
+        if(adm&&TRAVA_ADMIN.telas.indexOf(t[0])>=0)return;
         var k=pmSel.telas.indexOf(t[0]);
         if(todos&&k>=0)pmSel.telas.splice(k,1);
         else if(!todos&&k<0)pmSel.telas.push(t[0]);});
@@ -20722,6 +20809,10 @@ function renderPmChips(){
   ACOES.slice().sort(function(x,y){return ordAZ(x[1],y[1]);}).forEach(function(a){
     var b=document.createElement("button");b.type="button";b.textContent=a[1];
     b.setAttribute("aria-pressed",String(pmSel.acoes.indexOf(a[0])>=0));
+    if(adm&&TRAVA_ADMIN.acoes.indexOf(a[0])>=0){
+      b.disabled=true;b.title="O Administrador nunca perde esta permissão";b.textContent=a[1]+" · sempre do Administrador";
+      wa.appendChild(b);return;
+    }
     b.onclick=function(){
       var k=pmSel.acoes.indexOf(a[0]);
       if(k>=0)pmSel.acoes.splice(k,1);else pmSel.acoes.push(a[0]);
@@ -20733,14 +20824,61 @@ function renderPmChips(){
 }
 function notaPermissao(){
   var g=pmSel.acoes.indexOf("verTudo")>=0;
-  var semDash=pmSel.telas.indexOf("dash")<0;
-  $("pm_alerta").innerHTML='<div class="note'+(g||semDash?" warn":"")+'">'+
+  var av=avisosDePermissao(pmSel.telas,pmSel.acoes,pmFunc&&pmFunc.nome);
+  $("pm_alerta").innerHTML='<div class="note'+(g||av.length?" warn":"")+'">'+
     "<b>"+pmSel.telas.length+" de "+TODAS_TELAS.length+" telas e "+pmSel.acoes.length+" de "+ACOES.length+" permissões.</b>"+
     (g?"<br><b>Ver dados de toda a equipe</b> está marcada: quem tem esta função enxerga a agenda, o faturamento e o ponto de todos, "+
        "e não sofre o bloqueio de atividade atrasada.":
        "<br>Sem <b>Ver dados de toda a equipe</b>, a pessoa enxerga só o próprio trabalho nas telas liberadas.")+
-    (semDash?"<br><b>O Dashboard está desmarcado.</b> É a tela inicial do sistema — sem ela a pessoa cai na Agenda ao entrar.":"")+
+    av.map(function(x){return "<br>"+x;}).join("")+
     "</div>";
+}
+/* ---- histórico das mudanças de permissão (27/10, regra dele: quem, quando e o quê) ----
+   Fica em config/permlog (só o Administrador grava as configurações, e só ele muda permissão).
+   As mudanças de um usuário ficam também no cadastro dele (u.permHist), que vale nas duas empresas. */
+var permLog=[],permLogLido=false;
+async function lerLogPerm(forcar){
+  if(permLogLido&&!forcar)return permLog;
+  if(!db){permLogLido=true;return permLog;}
+  try{var d=await db.doc("config/permlog").get();
+    permLog=(d.exists&&d.data()&&d.data().lista)||[];permLogLido=true;}catch(e){console.warn("permlog",e);}
+  return permLog;
+}
+function diffLista(antes,agora){
+  antes=antes||[];agora=agora||[];
+  return {entrou:agora.filter(function(x){return antes.indexOf(x)<0;}),
+          saiu:antes.filter(function(x){return agora.indexOf(x)<0;})};
+}
+async function registrarLogPerm(e){
+  e.quando=iso(new Date());e.hora=agoraHM();e.por=usuarioAtual;e.empresa=lojaAtual;
+  await lerLogPerm();
+  permLog.push(e);
+  if(permLog.length>400)permLog=permLog.slice(-400);
+  if(db)await db.doc("config/permlog").set({lista:permLog});
+  try{renderHistPerm();}catch(x){}
+}
+function textoLogPerm(e){
+  if(e.texto)return esc(e.texto);
+  var p=[];
+  function nomes(l,fn){return l.map(function(k){return esc(fn(k));}).join(", ");}
+  if(e.telasEntrou&&e.telasEntrou.length)p.push((e.alvo==="usuario"?"acrescentou só para ele":"marcou")+" a(s) tela(s) "+nomes(e.telasEntrou,nomeDaTela));
+  if(e.telasSaiu&&e.telasSaiu.length)p.push((e.alvo==="usuario"?"retirou só dele":"desmarcou")+" a(s) tela(s) "+nomes(e.telasSaiu,nomeDaTela));
+  if(e.acoesEntrou&&e.acoesEntrou.length)p.push((e.alvo==="usuario"?"acrescentou só para ele":"marcou")+" "+nomes(e.acoesEntrou,nomeDaAcao));
+  if(e.acoesSaiu&&e.acoesSaiu.length)p.push((e.alvo==="usuario"?"retirou só dele":"desmarcou")+" "+nomes(e.acoesSaiu,nomeDaAcao));
+  if(e.desfeitas&&e.desfeitas.length)p.push("desfez a exceção de "+esc(e.desfeitas.join(", ")));
+  if(e.padrao)p.push("voltou ao padrão da função");
+  return p.join(" · ")||"sem mudança";
+}
+function linhaLogPerm(e){
+  var alvo=e.alvo==="usuario"?"Usuário "+esc(e.nome):(e.alvo==="migracao"?"Todas as funções":"Função "+esc(e.nome));
+  return "<tr><td>"+esc(dataBR(String(e.quando||"").slice(0,10)))+" "+esc(e.hora||"")+"</td><td>"+esc(e.por||"")+
+    "</td><td><b>"+alvo+"</b>"+(e.empresa?' <span class="count">'+esc(nomeLojaId(e.empresa))+"</span>":"")+"</td><td>"+textoLogPerm(e)+"</td></tr>";
+}
+function renderHistPerm(){
+  var b=$("pmHist");if(!b)return;
+  var l=permLog.slice().reverse().slice(0,60);
+  b.innerHTML=l.length?l.map(linhaLogPerm).join(""):
+    '<tr><td colspan="4" class="empty">Nenhuma mudança de permissão registrada ainda.</td></tr>';
 }
 function renderMatriz(){
   var h=$("pmHead"),b=$("pmMatriz");
@@ -20763,8 +20901,14 @@ function renderMatriz(){
       var p=bt.getAttribute("data-mx").split("|"),f=funcoes[+p[0]],a=p[1];
       f.acoes=f.acoes||[];
       var k=f.acoes.indexOf(a);
+      if(k>=0&&f.nome==="Administrador"&&TRAVA_ADMIN.acoes.indexOf(a)>=0){
+        toast("O Administrador nunca perde a permissão "+nomeDaAcao(a)+".");return;}
       if(k>=0)f.acoes.splice(k,1);else f.acoes.push(a);
-      await gravarFuncoes();aplicarPerfil();renderPermissoes();renderFuncoes();
+      try{await gravarFuncoesConf();}
+      catch(e){if(k>=0)f.acoes.splice(k,0,a);else f.acoes.splice(f.acoes.indexOf(a),1);
+        toast("Não foi salvo: "+(e&&e.message||e));return;}
+      try{await registrarLogPerm({alvo:"funcao",nome:f.nome,acoesEntrou:k>=0?[]:[a],acoesSaiu:k>=0?[a]:[]});}catch(e2){}
+      aplicarPerfil();renderPermissoes();renderFuncoes();
       toast(f.nome+": "+(k>=0?"permissão retirada":"permissão concedida")+".");};});
 }
 
@@ -21122,6 +21266,130 @@ function montarEmpresaUsuario(u){
        "<b>continua onde está</b> — o que muda é onde ele trabalha daqui para a frente.")
     : "Só o Administrador e o Gerente mudam a empresa de um colaborador.";
 }
+/* ---------- permissões deste usuário (27/10) ---------- */
+var usPerm=null;
+function funcaoDaFicha(){var p=$("u_perfil");return funcaoPor(p&&p.value)||{nome:(p&&p.value)||"",telas:[],acoes:[]};}
+function estadoPermUs(f,tipo,k){
+  if(ehTravaAdmin(null,tipo,k,f.nome))return "trava";
+  if((f[tipo]||[]).indexOf(k)>=0)return usPerm.menos[tipo].indexOf(k)>=0?"menos":"funcao";
+  return usPerm.mais[tipo].indexOf(k)>=0?"mais":"fora";
+}
+/* as exceções que valem com a função escolhida agora (troca de função deixa algumas sem efeito) */
+function excecoesValidas(f){
+  var r={mais:{telas:[],acoes:[]},menos:{telas:[],acoes:[]}};
+  ["telas","acoes"].forEach(function(t){
+    r.mais[t]=usPerm.mais[t].filter(function(k){return (f[t]||[]).indexOf(k)<0;});
+    r.menos[t]=usPerm.menos[t].filter(function(k){return (f[t]||[]).indexOf(k)>=0&&!ehTravaAdmin(null,t,k,f.nome);});
+  });
+  return r;
+}
+function finalDaFicha(f){
+  var e=excecoesValidas(f),r={};
+  ["telas","acoes"].forEach(function(t){
+    r[t]=(f[t]||[]).filter(function(k){return e.menos[t].indexOf(k)<0;}).concat(e.mais[t]);
+    if(f.nome==="Administrador")TRAVA_ADMIN[t].forEach(function(k){if(r[t].indexOf(k)<0)r[t].push(k);});
+  });
+  return r;
+}
+function montarPermUsuario(u){
+  usPerm=excecoesDe(u);
+  renderPermUsuario(u);
+}
+function renderPermUsuario(u){
+  u=u||editandoUs||{};
+  var box=$("u_permTelas");if(!box||!usPerm)return;
+  var adm=ehAdministrador(),f=funcaoDaFicha();
+  function chip(tipo,k,rot){
+    var e=estadoPermUs(f,tipo,k);
+    var tit={funcao:"Vem da função "+f.nome+". Toque para retirar só dele.",
+      menos:"Retirado só dele — a função "+f.nome+" tem. Toque para devolver.",
+      mais:"Acrescentado só para ele — a função "+f.nome+" não tem. Toque para tirar.",
+      fora:"A função "+f.nome+" não tem. Toque para acrescentar só para ele.",
+      trava:"O Administrador nunca perde esta permissão."}[e];
+    return '<button type="button" class="perm-'+e+'" data-uperm="'+tipo+"|"+k+'" aria-pressed="'+
+      (e==="funcao"||e==="trava")+'"'+((!adm||e==="trava")?" disabled":"")+' title="'+esc(tit)+'">'+esc(rot)+
+      (e==="mais"?" <small>· acrescentado só para ele</small>":e==="menos"?" <small>· retirado só dele</small>":
+       e==="trava"?" <small>· sempre do Administrador</small>":"")+"</button>";
+  }
+  box.innerHTML=GRUPOS_TELA.map(function(g){
+    return '<div style="margin-bottom:12px"><span class="sect-t" style="margin:0 0 6px;display:block">'+esc(g.g)+"</span>"+
+      '<div class="chips">'+g.telas.map(function(t){return chip("telas",t[0],t[1]);}).join("")+"</div></div>";
+  }).join("");
+  $("u_permAcoes").innerHTML=ACOES.slice().sort(function(x,y){return ordAZ(x[1],y[1]);})
+    .map(function(a){return chip("acoes",a[0],a[1]);}).join("");
+  var ex=excecoesValidas(f),fin=finalDaFicha(f);
+  var mais=ex.mais.telas.map(nomeDaTela).concat(ex.mais.acoes.map(nomeDaAcao));
+  var menos=ex.menos.telas.map(nomeDaTela).concat(ex.menos.acoes.map(nomeDaAcao));
+  $("u_permResumo").innerHTML='<div class="note'+(mais.length||menos.length?" warn":"")+'">'+
+    "<b>Função "+esc(f.nome||"—")+": "+(f.telas||[]).length+" telas e "+(f.acoes||[]).length+" ações.</b> "+
+    "Este usuário fica com <b>"+fin.telas.length+" telas e "+fin.acoes.length+" ações</b>."+
+    (mais.length?'<br><span style="color:var(--ok)"><b>Acrescentado só para ele:</b> '+esc(mais.join(", "))+"</span>":"")+
+    (menos.length?'<br><span style="color:var(--crit)"><b>Retirado só dele:</b> '+esc(menos.join(", "))+"</span>":"")+
+    (!mais.length&&!menos.length?"<br>Igual à função — nenhuma exceção.":"")+
+    (adm?"":"<br>Só o Administrador muda as permissões de um usuário.")+"</div>";
+  var av=avisosDePermissao(fin.telas,fin.acoes,f.nome);
+  $("u_permAviso").innerHTML=av.length?'<div class="note warn" style="margin-top:10px">'+av.join("<br>")+"</div>":"";
+  $("u_permPadrao").hidden=!adm||(!usPerm.mais.telas.length&&!usPerm.mais.acoes.length&&!usPerm.menos.telas.length&&!usPerm.menos.acoes.length);
+  var h=((u&&u.permHist)||[]).slice(-5).reverse();
+  $("u_permHist").innerHTML=h.length?'<div class="help" style="margin-top:10px">Últimas mudanças:<ul style="margin:6px 0 0 18px">'+
+    h.map(function(x){return "<li>"+esc(x.por||"")+" em "+esc(dataBR(String(x.quando||"").slice(0,10)))+" "+esc(x.hora||"")+
+      " · "+textoLogPerm(Object.assign({alvo:"usuario"},x))+"</li>";}).join("")+"</ul></div>":"";
+}
+/* o toque num botão da seção: o estado anda em volta da função */
+function ligarPermUsuario(){
+  var sec=$("u_secPerm");if(!sec||sec.__lig)return;sec.__lig=true;
+  sec.addEventListener("click",function(ev){
+    var b=ev.target.closest?ev.target.closest("[data-uperm]"):null;
+    if(b&&!b.disabled&&usPerm){
+      if(!ehAdministrador()){toast("Só o Administrador muda as permissões de um usuário.");return;}
+      var p=b.getAttribute("data-uperm").split("|"),tipo=p[0],k=p[1],f=funcaoDaFicha();
+      var e=estadoPermUs(f,tipo,k);
+      function tira(l){var i=l.indexOf(k);if(i>=0)l.splice(i,1);}
+      if(e==="funcao")usPerm.menos[tipo].push(k);
+      else if(e==="menos")tira(usPerm.menos[tipo]);
+      else if(e==="fora"){if(tipo==="telas"&&k==="rastreio"&&!confirmaRastreio())return;usPerm.mais[tipo].push(k);}
+      else if(e==="mais")tira(usPerm.mais[tipo]);
+      renderPermUsuario();return;
+    }
+    if(ev.target&&ev.target.id==="u_permPadrao"){
+      if(!ehAdministrador())return;
+      if(!confirm("Voltar ao padrão da função "+funcaoDaFicha().nome+"? As exceções deste usuário saem quando você salvar."))return;
+      usPerm={mais:{telas:[],acoes:[]},menos:{telas:[],acoes:[]}};
+      renderPermUsuario();
+    }
+  });
+  var sp=$("u_perfil");if(sp)sp.addEventListener("change",function(){try{renderPermUsuario();}catch(e){}});
+}
+/* o que vai ser gravado, com a trava por dentro (regra da v321) e o registro da mudança */
+function lerPermUsuario(u){
+  if(!usPerm)return null;
+  if(!ehAdministrador())return null;          /* quem não é Administrador não muda nada aqui */
+  var f=funcaoPor(u.perfil)||{nome:u.perfil,telas:[],acoes:[]};
+  var antes=excecoesDe(u),ex=excecoesValidas(f);
+  var d={telasEntrou:[],telasSaiu:[],acoesEntrou:[],acoesSaiu:[]};
+  ["telas","acoes"].forEach(function(t){
+    var T=t==="telas"?"telas":"acoes";
+    /* o que passou a valer só para ele, e o que deixou de ser exceção */
+    ex.mais[t].forEach(function(k){if(antes.mais[t].indexOf(k)<0)d[T+"Entrou"].push(k);});
+    ex.menos[t].forEach(function(k){if(antes.menos[t].indexOf(k)<0)d[T+"Saiu"].push(k);});
+  });
+  var voltou=(antes.mais.telas.length+antes.mais.acoes.length+antes.menos.telas.length+antes.menos.acoes.length)>0&&
+    !(ex.mais.telas.length+ex.mais.acoes.length+ex.menos.telas.length+ex.menos.acoes.length);
+  var desfeitas=[];
+  ["telas","acoes"].forEach(function(t){
+    antes.mais[t].forEach(function(k){if(ex.mais[t].indexOf(k)<0)desfeitas.push(t==="telas"?nomeDaTela(k):nomeDaAcao(k));});
+    antes.menos[t].forEach(function(k){if(ex.menos[t].indexOf(k)<0)desfeitas.push(t==="telas"?nomeDaTela(k):nomeDaAcao(k));});
+  });
+  if(ex.mais.telas.length||ex.mais.acoes.length)u.permMais=ex.mais;else delete u.permMais;
+  if(ex.menos.telas.length||ex.menos.acoes.length)u.permMenos=ex.menos;else delete u.permMenos;
+  var mudou=d.telasEntrou.length||d.telasSaiu.length||d.acoesEntrou.length||d.acoesSaiu.length||desfeitas.length;
+  if(!mudou)return null;
+  var e={quando:iso(new Date()),hora:agoraHM(),por:usuarioAtual,telasEntrou:d.telasEntrou,telasSaiu:d.telasSaiu,
+    acoesEntrou:d.acoesEntrou,acoesSaiu:d.acoesSaiu,padrao:voltou};
+  if(desfeitas.length&&!voltou)e.desfeitas=desfeitas;
+  u.permHist=(u.permHist||[]).concat([e]).slice(-30);
+  return e;
+}
 function abrirUsuario(i){
 
   editandoUs=(i==null?null:USUARIOS[i]);
@@ -21135,6 +21403,7 @@ function abrirUsuario(i){
   $("u_ativo").value=(u.ativo===false?"nao":"sim");
   montarEmpresaUsuario(u);
   try{montarEstoquesUsuario(u);}catch(e){}
+  try{ligarPermUsuario();montarPermUsuario(u);}catch(e){console.warn("permissões do usuário",e);}
   ajustarBotoesUsuario();
   CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)e.value=u[k]||"";});
   try{ajustarConjuge();}catch(e){}
@@ -24663,7 +24932,8 @@ function relTitulos(esp,P){
    relatório do sistema — principalmente de clientes e manutenções periódicas". Vale para
    relatório e planilha; o documento do cliente (pedido, OS, orçamento, recibo) continua com
    quem atende, porque é o papel que o cliente leva. */
-function podeExportar(){return ehAdministrador();}
+/* 27/10: virou a ação "Imprimir e exportar relatórios e listas" (antes: só o perfil Administrador) */
+function podeExportar(){return podeAcao("exportar");}
 /* ===== PRINT DE TELA (regra dele, 05/10: "se tiver como também bloquear o print de tela") =====
    **Não existe como bloquear.** PrintScreen, a ferramenta de captura do Windows e a foto com o
    celular são do sistema operacional e do mundo físico — nenhum site tem acesso a isso, em
@@ -28618,7 +28888,7 @@ function abrirCliRapido(cid){
   var c=cliPorId(cid);
   if(!c)return toast("Cadastro não encontrado.");
   crCliId=c.id;
-  var travado=clienteTravado(c)&&!ehAdministrador();
+  var travado=clienteTravado(c)&&!podeCorrigirCadastro();
   $("cr_titulo").textContent="Editar o cadastro · "+(ehLead(c)?"lead":"cliente");
   $("cr_sub").textContent=(c.nome||"")+(c.codigo?" · "+c.codigo:"");
   [["cr_nome","nome"],["cr_tel","tel"],["cr_email","email"],["cr_doc","doc"],["cr_cep","cep"],
@@ -28633,7 +28903,7 @@ function abrirCliRapido(cid){
     ["cr_nome","cr_doc"].forEach(function(id){var e=$(id);if(e&&String(e.value).trim())e.readOnly=true;});
   }
   $("cr_nota").innerHTML=travado
-    ? '<div class="note"><b>Nome e CPF/CNPJ de cliente só o Administrador corrige.</b> '+
+    ? '<div class="note"><b>Nome e CPF/CNPJ de cliente só quem tem a permissão Corrigir nome e CPF/CNPJ corrige.</b> '+
       "Contato e endereço você altera aqui mesmo.</div>"
     : "";
   $("cr_alerta").innerHTML="";
@@ -28655,8 +28925,11 @@ async function salvarCliRapido(){
     ["cr_rua","rua"],["cr_num","num"],["cr_comp","comp"],["cr_bairro","bairro"],
     ["cr_cidade","cidade"],["cr_uf","uf"],["cr_ref","ref"]];
   CAMPOS.forEach(function(p){antes[p[1]]=c[p[1]];});
+  var travaDoc=clienteTravado(c)&&!podeCorrigirCadastro();
   CAMPOS.forEach(function(p){
     var e=$(p[0]);if(!e||e.readOnly)return;
+    /* a trava vale por dentro (regra da v321): nome e documento já gravados ficam */
+    if(travaDoc&&(p[1]==="nome"||p[1]==="doc")&&String(antes[p[1]]||"").trim())return;
     c[p[1]]=e.value.trim();
   });
   if(c.uf)c.uf=String(c.uf).toUpperCase();
@@ -41402,8 +41675,8 @@ var usuarioAtual="Wagner",alertados={},agPend=null,bloqPend=null,timerAg=null;
    Esta lista tem de ser a MESMA coisa que o menu lateral (a `<nav class="rail">` do HTML), nos
    nomes e na ordem: é daqui que sai a tela de Permissões, e dois lugares dizendo coisas
    diferentes sobre o mesmo menu confundem quem libera acesso.
-   "rastreio" fica FORA de propósito: quem decide essa tela é o PERFIL (Administrador e Gerente),
-   não a lista de telas — para ninguém liberar sem querer a localização da equipe (v345). */
+   "rastreio" ENTROU em 27/10 (decisão dele): até ali era o PERFIL que decidia (v345); agora é
+   marcação normal, e marcar avisa que a pessoa passa a ver a localização da equipe. */
 var GRUPOS_TELA=[
   {g:"Painel",telas:[["dash","Dashboard"]]},
   {g:"Comercial",telas:[["agenda","Agenda"],["aniver","Aniversariantes"],["atend","Atendimentos"],
@@ -41414,7 +41687,7 @@ var GRUPOS_TELA=[
   {g:"Gestão Administrativa",telas:[["fin","Aprovação Financeira"],["fornec","Cadastro Fornecedores"],
     ["caixas","Caixas"],["concil","Conciliação"],["pagar","Contas a Pagar"],["receber","Contas a Receber"],
     ["notas","Entrada de Notas Fiscais"],["faturamento","Faturamento"],["fluxo","Fluxo de Caixa"],
-    ["prest","Prestadores de Serviço"],["relat","Relatórios"],["fatur","Remunerações Colaboradores"],["veiculos","Veículos"]]},
+    ["prest","Prestadores de Serviço"],["rastreio","Rastreio dos Vendedores"],["relat","Relatórios"],["fatur","Remunerações Colaboradores"],["veiculos","Veículos"]]},
   {g:"Configurações",telas:[["beneficios","Benefícios"],["cadcaixas","Cadastro de Caixas"],["centros","Centros de Custo"],
     ["cfgmetas","Configurações de Meta"],["empresa","Dados da Empresa"],["pgto","Formas de Pagamento"],
     ["funcoes","Funções"],["grupos","Grupos de Produtos"],["metas","Metas e Comissões"],
@@ -41434,7 +41707,12 @@ var ACOES=[
   ["gerenciarUsuarios","Cadastrar usuários e funções"],
   ["aprovarSolicitacoes","Aprovar solicitações da equipe"],
   ["baixarTitulos","Dar baixa em contas a pagar e receber"],
-  ["exportar","Imprimir e exportar listas"]
+  ["exportar","Imprimir e exportar relatórios e listas"],
+  /* 27/10: eram regras "só do Administrador" ou de um cargo; viraram marcação (decisão dele) */
+  ["apagarRegistros","Apagar registros (lixeira)"],
+  ["corrigirCadastro","Corrigir nome e CPF/CNPJ de cliente"],
+  ["aprovarCredito","Aprovar crédito (cheque e boleto)"],
+  ["autorizarEstoque","Autorizar venda do estoque de outra pessoa"]
 ];
 var TODAS_TELAS=GRUPOS_TELA.reduce(function(a,g){return a.concat(g.telas.map(function(t){return t[0];}));},[]);
 /* as telas do dia a dia, que as funções padrão recebem. NÃO é o grupo do menu: o grupo
@@ -41469,6 +41747,8 @@ var SEED_FUNCOES=[
     acoes:["entradaNF","moverEstoque","verCustos"]}
 ];
 async function gravarFuncoes(){if(!db)return;try{await db.doc("config/funcoes").set({lista:funcoes});}catch(e){console.warn(e);}}
+/* a mesma gravação, mas o erro SOBE: quem muda permissão precisa saber se o banco aceitou */
+async function gravarFuncoesConf(){if(!db)return;await db.doc("config/funcoes").set({lista:funcoes});}
 /* tela nova que nasceu depois das funções serem gravadas não pode sumir do
    Administrador: quem tem "ver tudo" recebe automaticamente o que ninguém tem */
 /* ação nova em função já gravada: sem isto, o Administrador do banco dele ficaria sem ela */
@@ -41503,8 +41783,119 @@ function funcaoDe(n){
   return funcaoPor(perfilDe(n))||funcaoPor("Vendedor")||{telas:TELAS_OPERACAO,acoes:[]};
 }
 function pode(acao,quem){
-  var f=funcaoDe(quem||usuarioAtual);
-  return (f.acoes||[]).indexOf(acao)>=0;
+  return temPerm(quem||usuarioAtual,"acoes",acao);
+}
+/* ============ PERMISSÕES FLEXÍVEIS (27/10, decisão dele) ============
+   Toda tela e toda ação se marca e desmarca, em dois níveis: a FUNÇÃO (vale para o cargo
+   inteiro) e o USUÁRIO (exceções na ficha: u.permMais acrescenta, u.permMenos retira).
+   Permissão final = a da função + o acrescentado − o retirado.
+   ÚNICA TRAVA: o perfil Administrador nunca perde Permissões, Usuários e "Cadastrar usuários
+   e funções" — para ninguém se trancar fora do sistema. */
+var TRAVA_ADMIN={telas:["permissoes","usuarios"],acoes:["gerenciarUsuarios"]};
+var PERM_FLEX_VERSAO="2026-10-27";
+/* o que até 27/10 era decidido fora da marcação — a migração regrava isso nas funções,
+   uma vez, para ninguém ganhar nem perder nada no dia da publicação */
+var TELAS_TODOS_ANTES=["leads","clientes","aniver","funil","solic"];
+var PERFIS_FERR_ANTES=["Administrador","Estoquista"];
+var PERFIS_RASTREIO_ANTES=["Administrador","Gerente"];
+var ACOES_POR_PERFIL_ANTES={exportar:["Administrador"],apagarRegistros:["Administrador"],
+  corrigirCadastro:["Administrador"],aprovarCredito:["Financeiro","Administrador"],
+  autorizarEstoque:["Administrador","Gerente"]};
+function ehTravaAdmin(n,tipo,k,perfil){
+  return (perfil||perfilDe(n))==="Administrador"&&TRAVA_ADMIN[tipo].indexOf(k)>=0;
+}
+function temPerm(n,tipo,k){
+  if(ehTravaAdmin(n,tipo,k))return true;
+  var u=usuarioPor(n);
+  if(u){
+    if(u.permMenos&&(u.permMenos[tipo]||[]).indexOf(k)>=0)return false;
+    if(u.permMais&&(u.permMais[tipo]||[]).indexOf(k)>=0)return true;
+  }
+  var f=funcaoDe(n);
+  return (f[tipo]||[]).indexOf(k)>=0;
+}
+/* as 5 ações que eram de um cargo: enquanto as funções não carregaram, vale a regra antiga
+   (senão, nesse intervalo, todo mundo exportaria e apagaria) */
+function podeAcao(k,quem){
+  var n=quem||usuarioAtual;
+  if(!funcoes.length)return (ACOES_POR_PERFIL_ANTES[k]||[]).indexOf(perfilDe(n))>=0;
+  return temPerm(n,"acoes",k);
+}
+/* as exceções gravadas no cadastro, sempre no mesmo formato */
+function excecoesDe(u){
+  var m=(u&&u.permMais)||{},r=(u&&u.permMenos)||{};
+  return {mais:{telas:(m.telas||[]).slice(),acoes:(m.acoes||[]).slice()},
+          menos:{telas:(r.telas||[]).slice(),acoes:(r.acoes||[]).slice()}};
+}
+/* a permissão final de alguém, em listas — para a tela (o sistema pergunta por temPerm) */
+function permissoesDe(n){
+  var tel=TODAS_TELAS.filter(function(t){return veTela(t,n);});
+  var ac=ACOES.map(function(a){return a[0];}).filter(function(a){return pode(a,n);});
+  return {telas:tel,acoes:ac};
+}
+function migrarPermFlex(lista){
+  var feitas=[];
+  (lista||[]).forEach(function(f){
+    if(!f||f.permFlex)return;
+    var t=(f.telas||[]).slice(),a=(f.acoes||[]).slice();
+    function poe(arr,k){if(arr.indexOf(k)<0)arr.push(k);}
+    function tira(arr,k){var i;while((i=arr.indexOf(k))>=0)arr.splice(i,1);}
+    TELAS_TODOS_ANTES.forEach(function(k){poe(t,k);});
+    /* Ferramentas e Rastreio: exatamente quem vê hoje (Financeiro e Gerente tinham
+       "ferramentas" gravado e não viam, porque o perfil mandava) */
+    if(PERFIS_FERR_ANTES.indexOf(f.nome)>=0)poe(t,"ferramentas");else tira(t,"ferramentas");
+    if(PERFIS_RASTREIO_ANTES.indexOf(f.nome)>=0)poe(t,"rastreio");else tira(t,"rastreio");
+    /* Prestadores e Relatórios eram herdados de outras telas; a herança vira marcação */
+    if(t.indexOf("faturamento")>=0||t.indexOf("fin")>=0)poe(t,"prest");
+    if(t.indexOf("dre")>=0){poe(t,"relat");tira(t,"dre");}
+    tira(t,"minhasferr");
+    Object.keys(ACOES_POR_PERFIL_ANTES).forEach(function(k){
+      if(ACOES_POR_PERFIL_ANTES[k].indexOf(f.nome)>=0)poe(a,k);else tira(a,k);});
+    if(f.nome==="Administrador"){
+      TRAVA_ADMIN.telas.forEach(function(k){poe(t,k);});
+      TRAVA_ADMIN.acoes.forEach(function(k){poe(a,k);});
+    }
+    f.telas=t.filter(function(x,i){return t.indexOf(x)===i;});
+    f.acoes=a.filter(function(x,i){return a.indexOf(x)===i;});
+    f.permFlex=PERM_FLEX_VERSAO;feitas.push(f.nome);
+  });
+  return feitas;
+}
+var permFlexMigradas=[];
+/* grava a migração: só o Administrador grava as funções (regra do banco) */
+async function gravarMigracaoPermFlex(){
+  if(!db||!permFlexMigradas.length||!ehAdministrador())return 0;
+  var n=permFlexMigradas.length,quais=permFlexMigradas.slice();
+  try{await gravarFuncoesConf();}catch(e){console.warn("permissões flexíveis",e);return 0;}
+  permFlexMigradas=[];
+  try{await registrarLogPerm({alvo:"migracao",nome:quais.join(", "),
+    texto:"As regras que eram decididas pelo cargo (Clientes, Leads, Aniversariantes, Funil, Solicitações, "+
+      "Ferramentas, Rastreio, Prestadores, Relatórios e as ações de exportar, apagar, corrigir cadastro, "+
+      "aprovar crédito e autorizar estoque) passaram a ser marcação, sem mudar o que cada um via."});}catch(e){}
+  return n;
+}
+/* a primeira tela liberada do menu, na ordem em que ele aparece */
+function telaDeEntrada(quem){
+  var bs=document.querySelectorAll(".rail button[data-s]");
+  for(var i=0;i<bs.length;i++){if(veTela(bs[i].dataset.s,quem))return bs[i].dataset.s;}
+  return "";
+}
+function nomeDaTela(s){
+  for(var i=0;i<GRUPOS_TELA.length;i++)for(var j=0;j<GRUPOS_TELA[i].telas.length;j++)
+    if(GRUPOS_TELA[i].telas[j][0]===s)return GRUPOS_TELA[i].telas[j][1];
+  return s;
+}
+function nomeDaAcao(k){var a=ACOES.filter(function(x){return x[0]===k;})[0];return a?a[1]:k;}
+/* a pessoa sem nenhuma tela liberada: aviso no lugar do sistema, em vez de uma tela errada */
+function avisoSemTelas(){
+  Array.prototype.forEach.call(document.querySelectorAll(".screen"),function(x){x.hidden=true;});
+  var d=$("s-dash");if(!d)return;
+  d.hidden=false;
+  var av=$("semTelasAviso");
+  if(!av){av=document.createElement("div");av.id="semTelasAviso";av.className="note crit";d.insertBefore(av,d.firstChild);}
+  av.innerHTML="<b>Nenhuma tela está liberada para você.</b> Peça ao Administrador para liberar o seu acesso em "+
+    "Configurações › Permissões.";
+  Array.prototype.forEach.call(d.children,function(ch){if(ch!==av&&!ch.hidden){ch.hidden=true;ch.setAttribute("data-semtel","1");}});
 }
 /* regra do Wagner (12/09): Leads e Clientes aparecem para TODOS os usuários,
    seja qual for a função — não dá para tirar na tela de Permissões */
@@ -41512,16 +41903,27 @@ function pode(acao,quem){
    Estoque Colaborador. O nome continua aqui só para o link antigo não dar em tela vazia.
    O comentário de origem: o vendedor e o técnico não acessam Cadastros, então era só nessa
    tela que eles enxergam a própria lista de ferramentas, e ela é SÓ LEITURA (22/10). */
+/* 27/10: NÃO É MAIS USADA — essas telas viraram marcação normal (migrarPermFlex). Fica de histórico. */
 var TELAS_TODOS=["leads","clientes","aniver","funil","solic","minhasferr"];
 function veTela(s,quem){
   /* prestador de serviço logado: vale a lista de acessos marcada no cadastro dele (05/10).
      Ele não é colaborador — não tem função nem perfil —, então essa lista é a única regra. */
   var pz=prestadorLogado(quem);
   if(pz)return (pz.telas||[]).indexOf(s)>=0;
-  if(TELAS_TODOS.indexOf(s)>=0)return true;
+  var n=quem||usuarioAtual;
+  /* o link antigo de "Minhas ferramentas" cai no Estoque Colaborador */
+  if(s==="minhasferr")return veTela("estColab",n);
+  /* enquanto as funções não carregaram, as duas telas sensíveis seguem a regra antiga */
+  if(!funcoes.length){
+    if(s==="rastreio")return PERFIS_RASTREIO_ANTES.indexOf(perfilDe(n))>=0;
+    if(s==="ferramentas")return PERFIS_FERR_ANTES.indexOf(perfilDe(n))>=0;
+  }
+  /* 27/10: TUDO é marcação. As heranças e os perfis que decidiam Prestadores, Relatórios,
+     Rastreio, Ferramentas, Clientes, Leads, Aniversariantes, Funil e Solicitações viraram
+     marcação na migração (migrarPermFlex), sem mudar o que cada um via. */
+  return temPerm(n,"telas",s);
+  /* o que vem abaixo ficou de histórico e não roda mais */
   var f=funcaoDe(quem||usuarioAtual);
-  /* Relatórios herdou a permissão da antiga tela DRE */
-  if(s==="relat"&&(f.telas||[]).indexOf("dre")>=0)return true;
   /* TELA NOVA: as funções já gravadas no banco não a têm, então ninguém a veria — nem o
      Administrador (foi o que aconteceu com "os" na v245). Prestadores de Serviço entra para
      quem paga: a Aprovação Financeira ou o Faturamento.
@@ -41684,7 +42086,8 @@ function aplicarPerfil(){
       n=n.nextElementSibling;}
     g2.style.display=algum?"":"none";
   });
-  if(precisaSair)ir(veTela("dash")?"dash":"agenda");
+  /* 27/10: a tela de entrada é a PRIMEIRA liberada do menu (antes: Dashboard, senão Agenda) */
+  if(precisaSair){var ent=telaDeEntrada();if(ent)ir(ent);else avisoSemTelas();}
 }
 /* ================= CENTRAL DE SOLICITAÇÕES (regra dele, 22/09) =================
    "CLIENTE e NEGÓCIO/ATENDIMENTO são coisas diferentes para fins de permissão."
@@ -42127,8 +42530,9 @@ var RASTRO_SILENCIO=20;   /* minutos sem nenhum ponto = rastreio desligado */
 function ehVendedorRastreado(nome){
   return RASTREIO.funcoes.indexOf(perfilDe(nome||usuarioAtual))>=0;
 }
+/* 27/10: quem recebe os avisos do rastreio é quem tem a TELA Rastreio marcada (antes: o perfil) */
 function recebeAvisoRastreio(){
-  return ehAdministrador()||perfilDe(usuarioAtual)==="Gerente";
+  return veTela("rastreio");
 }
 
 /* ---------- onde ficam as lojas (campo novo em Dados da Empresa) ---------- */
@@ -45548,8 +45952,9 @@ var TEXTO_TERMO_FERR="Declaro ter recebido as ferramentas acima, de propriedade 
    A trava fica na TELA, como em pedidos, clientes e atividades (decisão dele de 22/10:
    as regras do banco para esta coleção são as gerais — qualquer colaborador logado lê e
    grava. Se um dia a trava tiver de valer no banco, é uma policy nova no Supabase). */
+/* 27/10: quem gere o catálogo é quem tem a TELA Ferramentas marcada (antes: o perfil) */
 function ehGestorFerr(quem){
-  return PERFIS_FERR.indexOf(perfilDe(quem||usuarioAtual))>=0;
+  return veTela("ferramentas",quem||usuarioAtual);
 }
 
 async function carregarFerramentas(forcar){
@@ -46140,11 +46545,11 @@ function renderMinhasFerr(){
 
 /* ---------- cadastrar e alterar ---------- */
 function abrirFerrNova(){
-  if(!ehGestorFerr()){toast("Só o Administrador e o Estoquista cadastram ferramenta.");return;}
+  if(!ehGestorFerr()){toast("Só quem tem a tela Ferramentas cadastra ferramenta.");return;}
   abrirFerr(null);
 }
 function abrirFerr(f){
-  if(!ehGestorFerr()){toast("Só o Administrador e o Estoquista alteram ferramenta.");return;}
+  if(!ehGestorFerr()){toast("Só quem tem a tela Ferramentas altera ferramenta.");return;}
   ferrEdit=f||null;
   ferrFotoAtual=f?(f.foto||""):"";
   $("fe_titulo").textContent=f?"Alterar ferramenta":"Adicionar ferramenta";
@@ -46255,7 +46660,7 @@ async function salvarFerr(){
 
 /* ---------- dar baixa (nada se apaga) ---------- */
 function abrirBaixaFerr(f){
-  if(!ehGestorFerr()){toast("Só o Administrador e o Estoquista dão baixa.");return;}
+  if(!ehGestorFerr()){toast("Só quem tem a tela Ferramentas dá baixa.");return;}
   ferrBaixaAtual=f;
   $("fb_sub").textContent=(+f.qtd||1)+"x "+(f.nome||"")+(f.serie?" · série "+f.serie:"")+
     " · está com "+(f.colaborador||"");
@@ -46294,7 +46699,7 @@ async function confirmarBaixaFerr(){
 
 /* ---------- passar para outro usuário ---------- */
 function abrirPassarFerr(f){
-  if(!ehGestorFerr()){toast("Só o Administrador e o Estoquista passam ferramenta.");return;}
+  if(!ehGestorFerr()){toast("Só quem tem a tela Ferramentas passa ferramenta.");return;}
   ferrPassarAtual=f;
   $("fpa_sub").textContent=(+f.qtd||1)+"x "+(f.nome||"")+(f.serie?" · série "+f.serie:"")+
     " · hoje está com "+(f.colaborador||"");
@@ -46397,7 +46802,7 @@ function htmlTermoFerr(nome,termo){
   "</div>";
 }
 function abrirTermoFerr(nome,termo){
-  if(!ehGestorFerr()){toast("Só o Administrador e o Estoquista abrem o termo.");return;}
+  if(!ehGestorFerr()){toast("Só quem tem a tela Ferramentas abre o termo.");return;}
   if(!nome)return;
   ferrTermoQuem=nome;
   $("fr_folha").innerHTML=htmlTermoFerr(nome,termo||null);
@@ -46801,6 +47206,15 @@ function ir(s,doMenu){
   if(!RENDER_COMPLETO)garantirRenderCompleto();
   /* a DRE mora dentro de Relatórios (pedido do Wagner, 16/09) */
   var abaRel="";if(s==="dre"){s="relat";abaRel="dre";}
+  /* 27/10 (decisão dele): atalho para tela que a pessoa não tem recusa com aviso — antes ele
+     abria a tela mesmo assim, e desmarcar só tirava o item do menu */
+  if(TODAS_TELAS.indexOf(s)>=0&&!veTela(s)){
+    toast("Você não tem acesso à tela "+nomeDaTela(s)+".");
+    return false;
+  }
+  var semTel=$("semTelasAviso");
+  if(semTel){var dh=$("s-dash");semTel.parentNode.removeChild(semTel);
+    if(dh)Array.prototype.forEach.call(dh.querySelectorAll("[data-semtel]"),function(ch){ch.hidden=false;ch.removeAttribute("data-semtel");});}
   var mudou=telaAtual!==s;
   /* saiu do Novo Pedido aberto por uma OS sem salvar: volta ao pedido normal (o "Completar cadastro" mantém) */
   if(mudou&&telaAtual==="venda"&&pedOrigemOS&&!voltaVenda){try{sairModoOS();}catch(e){console.warn(e);}}
@@ -47280,6 +47694,8 @@ function ligar(){
     u.facial=usFacial;u.facialSig=usFacialSig;
     /* o Administrador também pode cadastrar a foto de alguém: vai para o documento da pessoa */
     try{if(usFacial)await salvarFacialDoc(n,{foto:usFacial,sig:usFacialSig,quando:hojeISO()+" "+agoraHM(),por:usuarioAtual});}catch(eFc){console.warn("facial",eFc);}
+    /* permissões deste usuário (27/10): só o Administrador muda; a mudança vai para o histórico */
+    var dPerm=null;try{dPerm=lerPermUsuario(u);}catch(ePm){console.warn("permissões do usuário",ePm);}
     if(u===usNovoPendente)usNovoPendente=null;   /* já está na lista, e agora foi gravado */
     if(!editandoUs&&USUARIOS.indexOf(u)<0)USUARIOS.push(u);
     if(nomeAntigo&&nomeAntigo!==n){
@@ -47290,6 +47706,7 @@ function ligar(){
       if(usuarioAtual===nomeAntigo)usuarioAtual=n;
     }
     await gravarUsuarios();sincronizarEquipe();aplicarPerfil();
+    if(dPerm){try{await registrarLogPerm(Object.assign({alvo:"usuario",nome:n},dPerm,{quando:undefined}));}catch(eLg){console.warn("permlog",eLg);}}
     editandoUs=null;$("usForm").hidden=true;$("usLista").hidden=false;
     renderUsuarios();render();toast("Colaborador salvo.");};
 
@@ -47315,6 +47732,7 @@ function ligar(){
       var base=funcaoPor($("fc_base").value);
       f.telas=base?(base.telas||[]).slice():TELAS_OPERACAO.slice();
       f.acoes=base?(base.acoes||[]).slice():[];
+      f.permFlex=PERM_FLEX_VERSAO;
       funcoes.push(f);
     }
     if(antigo&&antigo!==n)USUARIOS.forEach(function(u){if(u.perfil===antigo)u.perfil=n;});
@@ -47326,8 +47744,30 @@ function ligar(){
   $("pmFuncao").onchange=renderPermissoes;
   $("pmSalvar").onclick=async function(){
     if(!pmFunc)return;
+    /* a trava vale por dentro (regra da v321): o Administrador nunca perde Permissões e Usuários */
+    if(pmFunc.nome==="Administrador"){
+      TRAVA_ADMIN.telas.forEach(function(k){if(pmSel.telas.indexOf(k)<0)pmSel.telas.push(k);});
+      TRAVA_ADMIN.acoes.forEach(function(k){if(pmSel.acoes.indexOf(k)<0)pmSel.acoes.push(k);});
+    }
+    var dt=diffLista(pmFunc.telas,pmSel.telas),da=diffLista(pmFunc.acoes,pmSel.acoes);
+    if(!dt.entrou.length&&!dt.saiu.length&&!da.entrou.length&&!da.saiu.length){toast("Nada mudou em "+pmFunc.nome+".");return;}
+    var av=avisosDePermissao(pmSel.telas,pmSel.acoes,pmFunc.nome).filter(function(x){return !/^<b>Rastreio/.test(x)||dt.entrou.indexOf("rastreio")>=0;});
+    var nPes=USUARIOS.filter(function(u){return u.perfil===pmFunc.nome&&u.ativo!==false;}).length;
+    if((dt.saiu.length||da.saiu.length||av.length)&&
+       !confirm("Salvar as permissões de "+pmFunc.nome+"? Vale para "+nPes+" pessoa(s) com esta função."+
+         (av.length?"\n\n"+av.map(function(x){return "• "+x.replace(/<[^>]+>/g,"");}).join("\n"):"")))return;
+    var antesT=(pmFunc.telas||[]).slice(),antesA=(pmFunc.acoes||[]).slice();
     pmFunc.telas=pmSel.telas.slice();pmFunc.acoes=pmSel.acoes.slice();
-    await gravarFuncoes();aplicarPerfil();renderPermissoes();renderFuncoes();
+    try{await gravarFuncoesConf();}
+    catch(e){
+      pmFunc.telas=antesT;pmFunc.acoes=antesA;
+      $("pm_alerta").innerHTML='<div class="note crit"><b>Não foi salvo.</b> O banco recusou: '+esc(e&&e.message||e)+
+        ". As permissões continuam como estavam.</div>";
+      return;
+    }
+    try{await registrarLogPerm({alvo:"funcao",nome:pmFunc.nome,telasEntrou:dt.entrou,telasSaiu:dt.saiu,
+      acoesEntrou:da.entrou,acoesSaiu:da.saiu});}catch(e2){console.warn("permlog",e2);}
+    aplicarPerfil();renderPermissoes();renderFuncoes();
     toast("Permissões de "+pmFunc.nome+" salvas.");};
   $("pmCopiar").onclick=function(){
     if(!pmFunc)return;
@@ -47995,14 +48435,14 @@ function ligar(){
     var fixos={},antes={};
     if(clienteTravado(editandoCli))["nome","doc","rg","tipo"].forEach(function(k){
       antes[k]=editandoCli[k]||"";
-      if(!ehAdministrador()&&String(editandoCli[k]||"").trim())fixos[k]=editandoCli[k];});
+      if(!podeCorrigirCadastro()&&String(editandoCli[k]||"").trim())fixos[k]=editandoCli[k];});
     var cidadeAntes=editandoCli?(editandoCli.cidade||""):"";
     CAMPOS_CLI.forEach(function(k){if(k!=="uf")c[k]=dados[k]||"";});
     Object.keys(fixos).forEach(function(k){c[k]=fixos[k];});
     /* localização colada ou marcada no local fica registrada como exata */
     c.geoOrigem=(c.geo&&$("c_geo").__geoExato===$("c_geo").value)?"exato":(c.geo?"endereco":"");
     /* o Administrador corrigiu dado pessoal de cliente: fica registrado na ficha */
-    if(clienteTravado(editandoCli)&&ehAdministrador()){
+    if(clienteTravado(editandoCli)&&podeCorrigirCadastro()){
       var ROT={nome:"Nome",doc:"CPF/CNPJ",rg:"RG",tipo:"Tipo"};
       Object.keys(antes).forEach(function(k){
         if(String(antes[k]||"")!==String(c[k]||"")&&String(antes[k]||"").trim()){
@@ -49355,6 +49795,8 @@ async function continuarBoot(){
   await passoBoot("liberar a tela de OS",liberarTelaOS);
   /* OS, Remunerações e Veículos para o vendedor, que também é técnico (25/10) */
   await passoBoot("acessos do comercial",liberarTelasComercial);
+  /* as permissões que eram decididas pelo cargo viraram marcação (27/10): grava, uma vez */
+  await passoBoot("permissões flexíveis",gravarMigracaoPermFlex);
   /* os 12 status novos passaram a conduzir a tela: as OS já gravadas ganham o status certo, uma
      vez só, deduzido da lista antiga (pedido dele, 09/10) */
   await passoBoot("acerto do status das OS",ajustarSitOS);
