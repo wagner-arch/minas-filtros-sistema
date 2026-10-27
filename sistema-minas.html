@@ -528,6 +528,10 @@
   .chips button.perm-menos{background:var(--crit-bg);border-color:var(--crit);color:var(--crit);text-decoration:line-through;font-weight:600}
   .chips button.perm-menos small,.chips button.perm-mais small{font-size:11.5px;opacity:.95}
   .chips button[disabled]{cursor:default}
+  /* "Ir com o Google Maps" nos Detalhes da atividade (27/10): grande, para o dedo, na rua */
+  .bt-maps{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:54px;
+    font-size:16.5px;font-weight:700;background:#1A73E8;border:0;color:#fff!important;text-decoration:none;border-radius:12px;cursor:pointer}
+  .bt-maps[disabled]{background:var(--field);color:var(--muted)!important;border:1px dashed var(--field-bd);cursor:default;font-weight:600}
   .perm-leg{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:12.5px;color:var(--muted);margin:6px 0 12px}
   .perm-leg i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
 
@@ -3853,6 +3857,11 @@ img{max-width:100%}
             <div class="fld"><label for="af_ini">Horário</label><input id="af_ini" type="time"></div>
             <div class="fld"><label for="af_resp">Responsável</label><select id="af_resp"></select></div>
             <div class="fld"><label for="af_obs">O que fazer</label><input id="af_obs" placeholder="Ex.: retornar com proposta"></div>
+          </div>
+          <div class="fld" id="af_equipWrap" hidden style="margin-top:10px">
+            <label for="af_equip">De qual purificador é <span class="req">*</span></label>
+            <select id="af_equip"></select>
+            <div class="help" id="af_equipNota"></div>
           </div>
           <div id="at_conflito"></div>
         </div>
@@ -7522,6 +7531,8 @@ img{max-width:100%}
       </div>
     </div>
 
+    <div id="dt_mapsBox" style="margin-top:12px"></div>
+
     <div class="sect">
       <p class="sect-t">O que já aconteceu com este cliente</p>
       <div id="dt_hist"></div>
@@ -8020,6 +8031,11 @@ img{max-width:100%}
     <div class="sect" style="margin-top:6px">
       <p class="sect-t">Tipo do contato que será feito</p>
       <div class="chips" id="na_tipos"></div>
+    </div>
+    <div class="fld" id="na_equipWrap" hidden style="margin-top:10px">
+      <label for="na_equip">De qual purificador é <span class="req">*</span></label>
+      <select id="na_equip"></select>
+      <div class="help" id="na_equipNota"></div>
     </div>
     <div class="grid g3" style="margin-top:4px">
       <div class="fld"><label for="na_data">Data <span class="req">*</span></label><input id="na_data" type="date"></div>
@@ -9265,7 +9281,8 @@ async function carregar(){
     else{await gravarMotivos();}
     /* tipo e motivos do contato de aniversariante entram nas listas já gravadas */
     var gAn=garantirAniversarioCfg();
-    if(gAn.t)await gravarTipos();
+    /* 27/10: só quem pode gravar configuração tenta — senão o vendedor que abre primeiro acende a faixa do banco */
+    if(gAn.t&&podeGravarConfig())await gravarTipos();
     if(gAn.m)await gravarMotivos();
     if(gAn.mt)await gravarMetas();
     if(gAn.off)await gravarMotivosOff();   /* motivo do sistema que estava inativo volta a valer */
@@ -17912,6 +17929,8 @@ window.__prestLogadoMF=function(q){return prestadorLogado(q);};
 window.__achaCliMF=function(q){return achaCliente(q);};
 window.__euEstoqueMF=function(){return euNoEstoque();};
 window.__funcoesMF=function(){return funcoes;};
+window.__enderecoAtivMF=function(a){return enderecoDaAtividade(a);};window.__rotaMapsMF=function(a){return rotaGoogleMaps(enderecoDaAtividade(a));};
+window.__purificadoresMF=function(c){return purificadoresDoCliente(c);};window.__agendarVisitaMF=function(e){return agendarVisita(e);};
 window.__divididoMF=function(c,q){return clienteDividido(c,q);};
 window.__pessoasClienteMF=function(c){return pessoasDoCliente(c);};
 /* permissões flexíveis (27/10) */
@@ -28984,6 +29003,7 @@ function abrirDetalhes(a){
     mapaLink(c.geo)+
     (c.origem?'<br><span class="t-sub">veio por '+esc(c.origem)+"</span>":"")+
     (c.id?'<br><span class="t-sub cli-dica">dois cliques para editar o cadastro</span>':"");
+  try{$("dt_mapsBox").innerHTML=ativ?htmlMapsAtividade(a):"";}catch(eMp){console.warn("maps",eMp);$("dt_mapsBox").innerHTML="";}
   $("dt_quando").innerHTML="<b>"+esc(dataCurta(a.data))+(a.inicio?" às "+esc(a.inicio):"")+"</b>"+
     (a.fim?" – "+esc(a.fim):"")+
     "<br>"+esc(a.colaborador||"—")+
@@ -32277,7 +32297,8 @@ function agendarVisita(e){
   var dias=px&&px>h?Math.round((new Date(px+"T00:00:00")-new Date(h+"T00:00:00"))/86400000):1;
   abrirNovaAtividade({clienteId:e.clienteId,cliente:e.cliente||c.nome,tel:c.tel,doc:c.doc,cidade:c.cidade,
     origem:c.origem,colaborador:e.tecnico||usuarioAtual,dias:Math.max(1,dias),
-    tipos:tipos.filter(function(t){return /manuten|visita|pós/i.test(t);}).slice(0,1),
+    /* 27/10: o tipo de troca de refil; sem ele, o de antes */
+    tipos:(tipos.indexOf(TIPO_TROCA_REFIL)>=0?[TIPO_TROCA_REFIL]:tipos.filter(function(t){return /manuten|visita|pós/i.test(t);}).slice(0,1)),
     obs:"Manutenção periódica · "+(e.produto||"")+(e.serie?" · série "+e.serie:"")+
       (px?" · vence "+px:""),equipId:e.id,
     nota:"<b>Visita de manutenção.</b> "+esc(e.produto||"")+" instalado em "+esc(e.instaladoEm||"—")+
@@ -34312,6 +34333,78 @@ function enderecoDoAparelho(e,c){
   }
   return {proprio:false,texto:enderecoCadastroCli(c),geo:(c&&c.geo)||"",
     ref:(c&&c.ref)||"",contatoNome:"",contatoTel:"",horario:""};
+}
+/* ===== ATIVIDADE PELO APARELHO E BOTÃO DO MAPS (27/10, regra dele) =====
+   Troca de refil ou manutenção = tipo com "refil" ou "manutenção" no nome (o tipo criado em
+   27/10 é "Troca de refil / Manutenção"). Quem marca escolhe o PURIFICADOR, e a atividade usa o
+   endereço DELE (o endInst; sem endereço próprio, o do cadastro). Cliente sem purificador e os
+   outros tipos usam o endereço do cadastro. */
+var TIPO_TROCA_REFIL="Troca de refil / Manutenção";
+var RE_TIPO_MANUT=/refil|manuten/i;
+function tiposDeManut(lista){return (lista||[]).some(function(t){return RE_TIPO_MANUT.test(semAcento(String(t||"")));});}
+/* os purificadores ativos do cliente — os registros de refil da coleção ficam de fora */
+function purificadoresDoCliente(cid){
+  if(!cid)return [];
+  return equipamentos.filter(function(e){
+    if(e.clienteId!==cid||e.ativo===false)return false;
+    if(e.loja&&e.loja!==lojaAtual)return false;
+    var p=e.produtoId?prodPorId(e.produtoId):null;
+    return ehAparelhoDeOS(e.produto||e.equipamento||"",(p&&p.grupo)||"");
+  });
+}
+/* onde a atividade acontece: o aparelho dela, ou o cadastro do cliente */
+function enderecoDaAtividade(a){
+  var c=cliPorId(a&&a.clienteId)||{};
+  var e=(a&&a.equipId)?equipPorId(a.equipId):null;
+  if(e){var x=enderecoDoAparelho(e,c);x.equip=e;x.partes=temEndProprio(e)?e.endInst:c;return x;}
+  return {proprio:false,texto:enderecoCadastroCli(c),geo:c.geo||"",partes:c,equip:null};
+}
+/* a rota: o ponto do mapa quando existe (mais preciso), senão o endereço escrito */
+function rotaGoogleMaps(end){
+  var g=window.linkMapaMF?window.linkMapaMF(end&&end.geo):"";
+  if(g)return {url:g,porPonto:true,texto:""};
+  var p=(end&&end.partes)||{};
+  if(!String(p.rua||"").trim())return null;
+  var txt=[[p.rua,p.num].filter(Boolean).join(", "),p.bairro,[p.cidade,p.uf].filter(Boolean).join(" - ")]
+    .filter(Boolean).join(" - ");
+  return {url:"https://www.google.com/maps/dir/?api=1&destination="+encodeURIComponent(txt)+
+    "&travelmode=driving&dir_action=navigate",porPonto:false,texto:txt};
+}
+function htmlMapsAtividade(a){
+  var end=enderecoDaAtividade(a),r=rotaGoogleMaps(end);
+  var ap=end.equip?('<div class="note" style="margin:0 0 8px"><b>Aparelho desta atividade:</b> '+
+    esc(rotuloEquip(end.equip))+"</div>"+(end.proprio?avisoEndAparelho(end.equip):"")):"";
+  if(!r)return ap+'<button class="bt-maps" type="button" id="dt_maps" disabled>Cliente sem endereço — complete o cadastro</button>';
+  return ap+'<a class="bt-maps" id="dt_maps" href="'+esc(r.url)+'" target="_blank" rel="noopener">&#128205; Ir com o Google Maps</a>'+
+    '<div class="t-sub" style="margin-top:6px">'+(r.porPonto?"Rota pelo ponto marcado no mapa":"Rota pelo endereço: "+esc(r.texto))+
+    (end.proprio?" · endereço onde o aparelho está instalado":" · endereço do cadastro")+"</div>";
+}
+/* a lista de escolha do purificador (janela de nova atividade e atividade futura) */
+function montarEscolhaPurificador(pref,cid,manut,equipAtual){
+  var w=$(pref+"_equipWrap"),s=$(pref+"_equip"),nota=$(pref+"_equipNota");
+  if(!w||!s)return;
+  var lista=purificadoresDoCliente(cid);
+  var mostrar=!!cid&&lista.length>0&&(manut||!!equipAtual);
+  w.hidden=!mostrar;
+  if(!mostrar){s.innerHTML="";if(nota)nota.innerHTML="";return;}
+  var atual=s.value||equipAtual||"";
+  if(lista.length===1&&!atual)atual=lista[0].id;
+  var c=cliPorId(cid);
+  s.innerHTML='<option value="">— escolha o purificador —</option>'+lista.map(function(e){
+    var en=enderecoDoAparelho(e,c);
+    return '<option value="'+esc(e.id)+'">'+esc(rotuloEquip(e))+" — "+
+      esc(en.proprio?"instalado em: "+en.texto:"no endereço do cadastro")+"</option>";
+  }).join("");
+  if(lista.some(function(e){return e.id===atual;}))s.value=atual;
+  function nt(){
+    var e=equipPorId(s.value);
+    if(!nota)return;
+    if(!e){nota.innerHTML="Este cliente tem "+lista.length+" purificador(es). A atividade vai para o endereço do que for escolhido.";return;}
+    var en=enderecoDoAparelho(e,c);
+    nota.innerHTML=en.proprio?'<b style="color:var(--warn)">Instalado em outro endereço:</b> '+esc(en.texto)
+      :"Vai para o endereço do cadastro: "+esc(en.texto||"—");
+  }
+  s.onchange=nt;nt();
 }
 /* o aviso que a tela mostra quando o aparelho NÃO está no endereço do cadastro */
 function avisoEndAparelho(e,c){
@@ -36517,7 +36610,13 @@ function abrirNovaAtividade(ctx){
   naLimparCadastro();
   opcoesOrigem("na_origem","");
   renderChipsNa();naConferirCadastro();naAjustarTexto();
+  if($("na_equip"))$("na_equip").value="";
+  naAjustarEquip();
   $("ativModal").hidden=false;
+}
+function naAjustarEquip(){
+  if(!naCtx)return;
+  try{montarEscolhaPurificador("na",naCtx.clienteId,tiposDeManut(naTipos),naCtx.equipId||"");}catch(e){console.warn(e);}
 }
 function renderChipsNa(){
   var w=$("na_tipos");w.innerHTML="";
@@ -36528,7 +36627,7 @@ function renderChipsNa(){
     b.onclick=function(){
       var i=naTipos.indexOf(t);
       if(i>=0)naTipos.splice(i,1);else naTipos.push(t);
-      b.setAttribute("aria-pressed",String(naTipos.indexOf(t)>=0));naConferirCadastro();naAjustarTexto();};
+      b.setAttribute("aria-pressed",String(naTipos.indexOf(t)>=0));naConferirCadastro();naAjustarTexto();naAjustarEquip();};
     w.appendChild(b);
   });
 }
@@ -36542,7 +36641,8 @@ function buscarClienteNa(){
     b.onclick=function(){
       naCtx.clienteId=c.id;naCtx.cliente=c.nome;naCtx.tel=c.tel;naCtx.doc=c.doc;
       naCtx.cidade=c.cidade;naCtx.origem=c.origem;
-      $("na_nome").value=c.nome;$("na_sub").textContent=c.nome;box.hidden=true;naConferirCadastro();};
+      $("na_nome").value=c.nome;$("na_sub").textContent=c.nome;box.hidden=true;naConferirCadastro();
+      if($("na_equip"))$("na_equip").value="";naAjustarEquip();};
     box.appendChild(b);
   });
   box.hidden=false;
@@ -36567,6 +36667,15 @@ async function criarAtividadeRetorno(){
     return;
   }
 
+  /* troca de refil / manutenção: TEM de dizer de qual purificador é (27/10) */
+  naAjustarEquip();
+  var naEq=($("na_equipWrap")&&!$("na_equipWrap").hidden)?$("na_equip").value:"";
+  if($("na_equipWrap")&&!$("na_equipWrap").hidden&&!naEq){
+    $("na_alerta").innerHTML='<div class="note crit"><b>Escolha de qual purificador é esta atividade.</b> '+
+      "O cliente tem mais de um aparelho, e a atividade vai para o endereço do escolhido.</div>";
+    try{$("na_equip").focus();}catch(e){}
+    return;
+  }
   /* OS nova: só é gravada agora, junto com a atividade do técnico (regra do Wagner, 14/09) */
   var osNovaAberta=null;
   if(naCtx.osNova){
@@ -36584,7 +36693,9 @@ async function criarAtividadeRetorno(){
   var a={id:uid(),loja:lojaAtual,natureza:"atividade",
     clienteId:naCtx.clienteId||"",cliente:naCtx.cliente,tel:naCtx.tel||vinc.tel||"",
     doc:naCtx.doc||vinc.doc||"",cidade:naCtx.cidade||vinc.cidade||"",
-    endereco:[vinc.rua,vinc.num,vinc.bairro,vinc.cidade].filter(Boolean).join(", "),
+    endereco:(function(){var e=naEq?equipPorId(naEq):null;
+      if(e&&temEndProprio(e)){var x=e.endInst;return [x.rua,x.num,x.bairro,x.cidade].filter(Boolean).join(", ");}
+      return [vinc.rua,vinc.num,vinc.bairro,vinc.cidade].filter(Boolean).join(", ");})(),
     origem:naCtx.origem||vinc.origem||"",
     colaborador:$("na_resp").value,vendedor:naCtx.colaborador||"",
     /* quem marcou o compromisso (24/10): é por este campo que quem agenda para um colega
@@ -36595,7 +36706,7 @@ async function criarAtividadeRetorno(){
     obs:$("na_obs").value.trim(),origemOrc:naCtx.orcId||"",
     origemAtiv:naCtx.origemAtiv||"",
     /* reagendada ou retorno de uma visita de manutenção continua ligada ao aparelho */
-    equipId:naCtx.equipId||((atendimentos.filter(function(x){return !!naCtx.origemAtiv&&x.id===naCtx.origemAtiv;})[0]||{}).equipId)||"",
+    equipId:naEq||naCtx.equipId||((atendimentos.filter(function(x){return !!naCtx.origemAtiv&&x.id===naCtx.origemAtiv;})[0]||{}).equipId)||"",
     osId:naCtx.osId||naCtx.osContatoId||"",osEtapa:naCtx.osContatoId?"contato":(naCtx.osServico?"servico":""),
     situacao:"pendente",status:"aberto"};
   atendimentos.push(a);
@@ -40591,7 +40702,7 @@ async function decidir(p,ok,obs){
   render();
 }
 /* ---------- tipos de atendimento ---------- */
-var SEED_TIPOS=["Visita presencial","Ligação telefônica","WhatsApp","Instagram","Chat do site","Retorno de orçamento","Pós-venda","Aniversário do cliente","Contato Aniversariante","Atendimento técnico","Contactar Cliente OS","Cobrança"];
+var SEED_TIPOS=["Visita presencial","Ligação telefônica","WhatsApp","Instagram","Chat do site","Retorno de orçamento","Pós-venda","Aniversário do cliente","Contato Aniversariante","Atendimento técnico","Contactar Cliente OS","Cobrança","Troca de refil / Manutenção"];
 var tipos=[];
 async function gravarTipos(){if(!db)return;try{await db.doc("config/tipos_atendimento").set({lista:tipos});}catch(e){console.warn(e);}}
 var CANAIS=[["mensagem","Mensagem"],["ligacao","Ligação"],["abordagem","Abordagem"],["outro","Outro"]];
@@ -41614,12 +41725,17 @@ function validaFecho(){
   return true;
 }
 /* a atividade futura combinada no fecho do atendimento */
+function afAjustarEquip(at){
+  if(!at)return;
+  try{montarEscolhaPurificador("af",at.clienteId,tiposDeManut(at.tipos||[]),at.manutEquipId||at.equipId||"");}catch(e){console.warn(e);}
+}
 async function agendarFuturaDoAtend(at){
   var f={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:at.clienteId,cliente:at.cliente,
     criadoPor:usuarioAtual,
     colaborador:$("af_resp").value,tipos:(at.tipos||[]).slice(),tipo:at.tipo,
     data:$("af_data").value,inicio:$("af_ini").value,fim:"",obs:$("af_obs").value.trim(),
-    origemAtend:at.id,equipId:at.manutEquipId||at.equipId||"",status:"aberto"};
+    origemAtend:at.id,
+    equipId:(($("af_equipWrap")&&!$("af_equipWrap").hidden&&$("af_equip").value)||at.manutEquipId||at.equipId||""),status:"aberto"};
   atendimentos.push(f);
   {try{dividirPelaAtividade(f);}catch(eDv){}if(db){try{await col("atendimentos").doc(f.id).set(f);}catch(e){console.warn(e);}}}
   try{await atualizarFunilCliente(f.clienteId,"atendimento",f.colaborador||usuarioAtual);}catch(eF){console.warn("funil",eF);}
@@ -41633,6 +41749,14 @@ async function fecharAtend(comFutura){
   if(comFutura&&!$("af_data").value){
     $("at_fechaAlerta").innerHTML='<div class="note crit"><b>Informe a data da atividade futura.</b></div>';
     $("at_futuraBloco").hidden=false;return;}
+  /* troca de refil / manutenção: escolher o purificador (27/10) */
+  if(comFutura){
+    afAjustarEquip(atendPend);
+    if($("af_equipWrap")&&!$("af_equipWrap").hidden&&!$("af_equip").value){
+      $("at_fechaAlerta").innerHTML='<div class="note crit"><b>Escolha de qual purificador é a atividade futura.</b> '+
+        "Ela vai para o endereço do aparelho escolhido.</div>";
+      $("at_futuraBloco").hidden=false;return;}
+  }
   /* a atividade futura também confere a agenda de quem vai executar (24/10) */
   if(comFutura){
     var cfF=conflitoDeAgenda($("af_resp").value,$("af_data").value,$("af_ini").value,"",null);
@@ -45521,6 +45645,8 @@ function garantirAniversarioCfg(){
   if(tipos.indexOf(TIPO_CONTATO_OS)<0){tipos.push(TIPO_CONTATO_OS);mud.t=true;}
   /* follow-up programado pelo WhatsApp (04/10) */
   if(tipos.indexOf(TIPO_FOLLOWUP)<0){tipos.push(TIPO_FOLLOWUP);mud.t=true;}
+  /* troca de refil / manutenção pelo purificador (27/10) */
+  if(tipos.indexOf(TIPO_TROCA_REFIL)<0){tipos.push(TIPO_TROCA_REFIL);mud.t=true;}
   [MOT_ANIV_OK,MOT_ANIV_NAO].forEach(function(m){if(motivos.indexOf(m)<0){motivos.push(m);mud.m=true;}});
   /* OS interna: cliente vai pensar ou passar na loja (regra do Wagner, 14/09) */
   if(motivos.indexOf("Aguardando Retorno Cliente")<0){motivos.push("Aguardando Retorno Cliente");mud.m=true;}
@@ -49163,6 +49289,7 @@ function ligar(){
       $("at_futuraBloco").hidden=false;
       if(!$("af_data").value){var d=new Date();d.setDate(d.getDate()+1);$("af_data").value=iso(d);}
       $("af_resp").value=atendPend?atendPend.colaborador:usuarioAtual;
+      if($("af_equip"))$("af_equip").value="";afAjustarEquip(atendPend);
       $("at_fechaAlerta").innerHTML='<div class="note"><b>Marque a data e o horário</b> e clique de novo em <b>Finalizar e criar atividade futura</b>.</div>';
       return;}
     fecharAtend(true);};
