@@ -517,6 +517,11 @@
   .aviso-versao{position:fixed;left:12px;right:12px;top:calc(12px + env(safe-area-inset-top));z-index:1200;background:#FFF4CC;color:#3A2A00;
     border:1px solid #D9A900;border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.25);display:flex;gap:10px;align-items:center;
     justify-content:space-between;font-size:14px;line-height:1.35}
+  .aviso-versao.obrig{background:#FCE7E4;color:#5A1208;border-color:#B32A1C}
+  .aviso-versao .av-lin{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+  .aviso-versao .av-lin+.av-lin{border-top:1px solid rgba(0,0,0,.12);padding-top:8px;margin-top:8px}
+  #avisoVersao{flex-direction:column;align-items:stretch}
+  .aviso-versao .av-msg{color:#8A1B10;font-weight:600;font-size:13px;margin-top:6px}
   .aviso-versao button{background:#2E4FD6;color:#fff;border:0;border-radius:9px;padding:9px 12px;font:inherit;font-weight:600;flex-shrink:0;cursor:pointer}
   .chips button{font:inherit;font-size:13.5px;background:var(--card);border:1px solid var(--field-bd);
     border-radius:22px;padding:8px 16px;cursor:pointer;color:var(--ink-2);transition:all .12s}
@@ -1920,6 +1925,7 @@ img{max-width:100%}
 <div class="banner" id="offline" hidden>Modo demonstração — os dados desta sessão não estão sendo salvos.</div>
 <div class="banner" id="banner" hidden></div>
 <div class="aviso-versao" id="avisoApp" hidden></div>
+<div class="aviso-versao" id="avisoVersao" hidden role="alert"></div>
 
 <header class="top">
   <div class="brand">Sistema de Gestão</div>
@@ -17929,6 +17935,9 @@ window.__prestLogadoMF=function(q){return prestadorLogado(q);};
 window.__achaCliMF=function(q){return achaCliente(q);};
 window.__euEstoqueMF=function(){return euNoEstoque();};
 window.__funcoesMF=function(){return funcoes;};
+window.__conferirVersaoMF=function(f){return conferirVersaoSistema(f);};window.__atualizarVersaoMF=function(){return atualizarSistemaAgora();};
+window.__reabrirGuardadoMF=function(){return reabrirPedidoGuardado();};window.__andamentoMF=function(){return trabalhoEmAndamento();};
+window.__ligarVigiaMF=function(){return ligarVigiaVersao();};
 window.__enderecoAtivMF=function(a){return enderecoDaAtividade(a);};window.__rotaMapsMF=function(a){return rotaGoogleMaps(enderecoDaAtividade(a));};
 window.__purificadoresMF=function(c){return purificadoresDoCliente(c);};window.__agendarVisitaMF=function(e){return agendarVisita(e);};
 window.__divididoMF=function(c,q){return clienteDividido(c,q);};
@@ -43015,7 +43024,7 @@ function nomeVersaoApp(){
 async function conferirVersaoApp(forcar){
   if(!temAppMF())return;                       /* no computador não há aplicativo para atualizar */
   var agora=Date.now();
-  if(!forcar&&appVersaoEm&&agora-appVersaoEm<1800000)return;   /* no máximo a cada 30 min */
+  if(!forcar&&appVersaoEm&&agora-appVersaoEm<60000)return;   /* no máximo uma vez por minuto (27/10) */
   appVersaoEm=agora;
   try{
     var r=await fetch(APP_VERSAO_ARQ+"?t="+agora,{cache:"no-store"});
@@ -43027,6 +43036,9 @@ async function conferirVersaoApp(forcar){
   renderAvisoVersaoApp();
 }
 function renderAvisoVersaoApp(){
+  /* 27/10 (decisão dele): o aviso do aplicativo é igual ao do sistema e sai na MESMA faixa */
+  try{renderFaixaVersao();}catch(e){console.warn("faixa versão",e);}
+  return;
   var d=$("avisoApp");if(!d)return;
   if(!appVersaoNova||appVersaoDispensada===(+appVersaoNova.versionCode||0)){d.hidden=true;return;}
   d.innerHTML="<div><b>Versão nova do aplicativo: "+esc(appVersaoNova.versionName||"")+"</b>"+
@@ -44613,7 +44625,7 @@ function ligarRastreio(){
   /* versão nova do aplicativo: confere ao entrar, de 30 em 30 min e quando a aba volta */
   conferirVersaoApp(true);
   if(!window.__relogioVersaoApp){
-    window.__relogioVersaoApp=setInterval(function(){conferirVersaoApp(false);},1800000);
+    window.__relogioVersaoApp=setInterval(function(){if(!document.hidden)conferirVersaoApp(false);},300000);
     document.addEventListener("visibilitychange",function(){if(!document.hidden)conferirVersaoApp(false);});
   }
   /* a gestão: avisos no sino, conferência das paradas e o resumo das 18h30 */
@@ -47395,6 +47407,7 @@ function ir(s,doMenu){
     toast("Você não tem acesso à tela "+nomeDaTela(s)+".");
     return false;
   }
+  try{if(s!==telaAtual)faixaVersaoNaTroca();}catch(eFv){}
   var semTel=$("semTelasAviso");
   if(semTel){var dh=$("s-dash");semTel.parentNode.removeChild(semTel);
     if(dh)Array.prototype.forEach.call(dh.querySelectorAll("[data-semtel]"),function(ch){ch.hidden=false;ch.removeAttribute("data-semtel");});}
@@ -50011,7 +50024,164 @@ async function continuarBoot(){
   /* a arrumação e o desenho das outras telas saem daqui: eles rodam DEPOIS que a tela de
      preparo fecha, senão travam a aba e a própria tela não consegue fechar (14/10) */
 }
+/* ============ AVISO DE VERSÃO NOVA (27/10, decisão dele) ============
+   Quem está com o sistema aberto é avisado da versão nova. A conferência é só o versao.txt
+   (3 caracteres, sem cache): a cada 5 min com o sistema na frente da pessoa, e na hora quando
+   ela volta para a aba ou para o aplicativo (no máximo uma vez por minuto). NUNCA na entrada:
+   ao abrir, o sistema já entra na versão nova sozinho (regra de 20/09, que continua).
+   Versão obrigatória: o arquivo vem como "425 obrigatoria" — a faixa fica vermelha e sem "Depois".
+   "Depois" esconde por 10 min ou até a próxima troca de tela.
+   Nada se perde: pedido pela metade é guardado como Incompleto e reaberto na mesma etapa;
+   orçamento, atendimento, cadastro e OS com alteração não salva AVISAM e não recarregam. */
+var VERSAO_ABERTA=(function(){var m=/[?&]v=(\d+)/.exec(location.search);return m?+m[1]:0;})();
+var versaoNova=0,versaoObrig=false,versaoDepoisAte=0,versaoConfEm=0,versaoMsg="",appDepoisAte=0;
+async function conferirVersaoSistema(forcar){
+  var atual=window.__VERSAO_TESTE_MF||VERSAO_ABERTA;
+  if(!atual)return;
+  if(document.hidden)return;
+  var agora=Date.now();
+  if(!forcar&&versaoConfEm&&agora-versaoConfEm<60000)return;
+  versaoConfEm=agora;
+  try{
+    var r=await fetch((window.__VERSAO_URL_MF||"versao.txt")+"?nc="+agora,{cache:"no-store"});
+    if(!r.ok)return;
+    var t=String(await r.text()||""),n=t.match(/[0-9]+/);
+    if(!n)return;
+    var num=+n[0];
+    if(num>atual){versaoNova=num;versaoObrig=/obrigat/i.test(t);}
+    else{versaoNova=0;versaoObrig=false;}
+  }catch(e){return;}                          /* sem internet não se avisa nada */
+  renderFaixaVersao();
+}
+/* o que está em andamento e não pode se perder ao recarregar */
+var FORMS_ANDAMENTO=[["orcForm","orçamento"],["atendForm","atendimento"],["atendFecha","atendimento"],
+  ["cliForm","cadastro de cliente"],["prodForm","cadastro de produto"],["usForm","cadastro de colaborador"],["osForm","OS"]];
+var formSujo={};
+function ligarFormsAndamento(){
+  if(window.__formsLigados)return;window.__formsLigados=true;
+  function marca(ev){
+    var t=ev.target;if(!t||!t.closest)return;
+    FORMS_ANDAMENTO.forEach(function(f){if(t.closest("#"+f[0]))formSujo[f[0]]=true;});
+  }
+  document.addEventListener("input",marca,true);
+  document.addEventListener("change",marca,true);
+  /* abriu ou fechou o formulário (salvou ou cancelou): começa limpo */
+  try{
+    var ob=new MutationObserver(function(ms){ms.forEach(function(m){formSujo[m.target.id]=false;});});
+    FORMS_ANDAMENTO.forEach(function(f){var el=$(f[0]);if(el)ob.observe(el,{attributes:true,attributeFilter:["hidden"]});});
+  }catch(e){}
+}
+function trabalhoEmAndamento(){
+  /* o pedido: tem item e não foi finalizado (a venda guarda os itens até finalizar ou limpar) */
+  try{
+    if((itens||[]).length){
+      if(pedEditando)return {tipo:"alteracao",rotulo:"a alteração do pedido "+(pedEditando.numero||"")};
+      return {tipo:"pedido",rotulo:"um pedido"};
+    }
+  }catch(e){}
+  for(var i=0;i<FORMS_ANDAMENTO.length;i++){
+    var f=FORMS_ANDAMENTO[i],el=$(f[0]);
+    if(el&&!el.hidden&&formSujo[f[0]])return {tipo:f[0],rotulo:(f[1]==="OS"?"uma OS":"um "+f[1])};
+  }
+  return null;
+}
+/* guarda o pedido pela metade como Incompleto, conferindo a gravação (regra da v327) */
+async function guardarPedidoParaAtualizar(){
+  if(vendaSemOrigem())return {erro:"Esta venda ainda não tem origem. Finalize ou limpe o pedido antes de atualizar."};
+  var c=clienteDaVenda();
+  if(!c)return {erro:"Escolha o cliente do pedido (ou finalize o pedido) antes de atualizar."};
+  var r=montarRascunho(),novo=!rascunhoAberto;
+  if(novo)rascunhos.push(r);
+  try{await gravaConf("rascunhos",r);}
+  catch(e){if(novo)rascunhos.pop();return {erro:"O banco não aceitou guardar o pedido ("+motivoBanco(e)+"). Ele continua na tela."};}
+  rascunhoAberto=r;
+  return {r:r};
+}
+async function atualizarSistemaAgora(){
+  var nova=versaoNova||(window.__VERSAO_TESTE_MF||VERSAO_ABERTA);
+  var w=trabalhoEmAndamento();
+  if(w&&w.tipo!=="pedido"){
+    versaoMsg="Você tem "+w.rotulo+" em andamento. Salve antes de atualizar.";
+    renderFaixaVersao();toast(versaoMsg);return false;
+  }
+  if(w&&w.tipo==="pedido"){
+    var g=await guardarPedidoParaAtualizar();
+    if(g.erro){versaoMsg=g.erro;renderFaixaVersao();toast(g.erro);return false;}
+    try{sessionStorage.setItem("mf_reabrir_rascunho",g.r.id);}catch(e){}
+  }
+  if(window.__RECARREGAR_TESTE_MF){window.__RECARREGAR_TESTE_MF(nova);return true;}
+  location.replace("sistema-minas.html?v="+nova+location.hash);
+  return true;
+}
+/* depois de recarregar: o pedido guardado volta, na mesma etapa */
+function reabrirPedidoGuardado(){
+  var id="";try{id=sessionStorage.getItem("mf_reabrir_rascunho")||"";}catch(e){}
+  if(!id)return false;
+  try{sessionStorage.removeItem("mf_reabrir_rascunho");}catch(e){}
+  var r=(rascunhos||[]).filter(function(x){return x.id===id;})[0];
+  if(!r){toast("O pedido que estava pela metade foi guardado em Pedidos, como Incompleto.");return false;}
+  retomarRascunho(r);
+  toast("Sistema atualizado. O pedido de "+(r.cliente||"cliente")+" voltou de onde você parou.");
+  return true;
+}
+function renderFaixaVersao(){
+  var d=$("avisoVersao");if(!d)return;
+  /* o pedido de salvar some quando já não há nada em andamento */
+  try{if(versaoMsg&&!trabalhoEmAndamento())versaoMsg="";}catch(e){}
+  var ag=Date.now(),lin=[];
+  var obr=!!(versaoNova&&versaoObrig);
+  if(versaoNova&&(obr||ag>=versaoDepoisAte)){
+    lin.push('<div class="av-lin"><div><b>'+(obr?"Atualização obrigatória do sistema.":"Nova versão do sistema disponível.")+"</b> "+
+      (obr?"Atualize agora para continuar.":"Atualize para continuar com tudo certo.")+"</div>"+
+      '<div style="display:flex;gap:8px;flex-shrink:0"><button type="button" id="avVer_ok">Atualizar agora</button>'+
+      (obr?"":'<button type="button" id="avVer_dep" style="background:none;border:1px solid #D9A900;color:#3A2A00">Depois</button>')+
+      "</div></div>"+(versaoMsg?'<div class="av-msg">'+esc(versaoMsg)+"</div>":""));
+  }
+  var app=(typeof appVersaoNova!=="undefined")?appVersaoNova:null;
+  var appObr=!!(app&&app.obrigatoria);
+  if(app&&(appObr||ag>=appDepoisAte)){
+    lin.push('<div class="av-lin"><div><b>'+(appObr?"Atualização obrigatória do aplicativo: ":"Versão nova do aplicativo: ")+esc(app.versionName||"")+"</b>"+
+      '<div class="t-sub">Este celular está na '+esc(nomeVersaoApp()||"anterior")+". Instala por cima — o login e o termo continuam valendo.</div></div>"+
+      '<div style="display:flex;gap:8px;flex-shrink:0"><button type="button" id="avApp_ok">Atualizar o aplicativo</button>'+
+      (appObr?"":'<button type="button" id="avApp_dep" style="background:none;border:1px solid #D9A900;color:#3A2A00">Depois</button>')+
+      "</div></div>");
+  }
+  if(!lin.length){d.hidden=true;d.innerHTML="";return;}
+  d.className="aviso-versao"+(obr||appObr?" obrig":"");
+  d.innerHTML=lin.join("");d.hidden=false;
+  var a=$("avisoApp");if(a)a.hidden=true;
+  if($("avVer_ok"))$("avVer_ok").onclick=function(){atualizarSistemaAgora();};
+  if($("avVer_dep"))$("avVer_dep").onclick=function(){versaoDepoisAte=Date.now()+600000;versaoMsg="";renderFaixaVersao();};
+  if($("avApp_ok"))$("avApp_ok").onclick=function(){
+    try{if(window.MFApp&&window.MFApp.procurarAtualizacao)window.MFApp.procurarAtualizacao();}catch(e){}
+    toast("Pedi a atualização ao aplicativo. Confirme na tela que o Android vai mostrar.");};
+  if($("avApp_dep"))$("avApp_dep").onclick=function(){appDepoisAte=Date.now()+600000;renderFaixaVersao();};
+}
+/* trocou de tela: o "Depois" acaba e a faixa volta */
+function faixaVersaoNaTroca(){
+  if(versaoDepoisAte||appDepoisAte){versaoDepoisAte=0;appDepoisAte=0;}
+  if(versaoNova||(typeof appVersaoNova!=="undefined"&&appVersaoNova))renderFaixaVersao();
+}
+function ligarVigiaVersao(){
+  if(window.__vigiaVersao)return;window.__vigiaVersao=true;
+  ligarFormsAndamento();
+  window.__relogioVersao=setInterval(function(){
+    if(document.hidden)return;
+    conferirVersaoSistema(true);
+    /* o "Depois" de 10 minutos venceu: a faixa volta */
+    if((versaoNova&&versaoDepoisAte&&Date.now()>=versaoDepoisAte)||(appDepoisAte&&Date.now()>=appDepoisAte))renderFaixaVersao();
+  },300000);
+  function volta(){if(!document.hidden){conferirVersaoSistema(false);try{conferirVersaoApp(false);}catch(e){}}}
+  document.addEventListener("visibilitychange",volta);
+  window.addEventListener("focus",volta);
+  /* a cada minuto confere só se o "Depois" venceu (nada vai à rede) */
+  setInterval(function(){if((versaoNova&&versaoDepoisAte&&Date.now()>=versaoDepoisAte)||(appDepoisAte&&Date.now()>=appDepoisAte)){
+    versaoDepoisAte=versaoDepoisAte&&Date.now()>=versaoDepoisAte?0:versaoDepoisAte;
+    appDepoisAte=appDepoisAte&&Date.now()>=appDepoisAte?0:appDepoisAte;renderFaixaVersao();}},60000);
+}
 function arrumacaoDeFundo(){
+  /* aviso de versão nova (27/10): liga o vigia e devolve o pedido guardado antes de atualizar */
+  setTimeout(function(){try{ligarVigiaVersao();reabrirPedidoGuardado();}catch(e){console.warn("versão",e);}},400);
   /* as outras 44 telas são desenhadas aqui, com o sistema JÁ ABERTO. Chamada depois que a
      tela de preparo fecha (14/10): o navegador é uma linha só, e desenhá-las enquanto a tela
      ainda esperava travava a aba por quase 5 segundos — a tela não conseguia nem fechar. */
