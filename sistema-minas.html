@@ -877,6 +877,8 @@
   /* sem retorno do WhatsApp há 3 dias úteis ou mais (27/10) */
   .p-laranja{color:var(--laranja);background:var(--laranja-bg);font-weight:600}
   .mz-grupo{margin-top:18px}
+  .zv-op{border-top:1px solid var(--line);padding:12px 0}
+  .mz-n{display:block;margin-top:10px;font-size:13px;font-weight:600}
   .mz-item{border-top:1px solid var(--line);padding:14px 0}
   .mz-cab{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
   .mz-item textarea{width:100%;margin-top:6px}
@@ -5853,7 +5855,7 @@ img{max-width:100%}
       <div class="page-head"><h1>Mensagens do WhatsApp</h1><p>Os textos que o sistema já deixa escritos quando alguém abre o WhatsApp para o cliente. Valem para as duas empresas. Quem envia ainda pode mudar o texto na hora, antes de mandar.</p></div>
       <div class="card">
         <div id="mz_nota"></div>
-        <p class="help">As palavras entre chaves, como <b>{cliente}</b>, o sistema troca sozinho na hora do envio. Toque numa delas, embaixo de cada texto, para pôr no lugar do cursor. Campo que não tiver valor some da frase.</p>
+        <p class="help">As palavras entre chaves, como <b>{cliente}</b>, o sistema troca sozinho na hora do envio. Toque numa delas, embaixo de cada texto, para pôr no lugar do cursor. Campo que não tiver valor some da frase. Cada mensagem pode ter uma <b>nº 02</b>: preenchida, quem envia escolhe entre as duas na hora.</p>
         <div id="mz_lista"></div>
         <div id="mz_alerta"></div>
         <div class="actions">
@@ -7038,12 +7040,24 @@ img{max-width:100%}
     </div>
   </div>
 </div>
+<div class="modal" id="zapVarModal" hidden>
+  <div class="box">
+    <h3>Qual mensagem enviar?</h3>
+    <div class="sub" id="zv_sub"></div>
+    <div class="zv-op"><b>Mensagem nº 01</b><div class="mz-bolha" id="zv_t1"></div>
+      <div class="actions"><button class="btn" type="button" id="zv_1">Enviar a nº 01</button></div></div>
+    <div class="zv-op"><b>Mensagem nº 02</b><div class="mz-bolha" id="zv_t2"></div>
+      <div class="actions"><button class="btn" type="button" id="zv_2">Enviar a nº 02</button></div></div>
+    <div class="actions"><button class="btn mut" type="button" id="zv_fechar">Cancelar</button></div>
+  </div>
+</div>
 <div class="modal" id="zapModal" hidden>
   <div class="box">
     <h3 id="zp_titulo">WhatsApp</h3>
     <div class="sub" id="zp_sub"></div>
     <div class="fld" style="margin-top:14px"><label>Mensagem pronta</label>
-      <div class="chips" id="zp_modelos"></div></div>
+      <div class="chips" id="zp_modelos"></div>
+      <div class="chips" id="zp_vars" hidden style="margin-top:8px"></div></div>
     <div class="fld" style="margin-top:12px"><label for="zp_msg">Mensagem (dá para editar antes de abrir)</label>
       <textarea id="zp_msg" rows="5"></textarea></div>
     <!-- a caixinha "Anotar no histórico" saiu (27/10): abrir o WhatsApp registra o atendimento sozinho -->
@@ -9285,7 +9299,7 @@ async function carregar(){
     var gsr=await jaPedido("cfg:serie",function(){return db.doc("config/serie").get();});
     if(gsr.exists&&gsr.data()&&Array.isArray(gsr.data().grupos))GRUPOS_SERIE=gsr.data().grupos;
     var gmz=await jaPedido("cfg:mensagens_zap",function(){return db.doc("config/mensagens_zap").get();});
-    if(gmz.exists&&gmz.data()&&gmz.data().textos)MSG_ZAP={textos:gmz.data().textos||{},quem:gmz.data().quem||{}};
+    if(gmz.exists&&gmz.data()&&gmz.data().textos)MSG_ZAP={textos:gmz.data().textos||{},textos2:gmz.data().textos2||{},quem:gmz.data().quem||{}};
     var gpc=await jaPedido("cfg:preco",function(){return db.doc("config/preco").get();});
     if(gpc.exists&&gpc.data()&&+gpc.data().pctMinimo>0)CFG_PRECO.pctMinimo=+gpc.data().pctMinimo;
     var gbf=await jaPedido("cfg:beneficios",function(){return db.doc("config/beneficios").get();});
@@ -38537,6 +38551,7 @@ function cfgFichaOSWhatsApp(o,p){
   return {chave:"os:"+o.id,gerar:function(){return gerarPdfFichaOS(o,p);},
     tel:o.tel||c.tel,cliente:o.cliente,titulo:"OS "+o.numero,oQue:"da OS "+o.numero,
     msg:textoZap("fichaos",varsBaseZap({nome:o.cliente||""},{numero:o.numero})),
+    msg2:textoZap("fichaos",varsBaseZap({nome:o.cliente||""},{numero:o.numero}),2),
     registrar:async function(como){
       o.historico=o.historico||[];
       o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Ficha da OS enviada ao cliente pelo WhatsApp ("+como+")"});
@@ -39693,7 +39708,7 @@ function clientePorTelZap(tel){
    Fica em config/mensagens_zap, que é UMA lista para as duas empresas (CONFIG_GLOBAL do adapter):
    o nome da empresa entra pelo campo {loja}/{empresa}, então o mesmo texto serve às duas.
    Campo sem valor some da frase (limparTextoZap), para não sair "Olá, !" nem "()" vazio. */
-var MSG_ZAP={textos:{},quem:{}};
+var MSG_ZAP={textos:{},textos2:{},quem:{}};
 var CAMPOS_ZAP={
   saudacao:"a Saudação (o primeiro texto desta tela)",cliente:"primeiro nome do cliente",
   vendedor:"primeiro nome de quem está enviando",loja:"nome da loja aberta",empresa:"razão social da empresa",
@@ -39738,7 +39753,9 @@ var MODELOS_ZAP=[
     padrao:"Olá, {cliente}! Segue o comprovante de entrega da ordem de serviço Nº {numero} da {empresa}. Guarde este comprovante: a retirada do equipamento é feita com ele. Qualquer dúvida, estamos à disposição."}
 ];
 function modeloZapDef(k){return MODELOS_ZAP.filter(function(m){return m.k===k;})[0]||null;}
-function textoBaseZap(k){
+/* n=2: a Mensagem nº 02 (opcional, 27/10) — sem ela, devolve vazio e a escolha nem aparece */
+function textoBaseZap(k,n){
+  if(n===2){var t2=MSG_ZAP.textos2&&MSG_ZAP.textos2[k];return (t2&&String(t2).trim())?String(t2):"";}
   var d=modeloZapDef(k),t=MSG_ZAP.textos&&MSG_ZAP.textos[k];
   return (t&&String(t).trim())?String(t):(d?d.padrao:"");
 }
@@ -39765,7 +39782,7 @@ function varsBaseZap(c,extra){
   if(v.saudacao==null)v.saudacao=preencherZap(textoBaseZap("oi").replace(/\{saudacao\}/g,""),v);
   return v;
 }
-function textoZap(k,vars){return preencherZap(textoBaseZap(k),vars||{});}
+function textoZap(k,vars,n){var b=textoBaseZap(k,n);return b?preencherZap(b,vars||{}):"";}
 /* campos escritos errado (ex.: {clinte}) — não deixa salvar */
 function camposDesconhecidosZap(t){
   var r=[],re=/\{([^{}]*)\}/g,m;
@@ -39803,9 +39820,18 @@ function atualizarPreviaZap(k){
       (falta.length?'<div class="note crit">Esta mensagem precisa ter '+esc(falta.map(function(c){return "{"+c+"}";}).join(", "))+
         " — sem ele o cliente não recebe o endereço.</div>":"");
   }
+  var t2=document.querySelector('#mz_lista textarea[data-mzk2="'+k+'"]'),txt2=t2?String(t2.value):"",tem2=!!txt2.trim();
+  var bx2=document.querySelector('[data-mzprev2box="'+k+'"]');if(bx2)bx2.hidden=!tem2;
+  var pv2=document.querySelector('[data-mzprev2="'+k+'"]');
+  if(pv2)pv2.textContent=tem2?preencherZap(txt2,exemploVarsZap(textoTelaZap("oi"))):"";
+  if(er&&tem2){
+    var desc2=camposDesconhecidosZap(txt2),falta2=(d.obrig||[]).filter(function(c){return txt2.indexOf("{"+c+"}")<0;});
+    er.innerHTML+=(desc2.length?'<div class="note crit">Na nº 02, o sistema não conhece '+esc(desc2.join(", "))+".</div>":"")+
+      (falta2.length?'<div class="note crit">A nº 02 também precisa ter '+esc(falta2.map(function(c){return "{"+c+"}";}).join(", "))+".</div>":"");
+  }
   var pl=document.querySelector('[data-mzpill="'+k+'"]');
   if(pl){var igual=txt===d.padrao;
-    pl.className="pill "+(igual?"p-mut":"p-acc");pl.textContent=igual?"texto padrão":"alterado";}
+    pl.className="pill "+(igual&&!tem2?"p-mut":"p-acc");pl.textContent=(igual?"texto padrão":"alterado")+(tem2?" · 2 mensagens":"");}
   /* a saudação entra nas outras: muda ela, a prévia de todas muda junto */
   if(k==="oi")MODELOS_ZAP.forEach(function(m){if(m.k!=="oi")atualizarPreviaZap(m.k);});
 }
@@ -39823,13 +39849,19 @@ function renderMensagensZap(){
         '<div class="mz-cab"><b>'+esc(m.n)+'</b> <span class="pill" data-mzpill="'+m.k+'"></span>'+
           (q&&salvo?'<span class="help"> · alterado por '+esc(q.por||"")+" em "+esc(dataBR(q.em||""))+"</span>":"")+"</div>"+
         '<p class="help">'+esc(m.onde)+"</p>"+
+        '<span class="mz-n">Mensagem nº 01</span>'+
         '<textarea data-mzk="'+m.k+'" rows="'+(m.k==="linkass"?6:3)+'"'+(adm?"":" readonly")+">"+esc(val)+"</textarea>"+
+        '<span class="mz-n">Mensagem nº 02 <span class="help">(opcional — preenchida, quem envia escolhe entre as duas)</span></span>'+
+        '<textarea data-mzk2="'+m.k+'" rows="'+(m.k==="linkass"?6:3)+'"'+(adm?"":" readonly")+' placeholder="Em branco: só a nº 01 é enviada">'+
+          esc((MSG_ZAP.textos2&&MSG_ZAP.textos2[m.k])||"")+"</textarea>"+
         (adm?'<div class="mz-campos">'+m.campos.map(function(c){
           return '<button type="button" class="btn ghost sm" data-mzcampo="'+c+'" data-mzalvo="'+m.k+'" title="'+esc(CAMPOS_ZAP[c])+'">{'+c+"}</button>";
-        }).join("")+'<button type="button" class="btn mut sm" data-mzpadrao="'+m.k+'">Voltar ao texto padrão</button></div>':"")+
+        }).join("")+'<button type="button" class="btn mut sm" data-mzpadrao="'+m.k+'">Nº 01 ao texto padrão</button>'+
+          '<button type="button" class="btn mut sm" data-mzlimpa2="'+m.k+'">Apagar a nº 02</button></div>':"")+
         '<div class="help mz-leg">'+m.campos.map(function(c){return "{"+c+"} = "+esc(CAMPOS_ZAP[c]);}).join(" · ")+"</div>"+
         '<div data-mzerro="'+m.k+'"></div>'+
-        '<div class="mz-prev"><span class="help">Como o cliente recebe:</span><div class="mz-bolha" data-mzprev="'+m.k+'"></div></div>'+
+        '<div class="mz-prev"><span class="help">Como o cliente recebe a nº 01:</span><div class="mz-bolha" data-mzprev="'+m.k+'"></div></div>'+
+        '<div class="mz-prev" data-mzprev2box="'+m.k+'"><span class="help">Como o cliente recebe a nº 02:</span><div class="mz-bolha" data-mzprev2="'+m.k+'"></div></div>'+
       "</div>";
     }).join("");
   }).join("");
@@ -39837,15 +39869,23 @@ function renderMensagensZap(){
 }
 function ligarMensagensZap(){
   var lista=$("mz_lista");if(!lista||lista.__lig)return;lista.__lig=true;
-  lista.addEventListener("input",function(ev){var t=ev.target;if(t&&t.dataset&&t.dataset.mzk)atualizarPreviaZap(t.dataset.mzk);});
+  lista.addEventListener("input",function(ev){var t=ev.target;if(!t||!t.dataset)return;
+    if(t.dataset.mzk)atualizarPreviaZap(t.dataset.mzk);if(t.dataset.mzk2)atualizarPreviaZap(t.dataset.mzk2);});
+  /* o campo tocado entra na caixa onde o cursor estava por último: nº 01 ou nº 02 */
+  lista.__ult={};
+  lista.addEventListener("focusin",function(ev){var t=ev.target;if(!t||!t.dataset)return;
+    if(t.dataset.mzk)lista.__ult[t.dataset.mzk]=1;if(t.dataset.mzk2)lista.__ult[t.dataset.mzk2]=2;});
   lista.addEventListener("click",function(ev){
-    var b=ev.target&&ev.target.closest&&ev.target.closest("[data-mzcampo],[data-mzpadrao]");if(!b)return;
+    var b=ev.target&&ev.target.closest&&ev.target.closest("[data-mzcampo],[data-mzpadrao],[data-mzlimpa2]");if(!b)return;
+    if(b.dataset.mzlimpa2){var t2l=lista.querySelector('textarea[data-mzk2="'+b.dataset.mzlimpa2+'"]');
+      if(t2l){t2l.value="";atualizarPreviaZap(b.dataset.mzlimpa2);}return;}
     if(b.dataset.mzpadrao){
       var tp=lista.querySelector('textarea[data-mzk="'+b.dataset.mzpadrao+'"]');
       if(tp){tp.value=modeloZapDef(b.dataset.mzpadrao).padrao;atualizarPreviaZap(b.dataset.mzpadrao);}
       return;
     }
-    var t=lista.querySelector('textarea[data-mzk="'+b.dataset.mzalvo+'"]');if(!t||t.readOnly)return;
+    var t=lista.querySelector(lista.__ult[b.dataset.mzalvo]===2?'textarea[data-mzk2="'+b.dataset.mzalvo+'"]':
+      'textarea[data-mzk="'+b.dataset.mzalvo+'"]');if(!t||t.readOnly)return;
     var ins="{"+b.dataset.mzcampo+"}",i=t.selectionStart!=null?t.selectionStart:t.value.length,f=t.selectionEnd!=null?t.selectionEnd:i;
     t.value=t.value.slice(0,i)+ins+t.value.slice(f);
     t.focus();try{t.setSelectionRange(i+ins.length,i+ins.length);}catch(e){}
@@ -39856,20 +39896,28 @@ function ligarMensagensZap(){
 async function salvarMensagensZap(){
   var al=$("mz_alerta");
   if(!ehAdministrador()){al.innerHTML='<div class="note crit">Só o Administrador altera estes textos.</div>';return false;}
-  var tela=lerTextosTelaZap(),erros=[];
+  var tela=lerTextosTelaZap(),tela2={},erros=[];
+  Array.prototype.forEach.call(document.querySelectorAll("#mz_lista textarea[data-mzk2]"),function(t){tela2[t.dataset.mzk2]=t.value;});
   MODELOS_ZAP.forEach(function(m){
     var t=String(tela[m.k]||"").trim()?tela[m.k]:m.padrao;
     var desc=camposDesconhecidosZap(t);
     if(desc.length)erros.push(m.n+": "+desc.join(", ")+" não existe");
     (m.obrig||[]).forEach(function(c){if(t.indexOf("{"+c+"}")<0)erros.push(m.n+": falta {"+c+"}");});
+    var u=String(tela2[m.k]||"");
+    if(u.trim()){
+      var d2=camposDesconhecidosZap(u);if(d2.length)erros.push(m.n+" (nº 02): "+d2.join(", ")+" não existe");
+      (m.obrig||[]).forEach(function(c){if(u.indexOf("{"+c+"}")<0)erros.push(m.n+" (nº 02): falta {"+c+"}");});
+    }
   });
   if(erros.length){al.innerHTML='<div class="note crit"><b>Não foi salvo.</b> '+esc(erros.join(" · "))+"</div>";return false;}
-  var antes=JSON.parse(JSON.stringify(MSG_ZAP)),novo={textos:{},quem:{}};
+  var antes=JSON.parse(JSON.stringify(MSG_ZAP)),novo={textos:{},textos2:{},quem:{}};
   MODELOS_ZAP.forEach(function(m){
-    var t=String(tela[m.k]||"").replace(/\r/g,"");
-    if(!t.trim()||t===m.padrao)return;   /* igual ao padrão: não guarda, segue o padrão */
-    novo.textos[m.k]=t;
-    var mudou=!(antes.textos&&antes.textos[m.k]===t);
+    var t=String(tela[m.k]||"").replace(/\r/g,""),u=String(tela2[m.k]||"").replace(/\r/g,"");
+    var tem1=!!t.trim()&&t!==m.padrao,tem2=!!u.trim();
+    if(!tem1&&!tem2)return;   /* igual ao padrão e sem nº 02: não guarda, segue o padrão */
+    if(tem1)novo.textos[m.k]=t;
+    if(tem2)novo.textos2[m.k]=u;
+    var mudou=!(antes.textos&&antes.textos[m.k]===novo.textos[m.k])||!((antes.textos2||{})[m.k]===novo.textos2[m.k]);
     novo.quem[m.k]=mudou?{por:usuarioAtual,em:hojeISO()}:((antes.quem&&antes.quem[m.k])||{por:usuarioAtual,em:hojeISO()});
   });
   MSG_ZAP=novo;
@@ -39881,9 +39929,9 @@ async function salvarMensagensZap(){
     al.innerHTML='<div class="note crit"><b>'+RECUSA_BANCO+"</b>"+'<div class="help">'+esc((e&&e.message)||String(e))+"</div></div>";
     return false;
   }
-  var n=Object.keys(MSG_ZAP.textos).length;
+  var n=Object.keys(MSG_ZAP.textos).length,n2=Object.keys(MSG_ZAP.textos2).length;
   al.innerHTML='<div class="note ok"><b>Salvo.</b> '+(n?n+" mensagem(ns) com texto próprio; as outras seguem o texto padrão.":
-    "Todas as mensagens seguem o texto padrão.")+" Vale nas duas empresas a partir do próximo envio.</div>";
+    "Todas as mensagens nº 01 seguem o texto padrão.")+(n2?" "+n2+" com Mensagem nº 02, para quem envia escolher.":"")+" Vale nas duas empresas a partir do próximo envio.</div>";
   toast("Mensagens do WhatsApp salvas.");
   renderMensagensZap();
   return true;
@@ -39894,24 +39942,29 @@ window.__varsZapMF=function(c,e){return varsBaseZap(c,e);};
 window.__salvarMsgZapMF=salvarMensagensZap;
 window.__renderMsgZapMF=renderMensagensZap;
 window.__abrirWhatsAppMF=function(c){return abrirWhatsApp(c);};
+window.__enviarPdfZapMF=function(c,b){return enviarPdfWhatsApp(c,b);};
+window.__cfgVendaZapMF=function(p){return cfgVendaWhatsApp(p);};
 function modelosZap(ctx){
   /* empresa: cumprimenta o responsável, nunca "Olá, Clube!". Os textos vêm de
      Configurações › Mensagens do WhatsApp (27/10); sem texto próprio, vale o padrão de sempre. */
   var c=ctx.cliente||{},base=(c.nome||c.respNome)?c:{nome:ctx.nome||""};
   function vz(extra){return varsBaseZap(base,extra);}
-  var oi=textoZap("oi",vz())+" ";
-  var m=[{k:"livre",n:"Mensagem livre",t:""},{k:"oi",n:"Saudação",t:oi}];
+  var oi=textoZap("oi",vz())+" ",oi2=textoZap("oi",vz(),2);
+  var m=[{k:"livre",n:"Mensagem livre",t:""},{k:"oi",n:"Saudação",t:oi,t2:oi2?oi2+" ":""}];
   if(ctx.titulo){var t=ctx.titulo;
-    m.push({k:"cobranca",n:"Lembrete de pagamento",t:textoZap("cobranca",vz({parcela:t.totalParcelas>1?t.parcela+"/"+t.totalParcelas:"",
-      valor:BRL(t.valor),documento:t.docRef||"",vencimento:dataCurta(t.vencimento)}))});}
+    var vc=vz({parcela:t.totalParcelas>1?t.parcela+"/"+t.totalParcelas:"",
+      valor:BRL(t.valor),documento:t.docRef||"",vencimento:dataCurta(t.vencimento)});
+    m.push({k:"cobranca",n:"Lembrete de pagamento",t:textoZap("cobranca",vc),t2:textoZap("cobranca",vc,2)});}
   if(ctx.equip){var e=ctx.equip;
-    m.push({k:"manut",n:"Manutenção periódica",t:textoZap("manut",vz({produto:e.equipamento||e.produto||"purificador"}))});}
+    var vm=vz({produto:e.equipamento||e.produto||"purificador"});
+    m.push({k:"manut",n:"Manutenção periódica",t:textoZap("manut",vm),t2:textoZap("manut",vm,2)});}
   if(ctx.ativ){var a=ctx.ativ;
-    m.push({k:"visita",n:"Confirmar horário",t:textoZap("visita",vz({atividade:String(a.tipo||"atendimento").toLowerCase(),
-      data:a.data?dataCurta(a.data):"",hora:a.inicio||""}))});}
-  if(c.id&&!ehLead(c))m.push({k:"posvenda",n:"Pós-venda",t:textoZap("posvenda",vz())});
-  else m.push({k:"retorno",n:"Retorno do atendimento",t:textoZap("retorno",vz())});
-  if(ctx.mensagem)m.unshift(ctx.aniv?{k:"parabens",n:"Parabéns",t:ctx.mensagem}:{k:"pronta",n:"Mensagem sugerida",t:ctx.mensagem});
+    var vv=vz({atividade:String(a.tipo||"atendimento").toLowerCase(),data:a.data?dataCurta(a.data):"",hora:a.inicio||""});
+    m.push({k:"visita",n:"Confirmar horário",t:textoZap("visita",vv),t2:textoZap("visita",vv,2)});}
+  if(c.id&&!ehLead(c))m.push({k:"posvenda",n:"Pós-venda",t:textoZap("posvenda",vz()),t2:textoZap("posvenda",vz(),2)});
+  else m.push({k:"retorno",n:"Retorno do atendimento",t:textoZap("retorno",vz()),t2:textoZap("retorno",vz(),2)});
+  if(ctx.mensagem)m.unshift(ctx.aniv?{k:"parabens",n:"Parabéns",t:ctx.mensagem,t2:ctx.mensagem2||""}:
+    {k:"pronta",n:"Mensagem sugerida",t:ctx.mensagem,t2:ctx.mensagem2||""});
   return m;
 }
 /* ctx: {tel, cliente (obj ou id), nome, mensagem, titulo, equip, ativ, origem} */
@@ -40008,6 +40061,7 @@ function abrirWhatsApp(ctx){
     return '<button type="button" data-zpm="'+i+'" aria-pressed="'+(i===(ctx.mensagem?0:1)?"true":"false")+'">'+esc(x.n)+"</button>";}).join("");
   $("zp_msg").value=mods[ctx.mensagem?0:1].t;
   zapCtx.modeloIdx=ctx.mensagem?0:1;
+  mostrarVarsZap(mods[ctx.mensagem?0:1]);
   /* o atendimento é registrado SOZINHO ao abrir o WhatsApp (27/10) — a caixinha de anotar saiu */
   var rn=$("zp_regNota");
   if(rn){
@@ -40158,7 +40212,31 @@ function etiquetaContatoZap(cid,idx){
   return {k:"contatado",cls:"p-mut",a:u.a,dias:dias,uteis:uteis,
     n:"Contatado há "+dias+" dia"+(dias===1?"":"s")+" · sem retorno"+(quem?" · "+quem:"")};
 }
-function msgParabens(c){return textoZap("parabens",varsBaseZap({nome:(c&&c.nome)||""}));}
+function msgParabens(c,n){return textoZap("parabens",varsBaseZap({nome:(c&&c.nome)||""}),n);}
+/* duas mensagens para o mesmo modelo (27/10): a escolha antes do envio com PDF */
+function escolherMensagemZap(t1,t2,titulo,feito){
+  $("zv_sub").textContent=(titulo||"")+" · escolha o texto que vai para o cliente";
+  $("zv_t1").textContent=t1||"";$("zv_t2").textContent=t2||"";
+  function vai(n){$("zapVarModal").hidden=true;feito(n);}
+  $("zv_1").onclick=function(){vai(1);};$("zv_2").onclick=function(){vai(2);};
+  $("zv_fechar").onclick=function(){$("zapVarModal").hidden=true;};
+  $("zapVarModal").hidden=false;
+}
+/* na janela do WhatsApp: modelo com nº 02 mostra a escolha logo abaixo dos modelos */
+function mostrarVarsZap(m){
+  var box=$("zp_vars");if(!box)return;
+  if(zapCtx)zapCtx.varZap=1;
+  if(!m||!m.t2){box.hidden=true;box.innerHTML="";return;}
+  box.hidden=false;
+  box.innerHTML='<button type="button" data-zpv="1" aria-pressed="true">Mensagem nº 01</button>'+
+    '<button type="button" data-zpv="2" aria-pressed="false">Mensagem nº 02</button>';
+  box.onclick=function(ev){
+    var b=ev.target.closest("[data-zpv]");if(!b||!zapCtx)return;
+    var n=+b.getAttribute("data-zpv");zapCtx.varZap=n;
+    Array.prototype.forEach.call(box.querySelectorAll("button"),function(x){x.setAttribute("aria-pressed",String(x===b));});
+    $("zp_msg").value=n===2?m.t2:m.t;$("zp_msg").focus();
+  };
+}
 function ligarWhatsApp(){
   $("zp_fechar").onclick=function(){$("zapModal").hidden=true;zapCtx=null;};
   $("zp_lado").onclick=function(){confirmarWhatsApp("lado");};
@@ -40173,7 +40251,7 @@ function ligarWhatsApp(){
     var m=zapCtx.modelos[+b.getAttribute("data-zpm")];if(!m)return;
     zapCtx.modeloIdx=+b.getAttribute("data-zpm");
     Array.prototype.forEach.call($("zp_modelos").querySelectorAll("button"),function(x){x.setAttribute("aria-pressed",String(x===b));});
-    $("zp_msg").value=m.t;$("zp_msg").focus();
+    $("zp_msg").value=m.t;mostrarVarsZap(m);$("zp_msg").focus();
   };
   /* todo link antigo "wa.me" do sistema e todo botão novo passam pela mesma janela */
   document.addEventListener("click",function(ev){
@@ -40185,7 +40263,7 @@ function ligarWhatsApp(){
     var mqa=alvo.closest("#mqaModal");if(mqa)mqa.hidden=true;
     if(alvo.hasAttribute("data-zapaniv")){
       var pz=String(alvo.getAttribute("data-zapaniv")).split("|"),ca=cliPorId(pz[0]);if(!ca)return;
-      abrirWhatsApp({cliente:ca,mensagem:msgParabens(ca),aniv:{ano:+pz[1],data:pz[2]},origem:"aniversariantes"});return;}
+      abrirWhatsApp({cliente:ca,mensagem:msgParabens(ca),mensagem2:msgParabens(ca,2),aniv:{ano:+pz[1],data:pz[2]},origem:"aniversariantes"});return;}
     if(alvo.hasAttribute("data-zapcli")){abrirWhatsApp({cliente:alvo.getAttribute("data-zapcli"),origem:"ficha do cliente"});return;}
     if(alvo.hasAttribute("data-zaptit")){
       var t=titulos.filter(function(x){return x.id===alvo.getAttribute("data-zaptit");})[0];if(!t)return;
@@ -40204,6 +40282,12 @@ function ligarWhatsApp(){
 function primeiroNome(n){return String(n||"").trim().split(/\s+/)[0]||"";}
 /* cfg: chave, gerar() → File, tel, cliente, titulo, oQue ("do pedido 20802"), msg, registrar(como) */
 async function enviarPdfWhatsApp(cfg,botao){
+  /* duas mensagens cadastradas (27/10): quem envia escolhe antes, e o envio segue igual */
+  if(cfg&&cfg.msg2&&!cfg.__varEscolhida){
+    escolherMensagemZap(cfg.msg,cfg.msg2,cfg.titulo,function(n){
+      if(n===2)cfg.msg=cfg.msg2;cfg.__varEscolhida=true;cfg.varZap=n;enviarPdfWhatsApp(cfg,botao);});
+    return;
+  }
   var rotulo=botao?(botao.__rotulo||(botao.__rotulo=botao.textContent)):"";
   var quem=primeiroNome(cfg.cliente);
   /* UM TOQUE SÓ (regra dele, 19/10: "quando clicar em enviar para o cliente o pedido via
@@ -40345,6 +40429,7 @@ function cfgVendaWhatsApp(p){
   return {chave:"ped:"+p.id,gerar:function(){return gerarPdfVenda(p);},tel:c.tel,cliente:p.cliente,
     titulo:"Pedido "+p.numero,oQue:"do pedido "+p.numero,
     msg:textoZap("pedido",varsBaseZap({nome:p.cliente||""},{numero:p.numero})),
+    msg2:textoZap("pedido",varsBaseZap({nome:p.cliente||""},{numero:p.numero}),2),
     registrar:async function(como){registrarEvento(p,"Pedido de venda enviado pelo WhatsApp ("+como+")");await gravarPedido(p);}};
 }
 function prepararPdfVenda(p){var cf=cfgVendaWhatsApp(p);return prepararPdf(cf.chave,cf.gerar);}
@@ -40492,6 +40577,7 @@ function enviarOrcamentoOSWhatsApp(o,botao){
     },
     tel:o.tel||c.tel,cliente:o.cliente,titulo:"Orçamento da OS "+o.numero,oQue:"do orçamento da OS "+o.numero,
     msg:textoZap("orcos",varsBaseZap({nome:o.cliente||""},{produto:o.equipamento||"equipamento",numero:o.numero,valor:BRL(Math.max(0,tot))})),
+    msg2:textoZap("orcos",varsBaseZap({nome:o.cliente||""},{produto:o.equipamento||"equipamento",numero:o.numero,valor:BRL(Math.max(0,tot))}),2),
     registrar:async function(como){await marcarOrcamentoEnviadoOS(o,como,Math.max(0,tot));}},botao);
 }
 /* mandou o orçamento: a OS passa a esperar a resposta do cliente (09/10). Função própria para
@@ -40525,6 +40611,7 @@ function enviarOSWhatsApp(o,botao){
     },
     tel:o.tel||c.tel,cliente:o.cliente,titulo:"Comprovante da OS "+o.numero,oQue:"do comprovante da OS "+o.numero,
     msg:textoZap("comprovos",varsBaseZap({nome:o.cliente||""},{numero:o.numero})),
+    msg2:textoZap("comprovos",varsBaseZap({nome:o.cliente||""},{numero:o.numero}),2),
     registrar:async function(como){
       o.historico=o.historico||[];
       o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Comprovante de entrega enviado ao cliente pelo WhatsApp ("+como+")"});
@@ -40696,7 +40783,7 @@ async function abrirLinkAssinatura(p,jaEnviar){
   }
 }
 function textoLinkAssinatura(p){
-  return textoZap("linkass",varsBaseZap({nome:(p&&p.cliente)||""},{numero:p?p.numero:"",link:lkUrl}));
+  return textoZap("linkass",varsBaseZap({nome:(p&&p.cliente)||""},{numero:p?p.numero:"",link:lkUrl}),arguments[1]);
 }
 /* o cliente assinou? a assinatura entra no pedido e vale em todos os De Acordo */
 async function aplicarAssinaturasRecebidas(avisar){
@@ -48132,7 +48219,7 @@ function ligar(){
     if(!lkUrl)return;
     var p=lkPedido||{},c=cliPorId(p.clienteId)||{};
     abrirWhatsApp({tel:p.tel||c.tel||"",cliente:c.id?c:null,nome:p.cliente||c.nome||"",
-      mensagem:textoLinkAssinatura(p),titulo:"Enviar o link de assinatura",origem:"link de assinatura"});
+      mensagem:textoLinkAssinatura(p),mensagem2:textoLinkAssinatura(p,2),titulo:"Enviar o link de assinatura",origem:"link de assinatura"});
   };
   $("lk_abrir").onclick=function(){if(lkUrl)window.open(lkUrl,"_blank","noopener");};
   $("lk_lista").addEventListener("click",async function(ev){
