@@ -17036,7 +17036,34 @@ function ligarEndRevisao(c){
     };
   });
 }
+/* UM PEDIDO POR CONFIRMAÇÃO (27/10, achado no banco: pedidos 20845 e 20846, mesmo cliente, mesmos
+   itens e mesmo valor, gravados com 6 segundos de diferença). Entre pedir o número ao banco e
+   gravar o pedido há várias esperas; um segundo toque nesse meio iniciava OUTRA gravação. Agora
+   a segunda chamada espera a primeira terminar e é recusada com aviso. A trava solta sozinha no
+   fim (ou em 90 s, se algo travar), e os botões ficam desligados enquanto grava. */
+var salvandoPedidoEm=0;
 async function salvarPedido(){
+  if(salvandoPedidoEm&&Date.now()-salvandoPedidoEm<90000){
+    toast("O pedido já está sendo gravado — aguarde um instante.");return null;}
+  salvandoPedidoEm=Date.now();
+  var bts=[$("v_salvar"),$("rv_ok")].filter(Boolean);
+  bts.forEach(function(b){b.disabled=true;});
+  try{return await salvarPedidoAgora();}
+  finally{salvandoPedidoEm=0;bts.forEach(function(b){b.disabled=false;});}
+}
+window.__salvandoPedidoMF=function(){return !!salvandoPedidoEm;};
+/* mesmo pedido gravado há pouco (outra aba, ou o mesmo atendimento): pergunta antes de repetir */
+var QUEBRA2=String.fromCharCode(10,10);
+function pedidoIgualRecente(cliId,origemId,total){
+  var agora=Date.now();
+  return pedidos.filter(function(p){
+    if(p.clienteId!==cliId||p.status==="Cancelada"||p.cancelada)return false;
+    if(Math.abs((+p.total||0)-(+total||0))>0.009)return false;
+    if(origemId&&p.origemAtiv&&p.origemAtiv!==origemId)return false;
+    var t=instanteDoRegistro(p);return t&&agora-t<10*60000;
+  })[0]||null;
+}
+async function salvarPedidoAgora(){
   /* segunda barreira da regra de 03/10: nem forçando pela tela a venda fecha sem contato de origem */
   if(vendaSemOrigem()){
     toast("Esta venda precisa nascer de um atendimento ou de uma atividade — é onde fica registrado o contato com o cliente.");
@@ -17151,6 +17178,9 @@ async function salvarPedido(){
      a mesma data e a mesma assinatura — não nasce outro (regra dele, 22/09) */
   if(pedEditando)return await aplicarEdicaoPedido(cliSel,r,solDesc);
   var cli=cliSel;
+  var igual=pedidoIgualRecente(cliSel.id,pedOrigemAtiv&&pedOrigemAtiv.id,r.total);
+  if(igual&&!confirm("Já existe o pedido "+igual.numero+" de "+cliSel.nome+", com o mesmo valor ("+BRL(+igual.total||0)+
+    "), gravado há poucos minutos."+QUEBRA2+"Lançar OUTRO pedido mesmo assim?"))return null;
   var arquivos=ANEXOS.filter(function(a){return a.dados;}).map(function(a){return a.dados;});
   var anexados=arquivos.map(function(a){return a.nome;});
   var ped={id:uid(),loja:lojaAtual,numero:(await numeroNovo("pedido",pedidos,20801)),
