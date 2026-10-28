@@ -8158,12 +8158,12 @@ img{max-width:100%}
 
 <div class="modal" id="bloqAg" hidden>
   <div class="box">
-    <div class="relogio" id="bq_relogio">Atrasada</div>
-    <h3>Você tem atividade atrasada</h3>
-    <div class="sub">Enquanto ela não for finalizada, as próximas atividades ficam visíveis mas não podem ser abertas.</div>
+    <div class="relogio" id="bq_relogio">Em aberto</div>
+    <h3>Finalize a atividade anterior primeiro</h3>
+    <div class="sub">A próxima atividade só abre depois que esta for finalizada ou reagendada. As seguintes ficam visíveis na agenda, mas não abrem.</div>
     <div class="note crit" id="bq_det"></div>
     <div class="actions">
-      <button class="btn" type="button" id="bq_abrir">Finalizar a atividade atrasada</button>
+      <button class="btn" type="button" id="bq_abrir">Abrir a atividade pendente</button>
       <button class="btn mut" type="button" id="bq_fechar">Voltar</button>
     </div>
   </div>
@@ -29207,6 +29207,8 @@ async function salvarCliRapido(){
   render();
 }
 function abrirDetalhes(a){
+  var tvD=bloqueada(a);
+  if(tvD){avisarBloqueio(tvD);return;}
   detReg=a;
   /* regra dele (20/09): "essas repetições da mesma ação não aparecer" — limpa o que já estava
      gravado antes da correção, não só o que nasce daqui para a frente */
@@ -29437,6 +29439,8 @@ function fmAjustarVendido(){
 /* finalizar a atividade sempre pergunta o que aconteceu — sem isso o histórico morre */
 var fmReg=null,fmMotivos=[],fmRetorno="";
 function abrirFinalizar(a){
+  var tvF=bloqueada(a);
+  if(tvF){avisarBloqueio(tvF);return;}
   fmReg=a;fmMotivos=[];fmRetorno="";
   $("fm_sub").textContent=(a.cliente||"—")+" · "+dataCurta(a.data||"")+(a.inicio?" às "+a.inicio:"");
   $("fm_obs").innerHTML=a.obs
@@ -30713,11 +30717,7 @@ function renderAtividades(){
     '<div class="kpi"><div class="l">Hoje</div><div class="v">'+abertas.filter(function(a){return a.data===hoje&&(!quem||a.colaborador===quem);}).length+"</div></div>"+
     '<div class="kpi"><div class="l">Realizadas</div><div class="v">'+feitas.filter(function(a){return !quem||a.colaborador===quem;}).length+"</div></div>";
 
-  var travante=atrasadas()[0];
-  $("ativAviso").innerHTML=(travante&&!ehGestor())
-    ? '<div class="note crit"><b>Você tem atividade atrasada.</b> Só a de <b>'+esc(travante.cliente||"—")+
-      "</b> ("+esc(dataBR(travante.data))+(travante.inicio?" às "+esc(travante.inicio):"")+
-      ") pode ser aberta. As demais ficam visíveis, mas bloqueadas até esta ser finalizada.</div>" : "";
+  $("ativAviso").innerHTML=htmlAvisoFila();
 
   $("avCount").textContent=lista.length+(lista.length===1?" atividade":" atividades");
   var b=$("avBody");b.innerHTML="";
@@ -41828,6 +41828,7 @@ function renderChipsTipos(){
   });
 }
 function abrirAtend(a){
+  if(a&&a.natureza==="atividade"){var tvA=bloqueada(a);if(tvA){avisarBloqueio(tvA);return;}}
   editandoAt=a||null;clienteVinc=null;atendManutEq=null;atendAniv=null;
   $("atendLista").hidden=true;$("atendForm").hidden=false;$("atendFecha").hidden=true;
   $("atendTitulo").textContent=a?("Editar · "+(a.cliente||"")):"Novo atendimento";
@@ -45948,36 +45949,61 @@ function atrasadas(){
   return minhasAtividades().filter(function(a){var d=quando(a);return d&&d<ag;})
     .sort(function(x,y){return quando(x)-quando(y);});
 }
+/* A PRÓXIMA SÓ ABRE DEPOIS DA ANTERIOR (27/10, regra dele): "o vendedor só consegue abrir a
+   próxima agenda ou atividade se ele finalizar a última atividade… colocar para funcionar a
+   partir de amanhã". A fila é a das atividades em aberto de quem vai executar, na ordem do
+   horário, e conta SÓ o que está marcado a partir de 28/10 — o que ficou para trás antes disso
+   não tranca nada. Finalizar ou reagendar a primeira libera a seguinte. A gestão não entra na
+   trava, e o compromisso de outra pessoa já é só leitura (v400).
+   Antes daqui a trava só olhava a atividade ATRASADA e era fraca: os Detalhes abriam do mesmo
+   jeito e só dois botões recusavam. Agora a atividade bloqueada não abre. */
+var TRAVA_SEQ_DESDE="2026-10-28";
+function ativNaFila(a){
+  return !!a&&a.natureza==="atividade"&&a.status!=="finalizado"&&a.status!=="cancelada"&&
+    !a.finalizado&&a.situacao!=="reagendada"&&!!a.data&&String(a.data).slice(0,10)>=TRAVA_SEQ_DESDE;
+}
+function filaDeAtividades(quem){
+  return atendimentos.filter(function(a){
+    return a.loja===lojaAtual&&ativNaFila(a)&&(a.colaborador||"")===quem;})
+    .sort(function(x,y){return (quando(x)-quando(y))||String(x.id).localeCompare(String(y.id));});
+}
 function bloqueada(a){
-  /* a atividade atrasada mais antiga é sempre abrível; as outras ficam travadas */
   if(!a||a.natureza!=="atividade")return null;
   if(ehGestor())return null;
   if((a.colaborador||"")!==usuarioAtual)return null;
-  var at=atrasadas();
-  if(!at.length)return null;
-  if(at[0].id===a.id)return null;
-  return at[0];
+  if(!ativNaFila(a))return null;
+  var fila=filaDeAtividades(usuarioAtual);
+  if(!fila.length||fila[0].id===a.id)return null;
+  /* duas marcadas no MESMO horário não se trancam uma à outra */
+  if(!(quando(fila[0])<quando(a)))return null;
+  return fila[0];
 }
+window.__bloqueadaMF=function(a){return bloqueada(a);};
+window.__filaAtivMF=function(q){return filaDeAtividades(q||usuarioAtual);};
+window.__travaDesdeMF=function(d){if(d)TRAVA_SEQ_DESDE=d;return TRAVA_SEQ_DESDE;};
 function avisarBloqueio(trava){
   bloqPend=trava;
   var d=quando(trava),ag=new Date();
   var mins=Math.floor((ag-d)/60000);
   var txt=mins<60?(mins+" min"):(Math.floor(mins/60)+"h"+String(mins%60).padStart(2,"0"));
-  $("bq_relogio").textContent=txt+" de atraso";
+  $("bq_relogio").textContent=mins>0?txt+" de atraso":"Em aberto";
   $("bq_det").innerHTML="<b>"+esc(trava.cliente||"—")+"</b> · "+esc(dataBR(trava.data))+
     (trava.inicio?" às "+esc(trava.inicio):"")+" · "+esc(trava.tipo||"—")+
     (trava.obs?"<br>"+esc(trava.obs):"");
   $("bloqAg").hidden=false;
 }
+function htmlAvisoFila(){
+  if(ehGestor())return "";
+  var fila=filaDeAtividades(usuarioAtual);
+  if(fila.length<2)return "";
+  var p=fila[0],atr=quando(p)<new Date();
+  return '<div class="note '+(atr?"crit":"warn")+'"><b>Sua próxima atividade é a de '+esc(p.cliente||"—")+"</b> ("+
+    esc(dataBR(p.data))+(p.inicio?" às "+esc(p.inicio):"")+(atr?", atrasada":"")+"). "+
+    "As outras "+(fila.length-1)+" aparecem, mas só abrem depois que esta for finalizada ou reagendada.</div>";
+}
 function marcarTravadas(){
   /* pinta na lista e na agenda o que está travado */
-  var at=atrasadas();
-  $("agendaAviso").innerHTML = (at.length&&!ehGestor())
-    ? '<div class="note crit"><b>'+at.length+" atividade"+(at.length===1?"":"s")+" em atraso"+
-      (at.length===1?"":" — a mais antiga primeiro")+".</b> "+esc(usuarioAtual)+
-      " só consegue abrir a atividade de <b>"+esc(at[0].cliente||"—")+"</b> ("+esc(dataBR(at[0].data))+
-      (at[0].inicio?" às "+esc(at[0].inicio):"")+"). As próximas aparecem, mas ficam bloqueadas até esta ser finalizada.</div>"
-    : "";
+  $("agendaAviso").innerHTML=htmlAvisoFila();
 }
 function checarAgenda(){
   var ag=new Date();
@@ -46262,7 +46288,8 @@ function renderCalendario(){
         '<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'"><b>'+esc(e.cliente||"—")+
           (e.cidade?' <span class="pill p-mut">'+esc(e.cidade)+"</span>":"")+"</b><span>"+
           esc(e.rot)+(e.tipo?" · "+esc(e.tipo):"")+(e.quem?" · "+esc(e.quem):"")+
-          (e.meu?"":' · <i>só leitura</i>')+"</span></div>"+
+          (e.meu?"":' · <i>só leitura</i>')+
+          (e.id&&e.id.indexOf("ped:")!==0&&bloqueada(atendPorId(e.id))?' · 🔒 <b>abre depois da anterior</b>':"")+"</span></div>"+
         /* lixeira do agendamento, só para o Administrador (regra dele, 20/09) */
         (e.id&&e.id.indexOf("ped:")!==0?htmlLixeira("atividade",e.id):"")+"</div></div>";
     });
@@ -50060,7 +50087,7 @@ function ligar(){
   $("bq_fechar").onclick=function(){$("bloqAg").hidden=true;bloqPend=null;};
   $("bq_abrir").onclick=function(){
     var a=bloqPend;$("bloqAg").hidden=true;bloqPend=null;
-    if(a){ir("atend");abrirAtend(a);}};
+    if(a)abrirDetalhes(a);};
   $("usuario").onchange=function(){
     usuarioAtual=this.value;alertados={};aplicarPerfil();render();
     toast("Operando como "+usuarioAtual+" · "+perfilDe(usuarioAtual)+".");};
