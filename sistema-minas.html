@@ -12008,7 +12008,7 @@ function aplicarRespEstoques(){
     marca(v.subst,locLoja(l.id));
   });
   /* o Almoxarifado: quem já responde por ele hoje, pelo perfil */
-  if(!responsaveisDoEstoque(LOC_EMPRESA).length){
+  if(!responsaveisMarcados(LOC_EMPRESA).length){
     USUARIOS.filter(function(u){return u.ativo!==false&&ehPerfilAlmox(u.perfil);})
       .forEach(function(u){marca(u.nome,LOC_EMPRESA);});
   }
@@ -20807,7 +20807,10 @@ function renderEstColab(){
   /* a gestão e o almoxarifado (28/10) veem o estoque de todos */
   var verTodosEst=ehGestor()||ehAlmox();
   var lista=verTodosEst?colabsComEstoque():[euEst];
-  var lojasEst=(verTodosEst?LOJAS:lojasQueRespondo(euEst)).map(function(l){return locLoja(l.id);});
+  /* só a empresa aberta: desde a v394 o sistema trabalha numa empresa de cada vez, e o Estoque
+     da Loja da outra apareceria sempre vazio aqui dentro */
+  var lojasEst=(verTodosEst?LOJAS:lojasQueRespondo(euEst)).filter(function(l){return l.id===lojaAtual;})
+    .map(function(l){return locLoja(l.id);});
   sq.innerHTML="";
   lojasEst.forEach(function(lc){
     var o=document.createElement("option");o.value=lc;
@@ -44027,8 +44030,10 @@ function htmlRespsEstoque(loc){
       " está sem responsável.</b> Ninguém autoriza a venda que sai dele. "+
       "Marque alguém em <b>Configurações › Usuários</b>, na ficha do colaborador, em "+
       "<b>Estoques sob responsabilidade</b>.</div>";
-  return '<div class="note" style="margin:0 0 14px">Responsáveis por <b>'+esc(nomeLocal(loc))+
-    "</b>: "+nomes+(r.length>1?" — qualquer um deles autoriza.":"")+
+  var peloAlmox=!responsaveisMarcados(loc).length&&r.length&&!pessoa;
+  return '<div class="note" style="margin:0 0 14px">Responsáve'+(r.length>1?"is":"l")+' por <b>'+esc(nomeLocal(loc))+
+    "</b>: "+nomes+(peloAlmox?" — é o <b>Almoxarifado</b>, porque ninguém foi marcado para este estoque.":"")+
+    (r.length>1?" Qualquer um deles autoriza.":"")+
     '<span class="help" style="margin:4px 0 0">A marcação é na ficha de cada colaborador.</span></div>';
 }
 /* abre a ficha de um colaborador pelo nome (o atalho da linha de responsáveis) */
@@ -44052,13 +44057,24 @@ function estoquesDaEmpresa(loja){
 }
 /* quem está marcado como responsável por este estoque. Só gente ativa — colaborador
    desativado não autoriza nada, e por isso ele também não conta para o aviso do sino. */
-function responsaveisDoEstoque(loc){
+function responsaveisMarcados(loc){
   if(!loc)return [];
   var eq=(typeof EQUIPE!=="undefined"&&EQUIPE)||[];
   return eq.filter(function(nm){
     var u=usuarioPor(nm);
     return !!u&&u.ativo!==false&&(u.estoques||[]).indexOf(loc)>=0;
   });
+}
+/* 28/10 (regra dele: "almoxarifado é" o responsável): o almoxarifado e o Estoque da Loja que
+   ninguém marcou ficam com quem é da função Almoxarifado. Marcando alguém na ficha, vale a marcação. */
+function responsaveisPadrao(loc){
+  if(loc!==LOC_EMPRESA&&!ehLocalLoja(loc))return [];
+  var eq=(typeof EQUIPE!=="undefined"&&EQUIPE)||[];
+  return eq.filter(function(nm){var u=usuarioPor(nm);return !!u&&u.ativo!==false&&ehPerfilAlmox(u.perfil);});
+}
+function responsaveisDoEstoque(loc){
+  var m=responsaveisMarcados(loc);
+  return m.length?m:responsaveisPadrao(loc);
 }
 function textoResponsaveis(loc,max){
   var r=responsaveisDoEstoque(loc);
