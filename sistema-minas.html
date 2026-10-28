@@ -2392,6 +2392,10 @@ img{max-width:100%}
           <button class="btn mut" type="button" id="prodApagarBusca" hidden>Apagar os da busca</button>
           <!-- excluir os marcados na lista (22/10, pedido dele) -->
           <button class="btn mut" type="button" id="prodExcluir" hidden>Excluir os marcados</button>
+          <!-- ATIVAR / DESATIVAR / EXPORTAR os marcados (28/10, pedido dele) -->
+          <button class="btn ghost" type="button" id="prodAtivar" hidden>Ativar os marcados</button>
+          <button class="btn ghost" type="button" id="prodDesativar" hidden>Desativar os marcados</button>
+          <button class="btn ghost" type="button" id="prodExportar" hidden>Exportar planilha</button>
         </div>
         <div class="tw"><table>
           <!-- EXCLUIR UM OU VÁRIOS (22/10, pedido dele): a coluna de marcar só existe
@@ -9205,6 +9209,7 @@ async function carregar(){
   funcoes=JSON.parse(JSON.stringify(SEED_FUNCOES));
   try{migrarPermFlex(funcoes);}catch(e){console.warn(e);}
   try{migrarAlmoxarifado(funcoes);}catch(e){console.warn(e);}
+  try{migrarEditarProdutos(funcoes);}catch(e){console.warn(e);}
   normalizarNomeAlmox();
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
@@ -9432,6 +9437,7 @@ async function carregar(){
        lista) iria para todo mundo que tem "ver tudo" — inclusive o Financeiro */
     try{permFlexMigradas=migrarPermFlex(funcoes);}catch(eFx){console.warn("permissões flexíveis",eFx);}
     try{almoxMigradas=migrarAlmoxarifado(funcoes);}catch(eAx){console.warn("almoxarifado",eAx);}
+    try{prodPermMigradas=migrarEditarProdutos(funcoes);}catch(ePp){console.warn("permissão de produtos",ePp);}
     normalizarNomeAlmox();
     await migrarTelasNovas();
     try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
@@ -10980,9 +10986,10 @@ function renderProdutos(){
     .sort(function(a,b){return ordAZ(a.nome,b.nome);});   /* ordem alfabética (regra dele, 20/09) */
   /* a contagem diz o que está na tela, senão "563 produtos" parece que o resto sumiu */
   var nomeSit=(fsit==="ativo"?" ativo":(fsit==="inativo"?" inativo":" produto"));
+  prodListaAtual=lista;     /* o que a tela mostra é o que a exportação leva (28/10) */
   $("prodCount").textContent=lista.length+nomeSit+(lista.length===1?"":"s")+
     (fsit?(" · de "+produtos.length+" no catálogo"):"");
-  setTimeout(function(){try{ligarExcluirProd();ajustarExcluirProd();}catch(e){}},0);
+  try{ligarExcluirProd();ajustarExcluirProd();}catch(e){}
   var b=$("prodBody");b.innerHTML="";
   lista.forEach(function(p){
     var tr=document.createElement("tr");tr.className="clickable";
@@ -10991,7 +10998,7 @@ function renderProdutos(){
     var estCls=est<0?"p-crit":((mn>0&&est<mn)?"p-warn":"p-mut");
     var inativo=(p.status||"ativo")==="inativo";
     if(inativo)tr.style.opacity=".55";
-    tr.innerHTML=(podeExcluirProd()?('<td class="pm-col"><input type="checkbox" data-pmk="'+esc(p.id)+
+    tr.innerHTML=(podeMarcarProd()?('<td class="pm-col"><input type="checkbox" data-pmk="'+esc(p.id)+
         '"'+(prodMarcados[p.id]?" checked":"")+' aria-label="Marcar '+esc(p.nome)+'"></td>'):"")+
       '<td><div class="t-main">'+
         /* miniatura da imagem do produto (20/09) */
@@ -11049,6 +11056,7 @@ function abrirProduto(p){
   prodComposto=JSON.parse(JSON.stringify(v.composto||[]));
   opcoesComposicao();renderComposicaoProd();avisoProduto("");
   notaCampanha();notaEstoque();notaCusto();
+  try{modoConsultaProduto();}catch(eMc){console.warn("consulta do produto",eMc);}
 }
 /* ---------- produto composto (v248, regra dele: "um produto composto é formado por um produto principal
    e um ou mais produtos vinculados a ele… sempre que o vendedor adicionar o Refil X, os produtos Y e Z
@@ -11591,6 +11599,7 @@ function previaImport(){
       amostraN+"</tbody></table></div>"+(novos.length>5?'<p class="help">… e mais '+(novos.length-5)+".</p>":""):"");
 }
 function abrirImportProdutos(){
+  if(!podeEditarProdutos()){toast(MSG_PROD_SO_CONSULTA);return;}
   $("ip_texto").value="";$("ip_arqNome").textContent="";$("ip_previa").innerHTML="";$("ip_alerta").innerHTML="";
   $("ip_estoque").checked=true;impLidos=null;
   atualizarBotaoApagarImport();
@@ -11599,6 +11608,7 @@ function abrirImportProdutos(){
   $("impModal").hidden=false;
 }
 async function importarProdutos(){
+  if(!podeEditarProdutos()){toast(MSG_PROD_SO_CONSULTA);return;}
   if(!impLidos)previaImport();
   var novos=(impLidos&&impLidos.novos)||[];
   var atualizar=(impLidos&&impLidos.atualizar)||[];
@@ -12214,6 +12224,7 @@ function renderDuplicados(){
   $("dp_ok").disabled=!(podem+presos);
 }
 function abrirDuplicados(){
+  if(!podeEditarProdutos()){toast(MSG_PROD_SO_CONSULTA);return;}
   dupEscolha={};dupPular={};
   $("dp_busca").value="";$("dp_alerta").innerHTML="";
   renderDuplicados();
@@ -12242,6 +12253,7 @@ function fundirRepetido(fica,sai){
   return mudou;
 }
 async function removerDuplicados(){
+  if(!podeEditarProdutos()){toast(MSG_PROD_SO_CONSULTA);return;}
   var modo=$("dp_modo").value,gs=gruposRepetidos(modo);
   var apagar=[],desativar=[],fundir=[];
   gs.forEach(function(g){
@@ -12332,17 +12344,47 @@ function ajustarApagarBusca(){
    gravado, e o histórico fica de pé. Só some do catálogo o que nunca foi usado.
    A gravação é conferida: o que o banco recusar é contado e dito na tela. */
 function podeExcluirProd(){ return ehAdministrador(); }
+function podeEditarProdutos(){return podeAcao("editarProdutos");}
+var MSG_PROD_SO_CONSULTA="Produtos e preços só o Administrador, o Almoxarifado e a gestão alteram. Você pode consultar.";
+/* a ficha aberta por quem não pode alterar: tudo travado, sem o Salvar, e o aviso em cima */
+function modoConsultaProduto(){
+  var f=$("prodForm");if(!f)return;
+  var so=!podeEditarProdutos();
+  [].forEach.call(f.querySelectorAll("input,select,textarea,button"),function(el){
+    if(el.id==="prodCancelar")return;
+    if(so){if(!el.disabled){el.disabled=true;el.setAttribute("data-prodro","1");}}
+    else if(el.getAttribute("data-prodro")){el.disabled=false;el.removeAttribute("data-prodro");}
+  });
+  if($("prodSalvar"))$("prodSalvar").hidden=so;
+  var av=$("prodSoConsulta");
+  if(!av){av=document.createElement("div");av.id="prodSoConsulta";av.className="note warn";av.style.marginBottom="12px";
+    var t=$("prodFormTitulo");if(t&&t.parentNode)t.parentNode.insertBefore(av,t.nextSibling);}
+  av.hidden=!so;av.innerHTML="<b>Só consulta.</b> "+esc(MSG_PROD_SO_CONSULTA);
+  if($("prodCancelar"))$("prodCancelar").textContent=so?"Voltar":"Cancelar";
+}
 var prodMarcados={};
 function marcadosProd(){
   return produtos.filter(function(p){return prodMarcados[p.id];});
 }
 function ajustarExcluirProd(){
   var bt=$("prodExcluir");if(!bt)return;
-  var L=podeExcluirProd()?marcadosProd():[];
+  var M=podeMarcarProd()?marcadosProd():[];
+  var L=podeExcluirProd()?M:[];
   bt.hidden=!L.length;
   bt.textContent="Excluir "+L.length+(L.length===1?" produto marcado":" produtos marcados");
-  /* a coluna de marcar só aparece para quem pode excluir */
-  [].forEach.call(document.querySelectorAll("#s-produtos .pm-col"),function(e){e.hidden=!podeExcluirProd();});
+  /* ativar e desativar (28/10): quem pode alterar produto; contam só os que mudam de situação */
+  var nAt=M.filter(function(p){return (p.status||"ativo")!=="ativo";}).length;
+  var nDe=M.filter(function(p){return (p.status||"ativo")==="ativo"&&!produtoDeSistema(p);}).length;
+  if($("prodAtivar")){$("prodAtivar").hidden=!nAt;$("prodAtivar").textContent="Ativar "+nAt+(nAt===1?" marcado":" marcados");}
+  if($("prodDesativar")){$("prodDesativar").hidden=!nDe;$("prodDesativar").textContent="Desativar "+nDe+(nDe===1?" marcado":" marcados");}
+  /* exportar: só o Administrador (regra dele de 05/10) — os marcados, ou a lista da tela */
+  if($("prodExportar")){$("prodExportar").hidden=!podeExportar();
+    $("prodExportar").textContent=M.length?("Exportar "+M.length+(M.length===1?" marcado":" marcados")):"Exportar planilha";}
+  /* a coluna de marcar aparece para quem pode mexer no cadastro */
+  [].forEach.call(document.querySelectorAll("#s-produtos .pm-col"),function(e){e.hidden=!podeMarcarProd();});
+  /* importar e juntar repetidos só para quem pode alterar produto */
+  if($("prodImportar"))$("prodImportar").hidden=!podeEditarProdutos();
+  if($("prodRepetidos"))$("prodRepetidos").hidden=!podeEditarProdutos();
   var td=$("prodTodos");
   if(td){ var naTela=[].slice.call(document.querySelectorAll("#prodBody [data-pmk]"));
     td.checked=naTela.length>0&&naTela.every(function(c){return c.checked;}); }
@@ -12387,6 +12429,48 @@ async function excluirProdutos(L,motivo){
   try{esquecerIndices();}catch(e){}
   return {apagados:apagados,desativados:desativados,erros:erros,movs:movs};
 }
+function podeMarcarProd(){return podeEditarProdutos()||podeExcluirProd()||podeExportar();}
+/* ativa ou desativa os marcados, com quem, quando e o motivo — e conferindo a gravação (v327) */
+async function situacaoProdutosMarcados(novo){
+  if(!podeEditarProdutos()){toast(MSG_PROD_SO_CONSULTA);return;}
+  var L=marcadosProd().filter(function(p){
+    return novo==="ativo"?(p.status||"ativo")!=="ativo":((p.status||"ativo")==="ativo"&&!produtoDeSistema(p));});
+  if(!L.length){toast("Nenhum produto marcado para "+(novo==="ativo"?"ativar":"desativar")+".");return;}
+  var amostra=L.slice(0,8).map(function(p){return "• "+(p.cod?p.cod+" ":"")+p.nome;}).join("\n");
+  if(!confirm((novo==="ativo"?"Ativar ":"Desativar ")+L.length+" produto(s)?\n\n"+amostra+(L.length>8?"\n… e mais "+(L.length-8):"")+
+    (novo==="ativo"?"\n\nAtivado, o produto volta para a lista de venda (se o cadastro estiver completo).":
+      "\n\nDesativado, o produto sai da lista de venda. O histórico continua.")))return;
+  var ok=0,falha=0,b1=$("prodAtivar"),b2=$("prodDesativar");
+  if(b1)b1.disabled=true;if(b2)b2.disabled=true;
+  for(var i=0;i<L.length;i++){
+    var p=L[i],antes=JSON.parse(JSON.stringify(p));
+    p.status=novo;
+    if(novo==="ativo"){p.reativadoEm=hojeISO();p.reativadoPor=usuarioAtual;}
+    else{p.inativadoEm=hojeISO();p.inativadoPor=usuarioAtual;p.inativadoMotivo="desativado na lista de produtos";}
+    try{if(db)await col("produtos").doc(p.id).set(p);ok++;delete prodMarcados[p.id];}
+    catch(e){Object.keys(p).forEach(function(k){delete p[k];});Object.assign(p,antes);falha++;console.warn("situação do produto",p.cod,e);}
+  }
+  if(b1)b1.disabled=false;if(b2)b2.disabled=false;
+  try{esquecerIndices();}catch(e){}
+  opcoesProduto();renderProdutos();
+  toast(ok+" produto(s) "+(novo==="ativo"?"ativado(s)":"desativado(s)")+(falha?" · "+falha+" não gravaram — confira a internet":"")+".");
+}
+var prodListaAtual=[];
+function exportarProdutos(){
+  if(!podeExportar())return recusaExport();
+  var L=marcadosProd();if(!L.length)L=prodListaAtual.slice();
+  var linhas=[["Código","Produto","Nome popular","Marca","Grupo","Subgrupo","Situação","Unidade","Estoque (almoxarifado)",
+    "Custo","Frete","Tabela 100% máxima","Tabela 100% mínima","Tabela 70% mínima","Campanha","Pontos",
+    "Manutenção (dias)","Garantia (meses)","Código de barras"]];
+  function n(v){return (v===""||v==null)?"":brMF(+v||0);}
+  L.forEach(function(p){
+    linhas.push([p.cod||"",p.nome||"",p.pop||"",p.marca||"",p.grupo||"",p.subgrupo||"",
+      (p.status||"ativo")==="ativo"?"Ativo":"Inativo",p.un||"UN",estEmpresaDe(p),
+      n(p.custo),n(p.frete),n(p.cheiaMax),n(p.cheia),n(p.campanha),n(p.minimo),p.pontos||0,
+      p.manut||"",p.gar||"",p.barras||""]);
+  });
+  baixarPlanilhaMF("Produtos_"+nomeLoja()+"_"+hojeISO(),linhas);
+}
 async function excluirProdutosMarcados(){
   if(!podeExcluirProd()){toast("Só o Administrador exclui produto.");return;}
   var L=marcadosProd();
@@ -12403,6 +12487,9 @@ async function excluirProdutosMarcados(){
 function ligarExcluirProd(){
   var bt=$("prodExcluir");
   if(bt&&!bt.__lig){bt.__lig=1;bt.onclick=excluirProdutosMarcados;}
+  if($("prodAtivar")&&!$("prodAtivar").__lig){$("prodAtivar").__lig=1;$("prodAtivar").onclick=function(){situacaoProdutosMarcados("ativo");};}
+  if($("prodDesativar")&&!$("prodDesativar").__lig){$("prodDesativar").__lig=1;$("prodDesativar").onclick=function(){situacaoProdutosMarcados("inativo");};}
+  if($("prodExportar")&&!$("prodExportar").__lig){$("prodExportar").__lig=1;$("prodExportar").onclick=exportarProdutos;}
   var td=$("prodTodos");
   if(td&&!td.__lig){td.__lig=1;td.onchange=function(){
     [].forEach.call(document.querySelectorAll("#prodBody [data-pmk]"),function(c){
@@ -13374,8 +13461,8 @@ var prodRapCtx=null;
 window.completarProdutoMF=function(pid,selId){
   var p=prodPorId(pid);
   if(!p)return;
-  if(!veTela("produtos",usuarioAtual)){
-    toast(p.nome+" está com o cadastro pela metade. Peça ao Administrador para completar o preço e o grupo.");
+  if(!podeEditarProdutos()){
+    toast(p.nome+" está com o cadastro pela metade. Peça ao Administrador ou ao Almoxarifado para completar o preço e o grupo.");
     return;
   }
   var motivo=motivoForaDaVenda(p);
@@ -13396,6 +13483,7 @@ window.completarProdutoMF=function(pid,selId){
 };
 async function salvarProdutoRapido(){
   var ctx=prodRapCtx;if(!ctx)return;
+  if(!podeEditarProdutos()){toast(MSG_PROD_SO_CONSULTA);return;}
   var p=prodPorId(ctx.pid);if(!p)return;
   var cheia=numMF($("pr_cheia").value)||0,g=$("pr_grupo").value.trim(),sg=$("pr_subgrupo").value.trim();
   if(!(cheia>0)||!g||!sg){
@@ -14367,7 +14455,7 @@ async function aplicarTodasSugestoes(){
   try{renderClientes();atualizarBotaoCidades();}catch(e){}
   renderCidadesConferir();
 }
-window.__ufPeloDDDMF=ufPeloDDD;window.__aplicarPlanoAvulsoMF=function(p){return aplicarPlanoAvulso(p);};window.__planoDoEquipMF=function(e){return planoDoEquip(e);};window.__planosDaVendaMF=function(p){return planosDaVenda(p);};window.__agendadorDeMF=function(a){return agendadorDe(a);};window.__podeEditarAtivMF=function(a){return podeEditarAtiv(a);};window.__htmlLigarMF=function(a){return htmlLigarAtividade(a);};
+window.__ufPeloDDDMF=ufPeloDDD;window.__podeEditarProdMF=function(){return podeEditarProdutos();};window.__prodListaAtualMF=function(){return prodListaAtual;};window.__aplicarPlanoAvulsoMF=function(p){return aplicarPlanoAvulso(p);};window.__planoDoEquipMF=function(e){return planoDoEquip(e);};window.__planosDaVendaMF=function(p){return planosDaVenda(p);};window.__agendadorDeMF=function(a){return agendadorDe(a);};window.__podeEditarAtivMF=function(a){return podeEditarAtiv(a);};window.__htmlLigarMF=function(a){return htmlLigarAtividade(a);};
 window.__ehAlmoxMF=function(q){return ehAlmox(q);};window.__podeMoverEstMF=function(q){return podeMoverEstoque(q);};
 window.__abaRelOkMF=function(a){return abaRelPermitida(a);};window.__migrarAlmoxMF=function(l){return migrarAlmoxarifado(l);};
 window.__relEstoqueMF=function(){return relEstoque(periodoRel());};
@@ -43383,7 +43471,10 @@ var ACOES=[
   /* 28/10 (pedido dele): o almoxarifado com acesso completo ao que é do almoxarifado —
      todos os estoques, contagens, autorizações de estoque e relatórios de estoque —
      sem ganhar nada de administração, financeiro ou comercial */
-  ["almoxarifado","Ver e gerir todos os estoques (contagens, autorizações e relatórios de estoque)"]
+  ["almoxarifado","Ver e gerir todos os estoques (contagens, autorizações e relatórios de estoque)"],
+  /* 28/10 (regra dele: "apareceu opção para os vendedores atualizar os preços, isso não pode
+     acontecer"): cadastrar, alterar, importar e ativar/desativar produto vira permissão */
+  ["editarProdutos","Cadastrar e alterar produtos e preços (inclui importar lista)"]
 ];
 var TODAS_TELAS=GRUPOS_TELA.reduce(function(a,g){return a.concat(g.telas.map(function(t){return t[0];}));},[]);
 /* as telas do dia a dia, que as funções padrão recebem. NÃO é o grupo do menu: o grupo
@@ -43415,7 +43506,7 @@ var SEED_FUNCOES=[
       "produtos","manut","estColab","os","fatur","veiculos"],acoes:[]},
   {nome:"Almoxarifado",desc:"Confere nota, move estoque e cuida de todo o almoxarifado",
     telas:["dash","agenda","ponto","leads","clientes","produtos","grupos","estEmpresa","estColab","estConsumo","notas","fornec","relat"],
-    acoes:["entradaNF","moverEstoque","verCustos","almoxarifado"]}
+    acoes:["entradaNF","moverEstoque","verCustos","almoxarifado","editarProdutos"]}
 ];
 async function gravarFuncoes(){if(!db)return;try{await db.doc("config/funcoes").set({lista:funcoes});}catch(e){console.warn(e);}}
 /* a mesma gravação, mas o erro SOBE: quem muda permissão precisa saber se o banco aceitou */
@@ -43476,7 +43567,8 @@ var PERFIS_FERR_ANTES=["Administrador","Estoquista","Almoxarifado"];
 var PERFIS_RASTREIO_ANTES=["Administrador","Gerente"];
 var ACOES_POR_PERFIL_ANTES={exportar:["Administrador"],apagarRegistros:["Administrador"],
   corrigirCadastro:["Administrador"],aprovarCredito:["Financeiro","Administrador"],
-  autorizarEstoque:["Administrador","Gerente"],almoxarifado:["Administrador","Estoquista","Almoxarifado"]};
+  autorizarEstoque:["Administrador","Gerente"],almoxarifado:["Administrador","Estoquista","Almoxarifado"],
+  editarProdutos:["Administrador","Almoxarifado","Estoquista","Financeiro","Gerente"]};
 function ehTravaAdmin(n,tipo,k,perfil){
   return (perfil||perfilDe(n))==="Administrador"&&TRAVA_ADMIN[tipo].indexOf(k)>=0;
 }
@@ -43555,6 +43647,28 @@ function migrarAlmoxarifado(lista){
   return feitas;
 }
 var almoxMigradas=[];
+var PROD_PERM_VERSAO="2026-10-28";
+function migrarEditarProdutos(lista){
+  var feitas=[];
+  (lista||[]).forEach(function(f){
+    if(!f||f.prodV)return;
+    var a=(f.acoes||[]).slice();
+    if(f.nome==="Administrador"||ehPerfilAlmox(f.nome)||a.indexOf("verTudo")>=0||a.indexOf("almoxarifado")>=0){
+      if(a.indexOf("editarProdutos")<0)a.push("editarProdutos");}
+    f.acoes=a;f.prodV=PROD_PERM_VERSAO;feitas.push(f.nome);
+  });
+  return feitas;
+}
+var prodPermMigradas=[];
+async function gravarMigracaoProdPerm(){
+  if(!db||!prodPermMigradas.length||!ehAdministrador())return 0;
+  try{await gravarFuncoesConf();}catch(e){console.warn("permissão de produtos",e);return 0;}
+  prodPermMigradas=[];
+  try{await registrarLogPerm({alvo:"migracao",nome:"Produtos",
+    texto:"Produtos (28/10): cadastrar e alterar produto e preço passou a ser a permissão \"Cadastrar e alterar produtos e preços\", "+
+      "dada ao Administrador, ao Almoxarifado e a quem tem \"ver tudo\". O comercial só consulta."});}catch(e){}
+  return 1;
+}
 async function gravarMigracaoAlmox(){
   if(!db||!almoxMigradas.length||!ehAdministrador())return 0;
   try{await gravarFuncoesConf();}catch(e){console.warn("almoxarifado",e);return 0;}
@@ -50403,6 +50517,8 @@ function ligar(){
     renderComposicaoProd();};
   $("prodSalvar").onclick=async function(){
     avisoProduto("");
+    /* a trava vale por dentro, não só no botão (regra da v321) */
+    if(!podeEditarProdutos()){avisoProduto("<b>Não foi salvo.</b> "+esc(MSG_PROD_SO_CONSULTA));return;}
     var cod=$("p_cod").value.trim(),nome=$("p_nome").value.trim();
     if(!cod||!nome){avisoProduto("<b>Código e nome são obrigatórios.</b> O produto não foi salvo.");return;}
     var codAntes=editandoProd?String(editandoProd.cod||"").trim():"";
@@ -51491,7 +51607,7 @@ function navegacaoBasica(){
         ir("atend");try{abrirAtend(null);}catch(err){}
         toast("O pedido nasce do contato com o cliente: registre o atendimento e finalize como Vendido — a venda abre já preenchida.");
       }
-      else if(q==="produto"){ir("produtos");try{abrirProduto(null);}catch(err){}}
+      else if(q==="produto"){if(!podeEditarProdutos()){toast(MSG_PROD_SO_CONSULTA);return;}ir("produtos");try{abrirProduto(null);}catch(err){}}
       else if(q==="atend"){ir("atend");try{abrirAtend(null);}catch(err){}}
       /* "+ Novo › Lead" (pedido dele, 02/10): a ficha do lead abre direto por aqui. O caminho do
          Atendimento continua sendo o normal; este é o atalho, e o cadastro nasce do mesmo jeito. */
@@ -51669,6 +51785,7 @@ async function continuarBoot(){
   /* as permissões que eram decididas pelo cargo viraram marcação (27/10): grava, uma vez */
   await passoBoot("permissões flexíveis",gravarMigracaoPermFlex);
   await passoBoot("almoxarifado",gravarMigracaoAlmox);
+  await passoBoot("permissão de produtos",gravarMigracaoProdPerm);
   /* os 12 status novos passaram a conduzir a tela: as OS já gravadas ganham o status certo, uma
      vez só, deduzido da lista antiga (pedido dele, 09/10) */
   await passoBoot("acerto do status das OS",ajustarSitOS);
