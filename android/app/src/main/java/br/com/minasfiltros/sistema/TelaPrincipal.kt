@@ -20,6 +20,8 @@ import androidx.core.content.ContextCompat
 import androidx.appcompat.app.AlertDialog
 
 class TelaPrincipal : AppCompatActivity() {
+  /* o pedido de camera da pagina espera a resposta do Android (28/10) */
+  private var pedidoCamera: PermissionRequest? = null
 
   companion object {
     const val ENDERECO = "https://wagner-arch.github.io/minas-filtros-sistema/"
@@ -68,7 +70,18 @@ class TelaPrincipal : AppCompatActivity() {
 
     /* camera e GPS pedidos pela propria pagina (foto do ponto, "marcar onde estou") */
     web.webChromeClient = object : WebChromeClient() {
-      override fun onPermissionRequest(p: PermissionRequest) { p.grant(p.resources) }
+      /* a pagina pede a camera (leitor de codigo de barras, foto do ponto): sem a permissao do
+         proprio Android, liberar para a pagina nao basta — pede primeiro, libera depois (28/10) */
+      override fun onPermissionRequest(p: PermissionRequest) {
+        runOnUiThread {
+          val querCamera = p.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+          if (querCamera && ContextCompat.checkSelfPermission(this@TelaPrincipal, Manifest.permission.CAMERA)
+              != PackageManager.PERMISSION_GRANTED) {
+            pedidoCamera = p
+            ActivityCompat.requestPermissions(this@TelaPrincipal, arrayOf(Manifest.permission.CAMERA), 12)
+          } else p.grant(p.resources)
+        }
+      }
       override fun onGeolocationPermissionsShowPrompt(o: String, cb: GeolocationPermissions.Callback) {
         cb.invoke(o, true, false)
       }
@@ -175,6 +188,18 @@ class TelaPrincipal : AppCompatActivity() {
 
   override fun onRequestPermissionsResult(c: Int, p: Array<out String>, r: IntArray) {
     super.onRequestPermissionsResult(c, p, r)
+    if (c == 12) {
+      val pc = pedidoCamera; pedidoCamera = null
+      if (pc != null) {
+        if (r.isNotEmpty() && r[0] == PackageManager.PERMISSION_GRANTED) pc.grant(pc.resources)
+        else {
+          pc.deny()
+          Toast.makeText(this, "Sem a câmera liberada não dá para ler o código. Libere em Ajustes › Aplicativos › Minas Filtros › Permissões.",
+            Toast.LENGTH_LONG).show()
+        }
+      }
+      return
+    }
     if (c == 10) pedirSempre()
   }
 

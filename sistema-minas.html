@@ -2664,6 +2664,15 @@ img{max-width:100%}
                 </div>
               </div>
             </div>
+            <!-- PLANO PREMIUM AVULSO (28/10, regra dele): "se o cliente tem um purificador sem o plano ele
+                 pode assinar, e colocamos o número de série do produto ligado ao plano premium" -->
+            <div class="fld" id="v_paWrap" hidden style="margin-top:14px">
+              <label for="v_paEquip">Este plano é para qual aparelho do cliente? <span class="req">*</span></label>
+              <select id="v_paEquip"></select>
+              <div class="fld" id="v_paProdWrap" hidden style="margin-top:10px">
+                <label for="v_paProd">Qual é o aparelho <span class="req">*</span></label><select id="v_paProd"></select></div>
+              <p class="help" id="v_paAjuda"></p>
+            </div>
             <div class="grid g4">
               <div class="fld" style="justify-content:flex-end"><button class="btn ghost" type="button" id="v_add">Adicionar</button></div>
             </div>
@@ -13291,7 +13300,12 @@ function opcoesProduto(){
   var s=$("v_prod"),atual=s.value;s.innerHTML="";
   /* plano não é escolhido como produto: entra sozinho pela garantia do item;
      produto importado sem preço também fica de fora até o cadastro ser completado (v143) */
-  var ativos=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos"&&!ehProdutoSucata(p)&&p.cod!=="OS-CLIENTE"&&!produtoIncompleto(p);});
+  /* 28/10: o plano de garantia ATIVO entra na lista — é a venda do plano para um aparelho que o
+     cliente já tem. Junto de um purificador novo ele continua entrando pela garantia do item. */
+  var ativos=produtos.filter(function(p){
+    if((p.status||"ativo")!=="ativo"||ehProdutoSucata(p)||p.cod==="OS-CLIENTE")return false;
+    if(p.grupo==="Planos")return !!(p.garantia&&+p.cheia>0);
+    return !produtoIncompleto(p);});
   porNomeAZ(ativos).forEach(function(p){var o=document.createElement("option");o.value=p.id;o.textContent=p.nome+"   "+BRL(precoTabela(p));o.setAttribute("data-cod",p.cod||"");   /* nome na frente: a lista fica visivelmente alfabética (20/09) */s.appendChild(o);});
   if(!ativos.length){var o=document.createElement("option");o.textContent="— nenhum produto ativo —";s.appendChild(o);}
   if(atual&&ativos.some(function(p){return p.id===atual;}))s.value=atual;
@@ -13320,7 +13334,7 @@ window.barrasProdutosMF=function(){
    inativo e os itens de controle. Agora a busca procura no CADASTRO INTEIRO e diz o motivo. */
 function motivoForaDaVenda(p){
   if((p.status||"ativo")!=="ativo")return "está inativo";
-  if(p.grupo==="Planos")return "é plano de garantia — entra sozinho pela garantia do item";
+  if(p.grupo==="Planos")return "é plano de garantia sem nome de garantia ou sem valor — confira em Configurações › Planos de Garantia";
   if(ehProdutoSucata(p))return "é o purificador da troca, controle do estoque";
   if(p.cod==="OS-CLIENTE")return "é equipamento de cliente em análise";
   if(produtoIncompleto(p)){
@@ -14353,7 +14367,7 @@ async function aplicarTodasSugestoes(){
   try{renderClientes();atualizarBotaoCidades();}catch(e){}
   renderCidadesConferir();
 }
-window.__ufPeloDDDMF=ufPeloDDD;window.__agendadorDeMF=function(a){return agendadorDe(a);};window.__podeEditarAtivMF=function(a){return podeEditarAtiv(a);};window.__htmlLigarMF=function(a){return htmlLigarAtividade(a);};
+window.__ufPeloDDDMF=ufPeloDDD;window.__aplicarPlanoAvulsoMF=function(p){return aplicarPlanoAvulso(p);};window.__planoDoEquipMF=function(e){return planoDoEquip(e);};window.__planosDaVendaMF=function(p){return planosDaVenda(p);};window.__agendadorDeMF=function(a){return agendadorDe(a);};window.__podeEditarAtivMF=function(a){return podeEditarAtiv(a);};window.__htmlLigarMF=function(a){return htmlLigarAtividade(a);};
 window.__ehAlmoxMF=function(q){return ehAlmox(q);};window.__podeMoverEstMF=function(q){return podeMoverEstoque(q);};
 window.__abaRelOkMF=function(a){return abaRelPermitida(a);};window.__migrarAlmoxMF=function(l){return migrarAlmoxarifado(l);};
 window.__relEstoqueMF=function(){return relEstoque(periodoRel());};
@@ -14861,6 +14875,104 @@ function atualizarPrecoItemNovo(soProduto){
   if(!soProduto){try{notaGarantia();}catch(e){}}   /* o plano segue o mesmo preço da forma (20/09) */
   try{calcular();}catch(e){}
 }
+/* ---------- PLANO PREMIUM AVULSO (28/10, regra dele) ----------
+   O cliente que já tem o purificador (comprado sem plano, ou com o plano vencido) assina o plano.
+   O vendedor escolhe o plano na lista de produtos e diz para QUAL aparelho é — um do cadastro do
+   cliente ou um que não está no cadastro, com o produto e a série. A série é obrigatória: é ela que
+   amarra o plano ao aparelho. Na aprovação do financeiro o plano passa a valer no aparelho. */
+function vendaPlanoAvulso(){var p=prodPorId($("v_prod")?$("v_prod").value:"");return !!(p&&p.grupo==="Planos");}
+function montarPlanoAvulso(){
+  var w=$("v_paWrap");if(!w)return;
+  var pl=prodPorId($("v_prod").value);
+  if(!pl||pl.grupo!=="Planos"){w.hidden=true;return;}
+  w.hidden=false;
+  var cid=$("v_cliente")?$("v_cliente").value:"",sel=$("v_paEquip"),atual=sel.value;
+  var lista=cid?purificadoresDoCliente(cid):[];
+  sel.innerHTML='<option value="">— escolha o aparelho —</option>'+lista.map(function(e){
+    var ja=planoAtivoEquip(e),inf=ja?planoDoEquip(e):null;
+    return '<option value="'+esc(e.id)+'">'+esc(rotuloEquip(e))+
+      (ja?" · já tem "+esc(e.plano)+(inf&&inf.fim?" até "+esc(dataBR(inf.fim)):""):"")+"</option>";
+  }).join("")+'<option value="__novo">O aparelho não está no cadastro — informar o produto e a série</option>';
+  if(atual&&[].some.call(sel.options,function(o){return o.value===atual;}))sel.value=atual;
+  else if(lista.length===1)sel.value=lista[0].id;
+  var ps=$("v_paProd"),atP=ps.value;
+  var cands=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.grupo!=="Planos"&&
+    (function(){try{return planoAtende(pl,p);}catch(e){return false;}})();});
+  ps.innerHTML='<option value="">— escolha o produto —</option>'+porNomeAZ(cands).map(function(p){
+    return '<option value="'+esc(p.id)+'">'+esc(p.nome)+(p.cod?" · "+esc(p.cod):"")+"</option>";}).join("");
+  if(atP)ps.value=atP;
+  aoEscolherAparelhoPlano(false);
+}
+function aoEscolherAparelhoPlano(trocou){
+  var sel=$("v_paEquip");if(!sel)return;
+  var v=sel.value,e=(v&&v!=="__novo")?equipPorId(v):null,pl=prodPorId($("v_prod").value);
+  $("v_paProdWrap").hidden=(v!=="__novo");
+  /* a série é o que amarra o plano ao aparelho: sempre aberta e obrigatória aqui */
+  if($("v_serieWrap"))$("v_serieWrap").hidden=false;
+  var sr=$("v_serie");sr.disabled=false;sr.placeholder="série do aparelho — obrigatória";
+  if(e&&(trocou||!sr.value))sr.value=e.serie||"";
+  var cid=$("v_cliente")?$("v_cliente").value:"";
+  var aj=!cid?"Escolha o cliente primeiro — o plano é para um aparelho dele."
+    :(!purificadoresDoCliente(cid).length?"Este cliente não tem aparelho no cadastro: escolha a última opção e informe o produto e a série."
+    :"O plano passa a valer neste aparelho quando o financeiro aprovar a venda, e sai o contrato do "+esc((pl&&pl.nome)||"plano")+" com a série.");
+  if(e&&planoAtivoEquip(e))aj='<b>Este aparelho já tem o plano '+esc(e.plano)+' vigente.</b> Vendendo de novo, a vigência passa a contar desta venda.';
+  if(e&&!e.serie)aj+=" Este aparelho está sem série no cadastro: digite a série — ela fica gravada nele.";
+  $("v_paAjuda").innerHTML=aj;
+}
+function addPlanoAvulso(pl){
+  var cid=$("v_cliente")?$("v_cliente").value:"";
+  if(!cid){toast("Escolha o cliente primeiro — o plano é para um aparelho dele.");return;}
+  var v=$("v_paEquip").value;
+  if(!v){toast("Escolha para qual aparelho do cliente é o "+pl.nome+".");try{$("v_paEquip").focus();}catch(e){}return;}
+  var serie=$("v_serie").value.trim();
+  if(!serie){toast("Informe o número de série do aparelho — é por ele que o plano fica amarrado.");try{$("v_serie").focus();}catch(e){}return;}
+  var e=null,ap=null;
+  if(v==="__novo"){ap=prodPorId($("v_paProd").value);
+    if(!ap){toast("Escolha qual é o aparelho (o produto).");try{$("v_paProd").focus();}catch(e2){}return;}}
+  else{e=equipPorId(v);if(!e){toast("Aparelho não encontrado.");return;}ap=prodPorId(e.produtoId)||{id:e.produtoId,nome:e.produto};}
+  if(itens.some(function(x){return x.planoAvulso&&((e&&x.planoParaEquip===e.id)||(x.planoAparelho&&x.planoAparelho.serie===serie));})){
+    toast("Este aparelho já tem um plano nesta venda.");return;}
+  if(e&&planoAtivoEquip(e)&&!confirm("Este aparelho já tem o plano "+e.plano+" vigente. Vender de novo mesmo assim?"))return;
+  var valor=numMF($("v_valor").value)||0;
+  if(!(valor>0)){toast("Informe o valor do "+pl.nome+".");try{$("v_valor").focus();}catch(e3){}return;}
+  itens.push({pid:pl.id,nome:pl.nome,cod:pl.cod,qtd:1,
+    valorBase:baseDoCampoValor(pl,1),valorTabela:+pl.cheia||0,valor:valor,
+    precoAuto:precoAutoItem(pl),valorFinal:(precoAutoItem(pl)?0:valor),
+    serie:serie,pontos:+pl.pontos||0,garantia:pl.garantia,plano:true,planoAvulso:true,
+    planoParaEquip:e?e.id:"",planoAparelho:{produtoId:ap.id||"",nome:ap.nome||"",serie:serie},vinculo:uid()});
+  $("v_serie").value="";$("v_paEquip").value="";render();
+  limparInclusao("v_prod","v_qtd",["v_valor"]);
+  ajustarEquipItem();try{montarPlanoAvulso();}catch(e4){}
+  toast(pl.nome+" para "+(ap.nome||"o aparelho")+" · série "+serie+". Passa a valer quando o financeiro aprovar a venda.");
+}
+/* na aprovação do financeiro: o plano passa a valer no aparelho (ou nasce o aparelho que não estava no cadastro) */
+async function aplicarPlanoAvulso(ped){
+  var feitos=0;
+  for(var j=0;j<(ped.itens||[]).length;j++){
+    var it=ped.itens[j];if(!it.planoAvulso)continue;
+    var ap=it.planoAparelho||{};
+    var e=it.planoParaEquip?equipPorId(it.planoParaEquip):null;
+    if(!e)e=equipamentos.filter(function(x){return x.planoPedidoId===ped.id&&x.planoItemVinculo===it.vinculo;})[0]||null;
+    if(e&&e.planoPedidoId===ped.id&&e.plano===it.garantia)continue;        /* já aplicado */
+    var prod=prodPorId(ap.produtoId)||{};
+    if(!e){
+      e={id:uid(),loja:ped.loja,clienteId:ped.clienteId,cliente:ped.cliente,produtoId:ap.produtoId||"",
+        produto:ap.nome||prod.nome||"",serie:ap.serie||it.serie||"",compradoEm:"",instaladoEm:"",
+        manutDias:+prod.manut||0,ultimaManut:"",ultimaManutHora:"",ultimoValor:null,ultimaForma:"",
+        plano:"Bronze",tecnico:"",local:"",obs:"",historico:[],ativo:true,demo:!!ped.demo,
+        criadoEm:hojeISO(),origem:"plano avulso",planoItemVinculo:it.vinculo};
+      equipamentos.push(e);
+    }
+    var antes=e.plano||"Bronze";
+    e.plano=it.garantia;e.planoInicio=String(ped.data||hojeISO()).slice(0,10);
+    e.planoPedidoId=ped.id;e.planoPedidoNumero=ped.numero;
+    if(!e.serie&&(ap.serie||it.serie))e.serie=ap.serie||it.serie;
+    e.historico=(e.historico||[]).concat([{por:ped.vendedor||usuarioAtual,data:hojeISO(),
+      texto:"Plano "+it.garantia+" contratado no pedido "+ped.numero+(antes!=="Bronze"?" (antes: "+antes+")":"")}]);
+    await grava("equipamentos",e);feitos++;
+  }
+  return feitos;
+}
 function sincronizarValor(){
   var p=prodPorId($("v_prod").value);
   if($("v_valor"))$("v_valor").__manual=false;
@@ -14875,6 +14987,7 @@ function sincronizarValor(){
     if($("v_serieWrap"))$("v_serieWrap").hidden=false;
     try{$("v_precoNota").innerHTML="";mostrarValorFinal(null);}catch(e){}}
   ajustarEquipItem();
+  try{montarPlanoAvulso();}catch(ePa){console.warn("plano avulso",ePa);}
   /* de qual estoque este item sai, com o saldo de cada um (23/10) */
   try{opcoesEstoqueItem();notaEstoqueItem();}catch(e){}
   try{renderEndDoEquipVenda();}catch(e){}
@@ -15581,6 +15694,7 @@ function addItem(){
   }
   var p=prodPorId($("v_prod").value);
   if(!p){toast("Escolha o produto.");try{$("v_prod_busca").focus();}catch(e){}return;}
+  if(p.grupo==="Planos")return addPlanoAvulso(p);
   var gar=$("v_gar").value, serie=pedeSerieProduto(p)?$("v_serie").value.trim():"", qtd=parseInt($("v_qtd").value,10)||0;
   if(!(qtd>=1)){toast("Informe a quantidade.");try{$("v_qtd").focus();}catch(e){}return;}
   var equipId=($("v_equip")&&!$("v_equipWrap").hidden)?$("v_equip").value:"";
@@ -19650,7 +19764,9 @@ function planoDoEquip(e){
     if(p.status==="Cancelada"||!pedidoAprovado(p)||!e.clienteId||p.clienteId!==e.clienteId)return;
     (p.itens||[]).forEach(function(it){
       if(it.garantia!==e.plano)return;
-      if(e.serie?(it.serie!==e.serie):(it.pid!==e.produtoId))return;
+      if(it.planoAvulso){
+        if(it.planoParaEquip?(it.planoParaEquip!==e.id):(it.serie!==e.serie))return;
+      }else if(e.serie?(it.serie!==e.serie):(it.pid!==e.produtoId))return;
       if(String(p.data||"")>ini){ini=String(p.data||"");ped=p;}
     });
   });
@@ -32615,6 +32731,7 @@ async function manutencaoPelaVenda(ped){
     if(prod&&(+prod.manut)>0)alvos.push({it:it,e:ja});
   }
   try{await sincronizarEquipamentos();}catch(err){console.warn(err);}
+  try{await aplicarPlanoAvulso(ped);}catch(errPa){console.warn("plano avulso",errPa);}
   var migPlano=null;
   try{migPlano=await migrarPlanoDaTroca(ped);}catch(errM){console.warn("migração do plano",errM);}
   var baixadas=0,agendadas=0,trocas=0;
@@ -39284,6 +39401,13 @@ function docContratoPlano(p,c,cobertos,plano){
 function planosDaVenda(p){
   var ordem=[],por={};
   (p.itens||[]).forEach(function(i){
+    if(i.planoAvulso){
+      var plA=planoDaGarantia(i.garantia,true)||prodPorId(i.pid);if(!plA)return;
+      if(!por[plA.id]){por[plA.id]={plano:plA,itens:[]};ordem.push(plA.id);}
+      var apA=i.planoAparelho||{};
+      por[plA.id].itens.push({pid:apA.produtoId,nome:apA.nome,serie:apA.serie||i.serie,qtd:1});
+      return;
+    }
     if(ehPlano(i))return;
     var pl=planoDaGarantia(i.garantia,true);if(!pl)return;
     if(!por[pl.id]){por[pl.id]={plano:pl,itens:[]};ordem.push(pl.id);}
@@ -47502,6 +47626,7 @@ function escolherClienteVenda(c){
   $("v_cliSug").hidden=true;
   ev(sc,"change");
   opcoesClienteVenda();
+  try{montarPlanoAvulso();}catch(ePa){}       /* os aparelhos do cliente para o plano avulso */
 }
 function ev(el,t){if(el)el.dispatchEvent(new Event(t,{bubbles:true}));}
 /* ================= DINHEIRO NO PADRÃO BRASILEIRO (v166, 20/09) =================
@@ -50382,6 +50507,7 @@ function ligar(){
     opcoesProduto();render();
   };
   $("v_prod").onchange=sincronizarValor;$("v_add").onclick=addItem;
+  if($("v_paEquip"))$("v_paEquip").onchange=function(){aoEscolherAparelhoPlano(true);};
   /* o estoque de onde o item sai (23/10): trocar refaz a nota dos saldos */
   if($("v_estoque"))$("v_estoque").onchange=function(){try{notaEstoqueItem();}catch(e){}};
   if($("ecContagem"))$("ecContagem").onclick=function(){abrirContagem($("ecQuem")?$("ecQuem").value:"");};
