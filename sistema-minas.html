@@ -2400,7 +2400,7 @@ img{max-width:100%}
         <div class="tw"><table>
           <!-- EXCLUIR UM OU VÁRIOS (22/10, pedido dele): a coluna de marcar só existe
                para o Administrador, e o botão da barra diz quantos estão marcados. -->
-          <thead><tr><th class="pm-col" hidden><input type="checkbox" id="prodTodos" title="Marcar todos os desta tela" aria-label="Marcar todos os produtos desta tela"></th><th>Produto</th><th>Grupo · Subgrupo</th><th class="num">Estoque</th><th class="num">Custo</th><th class="num">Frete</th><th class="num">100%</th><th class="num">70%</th><th class="num">Campanha</th><th class="num">Pontos</th><th>Série</th><th>Manutenção</th></tr></thead>
+          <thead><tr><th class="pm-col" hidden><input type="checkbox" id="prodTodos" title="Marcar todos os desta tela" aria-label="Marcar todos os produtos desta tela"></th><th>Produto</th><th>Grupo · Subgrupo</th><th class="num">Estoque</th><th class="num so-custo">Custo</th><th class="num so-custo">Frete</th><th class="num">100%</th><th class="num">70%</th><th class="num">Campanha</th><th class="num">Pontos</th><th>Série</th><th>Manutenção</th></tr></thead>
           <tbody id="prodBody"></tbody>
         </table></div>
       </div>
@@ -2480,7 +2480,7 @@ img{max-width:100%}
           <div id="p_trocaNota"></div>
         </div>
 
-        <div class="sect">
+        <div class="sect" id="p_secCusto">
           <p class="sect-t">Custo de aquisição</p>
           <div class="grid g4">
             <div class="fld"><label for="p_custo">Custo do produto</label><input id="p_custo" type="text" inputmode="decimal" step="0.01"></div>
@@ -9210,6 +9210,7 @@ async function carregar(){
   try{migrarPermFlex(funcoes);}catch(e){console.warn(e);}
   try{migrarAlmoxarifado(funcoes);}catch(e){console.warn(e);}
   try{migrarEditarProdutos(funcoes);}catch(e){console.warn(e);}
+  try{migrarVerCustos(funcoes);}catch(e){console.warn(e);}
   normalizarNomeAlmox();
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
@@ -9438,6 +9439,7 @@ async function carregar(){
     try{permFlexMigradas=migrarPermFlex(funcoes);}catch(eFx){console.warn("permissões flexíveis",eFx);}
     try{almoxMigradas=migrarAlmoxarifado(funcoes);}catch(eAx){console.warn("almoxarifado",eAx);}
     try{prodPermMigradas=migrarEditarProdutos(funcoes);}catch(ePp){console.warn("permissão de produtos",ePp);}
+    try{custoMigradas=migrarVerCustos(funcoes);}catch(eCu){console.warn("custo interno",eCu);}
     normalizarNomeAlmox();
     await migrarTelasNovas();
     try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
@@ -10990,7 +10992,10 @@ function renderProdutos(){
   $("prodCount").textContent=lista.length+nomeSit+(lista.length===1?"":"s")+
     (fsit?(" · de "+produtos.length+" no catálogo"):"");
   try{ligarExcluirProd();ajustarExcluirProd();}catch(e){}
-  var b=$("prodBody");b.innerHTML="";
+  var b=$("prodBody");
+  colunasCustoProd();
+  var vcP=podeVerCusto();
+  b.innerHTML="";
   lista.forEach(function(p){
     var tr=document.createElement("tr");tr.className="clickable";
     var est=estEmpresaDe(p);
@@ -11013,7 +11018,7 @@ function renderProdutos(){
         '><code>'+esc(p.cod)+"</code> · "+esc(p.marca||"—")+"</div></td>"+
       '<td><div class="t-main">'+esc(p.grupo||"—")+'</div><div class="t-sub">'+esc(p.subgrupo||"sem subgrupo")+"</div></td>"+
       '<td class="num"><span class="pill '+estCls+'">'+est+"</span></td>"+
-      '<td class="num">'+(p.custo?BRL(p.custo):"—")+'</td><td class="num">'+(p.frete?BRL(p.frete):"—")+"</td>"+
+      (vcP?'<td class="num">'+(p.custo?BRL(p.custo):"—")+'</td><td class="num">'+(p.frete?BRL(p.frete):"—")+"</td>":"")+
       /* faixa de preço (19/10): a coluna da 100% mostra a faixa inteira quando o produto tem
          máxima — é o preço de etiqueta que o vendedor procura aqui */
       '<td class="num">'+(temFaixaPreco(p)
@@ -11031,8 +11036,12 @@ function abrirProduto(p){
   editandoProd=p||null;$("prodLista").hidden=true;$("prodForm").hidden=false;
   $("prodFormTitulo").textContent=p?("Editar produto · "+p.nome):"Novo produto";
   var v=p||{};
+  var vcusto=podeVerCusto();
+  $("p_secCusto").hidden=!vcusto;
   ["cod","nome","pop","marca","grupo","subgrupo","barras","cheiaMax","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca","pctMinimo"].forEach(function(k){
-    var el=$("p_"+k);if(el)el.value=(v[k]!=null?v[k]:"");});
+    var el=$("p_"+k);if(!el)return;
+    if(!vcusto&&CAMPOS_CUSTO_PROD.indexOf(k)>=0){el.value="";return;}
+    el.value=(v[k]!=null?v[k]:"");});
   atualizarListasGrupoProd();
   $("p_un").value=v.un||"UN";
   $("p_serie").value=valorIdent(v.serie);
@@ -11143,6 +11152,7 @@ function opcoesComposicao(){
     o.setAttribute("data-cod",p.cod||"");s.appendChild(o);});
   if(atual)s.value=atual;
 }
+var CAMPOS_CUSTO_PROD=["custo","frete","ipi","st","federais","icms"];
 function custoDe(p){
   /* custo de aquisição = produto + frete + impostos que não geram crédito − ICMS creditado */
   return Math.round((((+p.custo||0)+(+p.frete||0)+(+p.ipi||0)+(+p.st||0)+(+p.federais||0)-(+p.icms||0)))*100)/100;
@@ -12455,19 +12465,33 @@ async function situacaoProdutosMarcados(novo){
   opcoesProduto();renderProdutos();
   toast(ok+" produto(s) "+(novo==="ativo"?"ativado(s)":"desativado(s)")+(falha?" · "+falha+" não gravaram — confira a internet":"")+".");
 }
+/* tira (ou devolve) as duas colunas do cabeçalho: tirar do DOM, e não só esconder, porque o
+   módulo de celular rotula o cartão pela posição de cada <th> */
+var thCustoProd=null;
+function colunasCustoProd(){
+  var tr=$("prodBody").parentNode.querySelector("thead tr");if(!tr)return;
+  if(!thCustoProd)thCustoProd=[].slice.call(tr.querySelectorAll("th.so-custo"));
+  var ref=[].slice.call(tr.children).filter(function(t){return t.textContent==="100%";})[0];
+  thCustoProd.forEach(function(t){
+    if(podeVerCusto()){if(!t.parentNode&&ref)tr.insertBefore(t,ref);}
+    else if(t.parentNode)t.parentNode.removeChild(t);});
+}
 var prodListaAtual=[];
 function exportarProdutos(){
   if(!podeExportar())return recusaExport();
   var L=marcadosProd();if(!L.length)L=prodListaAtual.slice();
-  var linhas=[["Código","Produto","Nome popular","Marca","Grupo","Subgrupo","Situação","Unidade","Estoque (almoxarifado)",
-    "Custo","Frete","Tabela 100% máxima","Tabela 100% mínima","Tabela 70% mínima","Campanha","Pontos",
-    "Manutenção (dias)","Garantia (meses)","Código de barras"]];
+  var vc=podeVerCusto();
+  var linhas=[["Código","Produto","Nome popular","Marca","Grupo","Subgrupo","Situação","Unidade","Estoque (almoxarifado)"]
+    .concat(vc?["Custo","Frete"]:[])
+    .concat(["Tabela 100% máxima","Tabela 100% mínima","Tabela 70% mínima","Campanha","Pontos",
+    "Manutenção (dias)","Garantia (meses)","Código de barras"])];
   function n(v){return (v===""||v==null)?"":brMF(+v||0);}
   L.forEach(function(p){
     linhas.push([p.cod||"",p.nome||"",p.pop||"",p.marca||"",p.grupo||"",p.subgrupo||"",
-      (p.status||"ativo")==="ativo"?"Ativo":"Inativo",p.un||"UN",estEmpresaDe(p),
-      n(p.custo),n(p.frete),n(p.cheiaMax),n(p.cheia),n(p.campanha),n(p.minimo),p.pontos||0,
-      p.manut||"",p.gar||"",p.barras||""]);
+      (p.status||"ativo")==="ativo"?"Ativo":"Inativo",p.un||"UN",estEmpresaDe(p)]
+      .concat(vc?[n(p.custo),n(p.frete)]:[])
+      .concat([n(p.cheiaMax),n(p.cheia),n(p.campanha),n(p.minimo),p.pontos||0,
+      p.manut||"",p.gar||"",p.barras||""]));
   });
   baixarPlanilhaMF("Produtos_"+nomeLoja()+"_"+hojeISO(),linhas);
 }
@@ -14652,6 +14676,8 @@ window.__catsTextoMF=function(){return CATEGORIAS_MF;};
 window.__lerCategoriasMF=function(t){return lerCategoriasTexto(t);};
 window.__centrosMF=function(){return centros;};
 window.__equipeMF=function(){return EQUIPE.slice();};
+window.__podeVerCustoMF=function(q){return podeVerCusto(q);};
+window.__migrarCustosMF=function(l){return migrarVerCustos(l);};
 window.__usuariosMF=function(){return USUARIOS;};
 window.__porUsuariosMF=function(l){USUARIOS=l;};
 window.__porDbMF=function(d){db=d;};
@@ -15995,15 +16021,18 @@ function renderPecasSucata(){
   box.innerHTML='<div class="rec-lista">'+
     sucPecas.map(function(i,ix){
       var cu=custoPecaRecup(i.pid),s=saldoEm(i.pid,LOC_EMPRESA),falta=s<(+i.qtd||0);
+      var vcS=podeVerCusto();
       return '<div class="rec-item"><div class="rec-n">'+esc(i.nome)+
-        (cu<=0?' <span class="pill p-warn">sem custo no cadastro</span>':"")+"</div>"+
-        '<div class="rec-v">'+(+i.qtd||0)+" × "+BRL(cu)+" = <b>"+BRL(cu*(+i.qtd||0))+"</b> · "+
+        (vcS&&cu<=0?' <span class="pill p-warn">sem custo no cadastro</span>':"")+"</div>"+
+        '<div class="rec-v">'+(+i.qtd||0)+(vcS?" × "+BRL(cu)+" = <b>"+BRL(cu*(+i.qtd||0))+"</b>":" un.")+" · "+
         '<span class="pill '+(falta?"p-crit":"p-ok")+'">'+s+(falta?" — falta no almoxarifado":" no almoxarifado")+"</span></div>"+
         '<div class="rec-b"><button class="btn mut sm" type="button" data-scrm="'+ix+'">Remover</button></div></div>';
     }).join("")+"</div>";
   var sem=pecasSemCustoRecup(sucPecas);
-  cx.innerHTML='<div class="note '+(sem.length?"warn":"ok")+'"><b>Custo deste seminovo: '+BRL(custoRecuperacao(sucPecas))+"</b>"+
-    (sem.length?"<br>Peça sem custo no cadastro: o custo do seminovo vai ficar menor que o real — "+esc(sem.join(", ")):"")+"</div>";
+  cx.innerHTML=podeVerCusto()
+    ?('<div class="note '+(sem.length?"warn":"ok")+'"><b>Custo deste seminovo: '+BRL(custoRecuperacao(sucPecas))+"</b>"+
+      (sem.length?"<br>Peça sem custo no cadastro: o custo do seminovo vai ficar menor que o real — "+esc(sem.join(", ")):"")+"</div>")
+    :'<div class="note ok">'+sucPecas.length+(sucPecas.length===1?" peça lançada":" peças lançadas")+" para este seminovo.</div>";
   Array.prototype.forEach.call(box.querySelectorAll("[data-scrm]"),function(bt){
     bt.onclick=function(){sucPecas.splice(+bt.getAttribute("data-scrm"),1);renderPecasSucata();};});
 }
@@ -20676,12 +20705,13 @@ function recuperacoesDoPeriodo(de,ate,busca){
 function exportarRecuperacoes(){
   if(!podeExportar())return recusaExport();
   var lista=recuperacoesDoPeriodo(($("eeRecDe")||{}).value,($("eeRecAte")||{}).value,($("eeBusca").value||""));
-  var linhas=[["Data","Aparelho","Série","Peças usadas","Custo","Quem registrou","Observação","Loja"]];
+  var vc=podeVerCusto();
+  var linhas=[["Data","Aparelho","Série","Peças usadas"].concat(vc?["Custo"]:[]).concat(["Quem registrou","Observação","Loja"])];
   lista.forEach(function(m){
     var r=m.recuperacao||{};
     linhas.push([dataBR(r.data||m.data),r.produto||"",r.serie||"",
-      (r.pecas||[]).map(function(i){return (+i.qtd||0)+"× "+i.nome+" ("+BRL(i.total)+")";}).join(" | "),
-      String(+r.custo||0).replace(".",","),r.por||m.por||"",r.obs||"",nomeLoja()]);
+      (r.pecas||[]).map(function(i){return (+i.qtd||0)+"× "+i.nome+(vc?" ("+BRL(i.total)+")":"");}).join(" | ")]
+      .concat(vc?[String(+r.custo||0).replace(".",",")]:[]).concat([r.por||m.por||"",r.obs||"",nomeLoja()]));
   });
   baixarPlanilhaMF("Recuperacoes_de_seminovo_"+nomeLoja(),linhas);
 }
@@ -20704,7 +20734,7 @@ function renderEstEmpresa(){
   $("eeKpis").innerHTML=
     '<div class="kpi"><div class="l">Itens com saldo</div><div class="v">'+comSaldo.length+"</div></div>"+
     '<div class="kpi"><div class="l">Unidades</div><div class="v">'+todos.reduce(function(a,p){return a+estEmpresaDe(p);},0)+"</div></div>"+
-    '<div class="kpi"><div class="l">Valor em estoque</div><div class="v">'+BRL(valor)+"</div></div>"+
+    (podeVerCusto()?'<div class="kpi"><div class="l">Valor em estoque</div><div class="v">'+BRL(valor)+"</div></div>":"")+
     '<div class="kpi"><div class="l">Abaixo do mínimo</div><div class="v" style="color:'+
       (abaixo.length?"var(--crit)":"inherit")+'">'+abaixo.length+"</div></div>"+
     '<div class="kpi"><div class="l">Requisições pendentes</div><div class="v" style="color:'+
@@ -20713,7 +20743,7 @@ function renderEstEmpresa(){
   var h=$("eeHead"),b=$("eeBody");b.innerHTML="";
   if(eeAba==="saldo"){
     h.innerHTML="<th>Produto</th><th>Localização</th><th class=\"num\">Saldo</th><th class=\"num\">Mínimo</th>"+
-      "<th class=\"num\">Com vendedores</th><th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th><th>Situação</th>";
+      "<th class=\"num\">Com vendedores</th>"+(podeVerCusto()?"<th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th>":"")+"<th>Situação</th>";
     var lista=todos.filter(function(p){
       if(q&&(p.nome||"").toLowerCase().indexOf(q)<0&&(p.cod||"").toLowerCase().indexOf(q)<0)return false;
       var s=estEmpresaDe(p),mn=(p.estmin&&p.estmin[lojaAtual])||0;
@@ -20738,7 +20768,7 @@ function renderEstEmpresa(){
         "<td>"+esc((p.local&&p.local[lojaAtual])||"—")+"</td>"+
         '<td class="num"><b>'+s+'</b></td><td class="num">'+(mn||"—")+"</td>"+
         '<td class="num">'+(comVend||"—")+"</td>"+
-        '<td class="num">'+BRL(custoTotalDe(p))+'</td><td class="num">'+BRL(s*custoTotalDe(p))+"</td>"+
+        (podeVerCusto()?'<td class="num">'+BRL(custoTotalDe(p))+'</td><td class="num">'+BRL(s*custoTotalDe(p))+"</td>":"")+
         '<td><span class="pill '+cls+'">'+sit+"</span></td>";
       tr.onclick=function(){ir("produtos");abrirProduto(p);};
       Array.prototype.forEach.call(tr.querySelectorAll("[data-suc]"),function(bt){
@@ -20769,11 +20799,12 @@ function renderEstEmpresa(){
   /* ---- Recuperações: sai dos próprios movimentos de entrada do seminovo ----
      cada movimento com o bloco `recuperacao` é UM aparelho: série, peças e custo dele. */
   else if(eeAba==="rec"){
+    var vcR=podeVerCusto();
     h.innerHTML='<th>Data</th><th>Aparelho</th><th>Série</th><th>Peças usadas</th>'+
-      '<th class="num">Custo</th><th>Quem registrou</th>';
+      (vcR?'<th class="num">Custo</th>':"")+'<th>Quem registrou</th>';
     var lr2=recuperacoesDoPeriodo(($("eeRecDe")||{}).value,($("eeRecAte")||{}).value,q);
     $("eeCount").textContent=lr2.length+(lr2.length===1?" recuperação":" recuperações")+
-      (lr2.length?" · custo total "+BRL(lr2.reduce(function(a,m){return a+(+m.recuperacao.custo||0);},0)):"");
+      (vcR&&lr2.length?" · custo total "+BRL(lr2.reduce(function(a,m){return a+(+m.recuperacao.custo||0);},0)):"");
     if(!lr2.length){
       b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma recuperação neste período</div>'+
         "Ela nasce no botão <b>Recuperado → seminovo</b> da linha do Purificador Sucata, na aba Saldo.</div></td></tr>";return;}
@@ -20783,10 +20814,10 @@ function renderEstEmpresa(){
         "<td>"+esc(r.produto||"—")+"</td>"+
         "<td><code>"+esc(r.serie||"—")+"</code></td>"+
         "<td>"+(pc.length
-          ? pc.map(function(i){return esc((+i.qtd||0)+"× "+i.nome)+" <span class=\"t-sub\">"+BRL(i.total)+"</span>";}).join("<br>")
+          ? pc.map(function(i){return esc((+i.qtd||0)+"× "+i.nome)+(vcR?" <span class=\"t-sub\">"+BRL(i.total)+"</span>":"");}).join("<br>")
           : '<span class="pill p-mut">sem troca de peça</span>')+
-          ((r.semCusto||[]).length?'<div class="t-sub" style="color:var(--warn)">sem custo no cadastro: '+esc(r.semCusto.join(", "))+"</div>":"")+"</td>"+
-        '<td class="num"><b>'+BRL(r.custo)+"</b></td>"+
+          (vcR&&(r.semCusto||[]).length?'<div class="t-sub" style="color:var(--warn)">sem custo no cadastro: '+esc(r.semCusto.join(", "))+"</div>":"")+"</td>"+
+        (vcR?'<td class="num"><b>'+BRL(r.custo)+"</b></td>":"")+
         "<td>"+esc(r.por||m.por||"—")+(r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+"</td></tr>";
     });
   }
@@ -21096,7 +21127,7 @@ function renderEstColab(){
     '<div class="kpi"><div class="l">Unidades</div><div class="v">'+unid+"</div></div>"+
     '<div class="kpi"><div class="l">Reservado para vendas</div><div class="v">'+
       Object.keys(reserv).reduce(function(a,k){return a+reserv[k];},0)+"</div></div>"+
-    '<div class="kpi"><div class="l">Valor sob responsabilidade</div><div class="v">'+BRL(valor)+"</div></div>"+
+    (podeVerCusto()?'<div class="kpi"><div class="l">Valor sob responsabilidade</div><div class="v">'+BRL(valor)+"</div></div>":"")+
     '<div class="kpi"><div class="l">A receber</div><div class="v" style="color:'+
       (receber.length?"var(--warn)":"inherit")+'">'+receber.length+"</div></div>"+
     '<div class="kpi"><div class="l">Devoluções em aberto</div><div class="v">'+
@@ -21108,7 +21139,7 @@ function renderEstColab(){
 
   var h=$("ecHead"),b=$("ecBody");b.innerHTML="";
   if(ecAba==="meu"){
-    h.innerHTML="<th>Produto</th><th class=\"num\">Comigo</th><th class=\"num\">Reservado</th><th class=\"num\">Disponível</th><th class=\"num\">No almoxarifado</th><th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th><th></th>";
+    h.innerHTML="<th>Produto</th><th class=\"num\">Comigo</th><th class=\"num\">Reservado</th><th class=\"num\">Disponível</th><th class=\"num\">No almoxarifado</th>"+(podeVerCusto()?"<th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th>":"")+"<th></th>";
     var l1=comigo.filter(function(p){return !q||(p.nome||"").toLowerCase().indexOf(q)>=0||(p.cod||"").toLowerCase().indexOf(q)>=0;})
       .sort(function(a,b2){return (a.nome||"").localeCompare(b2.nome||"","pt-BR");});
     $("ecCount").textContent=l1.length+(l1.length===1?" produto":" produtos");
@@ -21123,7 +21154,7 @@ function renderEstColab(){
         '<td class="num"><b>'+s+'</b></td><td class="num">'+(rs||"—")+"</td>"+
         '<td class="num"><span class="pill '+(dp<0?"p-crit":(dp>0?"p-ok":"p-mut"))+'">'+dp+"</span></td>"+
         '<td class="num">'+estEmpresaDe(p)+"</td>"+
-        '<td class="num">'+BRL(custoTotalDe(p))+'</td><td class="num">'+BRL(s*custoTotalDe(p))+"</td>"+
+        (podeVerCusto()?'<td class="num">'+BRL(custoTotalDe(p))+'</td><td class="num">'+BRL(s*custoTotalDe(p))+"</td>":"")+
         '<td class="num">'+(s>0?'<button class="btn mut sm" type="button" data-ecd="'+p.id+'">Devolver</button>':"")+"</td></tr>";
     });
     Array.prototype.forEach.call(b.querySelectorAll("[data-ecd]"),function(bt){
@@ -21312,11 +21343,11 @@ function renderEstConsumo(){
     '<div class="kpi"><div class="l">Itens em consumo</div><div class="v">'+comSaldo.length+"</div></div>"+
     '<div class="kpi"><div class="l">Unidades</div><div class="v">'+
       comSaldo.reduce(function(a,p){return a+saldoEm(p.id,LOC_CONSUMO);},0)+"</div></div>"+
-    '<div class="kpi"><div class="l">Consumido no mês</div><div class="v">'+BRL(totalMes)+"</div></div>"+
-    '<div class="kpi"><div class="l">Consumido no ano</div><div class="v">'+BRL(totalAno)+"</div></div>";
+    (podeVerCusto()?'<div class="kpi"><div class="l">Consumido no mês</div><div class="v">'+BRL(totalMes)+"</div></div>"+
+    '<div class="kpi"><div class="l">Consumido no ano</div><div class="v">'+BRL(totalAno)+"</div></div>":"");
   var h=$("ucHead"),b=$("ucBody");b.innerHTML="";
   if(ucAba==="saldo"){
-    h.innerHTML="<th>Produto</th><th class=\"num\">Em consumo</th><th class=\"num\">No almoxarifado</th><th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th>";
+    h.innerHTML="<th>Produto</th><th class=\"num\">Em consumo</th><th class=\"num\">No almoxarifado</th>"+(podeVerCusto()?"<th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th>":"");
     var l1=comSaldo.filter(function(p){return !q||(p.nome||"").toLowerCase().indexOf(q)>=0;})
       .sort(function(a,b2){return (a.nome||"").localeCompare(b2.nome||"","pt-BR");});
     $("ucCount").textContent=l1.length+(l1.length===1?" produto":" produtos");
@@ -21325,10 +21356,10 @@ function renderEstConsumo(){
       var s=saldoEm(p.id,LOC_CONSUMO);
       b.innerHTML+='<tr><td><div class="t-main">'+esc(p.nome)+'</div><div class="t-sub"><code>'+esc(p.cod)+"</code></div></td>"+
         '<td class="num"><b>'+s+'</b></td><td class="num">'+estEmpresaDe(p)+"</td>"+
-        '<td class="num">'+BRL(custoTotalDe(p))+'</td><td class="num">'+BRL(s*custoTotalDe(p))+"</td></tr>";
+        (podeVerCusto()?'<td class="num">'+BRL(custoTotalDe(p))+'</td><td class="num">'+BRL(s*custoTotalDe(p))+"</td>":"")+"</tr>";
     });
   } else {
-    h.innerHTML="<th>Data</th><th>Produto</th><th class=\"num\">Qtd</th><th>Centro de custo</th><th class=\"num\">Custo</th><th>Quem lançou</th>";
+    h.innerHTML="<th>Data</th><th>Produto</th><th class=\"num\">Qtd</th><th>Centro de custo</th>"+(podeVerCusto()?"<th class=\"num\">Custo</th>":"")+"<th>Quem lançou</th>";
     var l2=lm.filter(function(m){return m.destino===LOC_CONSUMO;})
       .sort(function(a,b2){return (b2.data||"").localeCompare(a.data||"");});
     $("ucCount").textContent=l2.length+(l2.length===1?" baixa":" baixas");
@@ -21338,7 +21369,7 @@ function renderEstConsumo(){
       var c=centroPor(m.centroId);
       b.innerHTML+="<tr><td>"+esc(dataBR(m.data))+"</td><td>"+esc(p.nome||"—")+"</td>"+
         '<td class="num">'+m.qtd+"</td><td>"+esc(c?c.nome:"—")+"</td>"+
-        '<td class="num">'+BRL(custoTotalDe(p)*(+m.qtd||0))+"</td><td>"+esc(m.por||"—")+"</td></tr>";
+        (podeVerCusto()?'<td class="num">'+BRL(custoTotalDe(p)*(+m.qtd||0))+"</td>":"")+"<td>"+esc(m.por||"—")+"</td></tr>";
     });
   }
 }
@@ -25247,7 +25278,7 @@ function relEstoque(P){
   var tipo=$("rs_tipo").value||"posicao",loc=$("rs_local").value,grupo=$("rs_grupo").value;
   var busca=semAcento(String($("rs_busca").value||"")).toLowerCase().trim(),sit=$("rs_sit").value;
   try{$("rs_sitWrap").hidden=(tipo!=="posicao");}catch(e){}
-  var custo=pode("verCustos")||ehAlmox();
+  var custo=podeVerCusto();
   var locs=estoquesDaEmpresa(lojaAtual),nomeDe={};
   locs.forEach(function(e){nomeDe[e.loc]=e.nome;});
   function nomeLoc(l){return nomeDe[l]||nomeLocal(l);}
@@ -43451,7 +43482,7 @@ var GRUPOS_TELA=[
 ];
 var ACOES=[
   ["verTudo","Ver dados de toda a equipe"],
-  ["verCustos","Ver custo e margem dos produtos"],
+  ["verCustos","Ver custo, margem e dados fiscais dos produtos (informação interna)"],
   ["aprovarFinanceiro","Aprovar venda no financeiro"],
   ["reabrirVenda","Reabrir e alterar venda encerrada"],
   ["aprovarDesconto","Aprovar venda abaixo da tabela"],
@@ -43492,10 +43523,10 @@ var SEED_FUNCOES=[
   /* o Financeiro VÊ TUDO, mas nas Configurações só olha (Etapa 2, regra dele de 23/10) */
   {nome:"Financeiro",desc:"Vê tudo; nas Configurações, só olha",
     telas:TODAS_TELAS.slice(),
-    acoes:["verTudo","verCustos","aprovarFinanceiro","reabrirVenda","baixarTitulos","exportar"]},
+    acoes:["verTudo","aprovarFinanceiro","reabrirVenda","baixarTitulos","exportar"]},
   {nome:"Gerente",desc:"Acompanha a equipe e aprova desconto",
     telas:TELAS_OPERACAO.concat(["estEmpresa","faturamento","fatur","metasop"]),
-    acoes:["verTudo","verCustos","aprovarDesconto","editarMetas","exportar"]},
+    acoes:["verTudo","aprovarDesconto","editarMetas","exportar"]},
   {nome:"Vendedor",desc:"Vende, atende e cuida do próprio estoque",telas:TELAS_OPERACAO.slice(),acoes:[]},
   {nome:"Prospector",desc:"Prospecta e agenda",
     telas:["dash","agenda","ponto","metasop","ativ","atend","leads","clientes","produtos"],acoes:[]},
@@ -43506,7 +43537,7 @@ var SEED_FUNCOES=[
       "produtos","manut","estColab","os","fatur","veiculos"],acoes:[]},
   {nome:"Almoxarifado",desc:"Confere nota, move estoque e cuida de todo o almoxarifado",
     telas:["dash","agenda","ponto","leads","clientes","produtos","grupos","estEmpresa","estColab","estConsumo","notas","fornec","relat"],
-    acoes:["entradaNF","moverEstoque","verCustos","almoxarifado","editarProdutos"]}
+    acoes:["entradaNF","moverEstoque","almoxarifado","editarProdutos"]}
 ];
 async function gravarFuncoes(){if(!db)return;try{await db.doc("config/funcoes").set({lista:funcoes});}catch(e){console.warn(e);}}
 /* a mesma gravação, mas o erro SOBE: quem muda permissão precisa saber se o banco aceitou */
@@ -43568,7 +43599,8 @@ var PERFIS_RASTREIO_ANTES=["Administrador","Gerente"];
 var ACOES_POR_PERFIL_ANTES={exportar:["Administrador"],apagarRegistros:["Administrador"],
   corrigirCadastro:["Administrador"],aprovarCredito:["Financeiro","Administrador"],
   autorizarEstoque:["Administrador","Gerente"],almoxarifado:["Administrador","Estoquista","Almoxarifado"],
-  editarProdutos:["Administrador","Almoxarifado","Estoquista","Financeiro","Gerente"]};
+  editarProdutos:["Administrador","Almoxarifado","Estoquista","Financeiro","Gerente"],
+  verCustos:["Administrador"]};
 function ehTravaAdmin(n,tipo,k,perfil){
   return (perfil||perfilDe(n))==="Administrador"&&TRAVA_ADMIN[tipo].indexOf(k)>=0;
 }
@@ -43660,6 +43692,32 @@ function migrarEditarProdutos(lista){
   return feitas;
 }
 var prodPermMigradas=[];
+/* CUSTO É INFORMAÇÃO INTERNA (28/10, regra dele): custo, margem, dados fiscais e valor de
+   estoque pelo custo só para o Administrador e para quem tiver "verCustos" marcado à mão.
+   Uma vez por função (marca custoV): desmarca de todas menos o Administrador. */
+var CUSTO_VERSAO="2026-10-28";
+function migrarVerCustos(lista){
+  var feitas=[];
+  (lista||[]).forEach(function(f){
+    if(!f||f.custoV)return;
+    var a=(f.acoes||[]).slice();
+    if(f.nome==="Administrador"){if(a.indexOf("verCustos")<0)a.push("verCustos");}
+    else a=a.filter(function(x){return x!=="verCustos";});
+    f.acoes=a;f.custoV=CUSTO_VERSAO;feitas.push(f.nome);
+  });
+  return feitas;
+}
+var custoMigradas=[];
+async function gravarMigracaoCustos(){
+  if(!db||!custoMigradas.length||!ehAdministrador())return 0;
+  try{await gravarFuncoesConf();}catch(e){console.warn("custo interno",e);return 0;}
+  custoMigradas=[];
+  try{await registrarLogPerm({alvo:"migracao",nome:"Custo",
+    texto:"Custo interno (28/10): \"Ver custo, margem e dados fiscais\" ficou só no Administrador."});}catch(e){}
+  return 1;
+}
+/* quem vê custo: a ação, e nada mais (o almoxarifado deixou de ver por ser almoxarifado) */
+function podeVerCusto(quem){try{return podeAcao("verCustos",quem);}catch(e){return false;}}
 async function gravarMigracaoProdPerm(){
   if(!db||!prodPermMigradas.length||!ehAdministrador())return 0;
   try{await gravarFuncoesConf();}catch(e){console.warn("permissão de produtos",e);return 0;}
@@ -50600,7 +50658,10 @@ function ligar(){
       await gravarGruposProd();
     }catch(eGC){console.warn("cadastro de grupos",eGC);}
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
-    ["cheiaMax","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){p[k]=numMF($("p_"+k).value)||0;});
+    ["cheiaMax","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){
+      /* quem não vê custo não mexe nele: o que estava gravado continua */
+      if(CAMPOS_CUSTO_PROD.indexOf(k)>=0&&!podeVerCusto())return;
+      p[k]=numMF($("p_"+k).value)||0;});
     p.serie=$("p_serie").value;p.campativa=$("p_campativa").value;p.status=$("p_status").value;
     p.pedeLocal=$("p_pedeLocal").value;
     /* preço mínimo e local da instalação (22/10) */
@@ -51786,6 +51847,7 @@ async function continuarBoot(){
   await passoBoot("permissões flexíveis",gravarMigracaoPermFlex);
   await passoBoot("almoxarifado",gravarMigracaoAlmox);
   await passoBoot("permissão de produtos",gravarMigracaoProdPerm);
+  await passoBoot("custo interno",gravarMigracaoCustos);
   /* os 12 status novos passaram a conduzir a tela: as OS já gravadas ganham o status certo, uma
      vez só, deduzido da lista antiga (pedido dele, 09/10) */
   await passoBoot("acerto do status das OS",ajustarSitOS);
