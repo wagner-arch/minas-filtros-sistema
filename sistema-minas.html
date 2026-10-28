@@ -14346,7 +14346,7 @@ async function aplicarTodasSugestoes(){
   try{renderClientes();atualizarBotaoCidades();}catch(e){}
   renderCidadesConferir();
 }
-window.__ufPeloDDDMF=ufPeloDDD;window.__htmlLigarMF=function(a){return htmlLigarAtividade(a);};
+window.__ufPeloDDDMF=ufPeloDDD;window.__agendadorDeMF=function(a){return agendadorDe(a);};window.__podeEditarAtivMF=function(a){return podeEditarAtiv(a);};window.__htmlLigarMF=function(a){return htmlLigarAtividade(a);};
 window.__ehAlmoxMF=function(q){return ehAlmox(q);};window.__podeMoverEstMF=function(q){return podeMoverEstoque(q);};
 window.__abaRelOkMF=function(a){return abaRelPermitida(a);};window.__migrarAlmoxMF=function(l){return migrarAlmoxarifado(l);};
 window.__relEstoqueMF=function(){return relEstoque(periodoRel());};
@@ -29975,7 +29975,7 @@ function abrirDetalhes(a){
     "Finalize a de <b>"+esc(trava.cliente||"—")+"</b> ("+esc(dataBR(trava.data))+") antes de abrir esta.</div>";
   else if(!podeEditarAtiv(a))$("dt_alerta").innerHTML='<div class="note warn"><b>Só leitura.</b> '+
     "Este compromisso é de <b>"+esc(a.colaborador||"outro colaborador")+"</b>"+
-    (a.criadoPor&&a.criadoPor!==a.colaborador?" e foi agendado por <b>"+esc(a.criadoPor)+"</b>":"")+
+    (agendadorDe(a)&&agendadorDe(a)!==a.colaborador?" e foi agendado por <b>"+esc(agendadorDe(a))+"</b>":"")+
     ". Quem finaliza ou altera é quem agendou, quem vai executar ou a gestão.</div>";
   else if(osAberta&&ativ&&a.status!=="finalizado")
     $("dt_alerta").innerHTML='<div class="note"><b>Esta atividade pertence à OS '+esc(osAberta.numero)+'.</b> '+
@@ -37800,6 +37800,8 @@ async function agendarRetornoOrcamento(o){
     tipos:[TIPO_RETORNO_ORC],tipo:TIPO_RETORNO_ORC,
     data:quando,inicio:"09:00",fim:"",
     obs:obs,origemOrc:o.id,autoVenc:true,
+    /* quem fez o orçamento é quem agendou o lembrete (28/10): sem isto ele não mexia no próprio retorno */
+    criadoPor:o.criadoPor||o.vendedor||usuarioAtual,criadoEm:agoraCarimbo(),
     situacao:"pendente",status:"aberto"};
   atendimentos.push(a);
   {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
@@ -43613,10 +43615,33 @@ function podeMoverEstoque(quem){return pode("moverEstoque",quem)||ehAlmox(quem)|
 /* QUEM ALTERA O COMPROMISSO (24/10, regra dele): "somente quem agendou ou quem vai executar".
    Antes o criador não entrava na conta — quem marcasse a visita para um colega não conseguia
    mais mexer nela. A gestão continua podendo tudo. */
+/* QUEM AGENDOU (28/10). Até 24/10 a atividade não guardava isso (criadoPor) — e quem marcou a
+   visita para um colega não conseguia mais cancelar nem remarcar o que ele mesmo marcou. Sem o
+   campo, quem agendou é quem fez o registro que deu origem a ela: o atendimento do mesmo cliente
+   feito até 3 horas antes (o id de cada registro é o instante em que ele nasceu), ou o orçamento. */
+function agendadorDe(a){
+  if(!a)return "";
+  if(a.criadoPor)return a.criadoPor;
+  if(a.natureza!=="atividade")return "";       /* atendimento é de quem atendeu */
+  try{
+    if(a.origemOrc){var o=orcamentos.filter(function(x){return x.id===a.origemOrc;})[0];
+      if(o)return o.criadoPor||o.vendedor||"";}
+    if(a.origemAtiv){var oa=atendPorId(a.origemAtiv);if(oa)return oa.colaborador||"";}
+    var t=instanteDoRegistro(a);if(!t||!a.clienteId)return "";
+    var melhor=null,dif=1e15;
+    atendimentos.forEach(function(x){
+      if(x===a||x.natureza==="atividade"||x.clienteId!==a.clienteId)return;
+      var tx=instanteDoRegistro(x),d=t-tx;
+      if(!tx||d<-300000||d>3*3600000)return;
+      if(Math.abs(d)<dif){dif=Math.abs(d);melhor=x;}
+    });
+    return melhor?(melhor.colaborador||""):"";
+  }catch(e){return "";}
+}
 function podeEditarAtiv(a){
   if(!a)return true;
   if(ehGestor())return true;
-  return [a.colaborador,a.prospector,a.vendedor,a.instalador,a.criadoPor]
+  return [a.colaborador,a.prospector,a.vendedor,a.instalador,agendadorDe(a)]
     .some(function(n){return n&&n===usuarioAtual;});
 }
 /* o que a pessoa pode mexer no registro aberto:
