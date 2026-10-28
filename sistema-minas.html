@@ -4662,6 +4662,7 @@ img{max-width:100%}
           <button type="button" data-t="receber" aria-current="false">Contas a Receber</button>
           <button type="button" data-t="origens" aria-current="false">Origens</button>
           <button type="button" data-t="centros" aria-current="false">Centros de Custo</button>
+          <button type="button" data-t="estoque" aria-current="false">Estoque</button>
           <button type="button" data-t="dre" aria-current="false">DRE</button>
         </div>
       </div>
@@ -4753,6 +4754,19 @@ img{max-width:100%}
             <select id="rc_uso"><option value="">Todas as cadastradas</option><option value="usadas">Só as que já têm lançamento</option><option value="sem">Só as que nunca foram usadas</option></select></div>
           <div class="fld"><label for="rc_modo">Tipo</label>
             <select id="rc_modo"><option value="lista">Lista de categorias</option><option value="movimento">Com o movimento do período</option></select></div>
+        </div>
+
+        <!-- Estoque (28/10): posição, movimentações e inventário, para o almoxarifado e a gestão -->
+        <div class="grid g4 rl-f" data-rel="estoque" style="margin-top:12px">
+          <div class="fld"><label for="rs_tipo">Relatório</label>
+            <select id="rs_tipo"><option value="posicao">Posição de estoque (saldo de hoje)</option><option value="mov">Movimentações do período</option>
+              <option value="invent">Inventário — contagens e ajustes do período</option></select></div>
+          <div class="fld"><label for="rs_local">Estoque</label><select id="rs_local"></select></div>
+          <div class="fld"><label for="rs_grupo">Grupo do produto</label><select id="rs_grupo"></select></div>
+          <div class="fld"><label for="rs_busca">Produto contém (nome ou código)</label><input id="rs_busca"></div>
+          <div class="fld" id="rs_sitWrap"><label for="rs_sit">Quais produtos</label>
+            <select id="rs_sit"><option value="">Só os que têm saldo</option><option value="abaixo">Abaixo do mínimo (almoxarifado)</option>
+              <option value="negativo">Saldo negativo</option><option value="todos">Todos os produtos ativos (no almoxarifado)</option></select></div>
         </div>
 
         <div class="grid g4 rl-f" data-rel="pagar receber" style="margin-top:12px">
@@ -9171,6 +9185,7 @@ async function carregar(){
   PADROES_LANC=JSON.parse(JSON.stringify(SEED_PADROES));
   funcoes=JSON.parse(JSON.stringify(SEED_FUNCOES));
   try{migrarPermFlex(funcoes);}catch(e){console.warn(e);}
+  try{migrarAlmoxarifado(funcoes);}catch(e){console.warn(e);}
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
   motivos=SEED_MOTIVOS.slice();
@@ -9396,6 +9411,7 @@ async function carregar(){
     /* permissões flexíveis (27/10): ANTES de migrarTelasNovas, senão "rastreio" (tela nova na
        lista) iria para todo mundo que tem "ver tudo" — inclusive o Financeiro */
     try{permFlexMigradas=migrarPermFlex(funcoes);}catch(eFx){console.warn("permissões flexíveis",eFx);}
+    try{almoxMigradas=migrarAlmoxarifado(funcoes);}catch(eAx){console.warn("almoxarifado",eAx);}
     await migrarTelasNovas();
     try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
     /* foto de referência de cada um (coleção própria: cada pessoa grava a sua) */
@@ -14325,6 +14341,9 @@ async function aplicarTodasSugestoes(){
   renderCidadesConferir();
 }
 window.__ufPeloDDDMF=ufPeloDDD;
+window.__ehAlmoxMF=function(q){return ehAlmox(q);};window.__podeMoverEstMF=function(q){return podeMoverEstoque(q);};
+window.__abaRelOkMF=function(a){return abaRelPermitida(a);};window.__migrarAlmoxMF=function(l){return migrarAlmoxarifado(l);};
+window.__relEstoqueMF=function(){return relEstoque(periodoRel());};
 window.__analisarCidadesMF=function(){esquecerAnaliseCidades();return analiseCidades();};
 window.__esquecerCidadesMF=esquecerAnaliseCidades;
 window.__ufsDaCidadeMF=ufsDaCidade;
@@ -15735,7 +15754,7 @@ var sucPend=null,sucPecas=[];
 /* Quem registra a recuperação é o almoxarifado — a ação "Movimentar e transferir estoque"
    (regra dele, 13/10). Administrador e Estoquista têm; Financeiro e Gerente só olham. */
 function podeAvaliarSucata(){
-  return pode("moverEstoque");
+  return pode("moverEstoque")||ehAlmox();
 }
 /* custo do seminovo = soma das peças aplicadas (quantidade × custo do cadastro).
    Mão de obra e o valor dado ao cliente na troca NÃO entram — regra dele. */
@@ -18973,7 +18992,7 @@ function nomeLojaId(id){return (LOJAS.filter(function(l){return l.id===id;})[0]|
    O vendedor vendeu sem estoque disponível: escolhe se sai do estoque geral (almoxarifado da loja) ou de outra
    loja. Ao salvar o pedido nasce a solicitação (requisição tipo "retirada"), o responsável pelo estoque aceita ou
    recusa, e só aceitando o estoque se move. A Aprovação Financeira espera a retirada aceita. */
-function podeAprovarRetirada(){return pode("moverEstoque")||podeConferir();}
+function podeAprovarRetirada(){return pode("moverEstoque")||podeConferir()||ehAlmox();}
 function retiradasPendentesSaindo(pid,loja){
   return requisicoes.filter(function(r){return r.tipo==="retirada"&&r.status==="pendente"&&(r.lojaOrigem||r.loja)===loja;})
     .reduce(function(a,r){return a+r.itens.filter(function(i){return i.pid===pid;}).reduce(function(b,i){return b+(+i.qtd||0);},0);},0);
@@ -19051,6 +19070,9 @@ function podeAutorizarEstoque(loc,quem){
   /* 27/10: virou a ação "Autorizar venda do estoque de outra pessoa" (antes: os perfis
      Administrador e Gerente; a migração marcou a ação para exatamente esses dois) */
   if(podeAcao("autorizarEstoque",q))return true;
+  /* o almoxarifado responde por todos os estoques da empresa (28/10) — é isto que deixa ele
+     lançar a contagem do Estoque da Loja e decidir a saída de qualquer estoque */
+  if(ehAlmox(q))return true;
   return respondePeloEstoque(q,loc);
 }
 /* o estoque escolhido no campo "Sai de" da linha do item; "meu" é o de quem entrega */
@@ -19107,7 +19129,7 @@ var cgLocal="";
 function abrirContagem(loc){
   cgLocal=loc||locLoja(lojaAtual);
   if(!podeAutorizarEstoque(cgLocal)){
-    toast("Só "+(donoDoEstoque(cgLocal)||"quem responde por este estoque")+" ou a gestão lança a contagem.");
+    toast("Só "+(donoDoEstoque(cgLocal)||"quem responde por este estoque")+", o almoxarifado ou a gestão lança a contagem.");
     return;}
   $("cg_sub").textContent=nomeLocal(cgLocal)+" · "+dataBR(hojeISO());
   var lista=produtos.filter(function(pr){return saldoEm(pr.id,cgLocal)!==0;})
@@ -20383,6 +20405,9 @@ async function confirmarEstoque(){
       : "Devolução registrada. Aguardando conferência do almoxarifado.");
     renderEstColab();renderEstEmpresa();return;
   }
+  if((esModo==="mov"||esModo==="transf")&&!podeMoverEstoque()){
+    $("es_alerta").innerHTML='<div class="note crit"><b>Sem permissão para movimentar estoque.</b> Quem lança movimento e '+
+      "transfere é o almoxarifado ou a gestão. Peça ao Administrador em Configurações › Permissões.</div>";return;}
   var org=$("es_origem").value,dst=$("es_destino").value;
   if(org===dst){$("es_alerta").innerHTML='<div class="note crit"><b>Origem e destino não podem ser o mesmo estoque.</b></div>';return;}
   if(esModo==="transf"&&(org===LOC_CONSUMO||dst===LOC_CONSUMO)){
@@ -20450,6 +20475,7 @@ function renderEstEmpresa(){
     $("eeRecPer").hidden=(eeAba!=="rec");
     $("eeRecCsv").hidden=(eeAba!=="rec"||!podeExportar());
     $("eeFiltro").hidden=(eeAba==="rec");
+    var pmv=podeMoverEstoque();$("eeMov").hidden=!pmv;$("eeTransf").hidden=!pmv;
   }catch(eR){}
   var q=($("eeBusca").value||"").toLowerCase(),f=$("eeFiltro").value;
   var todos=produtos.filter(function(p){return (p.status||"ativo")==="ativo";});
@@ -20775,8 +20801,10 @@ function renderEstColab(){
   if(ecTipo==="ferr")return renderEstColabFerr();
   var sq=$("ecQuem"),euEst=euNoEstoque(),atual=sq.value;
   /* quem não é da gestão vê o próprio estoque e os Estoques de Loja que ele responde */
-  var lista=ehGestor()?colabsComEstoque():[euEst];
-  var lojasEst=(ehGestor()?LOJAS:lojasQueRespondo(euEst)).map(function(l){return locLoja(l.id);});
+  /* a gestão e o almoxarifado (28/10) veem o estoque de todos */
+  var verTodosEst=ehGestor()||ehAlmox();
+  var lista=verTodosEst?colabsComEstoque():[euEst];
+  var lojasEst=(verTodosEst?LOJAS:lojasQueRespondo(euEst)).map(function(l){return locLoja(l.id);});
   sq.innerHTML="";
   lojasEst.forEach(function(lc){
     var o=document.createElement("option");o.value=lc;
@@ -20786,7 +20814,7 @@ function renderEstColab(){
   lista.forEach(function(nm){var o=document.createElement("option");o.value=nm;o.textContent=nm;sq.appendChild(o);});
   if(!lista.length&&!lojasEst.length){var o=document.createElement("option");o.textContent="— ninguém com estoque —";sq.appendChild(o);}
   var valores=lojasEst.concat(lista);
-  sq.disabled=(!ehGestor()&&valores.length<2);
+  sq.disabled=(!verTodosEst&&valores.length<2);
   if(atual&&valores.indexOf(atual)>=0)sq.value=atual;
   else if(valores.indexOf(euEst)>=0)sq.value=euEst;
   else if(valores.length)sq.value=valores[0];
@@ -20856,7 +20884,7 @@ function renderEstColab(){
     var minhas=[],outras=[];
     autorizacoesEstoque().forEach(function(x){
       if(x.aut.status==="pendente"&&podeAutorizarEstoque(x.aut.local))minhas.push(x);
-      else if(ehGestor()||x.aut.pedidaPor===euEst||podeAutorizarEstoque(x.aut.local))outras.push(x);
+      else if(ehGestor()||ehAlmox()||x.aut.pedidaPor===euEst||podeAutorizarEstoque(x.aut.local))outras.push(x);
     });
     var todas=minhas.concat(outras).filter(function(x){
       return !q||((x.item.nome||"")+" "+(x.ped.numero||"")+" "+(x.ped.cliente||"")+" "+(x.aut.pedidaPor||""))
@@ -23893,7 +23921,7 @@ function responsavelAlmox(){
 function ehAlmoxOuGestor(){
   var eu=euNoEstoque();
   try{if(respondePeloEstoque(eu,LOC_EMPRESA))return true;}catch(e){}
-  return usuarioAtual===responsavelAlmox()||ehGestor()||pode("moverEstoque");
+  return usuarioAtual===responsavelAlmox()||ehGestor()||pode("moverEstoque")||ehAlmox();
 }
 function possesDoVeic(id){
   return posses.filter(function(p){return p.veiculoId===id;})
@@ -24678,6 +24706,7 @@ var REL_AJUDA={
   fechamento:"O que entrou e saiu dos caixas no período, por centro de custo — no modelo do fechamento do LSoft. Créditos (1) e débitos (2), com os totais de cada conta e o total geral.",
   pagar:"Títulos a pagar pela data de vencimento, emissão ou pagamento, com totais pagos, em aberto e vencidos.",
   receber:"Títulos a receber pela data de vencimento, emissão ou recebimento, com totais recebidos, em aberto e vencidos.",
+  estoque:"O que tem em cada estoque da empresa (almoxarifado, Estoque da Loja e o de cada colaborador), tudo o que entrou e saiu no período, e as contagens e ajustes de inventário com a diferença de cada produto.",
   centros:"As categorias de entrada e saída cadastradas, com o código, o grupo e o subgrupo — no modelo da Lista de Categorias do sistema antigo. Dá para ver só as que têm lançamento e somar o movimento do período.",
   origens:"Por onde os contatos chegaram e quanto cada origem rendeu no período: novos cadastros, quantos viraram cliente, atendimentos, vendas, total vendido e ticket médio."};
 function numRel(v){return (Number(v)||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});}
@@ -24720,7 +24749,7 @@ function rodapeRel(n,rot){
   return '<div class="rel-reg">'+n+" "+esc(rot||(n===1?"registro":"registros"))+"</div>";
 }
 var REL_NOMES={vendas:"Relatório de Vendas",fechamento:"Relatório Fechamento do Mês",pagar:"Relatório de Contas a Pagar",
-  receber:"Relatório de Contas a Receber",origens:"Relatório de Origens",centros:"Lista de Categorias",dre:"DRE - Demonstração do Resultado"};
+  receber:"Relatório de Contas a Receber",origens:"Relatório de Origens",centros:"Lista de Categorias",estoque:"Relatório de Estoque",dre:"DRE - Demonstração do Resultado"};
 function textoRodapeRel(aba){return "Sistema Minas Filtros - Sistema de Gestão Comercial - "+(REL_NOMES[aba]||"Relatório");}
 /* folha: o cabeçalho fica no thead de uma tabela externa — na impressão ele se repete no alto de cada página,
    como no flu009; o rodapé da tela é o mesmo que a impressão põe no pé de cada página (com o número da página) */
@@ -24800,15 +24829,38 @@ function opcoesRelatorios(){
   encherMulti("rg_uf",listaUF,"Todos os estados","estados");
   encher("rg_quem",EQUIPE.slice(),"Todos");encher("rg_vend",EQUIPE.slice(),"Todos");
   encher("rt_caixa",cx.map(function(c){return {v:c.id,t:codConta(c.id)+" · "+c.nome};}),"Todos");
+  try{
+    encher("rs_local",estoquesDaEmpresa(lojaAtual).map(function(e){return {v:e.loc,t:e.nome};}),"Todos os estoques");
+    encher("rs_grupo",listaGruposProd(),"Todos");
+  }catch(eRs){console.warn(eRs);}
+}
+/* quem é só do almoxarifado (sem "ver tudo") vê só a aba Estoque — o acesso completo dele é ao
+   almoxarifado, não aos relatórios de venda, de caixa e de contas (28/10) */
+function abaRelPermitida(a){
+  if(a==="estoque")return ehGestor()||ehAlmox();
+  return pode("verTudo")||!ehAlmox();
 }
 function mostrarAbaRel(){
-  Array.prototype.forEach.call($("rlAbas").querySelectorAll("button"),function(b){b.setAttribute("aria-current",String(b.getAttribute("data-t")===relAba));});
+  if(!abaRelPermitida(relAba)){
+    var pr=Array.prototype.map.call($("rlAbas").querySelectorAll("button"),function(b){return b.getAttribute("data-t");})
+      .filter(abaRelPermitida)[0];
+    if(pr)relAba=pr;
+  }
+  Array.prototype.forEach.call($("rlAbas").querySelectorAll("button"),function(b){
+    b.hidden=!abaRelPermitida(b.getAttribute("data-t"));
+    b.setAttribute("aria-current",String(b.getAttribute("data-t")===relAba));});
+  try{
+    var phr=document.querySelector("#s-relat .page-head p");
+    if(phr){if(!phr.__orig)phr.__orig=phr.textContent;
+      phr.textContent=(pode("verTudo")||!ehAlmox())?phr.__orig
+        :"Relatórios de estoque: posição de cada estoque, movimentações do período e inventário. Escolha os filtros e gere.";}
+  }catch(eP){}
   var dre=relAba==="dre";
   $("rlFiltros").hidden=dre;$("rlSaida").hidden=dre;$("rlDre").hidden=!dre;
   if(dre){try{renderDRE();}catch(e){console.warn(e);}return;}
   Array.prototype.forEach.call(document.querySelectorAll("#rlFiltros .rl-f"),function(el){
     el.hidden=String(el.getAttribute("data-rel")).split(" ").indexOf(relAba)<0;});
-  var tit={vendas:"Filtros do relatório de vendas",fechamento:"Filtros do fechamento do mês",pagar:"Filtros de contas a pagar",receber:"Filtros de contas a receber",origens:"Filtros do relatório de origens"}[relAba];
+  var tit={estoque:"Filtros do relatório de estoque",vendas:"Filtros do relatório de vendas",fechamento:"Filtros do fechamento do mês",pagar:"Filtros de contas a pagar",receber:"Filtros de contas a receber",origens:"Filtros do relatório de origens"}[relAba];
   $("rlFiltTit").textContent=tit;$("rlFiltAjuda").textContent=REL_AJUDA[relAba];
   var rec=relAba==="receber";
   $("rt_pessoaRot").textContent=rec?"Cliente contém":"Fornecedor contém";
@@ -24842,7 +24894,10 @@ function ligarRelatorios(){
         '<button class="btn ghost" type="button" id="rl_dreImp">Imprimir / salvar em PDF</button>')
       :'<span class="count">Baixar e imprimir: só o Administrador.</span>';
     alvo.appendChild(bar);
-    $("rl_dreCsv").onclick=exportarRelatorioCSV;$("rl_dreImp").onclick=imprimirRelatorio;
+    /* sem a permissão de exportar os dois botões nem existem — e ligar o clique num botão que não
+       existe derrubava a tela inteira na primeira abertura (abas sem clique, relatório em branco) */
+    if($("rl_dreCsv"))$("rl_dreCsv").onclick=exportarRelatorioCSV;
+    if($("rl_dreImp"))$("rl_dreImp").onclick=imprimirRelatorio;
   }
   Array.prototype.forEach.call($("rlAbas").querySelectorAll("button"),function(b){
     b.onclick=function(){
@@ -24872,12 +24927,154 @@ function gerarRelatorio(){
     ["rl_csv","rl_imprimir","rl_dreCsv","rl_dreImp"].forEach(function(id){var e=$(id);if(e)e.hidden=!pe;});
   }catch(e){}
   if(relAba==="dre")return;
+  if(!abaRelPermitida(relAba)){$("rlSaida").innerHTML="";return;}
   var P=periodoRel();
   if(P.de>P.ate){$("rl_alerta").innerHTML='<div class="note crit"><b>A data inicial é depois da final.</b> Corrija o período.</div>';return;}
   $("rl_alerta").innerHTML="";
-  var r=relAba==="vendas"?relVendas(P):relAba==="fechamento"?relFechamento(P):relAba==="origens"?relOrigens(P):relAba==="centros"?relCentros(P):relTitulos(relAba,P);
+  var r=relAba==="estoque"?relEstoque(P):relAba==="vendas"?relVendas(P):relAba==="fechamento"?relFechamento(P):relAba==="origens"?relOrigens(P):relAba==="centros"?relCentros(P):relTitulos(relAba,P);
   relUltimo=r;
   $("rlSaida").innerHTML='<div class="rel-folha" id="relFolha">'+montarFolhaRel(r,relAba)+"</div>";
+}
+
+/* ---------- RELATÓRIO DE ESTOQUE (28/10, pedido dele: o almoxarifado consulta posição,
+   histórico e inventário). Três relatórios na mesma aba: a POSIÇÃO de hoje em cada estoque,
+   as MOVIMENTAÇÕES do período e o INVENTÁRIO (contagens e ajustes, com a diferença).
+   Tudo sai do razão (movEst), que é de onde o saldo do sistema sempre saiu. ---------- */
+function relEstoque(P){
+  var tipo=$("rs_tipo").value||"posicao",loc=$("rs_local").value,grupo=$("rs_grupo").value;
+  var busca=semAcento(String($("rs_busca").value||"")).toLowerCase().trim(),sit=$("rs_sit").value;
+  try{$("rs_sitWrap").hidden=(tipo!=="posicao");}catch(e){}
+  var custo=pode("verCustos")||ehAlmox();
+  var locs=estoquesDaEmpresa(lojaAtual),nomeDe={};
+  locs.forEach(function(e){nomeDe[e.loc]=e.nome;});
+  function nomeLoc(l){return nomeDe[l]||nomeLocal(l);}
+  function casa(p){
+    if(!p)return !grupo&&!busca;
+    if(grupo&&String(p.grupo||"")!==grupo)return false;
+    if(busca&&semAcento((p.nome||"")+" "+(p.cod||"")).toLowerCase().indexOf(busca)<0)return false;
+    return true;
+  }
+  function un(p){return (p&&p.un)||"UN";}
+  var filt=filtrosUsados([["rs_tipo","Relatório","posicao"],["rs_local","Estoque"],["rs_grupo","Grupo"],["rs_busca","Produto"]]
+    .concat(tipo==="posicao"?[["rs_sit","Produtos"]]:[]));
+  var titulo={posicao:"RELATÓRIO DE ESTOQUE - POSIÇÃO",mov:"RELATÓRIO DE ESTOQUE - MOVIMENTAÇÕES",
+    invent:"RELATÓRIO DE ESTOQUE - INVENTÁRIO (CONTAGENS E AJUSTES)"}[tipo];
+  var nomeArq="Estoque_"+tipo+"_"+hojeISO();
+  var csv,h="";
+
+  if(tipo==="posicao"){
+    /* saldo de cada produto em cada estoque, numa passada só pelo razão */
+    var S={};
+    movEst.forEach(function(m){
+      if(m.loja!==lojaAtual)return;
+      var q=+m.qtd||0;
+      if(m.destino){S[m.destino]=S[m.destino]||{};S[m.destino][m.produtoId]=(S[m.destino][m.produtoId]||0)+q;}
+      if(m.origem){S[m.origem]=S[m.origem]||{};S[m.origem][m.produtoId]=(S[m.origem][m.produtoId]||0)-q;}
+    });
+    var locais=loc?locs.filter(function(e){return e.loc===loc;}):locs;
+    csv=[["Estoque","Código","Produto","Grupo","Unidade","Saldo","Mínimo"].concat(custo?["Custo unitário","Valor"]:[])];
+    var gItens=0,gUn=0,gVal=0,gAbaixo=0;
+    locais.forEach(function(e){
+      var sl=S[e.loc]||{},ehAlmoxLoc=(e.loc===LOC_EMPRESA);
+      var lin=produtos.filter(function(p){
+        if(!casa(p))return false;
+        var sd=sl[p.id]||0,ativo=(p.status||"ativo")==="ativo",mn=ehAlmoxLoc?((p.estmin&&p.estmin[lojaAtual])||0):0;
+        if(sit==="abaixo")return ehAlmoxLoc&&mn>0&&sd<mn;
+        if(sit==="negativo")return sd<0;
+        if(sit==="todos")return ehAlmoxLoc?(ativo||sd!==0):sd!==0;
+        return sd!==0;
+      }).sort(function(a,b){return String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR");});
+      if(!lin.length&&!loc)return;
+      var tUn=0,tVal=0,tAb=0;
+      h+='<div class="rel-grupo">'+esc(e.nome)+(e.pessoa?" · "+esc(e.ajuda):"")+"</div>";
+      if(!lin.length){h+=vazioRel();return;}
+      h+='<table class="rel-tab"><thead><tr><th style="width:11%">Código</th><th>Produto</th><th style="width:15%">Grupo</th>'+
+        '<th style="width:6%">Un.</th><th class="n" style="width:8%">Saldo</th>'+(ehAlmoxLoc?'<th class="n" style="width:8%">Mínimo</th>':"")+
+        (custo?'<th class="n" style="width:11%">Custo unit.</th><th class="n" style="width:12%">Valor</th>':"")+"</tr></thead><tbody>";
+      lin.forEach(function(p){
+        var sd=sl[p.id]||0,mn=ehAlmoxLoc?((p.estmin&&p.estmin[lojaAtual])||0):0,cu=custoTotalDe(p),v=sd*cu;
+        var abaixo=ehAlmoxLoc&&mn>0&&sd<mn;
+        tUn+=sd;tVal+=v;if(abaixo)tAb++;
+        h+="<tr><td>"+esc(p.cod||"—")+'</td><td class="d">'+esc(p.nome||"")+((p.status||"ativo")!=="ativo"?" (inativo)":"")+
+          '</td><td class="d">'+esc(p.grupo||"")+"</td><td>"+esc(un(p))+'</td><td class="n"'+(sd<0||abaixo?' style="color:#b3261e;font-weight:700"':"")+">"+sd+"</td>"+
+          (ehAlmoxLoc?'<td class="n">'+(mn||"—")+"</td>":"")+
+          (custo?'<td class="n">'+numRel(cu)+'</td><td class="n">'+numRel(v)+"</td>":"")+"</tr>";
+        csv.push([e.nome,p.cod||"",p.nome||"",p.grupo||"",un(p),sd,ehAlmoxLoc?(mn||""):""].concat(custo?[numRel(cu),numRel(v)]:[]));
+      });
+      h+="</tbody></table>";
+      var tl=[{n:"Itens:",v:lin.length,i:1},{n:"Unidades:",v:tUn,i:1}];
+      if(ehAlmoxLoc)tl.push({n:"Abaixo do mínimo:",v:tAb,i:1});
+      if(custo)tl.push({n:"Valor em estoque:",v:tVal,s:1});
+      h+=totRel(tl,"grupo");
+      gItens+=lin.length;gUn+=tUn;gVal+=tVal;gAbaixo+=tAb;
+    });
+    if(!h)h=vazioRel();
+    var gl=[{n:"Itens:",v:gItens,i:1},{n:"Unidades:",v:gUn,i:1},{n:"Abaixo do mínimo:",v:gAbaixo,i:1}];
+    if(custo)gl.push({n:"Valor total:",v:gVal,s:1});
+    h+=totRel(gl,"geral")+rodapeRel(gItens,gItens===1?"linha":"linhas");
+    return {cab:cabecalhoRel(titulo,"Posição em "+dataCurta(hojeISO())+" às "+agoraHM(),filt),html:h,csv:csv,nome:nomeArq};
+  }
+
+  /* movimentações e inventário: o razão do período */
+  var lista=movEst.filter(function(m){
+    if(m.loja!==lojaAtual)return false;
+    var d=String(m.data||"");
+    if(d<P.de||d>P.ate)return false;
+    if(tipo==="invent"&&m.origem!=="ajuste"&&m.destino!=="ajuste")return false;
+    /* o saldo que o cadastro trazia e o da importação da lista não são contagem: entram com
+       "ajuste" de um lado só por serem o ponto de partida, e encheriam o inventário de falsa divergência */
+    if(tipo==="invent"&&(m.doc==="Estoque inicial"||m.doc===DOC_IMPORT))return false;
+    if(loc&&m.origem!==loc&&m.destino!==loc)return false;
+    return casa(prodPorId(m.produtoId));
+  }).sort(function(a,b){return String(a.data||"").localeCompare(String(b.data||""))||String(a.em||"").localeCompare(String(b.em||""));});
+  var cab=cabecalhoRel(titulo,P.txt,filt);
+  if(tipo==="mov"){
+    csv=[["Data","Documento","Código","Produto","Sai de","Entra em","Quantidade"].concat(custo?["Valor"]:[]).concat(["Quem","Observação"])];
+    var ent=0,sai=0,tv=0;
+    if(lista.length){
+      h+='<table class="rel-tab"><thead><tr><th style="width:9%">Data</th><th style="width:14%">Documento</th><th>Produto</th>'+
+        '<th style="width:13%">Sai de</th><th style="width:13%">Entra em</th><th class="n" style="width:7%">Qtd</th>'+
+        (custo?'<th class="n" style="width:10%">Valor</th>':"")+'<th style="width:10%">Quem</th></tr></thead><tbody>';
+      lista.forEach(function(m){
+        var p=prodPorId(m.produtoId),q=+m.qtd||0,v=q*custoTotalDe(p||{});
+        if(loc){if(m.destino===loc)ent+=q;if(m.origem===loc)sai+=q;}
+        tv+=v;
+        h+="<tr><td>"+esc(dataCurta(m.data))+'</td><td class="d">'+esc(m.doc||"")+'</td><td class="d">'+esc(p?p.nome:"(produto removido)")+
+          (m.obs?'<div style="font-size:9px;color:#555">'+esc(m.obs)+"</div>":"")+'</td><td class="d">'+esc(nomeLoc(m.origem))+'</td><td class="d">'+esc(nomeLoc(m.destino))+
+          '</td><td class="n">'+q+"</td>"+(custo?'<td class="n">'+numRel(v)+"</td>":"")+'<td class="d">'+esc(m.por||"")+"</td></tr>";
+        csv.push([dataCurta(m.data),m.doc||"",p?p.cod||"":"",p?p.nome:"",nomeLoc(m.origem),nomeLoc(m.destino),q]
+          .concat(custo?[numRel(v)]:[]).concat([m.por||"",m.obs||""]));
+      });
+      h+="</tbody></table>";
+    }else h=vazioRel();
+    var tm=[{n:"Movimentos:",v:lista.length,i:1}];
+    if(loc)tm=tm.concat([{n:"Entradas (un.):",v:ent,i:1},{n:"Saídas (un.):",v:sai,i:1},{n:"Saldo do período:",v:ent-sai,i:1,s:1}]);
+    if(custo)tm.push({n:"Valor movimentado:",v:tv,s:!loc});
+    h+=totRel(tm,"geral")+rodapeRel(lista.length,lista.length===1?"movimento":"movimentos");
+    return {cab:cab,html:h,csv:csv,nome:nomeArq};
+  }
+  /* inventário: o lado do ajuste é a diferença — entrou vindo de "ajuste" é sobra, saiu para "ajuste" é falta */
+  csv=[["Data","Estoque","Código","Produto","Diferença"].concat(custo?["Valor da diferença"]:[]).concat(["Documento","Quem","Observação"])];
+  var sob=0,fal=0,vs=0,vf=0;
+  if(lista.length){
+    h+='<table class="rel-tab"><thead><tr><th style="width:9%">Data</th><th style="width:16%">Estoque</th><th>Produto</th>'+
+      '<th class="n" style="width:9%">Diferença</th>'+(custo?'<th class="n" style="width:11%">Valor</th>':"")+
+      '<th style="width:16%">Documento</th><th style="width:10%">Quem</th></tr></thead><tbody>';
+    lista.forEach(function(m){
+      var p=prodPorId(m.produtoId),q=+m.qtd||0,dif=(m.origem==="ajuste")?q:-q;
+      var est=(m.origem==="ajuste")?m.destino:m.origem,v=dif*custoTotalDe(p||{});
+      if(dif>0){sob+=dif;vs+=v;}else{fal+=-dif;vf+=-v;}
+      h+="<tr><td>"+esc(dataCurta(m.data))+'</td><td class="d">'+esc(nomeLoc(est))+'</td><td class="d">'+esc(p?p.nome:"(produto removido)")+
+        (m.obs?'<div style="font-size:9px;color:#555">'+esc(m.obs)+"</div>":"")+'</td><td class="n" style="font-weight:700;color:'+(dif<0?"#b3261e":"#1b6e3a")+'">'+(dif>0?"+":"")+dif+"</td>"+
+        (custo?'<td class="n">'+numRel(v)+"</td>":"")+'<td class="d">'+esc(m.doc||"")+'</td><td class="d">'+esc(m.por||"")+"</td></tr>";
+      csv.push([dataCurta(m.data),nomeLoc(est),p?p.cod||"":"",p?p.nome:"",dif].concat(custo?[numRel(v)]:[]).concat([m.doc||"",m.por||"",m.obs||""]));
+    });
+    h+="</tbody></table>";
+  }else h=vazioRel();
+  var ti=[{n:"Ajustes:",v:lista.length,i:1},{n:"Sobras (un.):",v:sob,i:1},{n:"Faltas (un.):",v:fal,i:1}];
+  if(custo)ti=ti.concat([{n:"Valor das sobras:",v:vs},{n:"Valor das faltas:",v:vf},{n:"Diferença líquida:",v:vs-vf,s:1}]);
+  h+=totRel(ti,"geral")+rodapeRel(lista.length,lista.length===1?"ajuste":"ajustes");
+  return {cab:cab,html:h,csv:csv,nome:nomeArq};
 }
 
 /* ---------- Lista de Categorias · centros de custo (v246, no modelo do relatório cat.rpt do LSoft
@@ -26013,7 +26210,7 @@ async function salvarNota(){
 
 /* ---------- conferência do almoxarifado ---------- */
 var notaConf=null;
-function podeConferir(){return pode("entradaNF");}
+function podeConferir(){return pode("entradaNF")||ehAlmox();}
 function abrirConferencia(n){
   notaConf=n;
   $("nfLista").hidden=true;$("nfForm").hidden=true;$("nfConf").hidden=false;
@@ -42918,7 +43115,11 @@ var ACOES=[
   ["apagarRegistros","Apagar registros (lixeira)"],
   ["corrigirCadastro","Corrigir nome e CPF/CNPJ de cliente"],
   ["aprovarCredito","Aprovar crédito (cheque e boleto)"],
-  ["autorizarEstoque","Autorizar venda do estoque de outra pessoa"]
+  ["autorizarEstoque","Autorizar venda do estoque de outra pessoa"],
+  /* 28/10 (pedido dele): o almoxarifado com acesso completo ao que é do almoxarifado —
+     todos os estoques, contagens, autorizações de estoque e relatórios de estoque —
+     sem ganhar nada de administração, financeiro ou comercial */
+  ["almoxarifado","Acesso completo ao almoxarifado (todos os estoques, contagens e relatórios de estoque)"]
 ];
 var TODAS_TELAS=GRUPOS_TELA.reduce(function(a,g){return a.concat(g.telas.map(function(t){return t[0];}));},[]);
 /* as telas do dia a dia, que as funções padrão recebem. NÃO é o grupo do menu: o grupo
@@ -42949,8 +43150,8 @@ var SEED_FUNCOES=[
     telas:["dash","agenda","ponto","metasop","ativ","atend","pedidos","leads","clientes",
       "produtos","manut","estColab","os","fatur","veiculos"],acoes:[]},
   {nome:"Estoquista",desc:"Almoxarifado: confere nota e move estoque",
-    telas:["dash","agenda","ponto","leads","clientes","produtos","estEmpresa","estColab","estConsumo","notas","fornec"],
-    acoes:["entradaNF","moverEstoque","verCustos"]}
+    telas:["dash","agenda","ponto","leads","clientes","produtos","grupos","estEmpresa","estColab","estConsumo","notas","fornec","relat"],
+    acoes:["entradaNF","moverEstoque","verCustos","almoxarifado"]}
 ];
 async function gravarFuncoes(){if(!db)return;try{await db.doc("config/funcoes").set({lista:funcoes});}catch(e){console.warn(e);}}
 /* a mesma gravação, mas o erro SOBE: quem muda permissão precisa saber se o banco aceitou */
@@ -43006,7 +43207,7 @@ var PERFIS_FERR_ANTES=["Administrador","Estoquista"];
 var PERFIS_RASTREIO_ANTES=["Administrador","Gerente"];
 var ACOES_POR_PERFIL_ANTES={exportar:["Administrador"],apagarRegistros:["Administrador"],
   corrigirCadastro:["Administrador"],aprovarCredito:["Financeiro","Administrador"],
-  autorizarEstoque:["Administrador","Gerente"]};
+  autorizarEstoque:["Administrador","Gerente"],almoxarifado:["Administrador","Estoquista"]};
 function ehTravaAdmin(n,tipo,k,perfil){
   return (perfil||perfilDe(n))==="Administrador"&&TRAVA_ADMIN[tipo].indexOf(k)>=0;
 }
@@ -43068,6 +43269,32 @@ function migrarPermFlex(lista){
   return feitas;
 }
 var permFlexMigradas=[];
+/* 28/10: a ação "almoxarifado" nasce no Administrador e no Estoquista, e o Estoquista ganha as
+   telas do almoxarifado que faltavam (Grupos de Produtos e Relatórios — onde ele só vê a aba
+   Estoque). Uma vez por função (marca almoxV): se depois alguém desmarcar, fica desmarcado. */
+var ALMOX_VERSAO="2026-10-28";
+var TELAS_ALMOX=["produtos","grupos","estEmpresa","estColab","estConsumo","notas","fornec","ferramentas","relat"];
+function migrarAlmoxarifado(lista){
+  var feitas=[];
+  (lista||[]).forEach(function(f){
+    if(!f||f.almoxV)return;
+    var a=(f.acoes||[]).slice(),t=(f.telas||[]).slice();
+    if(f.nome==="Administrador"||f.nome==="Estoquista"){if(a.indexOf("almoxarifado")<0)a.push("almoxarifado");}
+    if(f.nome==="Estoquista")TELAS_ALMOX.forEach(function(k){if(t.indexOf(k)<0)t.push(k);});
+    f.acoes=a;f.telas=t;f.almoxV=ALMOX_VERSAO;feitas.push(f.nome);
+  });
+  return feitas;
+}
+var almoxMigradas=[];
+async function gravarMigracaoAlmox(){
+  if(!db||!almoxMigradas.length||!ehAdministrador())return 0;
+  try{await gravarFuncoesConf();}catch(e){console.warn("almoxarifado",e);return 0;}
+  almoxMigradas=[];
+  try{await registrarLogPerm({alvo:"migracao",nome:"Estoquista",
+    texto:"Almoxarifado completo: a ação \"Acesso completo ao almoxarifado\" foi dada ao Administrador e ao "+
+      "Estoquista, e o Estoquista ganhou Grupos de Produtos e Relatórios (só a aba Estoque)."});}catch(e){}
+  return 1;
+}
 /* grava a migração: só o Administrador grava as funções (regra do banco) */
 async function gravarMigracaoPermFlex(){
   if(!db||!permFlexMigradas.length||!ehAdministrador())return 0;
@@ -43253,6 +43480,15 @@ function ehGestor(){
   if(!funcoes.length)return PERFIS_GESTAO.indexOf(perfilDe(usuarioAtual))>=0;
   return pode("verTudo");
 }
+/* ALMOXARIFADO COMPLETO (28/10, pedido dele): quem tem a ação "almoxarifado" enxerga e
+   mexe em TODO estoque da empresa — almoxarifado, Estoque da Loja e o de cada colaborador —,
+   lança contagem, autoriza saída de estoque, recebe requisição e devolução, avalia a sucata e
+   vê os relatórios de estoque. NÃO dá "ver tudo": vendas, financeiro e configurações seguem
+   pela marcação de cada tela. A conta é por AÇÃO, então dá para dar ou tirar na tela de
+   Permissões, por função ou por usuário. */
+function ehAlmox(quem){return podeAcao("almoxarifado",quem);}
+/* mover, transferir e ajustar estoque */
+function podeMoverEstoque(quem){return pode("moverEstoque",quem)||ehAlmox(quem)||ehGestor();}
 /* quem não é da gestão só VÊ o que é dele (v200, soMeus); aqui é quem pode ALTERAR */
 /* QUEM ALTERA O COMPROMISSO (24/10, regra dele): "somente quem agendou ou quem vai executar".
    Antes o criador não entrava na conta — quem marcasse a visita para um colega não conseguia
@@ -51115,6 +51351,7 @@ async function continuarBoot(){
   await passoBoot("acessos do comercial",liberarTelasComercial);
   /* as permissões que eram decididas pelo cargo viraram marcação (27/10): grava, uma vez */
   await passoBoot("permissões flexíveis",gravarMigracaoPermFlex);
+  await passoBoot("almoxarifado",gravarMigracaoAlmox);
   /* os 12 status novos passaram a conduzir a tela: as OS já gravadas ganham o status certo, uma
      vez só, deduzido da lista antiga (pedido dele, 09/10) */
   await passoBoot("acerto do status das OS",ajustarSitOS);
