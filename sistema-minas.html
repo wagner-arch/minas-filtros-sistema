@@ -13722,9 +13722,11 @@ function analisarCidades(lista){
     if(UFS_BR.indexOf(uf)<0)uf="";     /* "MF", "NG", "35": UF que nao existe conta como vazia */
     var of=uf?cidadeOficialDe(c.cidade,uf):"";
     var ufNova="";
-    if(!of){
-      /* sem UF, ou com UF que nao casa, quem manda e o nome — e so quando ele
-         pertence a uma UF unica (homonimo vai para a conferencia) */
+    if(!of&&!uf){
+      /* SEM UF, quem manda e o nome — e so quando ele pertence a uma UF unica (homonimo vai
+         para a conferencia). COM UF VALIDA, o estado do cadastro e mantido (regra dele, 28/10:
+         "algumas ja tem a sigla do estado, favor manter essas que ja estao"): o nome que nao
+         existe naquele estado vai para a conferencia, e as sugestoes sao so daquele estado. */
       var achou=acharCidadeEmQualquerUF(c.cidade);
       if(achou){of=achou.cidade;ufNova=achou.uf;}
     }
@@ -13744,14 +13746,41 @@ function analisarCidades(lista){
     var k=String(c.cidade).toUpperCase()+" ("+(uf||"sem UF")+")";
     if(!saida.duvida[k]){
       var varias=ufsDaCidade(c.cidade);
-      var s=varias.length>1?null:(cidadeSugeridaDe(c.cidade,uf)||cidadeSugeridaDe(c.cidade,""));
-      saida.duvida[k]={cidade:c.cidade,uf:uf,n:0,sug:s,ids:[],
-        emVarias:varias.length>1?varias.map(function(x){return x.uf;}):null};
+      var s=uf?cidadeSugeridaDe(c.cidade,uf)
+        :(varias.length>1?null:cidadeSugeridaDe(c.cidade,""));
+      saida.duvida[k]={cidade:c.cidade,uf:uf,n:0,sug:s,ids:[],ddd:{},
+        emVarias:(!uf&&varias.length>1)?varias.map(function(x){return x.uf;}):null,
+        emOutras:(uf&&varias.length)?varias.map(function(x){return x.uf;}):null};
     }
     saida.duvida[k].n++;
     saida.duvida[k].ids.push(c.id);
+    /* o DDD dos telefones do grupo diz de que estado eles são (28/10: 14 de 21 "SANTO ANDRÉ"
+       com DDD 11 tinham ido para a PB) */
+    var ufTel=ufPeloDDD(c.tel)||ufPeloDDD(c.tel2)||ufPeloDDD(c.cel);
+    if(ufTel)saida.duvida[k].ddd[ufTel]=(saida.duvida[k].ddd[ufTel]||0)+1;
   });
   return saida;
+}
+/* DDD -> estado (tabela da Anatel) */
+var DDD_UF={11:"SP",12:"SP",13:"SP",14:"SP",15:"SP",16:"SP",17:"SP",18:"SP",19:"SP",21:"RJ",22:"RJ",24:"RJ",
+  27:"ES",28:"ES",31:"MG",32:"MG",33:"MG",34:"MG",35:"MG",37:"MG",38:"MG",41:"PR",42:"PR",43:"PR",44:"PR",
+  45:"PR",46:"PR",47:"SC",48:"SC",49:"SC",51:"RS",53:"RS",54:"RS",55:"RS",61:"DF",62:"GO",64:"GO",63:"TO",
+  65:"MT",66:"MT",67:"MS",68:"AC",69:"RO",71:"BA",73:"BA",74:"BA",75:"BA",77:"BA",79:"SE",81:"PE",87:"PE",
+  82:"AL",83:"PB",84:"RN",85:"CE",88:"CE",86:"PI",89:"PI",91:"PA",93:"PA",94:"PA",92:"AM",97:"AM",95:"RR",
+  96:"AP",98:"MA",99:"MA"};
+function ufPeloDDD(t){
+  var d=String(t||"").replace(/[^0-9]/g,"");
+  if(d.length>=12&&d.slice(0,2)==="55")d=d.slice(2);
+  if(d.length>=11&&d.charAt(0)==="0")d=d.slice(1);
+  if(d.length<10)return "";
+  return DDD_UF[+d.slice(0,2)]||"";
+}
+/* o estado mais provável do grupo pelo DDD, entre os estados em que a cidade existe */
+function ufSugeridaDDD(d){
+  var melhor="",n=0,tot=0;
+  Object.keys(d.ddd||{}).forEach(function(u){tot+=d.ddd[u];
+    if((!d.emVarias||d.emVarias.indexOf(u)>=0)&&d.ddd[u]>n){melhor=u;n=d.ddd[u];}});
+  return melhor?{uf:melhor,n:n,tot:tot}:null;
 }
 var UFS_BR=["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB",
   "PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
@@ -13784,7 +13813,8 @@ async function aplicarCidadesLista(lista,aviso){
       x.c.cidadeArrumadaEm=hojeISO();
       x.c.cidadeArrumadaPor=usuarioAtual;
       x.c.cidade=x.para;
-      if(x.ufPara)x.c.uf=x.ufPara;
+      var ufTinha=String(x.ufDe||"").toUpperCase();
+      if(x.ufPara&&(UFS_BR.indexOf(ufTinha)<0||x.distrito))x.c.uf=x.ufPara;
       gravar.push(x.c);
     });
     try{
@@ -14177,11 +14207,18 @@ function renderCidadesConferir(){
       '<td data-r="O sistema sugere">'+(d.sug?('<button class="btn sm" type="button" data-cidsug="'+ix+'">Usar '+
         esc(d.sug.cidade)+" ("+esc(d.sug.uf)+")</button>")
         :(d.emVarias?("<span class='sub'>existe em "+esc(d.emVarias.join(", "))+
-          " — falta dizer a UF</span>"):"<span class='sub'>sem sugestão</span>"))+"</td>"+
+          " — falta dizer a UF"+(ufSugeridaDDD(d)?(". <b>Pelo DDD dos telefones: "+esc(ufSugeridaDDD(d).uf)+"</b> ("+
+          ufSugeridaDDD(d).n+" de "+d.n+")"):"")+"</span>")
+         :(d.emOutras?("<span class='sub'>não existe em "+esc(d.uf)+" (existe em "+esc(d.emOutras.join(", "))+
+          "). O estado do cadastro é mantido: escolha a cidade certa de "+esc(d.uf)+" ao lado.</span>")
+          :"<span class='sub'>sem sugestão</span>")))+"</td>"+
       '<td data-r="Trocar para"><div class="fld" style="margin:0">'+
       /* cidade que existe em mais de um estado: o que falta e a UF, entao o campo oferece as siglas */
       (d.emVarias?('<select data-cidufx="'+ix+'"><option value="">— escolha o estado —</option>'+
-        d.emVarias.map(function(u){return '<option value="'+esc(u)+'">'+esc(u)+"</option>";}).join("")+
+        (function(){var sd=ufSugeridaDDD(d),l=d.emVarias.slice();
+          if(sd){l=[sd.uf].concat(l.filter(function(u){return u!==sd.uf;}));}
+          return l.map(function(u){return '<option value="'+esc(u)+'">'+esc(u)+
+            (sd&&u===sd.uf?" — pelo DDD ("+sd.n+" de "+d.n+")":"")+"</option>";}).join("");})()+
         "</select>")
        :('<input list="dlCidConf'+ix+'" data-cidman="'+ix+
       '" placeholder="escolher da lista"><datalist id="dlCidConf'+ix+'">'+opc+"</datalist>"))+
@@ -14237,6 +14274,7 @@ async function trocarCidadeGrupo(ix,nome,ufEscolhida){
   /* so faltava o estado: a cidade e a mesma, escrita com o nome oficial daquela UF */
   if(ufEscolhida){alvo=cidadeOficialDe(d.cidade,ufEscolhida);ufAlvo=alvo?ufEscolhida:"";
     if(!alvo){toast("“"+d.cidade+"” não existe em "+ufEscolhida+".");return;}}
+  if(!alvo&&nome&&d.uf){toast("“"+nome+"” não é uma cidade de "+d.uf+". O estado do cadastro é mantido — escolha uma cidade de "+d.uf+".");return;}
   if(!alvo&&nome){
     var qq=acharCidadeEmQualquerUF(nome);
     if(qq){alvo=qq.cidade;ufAlvo=qq.uf;}
@@ -14286,6 +14324,7 @@ async function aplicarTodasSugestoes(){
   try{renderClientes();atualizarBotaoCidades();}catch(e){}
   renderCidadesConferir();
 }
+window.__ufPeloDDDMF=ufPeloDDD;
 window.__analisarCidadesMF=function(){esquecerAnaliseCidades();return analiseCidades();};
 window.__esquecerCidadesMF=esquecerAnaliseCidades;
 window.__ufsDaCidadeMF=ufsDaCidade;
@@ -52020,8 +52059,26 @@ function erro(msg){
         if(d<md&&d<=teto){md=d;melhor={cidade:c.toUpperCase(),uf:u,dist:d};}
       });
     });
+    /* PALAVRA FALTANDO (28/10): "JOSE DA VARGINHA" é SÃO JOSÉ DA VARGINHA e "CARMO CAJURU" é
+       CARMO DO CAJURU — a distância de letras não alcança uma palavra inteira. Sem as palavras de
+       ligação e os títulos (são, santo, santa), o esqueleto tem de casar com UMA cidade só. */
+    /* 1º só as palavras de ligação; 2º também são/santo/santa, e SÓ quando sobram duas palavras
+       ou mais — "VITORIA" sozinho não vira "SANTA VITÓRIA" (pode ser Vitória-ES com a UF errada) */
+    [false,true].forEach(function(titulos){
+      if(melhor)return;
+      var esq=esqueletoCidade(n,titulos);
+      if(esq.length<6||(titulos&&esq.split(" ").length<2))return;
+      var achados=[];
+      ufs.forEach(function(u){listaMunic(u).forEach(function(c){
+        if(esqueletoCidade(normalizar(c),titulos)===esq)achados.push({cidade:c.toUpperCase(),uf:u,dist:9});});});
+      if(achados.length===1)melhor=achados[0];
+    });
     cacheSug[ck]=melhor;
     return melhor;
+  }
+  function esqueletoCidade(n,titulos){
+    var fora=["de","da","do","das","dos","e"].concat(titulos?["sao","santo","santa","sant"]:[]);
+    return String(n||"").split(/[^a-z0-9]+/).filter(function(w){return w&&fora.indexOf(w)<0;}).join(" ");
   }
   window.distritoConhecidoMF=distritoConhecido;
   window.cidadeOficialMF=cidadeOficial;
