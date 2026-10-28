@@ -7666,6 +7666,7 @@ img{max-width:100%}
       <button class="btn mut" type="button" id="cepg_fechar">Fechar</button>
       <button class="btn ghost" type="button" id="cepg_parar" hidden>Parar aqui</button>
       <button class="btn ghost" type="button" id="cepg_levantar">Levantar</button>
+      <button class="btn ghost" type="button" id="cepg_correios" hidden>Buscar nos Correios e no mapa</button>
       <button class="btn" type="button" id="cepg_gravar" hidden>Gravar</button>
     </div>
   </div>
@@ -13800,23 +13801,39 @@ async function aplicarCidadesLista(lista,aviso){
   }
   return {n:n,falhou:falhou};
 }
-/* CEP E LOCALIZAÇÃO DOS CADASTROS PELA BASE DO IBGE (28/10, pedidos dele: "levanta a geo
-   localização de todos primeiro, atualiza essa parte" e "buscar cep de todos cadastros dos
-   clientes e atualizar em todos"). A base geo/ (CNEFE, Censo 2022) tem, para cada endereço,
-   o CEP e o ponto no mapa — uma busca só dá os dois, sem serviço de terceiros.
-   Regras: (1) primeiro LEVANTA e mostra os números, só grava quando ele manda; (2) só
-   PREENCHE o que está vazio (CEP inválido conta como vazio) — nada que alguém digitou é
-   trocado; (3) rural fica de fora (a geolocalização lá é opcional, 28/10); (4) rua com o
-   mesmo nome em mais de um bairro, sem o bairro para desempatar, não recebe nada; (5) cada
-   cadastro guarda o que tinha antes (cepAnterior, geoAnterior), de onde veio e quem gravou. */
+/* CEP E LOCALIZAÇÃO DOS CADASTROS (28/10, pedidos dele: "levanta a geo localização de todos
+   primeiro, atualiza essa parte", "buscar cep de todos cadastros dos clientes e atualizar em
+   todos", "favor buscar nos correios" e "quero todos os cadastros com a geo localização
+   completa"). DUAS ETAPAS:
+   (1) LEVANTAR — base do IBGE (CNEFE, Censo 2022, pasta geo/), sem internet de terceiros: dá o
+       CEP e o ponto de cada endereço achado.
+   (2) BUSCAR O QUE FALTA — Correios (ViaCEP): CEP e o nome OFICIAL da rua e do bairro, e com
+       eles o IBGE de novo; CEP único da cidade; rural pelo CEP do município (-000 confirmado);
+       mapa aberto pela rua (cidade conferida); por último, o centro da cidade.
+   Regras: só grava quando ele manda; só PREENCHE o que está vazio (CEP ou ponto inválido conta
+   como vazio) — nada que alguém digitou é trocado; rua de mesmo nome em mais de um bairro, sem
+   o bairro para desempatar, não ganha ponto do IBGE; cada cadastro guarda o que tinha antes,
+   de onde veio cada dado e quem gravou. */
 var cepgLev=null,cepgParar=false,cepgRodando=false;
 function cepValidoCad(v){var d=String(v||"").replace(/[^0-9]/g,"");return d.length===8&&!/^0{5}/.test(d);}
 function geoValidoCad(v){return /^-?[0-9]{1,2}[.][0-9]+[ ]*,[ ]*-?[0-9]{1,3}[.][0-9]+$/.test(String(v||"").trim());}
 function cepFmtCad(d){return d.slice(0,5)+"-"+d.slice(5);}
+function ufDoCadastro(c){
+  if(String(c.uf||"").trim())return String(c.uf).trim().toUpperCase();
+  var a=acharCidadeEmQualquerUF(c.cidade);return a?a.uf:"";
+}
+function esperarMs(ms){return new Promise(function(res){setTimeout(res,ms);});}
+/* categorias de ponto, do melhor para o pior */
+var CEPG_BOM=["numero","vizinhos"],CEPG_APROX=["proximo","rua","mapa-rua"];
+function cepgItem(R,c){
+  if(!R.porId[c.id]){R.porId[c.id]={c:c,cep:"",cepFonte:"",geo:"",nivel:"",geoFonte:"",uf:""};R.itens.push(R.porId[c.id]);}
+  return R.porId[c.id];
+}
+function cepgPonto(it,la,lo,nivel,fonte){it.geo=la.toFixed(6)+","+lo.toFixed(6);it.nivel=nivel;it.geoFonte=fonte;}
 async function levantarCepGeo(aviso){
   var lista=clientes.filter(function(c){return c.loja===lojaAtual;});
-  var R={total:lista.length,lidos:0,ok:0,rural:0,semEndereco:0,fora:0,semRua:0,ambigua:0,
-    cep:0,geoNum:0,geoViz:0,geoAprox:0,semCepAntes:0,semGeoAntes:0,cepSemSaida:0,itens:[]};
+  var R={total:lista.length,lidos:0,ok:0,semCepAntes:0,semGeoAntes:0,semCidade:0,
+    ibgeCep:0,ibgeGeo:0,itens:[],porId:{},pend:[],etapa2:false};
   if(typeof window.cepGeoIBGEMF!=="function")throw new Error("a busca do IBGE não carregou");
   for(var i=0;i<lista.length;i++){
     if(cepgParar)break;
@@ -13825,92 +13842,185 @@ async function levantarCepGeo(aviso){
     if(faltaCep)R.semCepAntes++;
     if(faltaGeo)R.semGeoAntes++;
     if(!faltaCep&&!faltaGeo){R.ok++;continue;}
-    if(c.tipoend==="rural"){R.rural++;continue;}
-    if(!String(c.rua||"").trim()||!String(c.cidade||"").trim()){R.semEndereco++;continue;}
-    var r=null;
-    try{r=await window.cepGeoIBGEMF({rua:c.rua,num:c.num,bairro:c.bairro,cidade:c.cidade,uf:c.uf,
-      cep:faltaCep?"":c.cep});}catch(e){r=null;}
-    if(!r||r.fora)R.fora++;
-    else if(r.semRua)R.semRua++;
-    else if(r.locais>1)R.ambigua++;
-    else{
-      var it={c:c,cep:"",geo:"",nivel:""};
-      if(faltaCep){if(r.cep){it.cep=r.cep;R.cep++;}else R.cepSemSaida++;}
-      if(faltaGeo){
-        it.geo=r.la.toFixed(6)+","+r.lo.toFixed(6);it.nivel=r.nivel;
-        if(r.nivel==="numero")R.geoNum++;else if(r.nivel==="vizinhos")R.geoViz++;else R.geoAprox++;
-      }
-      if(it.cep||it.geo)R.itens.push(it);
+    if(!String(c.cidade||"").trim()){R.semCidade++;continue;}
+    var uf=ufDoCadastro(c),r=null;
+    if(c.tipoend!=="rural"&&String(c.rua||"").trim()){
+      try{r=await window.cepGeoIBGEMF({rua:c.rua,num:c.num,bairro:c.bairro,cidade:c.cidade,uf:uf,
+        cep:faltaCep?"":c.cep});}catch(e){r=null;}
     }
-    if(i%150===149){if(aviso)aviso(i+1,lista.length);await new Promise(function(res){setTimeout(res,0);});}
+    var ach=r&&!r.fora&&!r.semRua&&!(r.locais>1);
+    if(ach){
+      var it=cepgItem(R,c);
+      if(faltaCep&&r.cep){it.cep=r.cep;it.cepFonte="ibge-cnefe";R.ibgeCep++;}
+      if(faltaGeo){cepgPonto(it,r.la,r.lo,r.nivel,"ibge-cnefe");R.ibgeGeo++;}
+      if(uf&&!String(c.uf||"").trim())it.uf=uf;
+    }
+    if((faltaCep&&!(ach&&r.cep))||(faltaGeo&&!ach))R.pend.push(c);
+    if(i%150===149){if(aviso)aviso(i+1,lista.length);await esperarMs(0);}
   }
   return R;
 }
-function nivelGeoTexto(n){
-  return n==="numero"?"no número":n==="vizinhos"?"entre os vizinhos":n==="proximo"?"no número mais perto":"no meio da rua";
+/* etapa 2: Correios e mapa, um cadastro por vez e com pausa — os dois serviços são de uso justo */
+async function buscarFaltantesCepGeo(R,aviso){
+  var L=window.loteEnderecoMF;if(!L)throw new Error("a busca dos Correios não carregou");
+  R.etapa2=true;
+  R.e2=R.e2||{feitos:0,correiosCep:0,correiosGeo:0,cidadeUnica:0,rural:0,mapaRua:0,cidade:0,semUf:0,erros:0,seguidos:0};
+  var E=R.e2;
+  for(var i=E.feitos;i<R.pend.length;i++){
+    if(cepgParar)break;
+    var c=R.pend[i],it=R.porId[c.id]||null;
+    var faltaCep=!cepValidoCad(c.cep)&&!(it&&it.cep),faltaGeo=!geoValidoCad(c.geo)&&!(it&&it.geo);
+    var uf=ufDoCadastro(c);
+    if(!uf){E.semUf++;E.feitos=i+1;continue;}
+    var o={rua:c.rua,num:c.num,bairro:c.bairro,cidade:c.cidade,uf:uf},falhou=false;
+    try{
+      if(c.tipoend==="rural"){
+        if(faltaCep){var cr0=await L.rural(c.cidade,uf);if(cr0){it=cepgItem(R,c);it.cep=cr0;it.cepFonte="rural-cidade";E.rural++;faltaCep=false;}}
+      }else if(String(c.rua||"").trim()){
+        var cr=await L.correios(o);
+        if(cr.novo)await esperarMs(300);
+        if(cr.motivo==="rede")falhou=true;
+        if(cr.cep&&faltaCep){it=cepgItem(R,c);it.cep=cr.cep;it.cepFonte=cr.fonte;E.correiosCep++;faltaCep=false;}
+        if(faltaGeo&&cr.rua){
+          var g=await L.ibge({rua:cr.rua,num:c.num,bairro:cr.bairro||c.bairro,cidade:c.cidade,uf:uf,cep:cr.cep||""});
+          if(g&&!g.fora&&!g.semRua&&!(g.locais>1)){it=cepgItem(R,c);cepgPonto(it,g.la,g.lo,g.nivel,"ibge-correios");E.correiosGeo++;faltaGeo=false;
+            if(faltaCep&&g.cep){it.cep=g.cep;it.cepFonte="ibge-cnefe";faltaCep=false;}}
+        }
+      }
+      if(faltaCep){var cu=await L.cepUnico(c.cidade,uf);if(cu){it=cepgItem(R,c);it.cep=cu;it.cepFonte="cidade-unica";E.cidadeUnica++;faltaCep=false;}}
+      if(faltaGeo&&c.tipoend!=="rural"&&String(c.rua||"").trim()){
+        var m=await L.mapa(o,false);
+        if(m.novo)await esperarMs(1100);
+        if(m.erro)falhou=true;
+        if(m.la){it=cepgItem(R,c);cepgPonto(it,m.la,m.lo,"mapa-rua","mapa-aberto");E.mapaRua++;faltaGeo=false;}
+      }
+      if(faltaGeo){
+        var mc=await L.mapa(o,true);
+        if(mc.novo)await esperarMs(1100);
+        if(mc.erro)falhou=true;
+        if(mc.la){it=cepgItem(R,c);cepgPonto(it,mc.la,mc.lo,"cidade","mapa-aberto");E.cidade++;faltaGeo=false;}
+      }
+      if(it&&uf&&!String(c.uf||"").trim())it.uf=uf;
+    }catch(e){falhou=true;}
+    if(falhou){E.erros++;E.seguidos++;}else E.seguidos=0;
+    E.feitos=i+1;
+    /* internet caiu: para no lugar, o que já veio continua valendo */
+    if(E.seguidos>=8){E.parouRede=true;break;}
+    if(aviso)aviso(i+1,R.pend.length);
+    if(i%20===19)await esperarMs(0);
+  }
+  return R;
+}
+var CEPG_NIVEL={numero:"no número",vizinhos:"entre os vizinhos",proximo:"no número mais perto",rua:"no meio da rua",
+  "mapa-rua":"na rua, pelo mapa","cidade":"no centro da cidade"};
+var CEPG_CEPF={"ibge-cnefe":"IBGE","correios":"Correios","correios-numero":"Correios, pelo número",
+  "cidade-unica":"CEP único da cidade","rural-cidade":"CEP do município (rural)"};
+function cepgConta(R){
+  var q={cep:0,bom:0,aprox:0,cidade:0};
+  R.itens.forEach(function(x){
+    if(x.cep)q.cep++;
+    if(x.geo){if(CEPG_BOM.indexOf(x.nivel)>=0)q.bom++;else if(x.nivel==="cidade")q.cidade++;else q.aprox++;}
+  });return q;
 }
 function cepgEscolhidos(){
-  var oc=$("cepg_oCep"),ob=$("cepg_oBom"),oa=$("cepg_oAprox");
-  var q={cep:!!(oc&&oc.checked),bom:!!(ob&&ob.checked),aprox:!!(oa&&oa.checked)};
-  var n=0;
-  (cepgLev?cepgLev.itens:[]).forEach(function(x){
-    var g=x.geo&&((x.nivel==="numero"||x.nivel==="vizinhos")?q.bom:q.aprox);
-    if((x.cep&&q.cep)||g)n++;});
+  var v=function(id){var e=$(id);return !!(e&&e.checked);};
+  var q={cep:v("cepg_oCep"),bom:v("cepg_oBom"),aprox:v("cepg_oAprox"),cidade:v("cepg_oCid")},n=0;
+  (cepgLev?cepgLev.itens:[]).forEach(function(x){if(cepgGrava(x,q).algum)n++;});
   q.n=n;return q;
+}
+function cepgGrava(x,q){
+  var g=!!x.geo&&(CEPG_BOM.indexOf(x.nivel)>=0?q.bom:x.nivel==="cidade"?q.cidade:q.aprox);
+  var cep=!!x.cep&&q.cep;
+  return {cep:cep,geo:g,algum:cep||g};
 }
 function renderCepGeo(){
   var R=cepgLev,f=function(v){return (+v||0).toLocaleString("pt-BR");};
   if(!R){
     $("cepg_sub").innerHTML="Procura o <b>CEP</b> e o <b>ponto no mapa</b> de cada cadastro da loja "+esc(nomeLoja())+
-      " na base de endereços do IBGE (Censo 2022). Primeiro <b>levanta</b> e mostra os números; "+
-      "só grava quando você mandar, e só preenche o que está vazio.";
-    $("cepg_corpo").innerHTML="";$("cepg_gravar").hidden=true;return;
+      ". <b>1º</b> na base de endereços do IBGE, que está no próprio sistema; <b>2º</b> o que faltar, nos Correios e no mapa. "+
+      "Só grava quando você mandar, e só preenche o que está vazio.";
+    $("cepg_corpo").innerHTML="";$("cepg_gravar").hidden=true;$("cepg_correios").hidden=true;return;
   }
+  var q=cepgConta(R),E=R.e2||{},antes={};
+  ["cepg_oCep","cepg_oBom","cepg_oAprox","cepg_oCid"].forEach(function(id){var e=$(id);if(e)antes[id]=e.checked;});
   $("cepg_sub").innerHTML="<b>"+f(R.total)+" cadastros</b> na loja · "+f(R.semCepAntes)+" sem CEP · "+
-    f(R.semGeoAntes)+" sem localização"+(R.lidos<R.total?" · <b>parado em "+f(R.lidos)+"</b>":"");
-  var g=R.geoNum+R.geoViz;
-  var linhas=R.itens.slice(0,25).map(function(x){
+    f(R.semGeoAntes)+" sem localização · "+f(R.ok)+" já completos"+(R.lidos<R.total?" · <b>parado em "+f(R.lidos)+"</b>":"");
+  var faltam=R.pend.length-(E.feitos||0);
+  var linhas=R.itens.slice(-25).reverse().map(function(x){
     return "<tr><td>"+esc(x.c.nome||"")+"</td><td>"+esc([x.c.rua,x.c.num,x.c.bairro,x.c.cidade].filter(Boolean).join(", "))+
-      "</td><td>"+(x.cep?cepFmtCad(x.cep):"—")+"</td><td>"+(x.geo?nivelGeoTexto(x.nivel):"—")+"</td></tr>";}).join("");
+      "</td><td>"+(x.cep?cepFmtCad(x.cep)+'<div class="muted">'+esc(CEPG_CEPF[x.cepFonte]||"")+"</div>":"—")+
+      "</td><td>"+(x.geo?esc(CEPG_NIVEL[x.nivel]||x.nivel):"—")+"</td></tr>";}).join("");
+  var est=Math.ceil(faltam*1.6/60);
   $("cepg_corpo").innerHTML=
     '<div class="kpis" style="margin-bottom:10px">'+
-      '<div class="kpi"><div class="l">CEP encontrado</div><div class="v">'+f(R.cep)+'</div></div>'+
-      '<div class="kpi"><div class="l">Localização no número ou vizinhos</div><div class="v">'+f(g)+'</div></div>'+
-      '<div class="kpi"><div class="l">Localização aproximada</div><div class="v">'+f(R.geoAprox)+'</div></div>'+
-      '<div class="kpi"><div class="l">Já estavam completos</div><div class="v">'+f(R.ok)+'</div></div>'+
+      '<div class="kpi"><div class="l">CEP encontrado</div><div class="v">'+f(q.cep)+'</div></div>'+
+      '<div class="kpi"><div class="l">Ponto no número ou vizinhos</div><div class="v">'+f(q.bom)+'</div></div>'+
+      '<div class="kpi"><div class="l">Ponto aproximado (rua)</div><div class="v">'+f(q.aprox)+'</div></div>'+
+      '<div class="kpi"><div class="l">Só o centro da cidade</div><div class="v">'+f(q.cidade)+'</div></div>'+
     '</div>'+
-    '<div class="note">Ficam de fora: <b>'+f(R.semEndereco)+'</b> sem rua ou cidade no cadastro · <b>'+
-      f(R.semRua)+'</b> com rua que a base não conhece · <b>'+f(R.fora)+'</b> de cidade fora da base (raio de 350 km) · <b>'+
-      f(R.ambigua)+'</b> com rua de mesmo nome em mais de um bairro · <b>'+f(R.rural)+'</b> rurais (a localização é opcional) · <b>'+
-      f(R.cepSemSaida)+'</b> cuja rua tem mais de um CEP e o número não decide.</div>'+
-    '<label class="chk"><input type="checkbox" id="cepg_oCep" checked><span>Gravar o CEP ('+f(R.cep)+')<span class="ajuda">o CEP que o IBGE registrou naquele endereço; só nos cadastros sem CEP</span></span></label>'+
-    '<label class="chk"><input type="checkbox" id="cepg_oBom" checked><span>Gravar a localização no número ou entre os vizinhos ('+f(g)+')<span class="ajuda">'+f(R.geoNum)+' no número exato e '+f(R.geoViz)+' entre os dois vizinhos do mesmo lado</span></span></label>'+
-    '<label class="chk"><input type="checkbox" id="cepg_oAprox" checked><span>Gravar também a localização aproximada ('+f(R.geoAprox)+')<span class="ajuda">no número mais perto, ou no meio da rua quando o cadastro não tem número — serve para a rota, confira na visita</span></span></label>'+
-    '<div class="tw" style="margin-top:8px"><table><thead><tr><th>Cliente</th><th>Endereço</th><th>CEP novo</th><th>Localização</th></tr></thead><tbody>'+
-      (linhas||'<tr><td colspan="4" class="muted">Nada para preencher.</td></tr>')+'</tbody></table></div>'+
-    (R.itens.length>25?'<div class="muted" style="margin-top:6px">Mostrando 25 de '+f(R.itens.length)+'.</div>':"");
-  ["cepg_oCep","cepg_oBom","cepg_oAprox"].forEach(function(id){var el=$(id);if(el)el.onchange=atualizarBotaoCepGeo;});
+    (R.etapa2
+      ? '<div class="note">Correios e mapa: <b>'+f(E.feitos)+"</b> de "+f(R.pend.length)+" conferidos · "+
+          f(E.correiosCep)+" CEPs pelos Correios · "+f(E.correiosGeo)+" pontos no IBGE com o nome oficial dos Correios · "+
+          f(E.cidadeUnica)+" CEP único da cidade · "+f(E.rural)+" rurais · "+f(E.mapaRua)+" pela rua no mapa · "+
+          f(E.cidade)+" no centro da cidade"+(E.semUf?" · "+f(E.semUf)+" sem estado (cidade de nome repetido)":"")+
+          (E.erros?" · "+f(E.erros)+" sem resposta da internet":"")+
+          (E.parouRede?' · <b>parou: a internet não está respondendo — tente de novo</b>':"")+"</div>"
+      : '<div class="note">Na base do IBGE: <b>'+f(R.ibgeCep)+"</b> CEPs e <b>"+f(R.ibgeGeo)+"</b> pontos. Faltam <b>"+
+          f(R.pend.length)+"</b> cadastros para os Correios e o mapa"+(R.semCidade?" · "+f(R.semCidade)+" sem cidade no cadastro (não há onde procurar)":"")+".</div>")+
+    (faltam>0?'<div class="muted" style="margin:6px 0">Faltam '+f(faltam)+" para os Correios e o mapa — perto de "+
+      f(est)+" minuto(s), um por vez (os dois serviços pedem pausa entre as consultas). Dá para parar e gravar o que já veio.</div>":"")+
+    '<label class="chk"><input type="checkbox" id="cepg_oCep" checked><span>Gravar o CEP ('+f(q.cep)+')<span class="ajuda">só nos cadastros sem CEP; a origem de cada um fica guardada</span></span></label>'+
+    '<label class="chk"><input type="checkbox" id="cepg_oBom" checked><span>Gravar o ponto no número ou entre os vizinhos ('+f(q.bom)+')</span></label>'+
+    '<label class="chk"><input type="checkbox" id="cepg_oAprox" checked><span>Gravar o ponto aproximado ('+f(q.aprox)+')<span class="ajuda">no número mais perto, no meio da rua ou pela rua no mapa — serve para a rota, confira na visita</span></span></label>'+
+    '<label class="chk"><input type="checkbox" id="cepg_oCid" checked><span>Gravar o centro da cidade quando não houver nada melhor ('+f(q.cidade)+')<span class="ajuda">cadastro sem rua, ou rua que nenhuma base conhece — o ponto é da cidade, não da casa</span></span></label>'+
+    '<div class="tw" style="margin-top:8px"><table><thead><tr><th>Cliente</th><th>Endereço</th><th>CEP novo</th><th>Ponto</th></tr></thead><tbody>'+
+      (linhas||'<tr><td colspan="4" class="muted">Nada para preencher ainda.</td></tr>')+'</tbody></table></div>'+
+    (R.itens.length>25?'<div class="muted" style="margin-top:6px">Os 25 mais recentes de '+f(R.itens.length)+'.</div>':"");
+  ["cepg_oCep","cepg_oBom","cepg_oAprox","cepg_oCid"].forEach(function(id){var el=$(id);if(!el)return;
+    if(antes.hasOwnProperty(id))el.checked=antes[id];el.onchange=atualizarBotaoCepGeo;});
+  var bc=$("cepg_correios");
+  bc.hidden=cepgRodando||faltam<=0;
+  bc.textContent=(E.feitos?"Continuar nos Correios e no mapa (":"Buscar nos Correios e no mapa (")+f(faltam)+")";
   atualizarBotaoCepGeo();
 }
 function atualizarBotaoCepGeo(){
   var q=cepgEscolhidos(),b=$("cepg_gravar");
   b.hidden=!q.n||cepgRodando;b.textContent="Gravar em "+q.n.toLocaleString("pt-BR")+" cadastro(s)";
 }
+function cepgOcupado(sim){
+  cepgRodando=sim;$("cepg_parar").hidden=!sim;$("cepg_levantar").disabled=sim;
+  if(sim){$("cepg_gravar").hidden=true;$("cepg_correios").hidden=true;}
+}
 function abrirCepGeo(){
   if(!ehAdministrador()){toast("Só o Administrador preenche CEP e localização em lote.");return;}
-  cepgLev=null;cepgParar=false;$("cepg_alerta").innerHTML="";$("cepg_levantar").textContent="Levantar";
+  if(!cepgRodando){cepgLev=null;cepgParar=false;$("cepg_alerta").innerHTML="";$("cepg_levantar").textContent="Levantar";}
   renderCepGeo();$("cepgModal").hidden=false;
 }
 async function rodarLevantamentoCepGeo(){
   if(cepgRodando)return;
-  cepgRodando=true;cepgParar=false;$("cepg_parar").hidden=false;$("cepg_levantar").disabled=true;$("cepg_gravar").hidden=true;
-  $("cepg_alerta").innerHTML='<div class="note">Levantando…</div>';
+  cepgOcupado(true);cepgParar=false;
+  $("cepg_alerta").innerHTML='<div class="note">Levantando na base do IBGE…</div>';
   try{
     cepgLev=await levantarCepGeo(function(i,t){
-      $("cepg_alerta").innerHTML='<div class="note">Levantando '+i.toLocaleString("pt-BR")+" de "+t.toLocaleString("pt-BR")+"…</div>";});
+      $("cepg_alerta").innerHTML='<div class="note">Levantando na base do IBGE: '+i.toLocaleString("pt-BR")+" de "+t.toLocaleString("pt-BR")+"…</div>";});
     $("cepg_alerta").innerHTML="";
   }catch(e){$("cepg_alerta").innerHTML='<div class="note crit">Não deu para levantar: '+esc(e.message||String(e))+"</div>";}
-  cepgRodando=false;$("cepg_parar").hidden=true;$("cepg_levantar").disabled=false;$("cepg_levantar").textContent="Levantar de novo";
+  cepgOcupado(false);$("cepg_levantar").textContent="Levantar de novo";
+  renderCepGeo();
+}
+async function rodarCorreiosCepGeo(){
+  if(cepgRodando||!cepgLev)return;
+  cepgOcupado(true);cepgParar=false;
+  var ult=0;
+  try{
+    await buscarFaltantesCepGeo(cepgLev,function(i,t){
+      var agora=Date.now();if(agora-ult<700&&i<t)return;ult=agora;
+      $("cepg_alerta").innerHTML='<div class="note">Correios e mapa: '+i.toLocaleString("pt-BR")+" de "+t.toLocaleString("pt-BR")+
+        " — pode deixar a janela aberta e usar outra aba.</div>";
+      renderCepGeo();});
+    $("cepg_alerta").innerHTML="";
+  }catch(e){$("cepg_alerta").innerHTML='<div class="note crit">Parou: '+esc(e.message||String(e))+"</div>";}
+  cepgOcupado(false);
   renderCepGeo();
 }
 async function gravarCepGeo(){
@@ -13918,41 +14028,42 @@ async function gravarCepGeo(){
   var q=cepgEscolhidos();if(!q.n)return;
   if(!confirm("Gravar o CEP e/ou a localização em "+q.n.toLocaleString("pt-BR")+" cadastro(s)?\n\n"+
     "Só o que estava vazio é preenchido, e cada cadastro guarda o que tinha antes."))return;
-  var alvo=cepgLev.itens.map(function(x){
-    var g=x.geo&&((x.nivel==="numero"||x.nivel==="vizinhos")?q.bom:q.aprox);
-    return {x:x,cep:!!(x.cep&&q.cep),geo:!!g};}).filter(function(y){return y.cep||y.geo;});
-  cepgRodando=true;cepgParar=false;$("cepg_parar").hidden=false;$("cepg_gravar").hidden=true;$("cepg_levantar").disabled=true;
-  var n=0,falhou=0,bloco=100,parou=false;
+  var alvo=cepgLev.itens.map(function(x){var g=cepgGrava(x,q);g.x=x;return g;}).filter(function(y){return y.algum;});
+  cepgOcupado(true);cepgParar=false;
+  var n=0,falhou=0,bloco=100,parou=false,gravados={};
   for(var i=0;i<alvo.length;i+=bloco){
     if(cepgParar){parou=true;break;}
     var parte=alvo.slice(i,i+bloco),antes=[];
     parte.forEach(function(y){
-      var c=y.x.c;antes.push({c:c,cep:c.cep,geo:c.geo,cepA:c.cepAnterior,geoA:c.geoAnterior,
-        co:c.cepOrigem,go:c.geoOrigem,gn:c.geoNivel,em:c.cepGeoArrumadoEm,por:c.cepGeoArrumadoPor});
-      if(y.cep){c.cepAnterior=c.cep||"";c.cep=cepFmtCad(y.x.cep);c.cepOrigem="ibge-cnefe";}
-      if(y.geo){c.geoAnterior=c.geo||"";c.geo=y.x.geo;c.geoOrigem="ibge-cnefe";c.geoNivel="ibge-"+y.x.nivel;}
+      var c=y.x.c;antes.push({c:c,v:JSON.stringify({cep:c.cep,geo:c.geo,uf:c.uf,cepAnterior:c.cepAnterior,
+        geoAnterior:c.geoAnterior,ufAnterior:c.ufAnterior,cepOrigem:c.cepOrigem,geoOrigem:c.geoOrigem,
+        geoNivel:c.geoNivel,cepGeoArrumadoEm:c.cepGeoArrumadoEm,cepGeoArrumadoPor:c.cepGeoArrumadoPor})});
+      if(y.cep&&!cepValidoCad(c.cep)){c.cepAnterior=c.cep||"";c.cep=cepFmtCad(y.x.cep);c.cepOrigem=y.x.cepFonte;}
+      if(y.geo&&!geoValidoCad(c.geo)){c.geoAnterior=c.geo||"";c.geo=y.x.geo;c.geoOrigem=y.x.geoFonte;c.geoNivel=(String(y.x.geoFonte).indexOf("ibge")===0?"ibge-":"")+y.x.nivel;}
+      if(y.x.uf&&!String(c.uf||"").trim()){c.ufAnterior="";c.uf=y.x.uf;}
       c.cepGeoArrumadoEm=hojeISO();c.cepGeoArrumadoPor=usuarioAtual;
     });
     var gravar=parte.map(function(y){return y.x.c;});
     try{
       if(db&&typeof db.gravarVarios==="function")await db.gravarVarios("clientes",gravar,{bloco:bloco});
       else if(db)for(var j=0;j<gravar.length;j++)await col("clientes").doc(gravar[j].id).set(gravar[j]);
-      n+=gravar.length;
+      n+=gravar.length;gravar.forEach(function(c){gravados[c.id]=1;});
     }catch(e){
       falhou+=gravar.length;console.warn("cep e localizacao",e);
       /* desfaz na memória o que o banco recusou: ninguém lê "gravado" sem estar gravado */
-      antes.forEach(function(a){var c=a.c;c.cep=a.cep;c.geo=a.geo;c.cepAnterior=a.cepA;c.geoAnterior=a.geoA;
-        c.cepOrigem=a.co;c.geoOrigem=a.go;c.geoNivel=a.gn;c.cepGeoArrumadoEm=a.em;c.cepGeoArrumadoPor=a.por;});
+      antes.forEach(function(a){Object.assign(a.c,JSON.parse(a.v));});
     }
     $("cepg_alerta").innerHTML='<div class="note">Gravando '+Math.min(i+bloco,alvo.length).toLocaleString("pt-BR")+
       " de "+alvo.length.toLocaleString("pt-BR")+"…</div>";
   }
-  cepgRodando=false;$("cepg_parar").hidden=true;$("cepg_levantar").disabled=false;
+  cepgOcupado(false);
+  /* o que foi gravado sai da lista; o resto (recusado, ou caixa desmarcada) continua para outra vez */
+  cepgLev.itens=cepgLev.itens.filter(function(x){return !gravados[x.c.id];});
+  cepgLev.porId={};cepgLev.itens.forEach(function(x){cepgLev.porId[x.c.id]=x;});
   $("cepg_alerta").innerHTML='<div class="note '+(falhou?"crit":"ok")+'"><b>'+n.toLocaleString("pt-BR")+
     " cadastro(s) gravados.</b>"+(falhou?" O banco recusou "+falhou.toLocaleString("pt-BR")+" — eles continuam como estavam.":"")+
-    (parou?" Parado antes do fim: levante de novo para continuar.":"")+"</div>";
-  cepgLev=null;$("cepg_levantar").textContent="Levantar de novo";
-  $("cepg_corpo").innerHTML="";$("cepg_gravar").hidden=true;
+    (parou?" Parado antes do fim.":"")+"</div>";
+  renderCepGeo();
   try{renderClientes();}catch(e){}
 }
 window.__levantarCepGeoMF=levantarCepGeo;
@@ -49535,6 +49646,7 @@ function ligar(){
   if($("cepg_parar"))$("cepg_parar").onclick=function(){cepgParar=true;};
   if($("cepg_levantar"))$("cepg_levantar").onclick=rodarLevantamentoCepGeo;
   if($("cepg_gravar"))$("cepg_gravar").onclick=gravarCepGeo;
+  if($("cepg_correios"))$("cepg_correios").onclick=rodarCorreiosCepGeo;
   if($("cid_fechar"))$("cid_fechar").onclick=function(){$("cidModal").hidden=true;};
   if($("cid_todas"))$("cid_todas").onclick=aplicarTodasSugestoes;
   /* a letra aparece na hora e a lista espera a pausa na digitação (27/10); Enter filtra na hora */
@@ -52986,6 +53098,92 @@ function erro(msg){
     });
   }
   window.cepGeoIBGEMF=cepGeoIBGE;
+  /* ---- CORREIOS E MAPA PARA O PREENCHIMENTO EM LOTE (28/10, pedidos dele: "favor buscar nos
+     correios" e "quero todos os cadastros com a geo localização completa") ----
+     O que a base do IBGE não resolveu vai aos Correios (ViaCEP, busca por rua), que devolvem o
+     CEP E o nome OFICIAL da rua e do bairro — com eles a base do IBGE é consultada de novo e
+     costuma achar o número. O que ainda ficar sem ponto vai ao mapa aberto (Nominatim, com a
+     cidade conferida), e por último ao centro da cidade. Cada resposta é guardada: a mesma rua
+     não é perguntada duas vezes. */
+  var cacheViaRua={},cacheCepUnico={},cacheMapaRua={},cacheMapaCid={};
+  function soDig(s){return String(s||"").replace(/[^0-9]/g,"");}
+  function unicosDe(l){var m={};l.forEach(function(x){if(x)m[x]=1;});return Object.keys(m);}
+  /* "até 1099/1100", "de 1101/1102 a 2599/2600", "de 2601/2602 ao fim", "lado par/ímpar" */
+  function faixaCobre(comp,n){
+    var t=normalizar(comp||""),m;
+    if(/lado par/.test(t)&&n%2)return false;
+    if(/lado impar/.test(t)&&!(n%2))return false;
+    function mx(s){return Math.max.apply(null,s.split("/").map(Number));}
+    function mn(s){return Math.min.apply(null,s.split("/").map(Number));}
+    if((m=/de ([0-9\/]+) a ([0-9\/]+)/.exec(t)))return n>=mn(m[1])&&n<=mx(m[2]);
+    if((m=/de ([0-9\/]+) ao fim/.exec(t)))return n>=mn(m[1]);
+    if((m=/ate ([0-9\/]+)/.exec(t)))return n<=mx(m[1]);
+    return true;
+  }
+  function correiosRuaLote(o){
+    var termo=nucleoRua(o.rua||"");
+    if(!o.uf||!o.cidade||termo.length<3)return Promise.resolve({motivo:"semDados"});
+    var k=o.uf+"|"+normalizar(o.cidade)+"|"+termo,novo=!cacheViaRua[k];
+    if(novo)cacheViaRua[k]=buscarJSON("https://viacep.com.br/ws/"+o.uf+"/"+encodeURIComponent(o.cidade)+"/"+
+        encodeURIComponent(termo)+"/json/")
+      .then(function(j){return {lista:Array.isArray(j)?j:[]};},function(){delete cacheViaRua[k];return {erro:true};});
+    return cacheViaRua[k].then(function(r){
+      if(r.erro)return {motivo:"rede",novo:novo};
+      var alvo=ibgeSolto(termo);
+      var m=r.lista.filter(function(x){return ibgeSolto(nucleoRua(x.logradouro||""))===alvo;});
+      if(!m.length)return {motivo:r.lista.length?"outraRua":"semRua",novo:novo};
+      var bn=ibgeSolto(o.bairro||"");
+      if(bn){var mb=m.filter(function(x){return ibgeSolto(x.bairro||"")===bn;});if(mb.length)m=mb;}
+      var ceps=unicosDe(m.map(function(x){return soDig(x.cep);})),esc=null;
+      if(ceps.length===1)esc=m[0];
+      else{
+        var n=parseInt(soDig(o.num),10)||0;
+        if(n){var mn2=m.filter(function(x){return faixaCobre(x.complemento,n);});
+          if(unicosDe(mn2.map(function(x){return soDig(x.cep);})).length===1)esc=mn2[0];}
+      }
+      if(!esc)return {motivo:"variosCeps",novo:novo,rua:m[0].logradouro,bairros:unicosDe(m.map(function(x){return x.bairro;}))};
+      return {cep:soDig(esc.cep),rua:esc.logradouro||"",bairro:esc.bairro||"",
+        fonte:ceps.length===1?"correios":"correios-numero",novo:novo};
+    });
+  }
+  /* cidade de CEP ÚNICO: na base do IBGE todos os endereços dela têm o mesmo CEP, terminado em 000 */
+  function cepUnicoCidade(cidade,uf){
+    var k=String(uf||UF_PADRAO).toUpperCase()+"|"+ibgeTexto(cidade);
+    if(!cacheCepUnico[k])cacheCepUnico[k]=ibgeIndiceP().then(function(ind){
+      var c=ind&&ind.cidades&&ind.cidades[k];
+      if(!c||c[1])return "";
+      return ibgeArquivoP(c[0]+".txt").then(function(txt){
+        var m={};String(txt||"").split(String.fromCharCode(10)).forEach(function(l){
+          var p=l.split("|");if(p.length>=6&&/^[1-9][0-9]{4}000$/.test(p[4]))m[p[4]]=1;else if(p.length>=6&&p[4])m["x"+p[4]]=1;});
+        var ks=Object.keys(m);return ks.length===1&&ks[0].charAt(0)!=="x"?ks[0]:"";
+      });
+    }).then(null,function(){return "";});
+    return cacheCepUnico[k];
+  }
+  /* rural: o CEP do município (prefixo + 000) que os Correios confirmam — a regra de 09/09 */
+  function cepRuralCidade(cidade,uf){
+    return new Promise(function(res){cepDaCidade(cidade,uf,function(cep,conf){res(conf?soDig(cep):"");});});
+  }
+  /* mapa aberto (Nominatim): só vale se a cidade da resposta for a mesma do cadastro */
+  function mapaLote(o,soCidade){
+    var k=(soCidade?"":normalizar(o.rua||"")+"|")+normalizar(o.cidade)+"|"+o.uf,cache=soCidade?cacheMapaCid:cacheMapaRua;
+    var novo=!cache[k];
+    if(novo){
+      var q={city:o.cidade,state:o.uf,country:"Brasil"};if(!soCidade)q.street=(o.num?o.num+" ":"")+o.rua;
+      var qs=Object.keys(q).map(function(x){return x+"="+encodeURIComponent(q[x]);}).join("&");
+      cache[k]=buscarJSON("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&countrycodes=br&"+qs)
+        .then(function(j){
+          var r=j&&j[0];if(!r)return null;
+          var a=r.address||{},cid=a.city||a.town||a.village||a.municipality||"";
+          if(ibgeTexto(cid)!==ibgeTexto(o.cidade))return null;
+          return {la:+r.lat,lo:+r.lon};
+        },function(){delete cache[k];return {erro:true};});
+    }
+    return cache[k].then(function(r){return r?Object.assign({novo:novo},r):{novo:novo};});
+  }
+  window.loteEnderecoMF={correios:correiosRuaLote,cepUnico:cepUnicoCidade,rural:cepRuralCidade,
+    mapa:mapaLote,ibge:cepGeoIBGE,faixa:faixaCobre};
+
 
   /* P = prefixo do formulário: "c" (cadastro do cliente/lead) ou "at" (atendimento) */
   function ligarGeo(P){
