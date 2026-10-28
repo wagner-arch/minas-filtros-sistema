@@ -9186,6 +9186,7 @@ async function carregar(){
   funcoes=JSON.parse(JSON.stringify(SEED_FUNCOES));
   try{migrarPermFlex(funcoes);}catch(e){console.warn(e);}
   try{migrarAlmoxarifado(funcoes);}catch(e){console.warn(e);}
+  normalizarNomeAlmox();
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
   motivos=SEED_MOTIVOS.slice();
@@ -9412,6 +9413,7 @@ async function carregar(){
        lista) iria para todo mundo que tem "ver tudo" — inclusive o Financeiro */
     try{permFlexMigradas=migrarPermFlex(funcoes);}catch(eFx){console.warn("permissões flexíveis",eFx);}
     try{almoxMigradas=migrarAlmoxarifado(funcoes);}catch(eAx){console.warn("almoxarifado",eAx);}
+    normalizarNomeAlmox();
     await migrarTelasNovas();
     try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
     /* foto de referência de cada um (coleção própria: cada pessoa grava a sua) */
@@ -9425,6 +9427,7 @@ async function carregar(){
     if(us.exists&&us.data()&&us.data().lista&&us.data().lista.length){USUARIOS=us.data().lista;}
     else{await gravarUsuarios();}
     await mesclarPerfisBanco();
+    normalizarNomeAlmox();
     sincronizarEquipe();
     var gpx=await jaPedido("cfg:grupos_produtos",function(){return db.doc("config/grupos_produtos").get();});
     if(gpx.exists&&gpx.data()&&gpx.data().lista)GRUPOS_PROD=gpx.data().lista;
@@ -12006,7 +12009,7 @@ function aplicarRespEstoques(){
   });
   /* o Almoxarifado: quem já responde por ele hoje, pelo perfil */
   if(!responsaveisDoEstoque(LOC_EMPRESA).length){
-    USUARIOS.filter(function(u){return u.ativo!==false&&u.perfil==="Estoquista";})
+    USUARIOS.filter(function(u){return u.ativo!==false&&ehPerfilAlmox(u.perfil);})
       .forEach(function(u){marca(u.nome,LOC_EMPRESA);});
   }
   return {mud:mud,marcados:marcados};
@@ -21056,7 +21059,22 @@ function renderEstConsumo(){
 }
 
 /* ================= GESTÃO ADMINISTRATIVA ================= */
-var PERFIS=["Administrador","Financeiro","Gerente","Vendedor","Prospector","Instalador","Estoquista"];
+/* 28/10 (regra dele: "estoquista é o mesmo que o almoxarifado, deixe apenas 1"): a função se chama
+   ALMOXARIFADO. O nome antigo "Estoquista" continua sendo reconhecido (ehPerfilAlmox) e é trocado
+   sozinho ao carregar, para nenhum cadastro antigo perder o acesso no meio da troca. */
+var PERFIL_ALMOX="Almoxarifado",PERFIL_ALMOX_ANTIGO="Estoquista";
+function ehPerfilAlmox(p){return p===PERFIL_ALMOX||p===PERFIL_ALMOX_ANTIGO;}
+function normalizarNomeAlmox(){
+  try{
+    var temNova=funcoes.some(function(f){return f.nome===PERFIL_ALMOX;});
+    funcoes.forEach(function(f){
+      if(f.nome===PERFIL_ALMOX_ANTIGO&&!temNova){f.nome=PERFIL_ALMOX;temNova=true;
+        if(/^Almoxarifado: confere nota/.test(f.desc||""))f.desc="Confere nota, move estoque e cuida de todo o almoxarifado";}});
+    USUARIOS.forEach(function(u){if(u.perfil===PERFIL_ALMOX_ANTIGO)u.perfil=PERFIL_ALMOX;
+      if(u.funcaoBanco===PERFIL_ALMOX_ANTIGO)u.funcaoBanco=PERFIL_ALMOX;});
+  }catch(e){console.warn("almoxarifado",e);}
+}
+var PERFIS=["Administrador","Financeiro","Gerente","Vendedor","Prospector","Instalador","Almoxarifado"];
 var caixas=[],centros=[],fornecedores=[],titulos=[],movs=[],notas=[];
 /* centro de custo tem grupo e subgrupo (regra do Wagner, 15/09): ex. Veículos › Combustível, Pneus, Troca de óleo */
 var SEED_CENTROS=[
@@ -23911,7 +23929,7 @@ function responsavelAlmox(){
   try{marcados=responsaveisDoEstoque(LOC_EMPRESA);}catch(e){}
   if(marcados.length)return marcados[0];
   var ativos=USUARIOS.filter(function(u){return u.ativo!==false;});
-  var e=ativos.filter(function(u){return u.perfil==="Estoquista";})[0];
+  var e=ativos.filter(function(u){return ehPerfilAlmox(u.perfil);})[0];
   if(e)return e.nome;
   var m=ativos.filter(function(u){return pode("moverEstoque",u.nome);})[0];
   if(m)return m.nome;
@@ -26261,7 +26279,7 @@ function renderConferencia(){
   $("cf_alerta").innerHTML=fechada
     ? '<div class="note ok"><b>Entrada já efetivada.</b> Estoque, custo e contas a pagar foram gerados.</div>'
     : (!podeConferir()
-      ? '<div class="note warn"><b>Só o almoxarifado dá entrada.</b> Esta conferência é do perfil <b>Estoquista</b> (o Administrador também pode). '+
+      ? '<div class="note warn"><b>Só o almoxarifado dá entrada.</b> Esta conferência é da função <b>Almoxarifado</b> (o Administrador também pode). '+
         "Você está como "+esc(perfilDe(usuarioAtual))+" e enxerga tudo, mas não confirma.</div>"
       : (divergentes
         ? '<div class="note crit"><b>'+divergentes+" item(ns) com divergência</b>"+
@@ -27476,7 +27494,7 @@ async function gerarDemo(){
     semana:{tentativas:3,contatos:2,vendas:1,faturamento:1200},off:{},desabilitado:false};
   EQUIPE.forEach(function(n){
     var p=perfilDe(n);
-    if(p==="Administrador"||p==="Financeiro"||p==="Estoquista")return;
+    if(p==="Administrador"||p==="Financeiro"||ehPerfilAlmox(p))return;
     metas[n]=JSON.parse(JSON.stringify(alvo));
   });
   await gravarMetas();
@@ -33955,7 +33973,7 @@ function garantiaServicoVigente(equipId,exceto){
 /* ---------- liberacao da aba OS (decisao 7) ----------
    As funcoes ja estao gravadas no banco dele, entao acrescentar a tela no codigo nao muda nada
    la - e preciso regravar, uma vez, como foi feito com as categorias e os centros de custo. */
-var PERFIS_TELA_OS=["Vendedor","Prospector","Estoquista"];
+var PERFIS_TELA_OS=["Vendedor","Prospector","Estoquista","Almoxarifado"];
 var TELAS_COMERCIAL_25={
   "Vendedor":["os","fatur","veiculos"],
   "Instalador":["os","fatur","veiculos"],   /* o instalador perdeu a OS no banco: devolvida */
@@ -43119,7 +43137,7 @@ var ACOES=[
   /* 28/10 (pedido dele): o almoxarifado com acesso completo ao que é do almoxarifado —
      todos os estoques, contagens, autorizações de estoque e relatórios de estoque —
      sem ganhar nada de administração, financeiro ou comercial */
-  ["almoxarifado","Acesso completo ao almoxarifado (todos os estoques, contagens e relatórios de estoque)"]
+  ["almoxarifado","Ver e gerir todos os estoques (contagens, autorizações e relatórios de estoque)"]
 ];
 var TODAS_TELAS=GRUPOS_TELA.reduce(function(a,g){return a.concat(g.telas.map(function(t){return t[0];}));},[]);
 /* as telas do dia a dia, que as funções padrão recebem. NÃO é o grupo do menu: o grupo
@@ -43149,7 +43167,7 @@ var SEED_FUNCOES=[
     /* 25/10: o instalador também vê a própria remuneração e o veículo que está no nome dele */
     telas:["dash","agenda","ponto","metasop","ativ","atend","pedidos","leads","clientes",
       "produtos","manut","estColab","os","fatur","veiculos"],acoes:[]},
-  {nome:"Estoquista",desc:"Almoxarifado: confere nota e move estoque",
+  {nome:"Almoxarifado",desc:"Confere nota, move estoque e cuida de todo o almoxarifado",
     telas:["dash","agenda","ponto","leads","clientes","produtos","grupos","estEmpresa","estColab","estConsumo","notas","fornec","relat"],
     acoes:["entradaNF","moverEstoque","verCustos","almoxarifado"]}
 ];
@@ -43181,7 +43199,12 @@ async function migrarTelasNovas(){
   });
   if(mudou)await gravarFuncoes();
 }
-function funcaoPor(nome){return funcoes.filter(function(f){return f.nome===nome;})[0]||null;}
+function funcaoPor(nome){
+  var f=funcoes.filter(function(x){return x.nome===nome;})[0];
+  /* o nome antigo cai na função nova (28/10): um cadastro ainda com "Estoquista" não perde o acesso */
+  if(!f&&ehPerfilAlmox(nome))f=funcoes.filter(function(x){return ehPerfilAlmox(x.nome);})[0];
+  return f||null;
+}
 function perfilDe(n){var u=usuarioPor(n);return u?(u.perfil||"Vendedor"):"Vendedor";}
 function funcaoDe(n){
   /* enquanto as funções não carregaram, não esconde nada — senão o menu
@@ -43203,11 +43226,11 @@ var PERM_FLEX_VERSAO="2026-10-27";
 /* o que até 27/10 era decidido fora da marcação — a migração regrava isso nas funções,
    uma vez, para ninguém ganhar nem perder nada no dia da publicação */
 var TELAS_TODOS_ANTES=["leads","clientes","aniver","funil","solic"];
-var PERFIS_FERR_ANTES=["Administrador","Estoquista"];
+var PERFIS_FERR_ANTES=["Administrador","Estoquista","Almoxarifado"];
 var PERFIS_RASTREIO_ANTES=["Administrador","Gerente"];
 var ACOES_POR_PERFIL_ANTES={exportar:["Administrador"],apagarRegistros:["Administrador"],
   corrigirCadastro:["Administrador"],aprovarCredito:["Financeiro","Administrador"],
-  autorizarEstoque:["Administrador","Gerente"],almoxarifado:["Administrador","Estoquista"]};
+  autorizarEstoque:["Administrador","Gerente"],almoxarifado:["Administrador","Estoquista","Almoxarifado"]};
 function ehTravaAdmin(n,tipo,k,perfil){
   return (perfil||perfilDe(n))==="Administrador"&&TRAVA_ADMIN[tipo].indexOf(k)>=0;
 }
@@ -43279,8 +43302,8 @@ function migrarAlmoxarifado(lista){
   (lista||[]).forEach(function(f){
     if(!f||f.almoxV)return;
     var a=(f.acoes||[]).slice(),t=(f.telas||[]).slice();
-    if(f.nome==="Administrador"||f.nome==="Estoquista"){if(a.indexOf("almoxarifado")<0)a.push("almoxarifado");}
-    if(f.nome==="Estoquista")TELAS_ALMOX.forEach(function(k){if(t.indexOf(k)<0)t.push(k);});
+    if(f.nome==="Administrador"||ehPerfilAlmox(f.nome)){if(a.indexOf("almoxarifado")<0)a.push("almoxarifado");}
+    if(ehPerfilAlmox(f.nome))TELAS_ALMOX.forEach(function(k){if(t.indexOf(k)<0)t.push(k);});
     f.acoes=a;f.telas=t;f.almoxV=ALMOX_VERSAO;feitas.push(f.nome);
   });
   return feitas;
@@ -43290,9 +43313,9 @@ async function gravarMigracaoAlmox(){
   if(!db||!almoxMigradas.length||!ehAdministrador())return 0;
   try{await gravarFuncoesConf();}catch(e){console.warn("almoxarifado",e);return 0;}
   almoxMigradas=[];
-  try{await registrarLogPerm({alvo:"migracao",nome:"Estoquista",
+  try{await registrarLogPerm({alvo:"migracao",nome:"Almoxarifado",
     texto:"Almoxarifado completo: a ação \"Acesso completo ao almoxarifado\" foi dada ao Administrador e ao "+
-      "Estoquista, e o Estoquista ganhou Grupos de Produtos e Relatórios (só a aba Estoque)."});}catch(e){}
+      "Almoxarifado, e o Almoxarifado ganhou Grupos de Produtos e Relatórios (só a aba Estoque)."});}catch(e){}
   return 1;
 }
 /* grava a migração: só o Administrador grava as funções (regra do banco) */
@@ -43471,7 +43494,7 @@ function aplicarLeituraConfig(s){
   if(av)av.hidden=!on;
 }
 /* o catálogo de ferramentas é do almoxarifado (23/10, regra dele) */
-var PERFIS_FERR=["Administrador","Estoquista"];
+var PERFIS_FERR=["Administrador","Estoquista","Almoxarifado"];
 /* Enquanto as funções não carregaram, funcaoDe() devolve TUDO para o menu não nascer cortado —
    e isso fazia a regra de "só o que é meu" começar ABERTA: nesse intervalo (ou se o documento
    config/funcoes não existir no banco) o vendedor via os registros da equipe. Aqui a falta de
