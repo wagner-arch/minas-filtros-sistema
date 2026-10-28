@@ -4,11 +4,15 @@ package br.com.minasfiltros.sistema
    A pagina chama window.MFApp.* ; o aplicativo nunca inventa dado nenhum:
    quem diz quem esta logado, qual a funcao e qual a credencial e o sistema. */
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Base64
 import android.webkit.JavascriptInterface
+import androidx.core.content.FileProvider
 import org.json.JSONObject
+import java.io.File
 
 class Ponte(private val ctx: Context) {
 
@@ -101,6 +105,52 @@ class Ponte(private val ctx: Context) {
 
   @JavascriptInterface
   fun marcaDoCelular(): String = (Build.MANUFACTURER ?: "") + " " + (Build.MODEL ?: "")
+
+  /* O PDF DIRETO NA CONVERSA DO CLIENTE (28/10, print dele: o WhatsApp recebia so o texto).
+     Dentro do aplicativo o "compartilhar com arquivo" do navegador nao existe, entao o sistema
+     entrega o arquivo aqui: ele vira um arquivo do aplicativo, e o WhatsApp recebe o PDF e a
+     mensagem ja na conversa do numero do cliente (o WhatsApp Business primeiro, que e o dos
+     celulares da empresa; depois o comum; sem nenhum dos dois, a lista de aplicativos). */
+  @JavascriptInterface
+  fun compartilharArquivo(base64: String, nome: String, texto: String, telefone: String): Boolean {
+    return try {
+      val pasta = File(ctx.getExternalFilesDir(null), "compartilhar")
+      pasta.mkdirs()
+      pasta.listFiles()?.forEach { it.delete() }
+      val limpo = nome.replace(Regex("[^A-Za-z0-9._-]"), "_").ifEmpty { "documento.pdf" }
+      val arq = File(pasta, limpo)
+      arq.writeBytes(Base64.decode(base64, Base64.DEFAULT))
+      val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".arquivos", arq)
+      val dig = telefone.filter { it.isDigit() }
+      fun intencao(pacote: String?): Intent {
+        val i = Intent(Intent.ACTION_SEND)
+        i.type = "application/pdf"
+        i.putExtra(Intent.EXTRA_STREAM, uri)
+        if (texto.isNotEmpty()) i.putExtra(Intent.EXTRA_TEXT, texto)
+        if (dig.length >= 10) i.putExtra("jid", dig + "@s.whatsapp.net")
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (pacote != null) i.setPackage(pacote)
+        return i
+      }
+      val ui = (ctx as? android.app.Activity)
+      fun abrir(i: Intent) {
+        if (ui != null) ui.runOnUiThread { ui.startActivity(i) }
+        else { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); ctx.startActivity(i) }
+      }
+      val pm = ctx.packageManager
+      val pacote = listOf("com.whatsapp.w4b", "com.whatsapp").firstOrNull { p ->
+        try { pm.getPackageInfo(p, 0); true } catch (e: Exception) { false } }
+      if (pacote != null) {
+        try { abrir(intencao(pacote)); return true } catch (e: ActivityNotFoundException) { }
+      }
+      val esc = Intent.createChooser(intencao(null), "Enviar o PDF")
+      esc.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      abrir(esc)
+      true
+    } catch (e: Throwable) {
+      false
+    }
+  }
 
   private fun ligar() {
     if (ServicoLocalizacao.ligado) return
