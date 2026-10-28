@@ -1571,6 +1571,7 @@
 <!-- ============ AJUSTES DE CELULAR (estilo) — fica logo após o estilo principal
      para o celular já pintar o layout certo enquanto o resto do arquivo chega ============ -->
 <style id="estiloCelular">
+#ecBody tr.ec-grupo td{background:var(--bg);font-size:13px;color:var(--ink-2);padding-top:12px}
 /* o claude.ai injetava este reset; servido pelo GitHub Pages o arquivo vem cru */
 [hidden]{display:none!important}
 img{max-width:100%}
@@ -20623,6 +20624,26 @@ function renderEstEmpresa(){
       bt.onclick=function(){decidirRetirada(bt.getAttribute("data-rtr"),false);};});
   }
 }
+/* O QUE O PESSOAL PEDE DO ESTOQUE GERAL (28/10, pedido dele com o print do financeiro travado):
+   a retirada para venda (vendeu sem estoque e pede do almoxarifado) e a requisição de produto.
+   As duas esperam o almoxarifado e passam a aparecer também na aba Autorizações, seja qual for
+   o estoque escolhido — antes só existiam em Estoque Empresa › Requisições, e ninguém via. */
+function pedidosAoEstoqueGeral(){
+  return requisicoes.filter(function(r){
+    if(r.status!=="pendente")return false;
+    if(r.tipo==="retirada")return (r.lojaOrigem||r.loja)===lojaAtual;
+    if(r.tipo==="requisicao")return r.loja===lojaAtual;
+    return false;
+  }).sort(function(a,b){return (a.tipo==="retirada"?0:1)-(b.tipo==="retirada"?0:1)||
+    String(a.data||"").localeCompare(String(b.data||""));});
+}
+/* para quem não é do almoxarifado: só os dele, para acompanhar */
+function pedidosAoEstoqueGeralVisiveis(){
+  var eu=euNoEstoque();
+  return pedidosAoEstoqueGeral().filter(function(r){
+    return podeAprovarRetirada()||r.colaborador===eu||r.criadoPor===usuarioAtual||r.pedidaPor===usuarioAtual;});
+}
+function contarPedidosAoGeralParaMim(){return podeAprovarRetirada()?pedidosAoEstoqueGeral().length:0;}
 /* para onde esta requisição leva o produto: o Estoque da Loja (campo novo) ou a pessoa */
 function localDaReq(r){
   if(!r)return "";
@@ -20761,7 +20782,10 @@ function ajustarTextosEC(){
   var bAut=ab.querySelector('[data-t="aut"]');
   if(bAut){
     bAut.hidden=ferr;
-    var nAut=0;try{nAut=autorizacoesParaMim().length;}catch(e){}
+    var nAut=0;try{
+      var vq0=$("ecQuem")?String($("ecQuem").value||""):"",lq0=ehLocalLoja(vq0)?vq0:locColab(vq0);
+      nAut=autorizacoesParaMim().length+(podeAprovarRetirada()?pedidosAoEstoqueGeral().filter(function(r){return localDaReq(r)===lq0;}).length:0);
+    }catch(e){}
     var bg=$("ecAutBadge");if(bg){bg.textContent=nAut||"";bg.hidden=!nAut;}
   }
   if(ferr&&ecAba==="aut")ecAba="meu";
@@ -20817,7 +20841,14 @@ function renderEstColab(){
     var r=respEstoqueLoja(lojaDoLocal(lc));
     o.textContent=nomeLocal(lc)+(r?" · "+r:" · sem responsável");
     sq.appendChild(o);});
-  lista.forEach(function(nm){var o=document.createElement("option");o.value=nm;o.textContent=nm;sq.appendChild(o);});
+  var aAutPor={};
+  try{if(podeAprovarRetirada())pedidosAoEstoqueGeral().forEach(function(r){var l=localDaReq(r);aAutPor[l]=(aAutPor[l]||0)+1;});}catch(eA){}
+  Array.prototype.forEach.call(sq.options,function(o){var n=aAutPor[o.value];if(n)o.textContent+=" · "+n+" a autorizar";});
+  /* quem tem pedido esperando entra na lista mesmo sem estoque ainda (é o caso de quem vendeu sem ter) */
+  if(verTodosEst)Object.keys(aAutPor).forEach(function(l){
+    if(l.indexOf("colab:")!==0)return;var nm=l.slice(6);if(lista.indexOf(nm)<0)lista.push(nm);});
+  lista.forEach(function(nm){var o=document.createElement("option");o.value=nm;
+    var n=aAutPor[locColab(nm)];o.textContent=nm+(n?" · "+n+" a autorizar":"");sq.appendChild(o);});
   if(!lista.length&&!lojasEst.length){var o=document.createElement("option");o.textContent="— ninguém com estoque —";sq.appendChild(o);}
   var valores=lojasEst.concat(lista);
   sq.disabled=(!verTodosEst&&valores.length<2);
@@ -20830,6 +20861,10 @@ function renderEstColab(){
   var btCg=$("ecContagem");
   if(btCg)btCg.hidden=(ecTipo==="ferr")||!ehLoja||!podeAutorizarEstoque(vSel);
   var loc=ehLoja?vSel:locColab(vSel),quem=ehLoja?"":vSel;
+  /* o número da aba Autorizações é o do estoque escolhido (28/10) */
+  try{var bgA=$("ecAutBadge");if(bgA){
+    var nA=autorizacoesParaMim().length+(podeAprovarRetirada()?pedidosAoEstoqueGeral().filter(function(r){return localDaReq(r)===loc;}).length:0);
+    bgA.textContent=nA||"";bgA.hidden=!nA||ecTipo==="ferr";}}catch(eBg){}
   try{$("ecResps").innerHTML=htmlRespsEstoque(loc);}catch(e){}
   var q=($("ecBusca").value||"").toLowerCase();
 
@@ -20895,11 +20930,39 @@ function renderEstColab(){
     var todas=minhas.concat(outras).filter(function(x){
       return !q||((x.item.nome||"")+" "+(x.ped.numero||"")+" "+(x.ped.cliente||"")+" "+(x.aut.pedidaPor||""))
         .toLowerCase().indexOf(q)>=0;});
-    $("ecCount").textContent=minhas.length
-      ? minhas.length+" esperando você · "+todas.length+" no total"
-      : todas.length+(todas.length===1?" autorização":" autorizações");
-    if(!todas.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma autorização</div>'+
-      "Quando alguém vender um produto que sai do seu estoque, o pedido de autorização aparece aqui e no sino.</div></td></tr>";return;}
+    /* regra dele (28/10): o almoxarifado entra em CADA vendedor e vê o que aquele vendedor pediu
+       do estoque geral — então o bloco segue o estoque escolhido em "Estoque de" */
+    var geral=pedidosAoEstoqueGeralVisiveis().filter(function(r){
+      if(localDaReq(r)!==loc)return false;
+      return !q||((r.pedidoNumero||"")+" "+(r.cliente||"")+" "+(r.colaborador||"")+" "+
+        r.itens.map(function(i){return i.nome||"";}).join(" ")).toLowerCase().indexOf(q)>=0;});
+    var euGeral=podeAprovarRetirada()?geral.length:0,nMinhas=minhas.length+euGeral;
+    $("ecCount").textContent=nMinhas
+      ? nMinhas+" esperando você · "+(todas.length+geral.length)+" no total"
+      : (todas.length+geral.length)+((todas.length+geral.length)===1?" autorização":" autorizações");
+    if(!todas.length&&!geral.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma autorização</div>'+
+      "Quando alguém vender um produto que sai do seu estoque, ou pedir produto do estoque geral, o pedido aparece aqui e no sino.</div></td></tr>";return;}
+    if(geral.length){
+      b.innerHTML+='<tr class="ec-grupo"><td colspan="6"><b>Do estoque geral (almoxarifado)</b> · '+geral.length+
+        (geral.length===1?" pedido":" pedidos")+(euGeral?" esperando você":" aguardando o almoxarifado")+"</td></tr>";
+      geral.forEach(function(r){
+        var ret=(r.tipo==="retirada"),podeEu=podeAprovarRetirada();
+        b.innerHTML+="<tr><td>"+(r.pedidoNumero?"<b>"+esc(r.pedidoNumero)+"</b>":"—")+
+          '<div class="t-sub">'+(ret?'<span class="pill p-crit">Retirada p/ venda</span>':'<span class="pill p-acc">Requisição</span>')+
+          (r.cliente?" "+esc(r.cliente):"")+"</div></td>"+
+          "<td>"+r.itens.map(function(i){return '<div class="t-main">'+(+i.qtd||1)+"× "+esc(i.nome||"")+"</div>";}).join("")+
+            (r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+"</td>"+
+          "<td>"+(ret?esc(origemRetiradaNome(r)):"Almoxarifado")+'<div class="t-sub">para '+esc(nomeLocal(localDaReq(r)))+"</div></td>"+
+          "<td>"+esc(r.colaborador||r.pedidaPor||r.criadoPor||"")+'<div class="t-sub">'+esc(dataBR(r.data||""))+"</div></td>"+
+          '<td><span class="pill p-warn">aguardando '+(podeEu?"você":"o almoxarifado")+"</span></td>"+
+          '<td class="num">'+(podeEu
+            ?(ret?'<button class="btn sm" type="button" data-ecrta="'+esc(r.id)+'">Aceitar retirada</button> '+
+                 '<button class="btn mut sm" type="button" data-ecrtr="'+esc(r.id)+'">Recusar</button>'
+                 :'<button class="btn sm" type="button" data-ecrqs="'+esc(r.id)+'">Separar</button>')
+            :"")+"</td></tr>";
+      });
+      if(todas.length)b.innerHTML+='<tr class="ec-grupo"><td colspan="6"><b>Vendas que saem do estoque de outra pessoa</b></td></tr>';
+    }
     todas.forEach(function(x){
       var a=x.aut,pend=(a.status==="pendente"),euDecido=pend&&podeAutorizarEstoque(a.local);
       var sit=pend?'<span class="pill p-warn">aguardando'+(euDecido?" você":" "+esc(a.resp||"—"))+"</span>"
@@ -20919,6 +20982,12 @@ function renderEstColab(){
       bt.onclick=function(){
         var v=bt.getAttribute("data-ecaut").split("|");
         abrirAutEstoque(v[0],v[1]);};});
+    Array.prototype.forEach.call(b.querySelectorAll("[data-ecrta]"),function(bt){
+      bt.onclick=function(){decidirRetirada(bt.getAttribute("data-ecrta"),true);};});
+    Array.prototype.forEach.call(b.querySelectorAll("[data-ecrtr]"),function(bt){
+      bt.onclick=function(){decidirRetirada(bt.getAttribute("data-ecrtr"),false);};});
+    Array.prototype.forEach.call(b.querySelectorAll("[data-ecrqs]"),function(bt){
+      bt.onclick=function(){atenderReq(bt.getAttribute("data-ecrqs"));};});
   }
   else if(ecAba==="usados"){
     h.innerHTML="<th>Aparelho</th><th>Situação</th><th>Veio do pedido</th><th>Desde</th><th>Onde está</th><th></th>";
