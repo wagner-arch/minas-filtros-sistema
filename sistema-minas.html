@@ -2302,6 +2302,13 @@ img{max-width:100%}
             <div class="fld" id="c_conjSel"><label for="c_temconj">Tem cônjuge?</label>
               <select id="c_temconj"><option value="nao">Não</option><option value="sim">Sim</option></select></div>
           </div>
+          <!-- os outros telefones do cliente (29/10): a importação guarda todos, e a busca, o WhatsApp
+               e o "Ligar" usam os quatro -->
+          <div class="grid g3" style="margin-top:16px">
+            <div class="fld"><label for="c_tel2">Telefone 2</label><input id="c_tel2" placeholder="(37) 90000-0000"></div>
+            <div class="fld"><label for="c_tel3">Telefone 3</label><input id="c_tel3" placeholder="(37) 90000-0000"></div>
+            <div class="fld"><label for="c_tel4">Telefone 4</label><input id="c_tel4" placeholder="(37) 90000-0000"></div>
+          </div>
         </div>
 
         <div class="sect" id="c_pjWrap" hidden>
@@ -6361,15 +6368,15 @@ img{max-width:100%}
 
 <div class="modal" id="impcModal" hidden>
   <div class="box" style="width:min(760px,100%)">
-    <h3>Importar a base de clientes</h3>
-    <div class="sub">Um cliente por linha. A <b>primeira linha é o cabeçalho</b> com o nome das colunas — em qualquer ordem; o que não existir fica em branco.</div>
+    <h3>Importar clientes e aparelhos</h3>
+    <div class="sub">Planilha do Excel (.xlsx) ou .csv. <b>Uma linha por produto comprado</b>, com os dados do cliente repetidos em cada linha do mesmo cliente. A <b>primeira linha é o cabeçalho</b> — em qualquer ordem; o que não existir fica em branco. Tudo entra na empresa em que você entrou.</div>
     <div class="actions" style="justify-content:flex-start;margin:14px 0 10px">
       <button class="btn ghost" type="button" id="ic_arqBt">Escolher o arquivo…</button>
-      <input type="file" id="ic_arq" accept=".csv,.txt" class="os-foto-in">
+      <input type="file" id="ic_arq" accept=".xlsx,.xls,.csv,.txt" class="os-foto-in">
       <span class="count" id="ic_arqNome"></span>
     </div>
     <div class="fld"><label for="ic_texto">…ou cole as linhas aqui</label>
-      <textarea id="ic_texto" rows="5" placeholder="Nome;CPF/CNPJ;Telefone;Cidade;UF;Bairro;Rua;Nº;CEP"></textarea></div>
+      <textarea id="ic_texto" rows="5" placeholder="nome;tipo;cpf/cnpj;telefone;telefone 2;telefone 3;telefone 4;email;cep;rua;numero;complemento;bairro;cidade;uf;obs;produto;data da compra;próxima manutenção"></textarea></div>
     <div class="grid g3" style="margin:6px 0 2px">
       <div class="fld"><label for="ic_bloco">Gravar de quantos em quantos</label>
         <select id="ic_bloco">
@@ -6389,7 +6396,7 @@ img{max-width:100%}
       <span class="sp" style="flex:1"></span>
       <button class="btn mut" type="button" id="ic_apagar" hidden>Apagar os importados</button>
     </div>
-    <p class="help">Colunas aceitas: <b>código, nome, tipo, CPF/CNPJ, RG/IE, nascimento, sexo, telefone, celular, e-mail, profissão, apelido, CEP, rua, número, complemento, bairro, cidade, UF, origem, referência, geolocalização e observação</b>. Quem entra por aqui já nasce <b>cliente</b> — não passa pelo Atendimento — e fica marcado como importado. Repetido (mesmo CPF/CNPJ, ou mesmo nome e telefone) é pulado.</p>
+    <p class="help">Colunas: <b>nome; tipo; cpf/cnpj; telefone; telefone 2; telefone 3; telefone 4; email; cep; rua; numero; complemento; bairro; cidade; uf; obs; produto; data da compra; próxima manutenção</b> (datas em dd/mm/aaaa). Também aceita código, RG/IE, nascimento, sexo, origem e referência. Cada cliente é criado <b>uma vez</b> (mesmo CPF/CNPJ, ou mesmo nome e telefone) e já nasce <b>cliente</b>; cada linha com produto vira um aparelho na <b>Manutenção Periódica</b>. O endereço e o estado entram <b>exatamente como estão na planilha</b>. Importar o mesmo arquivo de novo não duplica.</p>
   </div>
 </div>
 
@@ -8291,7 +8298,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=428"></script>
+<script src="supabase/adapter.js?v=458"></script>
 <script>
 (function(){
 "use strict";
@@ -9344,12 +9351,18 @@ async function carregar(){
     lerClientesDoBanco();
     var ps=await jaPedido("col:produtos",function(){return col("produtos").limit(3000).get();});
     produtos=ps.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    if(!produtos.length){
+    /* PRODUTO DE SISTEMA NÃO DUPLICA (29/10). Em 28/10, entrando na WF, alguém que não via o
+       catálogo da Minas Filtros fez o sistema criar outro Plano Premium I, Plano Premium II e
+       Serviço de atendimento técnico. Com o catálogo único todos veem os mesmos produtos; e,
+       se a leitura voltar VAZIA com o banco ligado, é a leitura que falhou — nada é semeado. */
+    var catOk=!modoBanco()||produtos.length>0;
+    if(!catOk)console.warn("catálogo veio vazio do banco: os produtos de sistema não serão criados agora");
+    if(!produtos.length&&!modoBanco()){
       for(var i=0;i<SEED.length;i++){var p=JSON.parse(JSON.stringify(SEED[i]));p.id="p"+i;await col("produtos").doc(p.id).set(p);produtos.push(p);}
     }
     /* planos de garantia são itens do catálogo (grupo "Planos"): garante os que faltarem */
     var planosSeed=SEED.filter(function(x){return x.grupo==="Planos"&&/^PLANO-/.test(x.cod);});
-    for(var ip=0;ip<planosSeed.length;ip++){
+    for(var ip=0;catOk&&ip<planosSeed.length;ip++){
       var codPl=planosSeed[ip].cod;
       if(produtos.some(function(x){return x.cod===codPl;}))continue;
       var np=JSON.parse(JSON.stringify(planosSeed[ip]));np.id="plano-"+codPl.toLowerCase();
@@ -9357,19 +9370,19 @@ async function carregar(){
     }
     /* serviço de atendimento técnico da OS externa: garante na base já gravada */
     var srvSeed=SEED.filter(function(x){return x.cod==="SRV-ATEND";})[0];
-    if(srvSeed&&!produtos.some(function(x){return x.cod==="SRV-ATEND";})){
+    if(catOk&&srvSeed&&!produtos.some(function(x){return x.cod==="SRV-ATEND";})){
       var nsv=JSON.parse(JSON.stringify(srvSeed));nsv.id="srv-atend";
       await col("produtos").doc(nsv.id).set(nsv);produtos.push(nsv);
     }
     /* serviço de orçamento da OS interna: garante na base já gravada */
     var orcSeed=SEED.filter(function(x){return x.cod==="SRV-ORC";})[0];
-    if(orcSeed&&!produtos.some(function(x){return x.cod==="SRV-ORC";})){
+    if(catOk&&orcSeed&&!produtos.some(function(x){return x.cod==="SRV-ORC";})){
       var nor=JSON.parse(JSON.stringify(orcSeed));nor.id="srv-orc";
       await col("produtos").doc(nor.id).set(nor);produtos.push(nor);
     }
     /* o refil que o contrato do plano nomeia: garante na base já gravada (17/10) */
     var rfSeed=SEED.filter(function(x){return x.cod==="REFIL-PLANO";})[0];
-    if(rfSeed&&!produtos.some(function(x){return x.cod==="REFIL-PLANO";})){
+    if(catOk&&rfSeed&&!produtos.some(function(x){return x.cod==="REFIL-PLANO";})){
       var nrf=JSON.parse(JSON.stringify(rfSeed));nrf.id="refil-plano";
       await col("produtos").doc(nrf.id).set(nrf);produtos.push(nrf);
     }
@@ -9377,7 +9390,7 @@ async function carregar(){
        para SUCATA (25/09) — é o mesmo produto, então o saldo e o histórico seguem inteiros */
     var usdSeed=SEED.filter(function(x){return x.cod===COD_SUCATA;})[0];
     var usdJa=produtos.filter(ehProdutoSucata)[0];
-    if(usdSeed&&!usdJa){
+    if(catOk&&usdSeed&&!usdJa){
       var nus=JSON.parse(JSON.stringify(usdSeed));nus.id="usado-troca";
       await col("produtos").doc(nus.id).set(nus);produtos.push(nus);
     }else if(usdJa&&usdJa.cod===COD_SUCATA_ANTES){
@@ -9387,7 +9400,7 @@ async function carregar(){
     }
     /* equipamento de cliente trazido pelo técnico: garante na base já gravada */
     var oscSeed=SEED.filter(function(x){return x.cod==="OS-CLIENTE";})[0];
-    if(oscSeed&&!produtos.some(function(x){return x.cod==="OS-CLIENTE";})){
+    if(catOk&&oscSeed&&!produtos.some(function(x){return x.cod==="OS-CLIENTE";})){
       var noc=JSON.parse(JSON.stringify(oscSeed));noc.id="os-cliente";
       await col("produtos").doc(noc.id).set(noc);produtos.push(noc);
     }
@@ -9744,9 +9757,9 @@ function textoBusca(c){
      normaliza o que foi digitado com semAcento — assim "Antonio", "Antônio" e "ANTONIO" acham
      o mesmo cadastro. O "a2|" na chave é de propósito: ele força o texto a ser remontado em
      quem está com a aba aberta desde antes desta versão. */
-  var chave="a2|"+(c.nome||"")+"|"+(c.tel||"")+"|"+(c.doc||"")+"|"+(c.cidade||"")+"|"+(c.rua||"");
+  var chave="a3|"+(c.nome||"")+"|"+(c.tel||"")+"|"+(c.tel2||"")+"|"+(c.tel3||"")+"|"+(c.tel4||"")+"|"+(c.doc||"")+"|"+(c.cidade||"")+"|"+(c.rua||"");
   if(c.__bk===chave&&c.__bt!=null)return c.__bt;
-  var t=semAcento([c.nome,c.apelido,c.doc,c.tel,c.email,c.codigo,c.rua,c.num,c.comp,c.bairro,c.distrito,c.cidade,c.uf,c.cep,
+  var t=semAcento([c.nome,c.apelido,c.doc,c.tel,c.tel2,c.tel3,c.tel4,c.email,c.codigo,c.rua,c.num,c.comp,c.bairro,c.distrito,c.cidade,c.uf,c.cep,
           c.conjnome,c.conjtel,c.respNome,c.comprasNome]
     .filter(Boolean).join(" "));
   try{Object.defineProperty(c,"__bt",{value:t,writable:true,enumerable:false,configurable:true});
@@ -10345,7 +10358,7 @@ function maiusculizarCadastro(c){
   if(typeof c.conjemail==="string")c.conjemail=c.conjemail.toLowerCase().trim();
   return c;
 }
-var CAMPOS_CLI=["nome","doc","rg","apelido","nasc","tel","email","prof","cep","rua","num","comp","bairro","cidade","uf",
+var CAMPOS_CLI=["nome","doc","rg","apelido","nasc","tel","tel2","tel3","tel4","email","prof","cep","rua","num","comp","bairro","cidade","uf",
   "tipoend","ref","geo",
   "sexo","ie","respNome","respContato","respTel","comprasNome","comprasTel","comprasEmail",
   "conjnome","conjcpf","conjrg","conjnasc","conjtel","conjemail"];
@@ -11945,14 +11958,29 @@ async function aplicarManutMarcas(){
 /* MARCADOR: muda de nome a cada acerto de regra, senão quem já abriu o sistema
    com a regra anterior não recebe a correção (ele corrigiu as marcas em 04/10). */
 var MARCADOR_MANUT="manutMarcas3";
+/* AS ARRUMAÇÕES DO CATÁLOGO RODAM UMA VEZ SÓ PARA AS DUAS EMPRESAS (29/10). O catálogo é um só;
+   o marcador ficava no config/importacoes de CADA empresa, e entrar na WF pela primeira vez (27/10)
+   fez as rotinas rodarem de novo em cima dos produtos. Agora o marcador é o config/importacoes_catalogo,
+   que é das duas, e o marcador antigo da empresa aberta continua valendo (quem já rodou não roda). */
+async function marcadorCatalogoJa(nome){
+  try{var g=await db.doc("config/importacoes_catalogo").get();if(g&&g.exists&&g.data()&&g.data()[nome])return true;}
+  catch(e){return true;}   /* sem ler o marcador não se arruma o catálogo de ninguém */
+  try{var l=await db.doc("config/importacoes").get();if(l&&l.exists&&l.data()&&l.data()[nome])return true;}
+  catch(e){return true;}
+  return false;
+}
+async function gravarMarcadorCatalogo(nome,val){
+  var antes={};
+  try{var g=await db.doc("config/importacoes_catalogo").get();if(g&&g.exists&&g.data())antes=g.data();}catch(e){}
+  antes[nome]=val;
+  try{await db.doc("config/importacoes_catalogo").set(antes);}catch(e){console.warn("marcador do catálogo "+nome,e);}
+}
+window.__marcadorCatalogoJaMF=function(n){return marcadorCatalogoJa(n);};
 async function ajustarManutencaoMarcas(){
   if(!db||!ehAdministrador())return 0;
-  var doc=null,antes={};
-  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
-  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes[MARCADOR_MANUT])return 0;}
+  if(await marcadorCatalogoJa(MARCADOR_MANUT))return 0;
   var r=await aplicarManutMarcas(),n=r.n;
-  antes[MARCADOR_MANUT]={quando:hojeISO(),por:usuarioAtual,contagem:n};
-  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador da manutenção por marca",e);}
+  await gravarMarcadorCatalogo(MARCADOR_MANUT,{quando:hojeISO(),por:usuarioAtual,contagem:n});
   if(r.mud){
     try{renderProdutos();}catch(e){}
     toast("Manutenção periódica ajustada: "+MANUT_REGRAS.filter(function(x){return n[x.k];})
@@ -12076,13 +12104,10 @@ async function aplicarLimpezaVariacoes(){
 }
 async function limparVariacoesProduto(){
   if(!db||!ehAdministrador())return 0;
-  var doc=null,antes={};
-  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
-  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.variacoesOutubro)return 0;}
+  if(await marcadorCatalogoJa("variacoesOutubro"))return 0;
   var r=await aplicarLimpezaVariacoes(),n=r.n;
-  antes.variacoesOutubro={quando:hojeISO(),por:usuarioAtual,apagados:n.apagados,desativados:n.desativados,
-    inst:n.inst,site:n.site,premium:n.premium};
-  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador das variações",e);}
+  await gravarMarcadorCatalogo("variacoesOutubro",{quando:hojeISO(),por:usuarioAtual,apagados:n.apagados,desativados:n.desativados,
+    inst:n.inst,site:n.site,premium:n.premium});
   if(r.mud){
     try{renderProdutos();}catch(e){}
     toast("Variações retiradas do cadastro: "+n.apagados+" apagada(s) e "+n.desativados+
@@ -12142,12 +12167,9 @@ async function migrarRespEstoques(){
 window.__respEstoquesMF=aplicarRespEstoques;
 async function limparVersoesTroca(){
   if(!db||!ehAdministrador())return 0;
-  var doc=null,antes={};
-  try{doc=await db.doc("config/importacoes").get();}catch(e){return 0;}
-  if(doc&&doc.exists&&doc.data()){antes=doc.data();if(antes.versoesTroca)return 0;}
+  if(await marcadorCatalogoJa("versoesTroca"))return 0;
   var r=await aplicarLimpezaTroca(),n=r.n;
-  antes.versoesTroca={quando:hojeISO(),por:usuarioAtual,apagados:n.apagados,desativados:n.desativados,valorPara:n.valorPara};
-  try{await db.doc("config/importacoes").set(antes);}catch(e){console.warn("marcador das versões de troca",e);}
+  await gravarMarcadorCatalogo("versoesTroca",{quando:hojeISO(),por:usuarioAtual,apagados:n.apagados,desativados:n.desativados,valorPara:n.valorPara});
   if(r.mud){
     try{renderProdutos();opcoesProduto();}catch(e){}
     toast("Versões de troca retiradas: "+n.apagados+" apagada(s)"+
@@ -12790,13 +12812,15 @@ function ligarImportProdutos(){
 var COLS_CLI=[
   ["codigo",/^(codigo|cod|codigocliente|codcliente|id)$/],
   ["nome",/^(nome|cliente|razaosocial|nomecompleto|nomerazao)$/],
-  ["tipo",/^(tipo|pessoa|tipopessoa|pfpj)$/],
+  ["tipo",/^(tipo|pessoa|tipopessoa|pfpj|tipodepessoa)$/],
   ["doc",/^(doc|cpf|cnpj|cpfcnpj|documento|cpfoucnpj)$/],
   ["rg",/^(rg|identidade|inscricaoestadual|ie|rgie|rgouie)$/],
   ["nasc",/^(nasc|nascimento|datanascimento|aniversario|datadenascimento)$/],
   ["sexo",/^(sexo|genero)$/],
-  ["tel",/^(tel|telefone|fone|telefone1|contato)$/],
-  ["tel2",/^(celular|whatsapp|telefone2|tel2|cel)$/],
+  ["tel",/^(tel|telefone|fone|telefone1|tel1|fone1|contato)$/],
+  ["tel2",/^(celular|whatsapp|telefone2|tel2|fone2|cel)$/],
+  ["tel3",/^(telefone3|tel3|fone3|celular2)$/],
+  ["tel4",/^(telefone4|tel4|fone4|celular3)$/],
   ["email",/^(email|mail|correio)$/],
   ["prof",/^(prof|profissao|ocupacao)$/],
   ["apelido",/^(apelido|fantasia|nomefantasia|nomefantasiaapelido|fantasiaapelido)$/],
@@ -12810,12 +12834,15 @@ var COLS_CLI=[
   ["origem",/^(origem|midia|midiaorigem|comoconheceu|fonte)$/],
   ["ref",/^(ref|referencia|pontodereferencia|comochegar)$/],
   ["geo",/^(geo|geolocalizacao|coordenadas|latlng|localizacao)$/],
-  ["obs",/^(obs|observacao|observacoes|anotacao|nota|notas)$/]
+  ["obs",/^(obs|observacao|observacoes|anotacao|nota|notas)$/],
+  /* IMPORTAÇÃO ÚNICA (29/10): o aparelho vem na mesma linha do cliente */
+  ["produto",/^(produto|equipamento|aparelho|produtocomprado|purificador)$/],
+  ["compra",/^(datadacompra|datacompra|compra|dtcompra|dataultimacompra|ultimacompra)$/],
+  ["proxima",/^(proximamanutencao|proximatroca|proxima|datadamanutencao|datamanutencao|manutencao|vencimento|proximamanut)$/]
 ];
-/* o arquivo costuma ter Telefone, Telefone 2 e Celular: guarda TODAS as colunas de
-   telefone e, na leitura, vale a primeira preenchida — senão perde-se o número de quem
-   só tem celular */
-var RE_TEL_CLI=/^(tel|telefone|fone|telefone1|telefone2|tel2|tel3|celular|cel|celular2|whatsapp|zap|contato)$/;
+/* TODAS as colunas de telefone, na ordem do arquivo: a 1ª preenchida vai para o Telefone e as
+   outras para Telefone 2, 3 e 4 (29/10, pedido dele: "guarde TODOS os telefones") */
+var RE_TEL_CLI=/^(tel|telefone|fone|telefone1|tel1|fone1|telefone2|tel2|fone2|telefone3|tel3|fone3|telefone4|tel4|fone4|celular|cel|celular2|celular3|whatsapp|zap|contato)$/;
 function mapaCabecalhoCli(c){
   var m={},achou=0,tels=[];
   c.forEach(function(t,i){
@@ -12836,7 +12863,7 @@ function dataImport(s){
   var m=t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
   if(m){
     var a=m[3].length===2?((+m[3]>30?"19":"20")+m[3]):m[3];
-    if(+a<1900)return "";
+    if(+a<1900||+m[2]<1||+m[2]>12||+m[1]<1||+m[1]>31)return "";
     return a+"-"+("0"+m[2]).slice(-2)+"-"+("0"+m[1]).slice(-2);}
   m=t.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);
   if(m&&+m[1]>=1900)return m[1]+"-"+("0"+m[2]).slice(-2)+"-"+("0"+m[3]).slice(-2);
@@ -12872,137 +12899,375 @@ function registrosImport(txt,ncols){
   if(buf)out.push(buf);
   return out;
 }
-function linhasImportCliente(txt){
-  var itens=[],mapa=null,ncols=0;
-  /* o cabeçalho nunca quebra linha: ele dá o número de colunas que separa um registro do outro */
-  var cruas=String(txt||"").replace(/^﻿/,"").split(/\r?\n/);
-  for(var k=0;k<cruas.length;k++){
-    if(!cruas[k].trim())continue;
-    var cab=partesLinhaImport(cruas[k].trim());
-    mapa=mapaCabecalhoCli(cab);ncols=cab.length;break;
+/* ===== IMPORTAÇÃO ÚNICA: CLIENTES E APARELHOS NUMA PLANILHA SÓ (29/10) =====================
+   Regra dele: uma linha por produto comprado, com os dados do cliente repetidos em cada linha do
+   mesmo cliente. Cada cliente é criado UMA vez (mesmo CPF/CNPJ, ou mesmo nome + telefone); cada
+   linha com produto vira um aparelho ligado ao cliente e ao produto do catálogo, que entra na
+   Manutenção Periódica da empresa em que a pessoa entrou.
+   ENDEREÇO: grava EXATAMENTE o que está na planilha — nada de estado, cidade ou CEP preenchido,
+   corrigido ou adivinhado. Vazio continua vazio. (Na ficha feita na tela continua valendo o
+   preenchimento pelos Correios e pelo IBGE.) */
+/* o texto do arquivo .csv/.txt vira a mesma lista de linhas que o Excel devolve */
+function linhasDeTextoImport(txt){
+  var cruas=String(txt||"").replace(/^﻿/,"").split(/\r?\n/),ncols=0;
+  for(var k=0;k<cruas.length;k++){if(cruas[k].trim()){ncols=partesLinhaImport(cruas[k].trim()).length;break;}}
+  return registrosImport(txt,ncols).map(function(l){return l.trim()?partesLinhaImport(l.trim()):[];});
+}
+function linhasImportCliente(entrada){
+  var linhas=Array.isArray(entrada)?entrada:linhasDeTextoImport(entrada);
+  var itens=[],mapa=null,ix=0;
+  for(;ix<linhas.length;ix++){
+    var cab=linhas[ix]||[];
+    if(!cab.some(function(x){return String(x==null?"":x).trim();}))continue;
+    mapa=mapaCabecalhoCli(cab.map(function(x){return String(x==null?"":x);}));ix++;break;
   }
-  var linhas=registrosImport(txt,ncols);
   if(!mapa)return {itens:[],semCabecalho:true};
-  linhas.forEach(function(linha){
-    var l=linha.trim();if(!l)return;
-    var b=partesLinhaImport(l);
-    if(mapaCabecalhoCli(b))return;                       /* a própria linha do cabeçalho */
+  for(;ix<linhas.length;ix++){
+    var b=(linhas[ix]||[]).map(function(x){return String(x==null?"":x);});
+    if(!b.some(function(x){return x.trim();}))continue;
+    if(mapaCabecalhoCli(b))continue;                       /* o cabeçalho repetido no meio */
     var g=function(k){return mapa[k]==null?"":String(b[mapa[k]]==null?"":b[mapa[k]]).replace(/\s+/g," ").trim();};
     var nome=g("nome");
-    if(!nome)return;
-    var doc=soDig(g("doc")),tipoTxt=semAcento(g("tipo")).toLowerCase();
-    var pj=(doc.length===14)||/juri|pj|empresa|cnpj/.test(tipoTxt);
-    var tel="";
-    (mapa.__tels||[]).forEach(function(ix){
-      if(tel)return;
-      var v=String(b[ix]==null?"":b[ix]).trim();
-      if(soDig(v).length>=8)tel=v;
+    if(!nome)continue;
+    var doc=g("doc"),dd=soDig(doc),tipoTxt=semAcento(g("tipo")).toLowerCase();
+    var pj=/juri|^pj$|empresa|cnpj/.test(tipoTxt)||(!/fisic|^pf$|cpf/.test(tipoTxt)&&dd.length===14);
+    /* os telefones, sem repetir, na ordem das colunas */
+    var tels=[],vistos={};
+    (mapa.__tels||[]).forEach(function(i){
+      var v=String(b[i]==null?"":b[i]).trim(),d=soDig(v);
+      if(!v||d.length<8||vistos[d.slice(-8)])return;
+      vistos[d.slice(-8)]=1;tels.push(telImport(v));
     });
-    if(!tel)tel=g("tel")||g("tel2");
-    itens.push({codigo:g("codigo"),nome:nome,tipo:(pj?"Pessoa Jurídica":"Pessoa Física"),
-      doc:g("doc"),rg:g("rg"),nasc:dataImport(g("nasc")),
+    itens.push({linha:ix+1,codigo:g("codigo"),nome:nome,tipo:(pj?"Pessoa Jurídica":"Pessoa Física"),
+      doc:doc,rg:g("rg"),nasc:dataImport(g("nasc")),
       sexo:(/^f/i.test(g("sexo"))?"Feminino":(/^m/i.test(g("sexo"))?"Masculino":"")),
-      tel:telImport(tel),email:g("email").toLowerCase(),prof:g("prof"),apelido:g("apelido"),
+      tel:tels[0]||"",tel2:tels[1]||"",tel3:tels[2]||"",tel4:tels[3]||"",telsAMais:tels.slice(4),
+      email:g("email").toLowerCase(),prof:g("prof"),apelido:g("apelido"),
+      /* o endereço do jeito que veio: sem trocar maiúsculas, sem completar nada */
       cep:g("cep"),rua:g("rua"),num:g("num"),comp:g("comp"),bairro:g("bairro"),
-      cidade:g("cidade"),uf:g("uf").toUpperCase().slice(0,2),
-      origem:g("origem"),ref:g("ref"),geo:g("geo"),obs:g("obs")});
-  });
+      cidade:g("cidade"),uf:g("uf"),
+      origem:g("origem"),ref:g("ref"),geo:g("geo"),obs:g("obs"),
+      produto:g("produto"),compraTxt:g("compra"),proximaTxt:g("proxima"),
+      compra:dataImport(g("compra")),proxima:dataImport(g("proxima"))});
+  }
   return {itens:itens};
 }
-var impcLidos=null,impcParar=false;
-function previaImportCli(){
-  var r=linhasImportCliente($("ic_texto").value);
+/* Excel (.xlsx): o leitor só é baixado quando a pessoa escolhe um arquivo do Excel */
+var XLSX_URL="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+function carregarXlsx(){
+  if(window.XLSX)return Promise.resolve(window.XLSX);
+  return new Promise(function(ok,falha){
+    var s=document.createElement("script");s.src=XLSX_URL;s.async=true;
+    s.onload=function(){window.XLSX?ok(window.XLSX):falha(new Error("o leitor do Excel não carregou"));};
+    s.onerror=function(){falha(new Error("sem internet para carregar o leitor do Excel"));};
+    document.head.appendChild(s);
+  });
+}
+/* número do Excel numa coluna de data é o dia contado de 30/12/1899 */
+function dataDoExcel(n){
+  var d=new Date(Date.UTC(1899,11,30)+Math.round(n)*86400000);
+  return ("0"+d.getUTCDate()).slice(-2)+"/"+("0"+(d.getUTCMonth()+1)).slice(-2)+"/"+d.getUTCFullYear();
+}
+async function linhasDoXlsx(buf){
+  var X=await carregarXlsx();
+  var wb=X.read(new Uint8Array(buf),{type:"array",cellDates:false});
+  var ws=wb.Sheets[wb.SheetNames[0]];
+  var linhas=X.utils.sheet_to_json(ws,{header:1,raw:true,defval:""});
+  if(!linhas.length)return linhas;
+  /* acha o cabeçalho para saber quais colunas são de data, documento, CEP e telefone */
+  var hi=0;while(hi<linhas.length&&!linhas[hi].some(function(x){return String(x).trim();}))hi++;
+  var cab=(linhas[hi]||[]).map(function(x){return chaveCol(x);});
+  function tipoCol(k){
+    if(/^(datadacompra|datacompra|compra|dtcompra|dataultimacompra|ultimacompra|proximamanutencao|proximatroca|proxima|datadamanutencao|datamanutencao|manutencao|vencimento|proximamanut|nasc|nascimento|datanascimento|datadenascimento|aniversario)$/.test(k))return "data";
+    if(/^(doc|cpf|cnpj|cpfcnpj|documento|cpfoucnpj)$/.test(k))return "doc";
+    if(/^(cep|codigopostal)$/.test(k))return "cep";
+    return "";
+  }
+  var tipos=cab.map(tipoCol);
+  return linhas.map(function(l,i){
+    if(i<=hi)return l.map(function(x){return String(x==null?"":x);});
+    return l.map(function(x,j){
+      if(typeof x!=="number")return String(x==null?"":x);
+      var t=tipos[j];
+      if(t==="data")return dataDoExcel(x);
+      /* o Excel tira o zero da frente de número: devolve CPF com 11, CNPJ com 14 e CEP com 8 */
+      var s=String(Math.round(x));
+      if(t==="doc")return s.length<=11?s.padStart(11,"0"):s.padStart(14,"0");
+      if(t==="cep")return s.padStart(8,"0");
+      return String(x);
+    });
+  });
+}
+/* ---- casa a linha com o cliente e o produto ---- */
+function nomeImpCli(s){return normNomeImp(s);}
+function tel8CliImp(c){
+  return [c.tel,c.tel2,c.tel3,c.tel4,c.cel].map(tel8Imp).filter(Boolean);
+}
+/* a chave do cliente dentro do arquivo: CPF/CNPJ, senão nome + 1º telefone, senão só o nome */
+function chaveGrupoImp(n){
+  var d=soDig(n.doc);
+  if(d.length===11||d.length===14)return "d:"+d;
+  var t=tel8Imp(n.tel);
+  return t?("t:"+nomeImpCli(n.nome)+"|"+t):("n:"+nomeImpCli(n.nome));
+}
+/* SÓ os clientes da empresa aberta: nada da outra empresa é olhado */
+function indiceClientesEmpresa(){
+  var porDoc={},porNomeTel={},porNomeSemTel={};
+  clientes.forEach(function(c){
+    if(c.loja&&c.loja!==lojaAtual)return;
+    var d=soDig(c.doc);
+    if((d.length===11||d.length===14)&&!porDoc[d])porDoc[d]=c;
+    var n=nomeImpCli(c.nome);if(!n)return;
+    var ts=tel8CliImp(c);
+    ts.forEach(function(t){if(!porNomeTel[n+"|"+t])porNomeTel[n+"|"+t]=c;});
+    if(!ts.length&&!(d.length===11||d.length===14)&&!porNomeSemTel[n])porNomeSemTel[n]=c;
+  });
+  return {porDoc:porDoc,porNomeTel:porNomeTel,porNomeSemTel:porNomeSemTel};
+}
+function acharClienteEmpresa(g,idx){
+  var d=soDig(g.doc);
+  if((d.length===11||d.length===14)&&idx.porDoc[d])return idx.porDoc[d];
+  var n=nomeImpCli(g.nome),ts=[g.tel,g.tel2,g.tel3,g.tel4].map(tel8Imp).filter(Boolean);
+  for(var i=0;i<ts.length;i++)if(idx.porNomeTel[n+"|"+ts[i]])return idx.porNomeTel[n+"|"+ts[i]];
+  if(!ts.length&&!(d.length===11||d.length===14)&&idx.porNomeSemTel[n])return idx.porNomeSemTel[n];
+  return null;
+}
+/* produto pelo nome (sem acento nem maiúscula), ou pelo código que vier na frente
+   ("PMF085 - PURIFICADOR…"). O ativo vence o inativo. Sem casar, o aparelho entra com o nome
+   da planilha — a prévia mostra quais são, para corrigir antes, se quiser. */
+function indiceCatalogoImp(){
+  var porNome={},porCod={};
+  function vence(a,b){return !a||((a.status==="inativo")&&b.status!=="inativo");}
+  produtos.forEach(function(p){
+    if(produtoDeSistema(p))return;
+    var n=normNomeImp(p.nome),c=String(p.cod||"").toUpperCase().trim();
+    if(n&&vence(porNome[n],p))porNome[n]=p;
+    if(c&&vence(porCod[c],p))porCod[c]=p;
+  });
+  return {porNome:porNome,porCod:porCod};
+}
+function acharProdutoImp(txt,idx){
+  var t=String(txt||"").trim();if(!t)return null;
+  var n=normNomeImp(t);
+  if(idx.porNome[n])return idx.porNome[n];
+  var so=t.toUpperCase();
+  if(idx.porCod[so])return idx.porCod[so];
+  /* o código é a primeira palavra, quando ela tem algum número (PMF085, AMF016, RMF104-V-2) */
+  var m=t.match(/^([A-Za-z0-9-]*[0-9][A-Za-z0-9-]*)\s*[-–:|]?\s+(.+)$/);
+  if(m){
+    var c=m[1].toUpperCase();
+    if(idx.porCod[c])return idx.porCod[c];
+    var n2=normNomeImp(m[2]);
+    if(idx.porNome[n2])return idx.porNome[n2];
+  }
+  return null;
+}
+/* a próxima troca cai EXATAMENTE na data da planilha; o intervalo é o do produto no catálogo.
+   Quando a planilha não traz a próxima, ela sai da compra + o prazo do produto. */
+function prazoDoAparelhoImp(it,prod){
+  var prazoCat=(prod&&+prod.manut>0)?+prod.manut:0;
+  var compra=it.compra||"",prox=it.proxima||"";
+  if(prox&&compra&&prox<=compra)
+    return {ult:compra,dias:prazoCat||"",caso:"proxAntes"};
+  if(prox){
+    var dif=compra?diasEntreImp(compra,prox):0;
+    var dias=prazoCat||(dif>0?dif:365),ult=somaDias(prox,-dias);
+    if(compra&&ult<compra){ult=compra;dias=dif;}
+    return {ult:ult,dias:dias,caso:prazoCat?"ok":"prazoPlanilha"};
+  }
+  if(compra&&prazoCat)return {ult:compra,dias:prazoCat,caso:"calculada"};
+  return {ult:compra,dias:"",caso:"semPrazo"};
+}
+function chaveEquipImp(cid,it){
+  return cid+"|"+normNomeImp(it.produto)+"|"+(it.compra||"")+"|"+(it.proxima||"");
+}
+/* quantos aparelhos já importados desta chave existem na empresa (importar de novo não duplica,
+   e dois aparelhos iguais na mesma linha de compra continuam sendo dois) */
+function contagemEquipImp(){
+  var m={};
+  equipamentos.forEach(function(e){
+    if(e.loja&&e.loja!==lojaAtual)return;
+    if(!e.importado||!e.clienteId)return;
+    var k=e.clienteId+"|"+normNomeImp(e.produtoNomeOrigem||e.produto)+"|"+(e.compradoEm||"")+"|"+(e.proximaOrigem||"");
+    m[k]=(m[k]||0)+1;
+  });
+  return m;
+}
+var impcLidos=null,impcParar=false,impcFonte=null;
+function previaImportCli(entrada){
+  if(entrada!=null&&typeof entrada==="object"&&!Array.isArray(entrada))entrada=null;   /* evento do campo */
+  var r=linhasImportCliente(entrada!=null?entrada:(impcFonte!=null?impcFonte:$("ic_texto").value));
   impcLidos=r;
   if(r.semCabecalho){
-    $("ic_previa").innerHTML=$("ic_texto").value.trim()
-      ?'<div class="note crit"><b>Não achei o cabeçalho.</b> A primeira linha precisa dizer o nome das colunas — pelo menos <b>Nome</b> e mais uma (Telefone, CPF, Cidade…).</div>':"";
+    $("ic_previa").innerHTML=(entrada!=null||$("ic_texto").value.trim())
+      ?'<div class="note crit"><b>Não achei o cabeçalho.</b> A primeira linha precisa dizer o nome das colunas — pelo menos <b>nome</b> e mais uma (telefone, cpf/cnpj, cidade, produto…).</div>':"";
     return;}
   if(!r.itens.length){$("ic_previa").innerHTML='<div class="note crit"><b>Nenhuma linha com nome.</b></div>';return;}
-  var vistos={},novos=[],repete=0,jaTem=0;
-  clientes.forEach(function(c){vistos[chaveCliente(c)]="base";});
-  r.itens.forEach(function(c){
-    var k=chaveCliente(c);
-    if(vistos[k]){if(vistos[k]==="base")jaTem++;else repete++;return;}
-    vistos[k]="novo";novos.push(c);
+  var idxC=indiceClientesEmpresa(),idxP=indiceCatalogoImp(),jaEq=contagemEquipImp();
+  var grupos={},ordem=[];
+  r.itens.forEach(function(it){
+    var k=chaveGrupoImp(it);
+    if(!grupos[k]){grupos[k]={chave:k,dados:it,linhas:[]};ordem.push(k);}
+    grupos[k].linhas.push(it);
   });
-  impcLidos.novos=novos;
-  var semTel=novos.filter(function(c){return !soDig(c.tel);}).length;
-  var semCidade=novos.filter(function(c){return !c.cidade;}).length;
-  var amostra=novos.slice(0,6).map(function(c){
-    return "<tr><td>"+esc(c.nome)+"</td><td>"+esc(c.doc||"—")+"</td><td>"+esc(c.tel||"—")+"</td><td>"+
-      esc((c.cidade||"—")+(c.uf?"/"+c.uf:""))+"</td><td>"+esc(c.bairro||"—")+"</td></tr>";}).join("");
-  $("ic_previa").innerHTML='<div class="note'+(novos.length?" ok":" warn")+'"><b>'+r.itens.length+" linha(s) lida(s)</b> · <b>"+
-    novos.length+"</b> cliente(s) novo(s)"+(jaTem?" · "+jaTem+" já cadastrado(s)":"")+
-    (repete?" · "+repete+" repetido(s) no arquivo":"")+"</div>"+
-    ((semTel||semCidade)?'<div class="note warn">'+(semTel?"<b>"+semTel+"</b> sem telefone. ":"")+
-      (semCidade?"<b>"+semCidade+"</b> sem cidade. ":"")+
-      "Entram assim mesmo e ficam no filtro <b>Cadastro incompleto</b> — para tirar pedido vai faltar completar.</div>":"")+
-    (novos.length?'<div class="tw"><table><thead><tr><th>Nome</th><th>CPF/CNPJ</th><th>Telefone</th><th>Cidade</th><th>Bairro</th></tr></thead><tbody>'+
-      amostra+"</tbody></table></div>"+(novos.length>6?'<p class="help">… e mais '+(novos.length-6)+" cliente(s).</p>":""):"");
+  var lista=ordem.map(function(k){return grupos[k];});
+  var novos=0,jaTem=0,semTel=0,semCid=0,semUf=0,eqNovos=0,eqJa=0,soCadastro=0;
+  var casou={},naoCasou={},casos={ok:0,calculada:0,prazoPlanilha:0,semPrazo:0,proxAntes:0},datasRuins=0;
+  var precisa={};   /* quantos aparelhos desta chave o arquivo pede */
+  lista.forEach(function(g){
+    g.existente=acharClienteEmpresa(g.dados,idxC);
+    if(g.existente)jaTem++;
+    else{
+      novos++;
+      if(!soDig(g.dados.tel))semTel++;
+      if(!g.dados.cidade)semCid++;
+      if(!g.dados.uf)semUf++;
+    }
+    g.equips=[];
+    g.linhas.forEach(function(it){
+      if(!it.produto){soCadastro++;return;}
+      if((it.compraTxt&&!it.compra)||(it.proximaTxt&&!it.proxima))datasRuins++;
+      var p=acharProdutoImp(it.produto,idxP);
+      var chN=normNomeImp(it.produto);
+      if(p)casou[chN]=(casou[chN]||0)+1;else naoCasou[it.produto]=(naoCasou[it.produto]||0)+1;
+      var pz=prazoDoAparelhoImp(it,p);casos[pz.caso]=(casos[pz.caso]||0)+1;
+      g.equips.push({it:it,prod:p,pz:pz});
+    });
+    /* o que já foi importado desta mesma chave não entra de novo */
+    if(g.existente){
+      g.equips=g.equips.filter(function(x){
+        var k=chaveEquipImp(g.existente.id,x.it);
+        precisa[k]=(precisa[k]||0)+1;
+        if(precisa[k]<=(jaEq[k]||0)){eqJa++;return false;}
+        return true;
+      });
+    }
+    eqNovos+=g.equips.length;
+  });
+  impcLidos.grupos=lista;
+  impcLidos.novos=lista.filter(function(g){return !g.existente;}).map(function(g){return g.dados;});
+  var nomesC=Object.keys(casou).length,nomesN=Object.keys(naoCasou).length;
+  var linhasN=Object.keys(naoCasou).reduce(function(s,k){return s+naoCasou[k];},0);
+  var faltas=Object.keys(naoCasou).sort(function(a,b){return naoCasou[b]-naoCasou[a];});
+  var amostra=lista.filter(function(g){return !g.existente;}).slice(0,6).map(function(g){var c=g.dados;
+    return "<tr><td>"+esc(c.nome)+"</td><td>"+esc(c.doc||"—")+"</td><td>"+esc(c.tel||"—")+
+      ([c.tel2,c.tel3,c.tel4].filter(Boolean).length?" <small>+"+[c.tel2,c.tel3,c.tel4].filter(Boolean).length+"</small>":"")+"</td><td>"+
+      esc(c.cidade||"—")+"</td><td>"+esc(c.uf||"—")+"</td><td>"+g.equips.length+"</td></tr>";}).join("");
+  $("ic_previa").innerHTML=
+    '<div class="note"><b>Vai entrar na empresa '+esc(nomeLoja())+'</b> — a empresa em que você entrou. Nada vai para a outra empresa.</div>'+
+    '<div class="note'+(novos||eqNovos?" ok":" warn")+'"><b>'+r.itens.length+" linha(s) lida(s).</b><br>"+
+    "<b>"+lista.length+"</b> cliente(s) no arquivo · <b>"+novos+"</b> novo(s) a cadastrar"+
+    (jaTem?" · <b>"+jaTem+"</b> já existe(m) nesta empresa (não serão duplicados — os aparelhos novos entram neles)":"")+"<br>"+
+    "<b>"+eqNovos+"</b> aparelho(s) a cadastrar"+(eqJa?" · <b>"+eqJa+"</b> já importado(s) antes (serão pulados)":"")+
+    (soCadastro?" · <b>"+soCadastro+"</b> linha(s) sem produto (só o cadastro)":"")+"</div>"+
+    ((semTel||semCid||semUf)?'<div class="note warn">Dos cadastros novos: '+
+      (semTel?"<b>"+semTel+"</b> sem telefone · ":"")+(semCid?"<b>"+semCid+"</b> sem cidade · ":"")+
+      (semUf?"<b>"+semUf+"</b> sem estado · ":"")+
+      "Entram assim mesmo, <b>do jeito que estão na planilha</b> (nada é preenchido nem adivinhado), e ficam no filtro <b>Cadastro incompleto</b>.</div>":"")+
+    ((nomesC||nomesN)?'<div class="note'+(nomesN?" warn":" ok")+'"><b>Produtos:</b> '+nomesC+" nome(s) casaram com o catálogo"+
+      (nomesN?" · <b>"+nomesN+"</b> nome(s) não casaram ("+linhasN+" aparelho(s)): o aparelho entra com o nome da planilha, sem ligação com o catálogo — corrija o nome na planilha e importe de novo se quiser ligar. "+
+        esc(faltas.slice(0,6).map(function(k){return k+" ("+naoCasou[k]+")";}).join(" · "))+(faltas.length>6?" …":""):"")+"</div>":"")+
+    ((casos.calculada||casos.prazoPlanilha||casos.semPrazo||casos.proxAntes||datasRuins)?'<div class="note warn"><b>Datas:</b> '+
+      (casos.calculada?"<b>"+casos.calculada+"</b> sem próxima manutenção — calculada pela compra + o prazo do produto · ":"")+
+      (casos.prazoPlanilha?"<b>"+casos.prazoPlanilha+"</b> com produto sem prazo no catálogo — o intervalo sai das datas da planilha · ":"")+
+      (casos.semPrazo?"<b>"+casos.semPrazo+"</b> sem próxima manutenção e sem prazo — entram sem data na Manutenção Periódica · ":"")+
+      (casos.proxAntes?"<b>"+casos.proxAntes+"</b> com a próxima manutenção antes da compra — a data da planilha é ignorada · ":"")+
+      (datasRuins?"<b>"+datasRuins+"</b> com data que não deu para ler (use dd/mm/aaaa)":"")+"</div>":"")+
+    (novos?'<div class="tw"><table><thead><tr><th>Nome</th><th>CPF/CNPJ</th><th>Telefone</th><th>Cidade</th><th>UF</th><th>Aparelhos</th></tr></thead><tbody>'+
+      amostra+"</tbody></table></div>"+(novos>6?'<p class="help">… e mais '+(novos-6)+" cliente(s).</p>":""):"");
 }
 function abrirImportClientes(){
   $("ic_texto").value="";$("ic_arqNome").textContent="";$("ic_previa").innerHTML="";$("ic_alerta").innerHTML="";
-  impcLidos=null;impcParar=false;
+  impcLidos=null;impcParar=false;impcFonte=null;
   $("ic_parar").hidden=true;$("ic_parar").textContent="Parar aqui";
   atualizarBotaoApagarCli();
   $("impcModal").hidden=false;
 }
+function clienteDaPlanilha(n,codigo,agora){
+  var c={id:uid(),loja:lojaAtual,codigo:codigo,
+    criadoEm:agora,criadoPor:usuarioAtual,criadoVia:"importacao",importado:true,importadoVia:"planilha",
+    tipo:n.tipo,origem:n.origem||"",origemEm:(n.origem?agora:"")};
+  ["nome","doc","rg","nasc","sexo","tel","tel2","tel3","tel4","email","prof","apelido","cep","rua","num","comp","bairro","cidade","uf","ref","geo"]
+    .forEach(function(k){c[k]=n[k]||"";});
+  if(c.geo)c.geoOrigem="importado";
+  var notas=[];
+  if(n.obs)notas.push("Observação da planilha: "+n.obs);
+  if(n.telsAMais&&n.telsAMais.length)notas.push("Outros telefones da planilha: "+n.telsAMais.join(" · "));
+  if(notas.length)c.notas=notas.map(function(t){return {quando:agora.slice(0,16).replace("T"," "),por:usuarioAtual,texto:t};});
+  return c;
+}
+function aparelhoDaPlanilha(c,x,agora){
+  var it=x.it,p=x.prod,pz=x.pz;
+  return {id:uid(),loja:lojaAtual,ativo:true,criadoEm:agora,historico:[],
+    cliente:c.nome,clienteId:c.id,
+    produtoId:(p?p.id:""),produto:(p?p.nome:it.produto),produtoNomeOrigem:it.produto,
+    serie:"",local:"",instaladoEm:it.compra||"",compradoEm:it.compra||"",compradoHora:"",
+    ultimaManut:pz.ult||"",manutDias:pz.dias||"",plano:"",tecnico:"",
+    obs:"Importado da planilha de clientes e aparelhos"+(p?"":" · produto sem equivalente no catálogo: "+it.produto),
+    importado:true,importadoVia:"planilha",importadoEm:agora,proximaOrigem:it.proxima||""};
+}
 async function importarClientes(){
   if(!impcLidos)previaImportCli();
-  var novos=(impcLidos&&impcLidos.novos)||[];
-  if(!novos.length){$("ic_alerta").innerHTML='<div class="note crit"><b>Nada para importar.</b></div>';return;}
+  var grupos=(impcLidos&&impcLidos.grupos)||[];
+  var fila=grupos.filter(function(g){return !g.existente||g.equips.length;});
+  if(!fila.length){$("ic_alerta").innerHTML='<div class="note crit"><b>Nada para importar.</b> Os clientes e aparelhos deste arquivo já estão nesta empresa.</div>';return;}
   var bt=$("ic_ok");bt.disabled=true;$("ic_fechar").disabled=true;
-  var agora=iso(new Date()),lista=[],feitos=0;
-  /* o numerador do banco é consultado UMA vez; o resto é sequencial local */
-  var seq=0;
-  try{if(modoBanco()&&db&&typeof db.proximoNumero==="function")seq=await db.proximoNumero(lojaAtual,"cliente");}catch(e){seq=0;}
-  var pre={mf:"MF",wf:"WF"}[lojaAtual]||"CL";
-  novos.forEach(function(n){
-    var c={id:uid(),loja:lojaAtual,
-      codigo:(n.codigo||(pre+"-"+("0000"+(++seq)).slice(-5))),
-      criadoEm:agora,criadoPor:usuarioAtual,criadoVia:"importacao",importado:true,
-      tipo:n.tipo,origem:n.origem||"",origemEm:(n.origem?agora:"")};
-    ["nome","doc","rg","nasc","sexo","tel","email","prof","apelido","cep","rua","num","comp","bairro","cidade","uf","ref","geo"]
-      .forEach(function(k){c[k]=n[k]||"";});
-    if(c.geo)c.geoOrigem="importado";
-    if(n.obs)c.notas=[{quando:agora.slice(0,16).replace("T"," "),por:usuarioAtual,texto:"Observação da base antiga: "+n.obs}];
-    lista.push(c);
-  });
-  /* de N em N: cada bloco é uma gravação só, a tela mostra o andamento entre um e outro
-     e o botão "Parar aqui" encerra no fim do bloco. O que já entrou fica gravado, e
-     importar o mesmo arquivo de novo continua de onde parou (os repetidos são pulados). */
+  var agora=iso(new Date()),feitosC=0,feitosE=0;
   var bloco=Math.max(50,parseInt(($("ic_bloco")||{}).value,10)||100);
   var teto=parseInt(($("ic_ate")||{}).value,10)||0;
-  if(teto>0&&teto<lista.length)lista=lista.slice(0,teto);
+  if(teto>0&&teto<fila.length)fila=fila.slice(0,teto);
+  var totalC=fila.filter(function(g){return !g.existente;}).length;
+  var totalE=fila.reduce(function(s,g){return s+g.equips.length;},0);
   impcParar=false;$("ic_parar").hidden=false;
-  $("ic_alerta").innerHTML='<div class="note"><b>Gravando '+lista.length+" cliente(s), de "+bloco+" em "+bloco+"…</b></div>";
+  function andamento(){
+    $("ic_alerta").innerHTML='<div class="note"><b>Clientes: '+feitosC+" de "+totalC+" · aparelhos: "+feitosE+" de "+totalE+"…</b> "+
+      "pode acompanhar; o botão <b>Parar aqui</b> encerra no fim do bloco.</div>";
+  }
+  andamento();
   try{
-    for(var i=0;i<lista.length;i+=bloco){
+    for(var i=0;i<fila.length;i+=bloco){
       if(impcParar)break;
-      var parte=lista.slice(i,i+bloco);
-      if(db&&typeof db.gravarVarios==="function")await db.gravarVarios("clientes",parte,{bloco:bloco});
-      else if(db){for(var j=0;j<parte.length;j++)await col("clientes").doc(parte[j].id).set(parte[j]);}
-      parte.forEach(function(c){clientes.push(c);});
-      feitos+=parte.length;
-      $("ic_alerta").innerHTML='<div class="note"><b>Gravados '+feitos+" de "+lista.length+"…</b> "+
-        "pode acompanhar; o botão <b>Parar aqui</b> encerra no fim do bloco.</div>";
+      var parte=fila.slice(i,i+bloco);
+      /* o código de cada cliente novo sai do numerador do banco, um por cliente: assim o
+         cadastro feito depois na tela nunca repete um código da importação */
+      var novos=parte.filter(function(g){return !g.existente;});
+      var cods=await Promise.all(novos.map(function(g){
+        return g.dados.codigo?Promise.resolve(g.dados.codigo):codigoClienteNovo();}));
+      var cliNovos=novos.map(function(g,j){g.cliente=clienteDaPlanilha(g.dados,cods[j],agora);return g.cliente;});
+      if(cliNovos.length){
+        if(db&&typeof db.gravarVarios==="function")await db.gravarVarios("clientes",cliNovos,{bloco:bloco});
+        else if(db){for(var j=0;j<cliNovos.length;j++)await col("clientes").doc(cliNovos[j].id).set(cliNovos[j]);}
+        cliNovos.forEach(function(c){clientes.push(c);});
+        novos.forEach(function(g){g.existente=g.cliente;});
+        feitosC+=cliNovos.length;
+      }
+      var eqs=[];
+      parte.forEach(function(g){var c=g.existente;g.equips.forEach(function(x){eqs.push(aparelhoDaPlanilha(c,x,agora));});});
+      if(eqs.length){
+        if(db&&typeof db.gravarVarios==="function")await db.gravarVarios("equipamentos",eqs,{bloco:bloco});
+        else if(db){for(var m=0;m<eqs.length;m++)await col("equipamentos").doc(eqs[m].id).set(eqs[m]);}
+        eqs.forEach(function(e){equipamentos.push(e);});
+        parte.forEach(function(g){g.equips=[];});
+        feitosE+=eqs.length;
+      }
+      andamento();
       await new Promise(function(r){setTimeout(r,0);});   /* deixa a tela respirar entre os blocos */
     }
   }catch(e){
     console.warn("importar clientes",e);
     bt.disabled=false;$("ic_fechar").disabled=false;$("ic_parar").hidden=true;
-    $("ic_alerta").innerHTML='<div class="note crit"><b>A gravação parou em '+feitos+":</b> "+esc((e&&e.message)||e)+
+    $("ic_alerta").innerHTML='<div class="note crit"><b>A gravação parou em '+feitosC+" cliente(s) e "+feitosE+" aparelho(s):</b> "+esc((e&&e.message)||e)+
       " O que já entrou está gravado — importe o mesmo arquivo de novo, que ele continua de onde parou.</div>";
-    atualizarBotaoApagarCli();renderClientes();return;
+    impcLidos=null;atualizarBotaoApagarCli();renderClientes();try{renderManut();}catch(e2){}return;
   }
   bt.disabled=false;$("ic_fechar").disabled=false;$("ic_parar").hidden=true;
-  var faltam=((impcLidos&&impcLidos.novos)||[]).length-feitos;
-  $("ic_alerta").innerHTML='<div class="note ok"><b>'+feitos+" cliente(s) importado(s).</b> "+
-    "Todos entraram como <b>clientes</b>, não como leads. O que estiver faltando aparece no filtro <b>Cadastro incompleto</b>."+
-    (faltam>0?" <b>Faltam "+faltam+"</b> — importe o mesmo arquivo de novo que ele continua de onde parou.":"")+"</div>";
-  impcLidos=null;$("ic_texto").value="";$("ic_previa").innerHTML="";
-  atualizarBotaoApagarCli();renderClientes();
-  toast(feitos+" cliente(s) importado(s).");
+  var parou=impcParar&&(feitosC<totalC||feitosE<totalE);
+  $("ic_alerta").innerHTML='<div class="note ok"><b>'+feitosC+" cliente(s) e "+feitosE+" aparelho(s) importado(s) em "+esc(nomeLoja())+".</b> "+
+    "Os clientes entraram como <b>clientes</b>, não como leads, e os aparelhos já estão na <b>Manutenção Periódica</b>."+
+    (parou||(teto>0)?" Para continuar, importe o mesmo arquivo de novo: o que já entrou é pulado.":"")+"</div>";
+  impcLidos=null;impcFonte=null;$("ic_texto").value="";$("ic_previa").innerHTML="";
+  atualizarBotaoApagarCli();renderClientes();try{renderManut();}catch(e){}
+  toast(feitosC+" cliente(s) e "+feitosE+" aparelho(s) importado(s).");
 }
 /* ================= IMPORTAR AS MANUTENÇÕES PERIÓDICAS DO SISTEMA ANTIGO (v256) =================
    Regra dele, 02/10: pegar a listagem do LSoft e, para cada linha, achar o cliente que JÁ EXISTE
@@ -13216,7 +13481,8 @@ async function importarManutencoes(){
           criadoEm:agora,criadoPor:usuarioAtual,criadoVia:"importacao",importado:true,
           tipo:"Pessoa Física",nome:r.nome,
           tel:(r.tel||r.cel||""),rua:r.end||"",bairro:r.bairro||"",cidade:r.cidade||"",
-          uf:"MG",doc:"",origem:""};
+          /* estado: só o que veio no arquivo — a listagem não traz, então fica vazio (29/10) */
+          uf:"",doc:"",origem:""};
         novosCli[ch]=c;cliNovos.push(c);
       }
     }
@@ -13310,6 +13576,12 @@ async function apagarClientesImportados(){
   var apagados=0;
   for(var i=0;i<podem.length;i++){
     try{
+      /* os aparelhos que vieram junto na planilha saem com o cliente (29/10) */
+      var eqsDele=equipamentos.filter(function(e){return e.clienteId===podem[i].id&&e.importado;});
+      for(var q=0;q<eqsDele.length;q++){
+        await apaga("equipamentos",eqsDele[q].id);
+        var ie=equipamentos.indexOf(eqsDele[q]);if(ie>=0)equipamentos.splice(ie,1);
+      }
       await apaga("clientes",podem[i].id);
       var ix=clientes.indexOf(podem[i]);if(ix>=0)clientes.splice(ix,1);
       apagados++;
@@ -13346,14 +13618,25 @@ function ligarImportClientes(){
   $("ic_ok").onclick=importarClientes;
   $("ic_parar").onclick=function(){impcParar=true;this.textContent="Parando…";};
   $("ic_apagar").onclick=apagarClientesImportados;
-  $("ic_texto").oninput=previaImportCli;
+  $("ic_texto").oninput=function(){impcFonte=null;previaImportCli();};
   $("ic_arqBt").onclick=function(){$("ic_arq").click();};
   $("ic_arq").onchange=function(){
     var f=this.files&&this.files[0];if(!f)return;
     $("ic_arqNome").textContent=f.name;
     var r=new FileReader();
-    r.onload=function(){$("ic_texto").value=String(r.result||"");previaImportCli();};
-    r.readAsText(f,"utf-8");
+    /* Excel: lê as células direto (29/10); .csv e .txt continuam pelo texto */
+    if(/[.]xlsx?$/i.test(f.name)){
+      $("ic_previa").innerHTML='<div class="note"><b>Lendo a planilha do Excel…</b></div>';
+      r.onload=async function(){
+        try{impcFonte=await linhasDoXlsx(r.result);$("ic_texto").value="";previaImportCli();}
+        catch(e){impcFonte=null;$("ic_previa").innerHTML='<div class="note crit"><b>Não consegui ler a planilha:</b> '+esc((e&&e.message)||e)+"</div>";}
+      };
+      r.readAsArrayBuffer(f);
+    }else{
+      r.onload=function(){impcFonte=null;$("ic_texto").value=String(r.result||"");previaImportCli();};
+      r.readAsText(f,"utf-8");
+    }
+    this.value="";
   };
 }
 function ligarEquipRepetidos(){
@@ -41622,7 +41905,7 @@ function abrirJanelaWhatsApp(tel,msg,modo){
 function clientePorTelZap(tel){
   var d=String(tel||"").replace(/\D/g,"").replace(/^55(?=\d{10,11}$)/,"");
   if(!d)return null;
-  return clientes.filter(function(c){return String(c.tel||"").replace(/\D/g,"")===d||String(c.tel2||"").replace(/\D/g,"")===d;})[0]||null;
+  return clientes.filter(function(c){return [c.tel,c.tel2,c.tel3,c.tel4].some(function(t){return String(t||"").replace(/[^0-9]/g,"")===d;});})[0]||null;
 }
 /* ================= CONFIGURAÇÕES › MENSAGENS DO WHATSAPP (pedido dele, 27/10) =================
    "preciso mudar as mensagens de envio do whatsapp" — os textos eram fixos no código. Agora cada

@@ -98,7 +98,10 @@
      ---------------------------------------------------------------------- */
   /* o id real da configuração no banco: a empresa original fica como está, as outras
      ganham o prefixo da loja. Vale SÓ para a coleção "config". */
-  var CONFIG_GLOBAL = ["usuarios", "mensagens_zap"];   /* mensagens_zap: os textos do WhatsApp valem nas duas empresas (27/10) */
+  /* mensagens_zap: os textos do WhatsApp valem nas duas empresas (27/10).
+     grupos_produtos, serie e preco: o CATÁLOGO É UM SÓ para as duas empresas (decisão dele,
+     28/10 e 29/10) — os grupos, o número de série por grupo e o % do preço mínimo vão junto. */
+  var CONFIG_GLOBAL = ["usuarios", "mensagens_zap", "grupos_produtos", "serie", "preco", "importacoes_catalogo"];
   function configGlobal(colecao, id) {
     return colecao === "config" && CONFIG_GLOBAL.indexOf(String(id || "")) >= 0;
   }
@@ -116,7 +119,10 @@
   }
   var CAMPO_LOJA = {
     clientes: "loja",
-    produtos: "loja",
+    /* CATÁLOGO ÚNICO (29/10): Minas Filtros e WF vendem os mesmos produtos, com os mesmos
+       preços e códigos. Produto não tem empresa — grava loja NULL e vale para as duas.
+       O ESTOQUE continua por empresa (movest, requisicoes e custodia são "loja"). */
+    produtos: null,
     pedidos: "loja",
     orcamentos: "loja",
     atendimentos: "loja",
@@ -531,6 +537,27 @@
     /* -------------------- monta o SELECT de uma coleção --------------------
        crescente=false traz os documentos MAIS NOVOS primeiro (usado quando há
        limite, para o corte deixar de fora o antigo e não o de hoje). */
+    /* CADA UM LÊ SÓ A EMPRESA EM QUE ENTROU (29/10). A regra do banco deixa quem tem a marca
+       "ambas" (o Administrador das duas empresas) ler TUDO — e o sistema pedia tudo, porque a
+       leitura não dizia de qual empresa. As telas escondiam a outra empresa, mas as rotinas da
+       entrada não: em 27/10, entrando na WF, as arrumações rodaram em cima do catálogo e dos
+       centros de custo da Minas Filtros (apagaram, regravaram e marcaram produtos como WF).
+       Agora, numa coleção de empresa, a leitura pede a empresa aberta MAIS o que é das duas
+       (loja nula). Quem pede outra empresa de propósito continua passando filtros.loja.
+       Medido no banco como Wagner, com a regra de acesso valendo: 34 ms contra 118 sem filtro. */
+    function filtrosDaEmpresa(colecao, filtros) {
+      var f = {};
+      Object.keys(filtros || {}).forEach(function (k) { f[k] = filtros[k]; });
+      if (!ehTexto(f.loja) && campoLojaDe(colecao) && ehTexto(adapter.lojaPadrao)) {
+        f.loja = adapter.lojaPadrao;
+        f.lojaEstrita = false;
+      }
+      return f;
+    }
+    function daEmpresaAberta(colecao, loja) {
+      if (!campoLojaDe(colecao) || !ehTexto(adapter.lojaPadrao)) return true;
+      return loja === null || loja === undefined || loja === "" || loja === adapter.lojaPadrao;
+    }
     function montarConsulta(colecao, filtros, contar, crescente, corte, soId) {
       /* soId: traz SÓ o código, sem o documento. É uma leitura muito leve (o índice já tem o
          código, o Postgres nem toca nas linhas) e é com ela que se acham os pontos de corte
@@ -608,6 +635,7 @@
        no F5 seguinte e sumia do Contas a Receber, da comissão e da agenda.
        Com o limite atingido e ainda havendo documentos, avisa por aoTruncar(). */
     async function buscarColecao(colecao, limite, filtros) {
+      filtros = filtrosDaEmpresa(colecao, filtros);
       var alvo = (typeof limite === "number" && limite > 0) ? limite : Infinity;
       var crescente = !isFinite(alvo);  /* sem limite: crescente e completo */
       var linhas = [], total = null, guarda = 0, parouPorFalha = null;
@@ -1274,7 +1302,7 @@
        aparelho: carimbo igual e contagem igual = nada mudou, nao se baixa nada.
        Medido no banco dele: 59 ms para os 22.339 cadastros, sem indice novo. */
     adapter.resumo = async function (colecao, filtros) {
-      filtros = filtros || {};
+      filtros = filtrosDaEmpresa(colecao, filtros);
       var fonte = (filtros.fonte === "docs_sem_anexo") ? "docs_sem_anexo" : TABELA;
       var q = sb.from(fonte).select("atualizado_em", { count: "exact" }).eq("colecao", colecao);
       if (ehTexto(filtros.loja)) {
@@ -1308,6 +1336,7 @@
 
     /* total real no banco — para a tela dizer "mostrando 500 de 3.212" */
     adapter.contar = async function (colecao, filtros) {
+      filtros = filtrosDaEmpresa(colecao, filtros);
       var q = sb.from(TABELA).select("id", { count: "exact", head: true }).eq("colecao", colecao);
       if (ehTexto(filtros && filtros.loja)) {
         if (!lojaSegura(filtros.loja)) estourar(ErroBanco("Loja inválida no filtro.", colecao, null));
@@ -1481,7 +1510,7 @@
       var lim = Math.max(1, Math.min(typeof teto === "number" ? teto : PAGINA, PAGINA));
       var r = conferir(
         await naFila(function () {
-          return sb.from(TABELA).select("colecao,id,data")
+          return sb.from(TABELA).select("colecao,id,data,loja")
             .in("colecao", colecoes)
             .order("colecao", { ascending: true }).order("id", { ascending: true })
             .limit(lim);
@@ -1493,7 +1522,8 @@
       var porColecao = {};
       colecoes.forEach(function (c) { porColecao[c] = []; });
       linhas.forEach(function (l) {
-        if (porColecao[l.colecao]) porColecao[l.colecao].push(l);
+        /* só a empresa aberta (e o que é das duas): veja filtrosDaEmpresa */
+        if (porColecao[l.colecao] && daEmpresaAberta(l.colecao, l.loja)) porColecao[l.colecao].push(l);
       });
       var saida = {};
       colecoes.forEach(function (c) { saida[c] = fazerQuerySnap(porColecao[c], porColecao[c].length); });
@@ -1509,15 +1539,23 @@
     adapter.configs = async function (nomes) {
       var r = conferir(
         await naFila(function () {
-          return sb.from(TABELA).select("id,data").eq("colecao", "config").limit(PAGINA);
+          return sb.from(TABELA).select("id,data,loja").eq("colecao", "config").limit(PAGINA);
         }),
         "ler config"
       );
       /* as configurações são de cada empresa (23/10): aqui chega o id REAL (com o prefixo
          da loja, quando houver) e o sistema conhece o id sem ele. A RLS do banco já entrega
          só as da empresa de quem está logado, então basta tirar o prefixo. */
+      /* O ID EXATO DA EMPRESA ABERTA (29/10). Antes, tirando o prefixo de TODAS as linhas, quem
+         enxerga as duas empresas recebia "metas" e "wf:metas" com o mesmo nome — e valia a que
+         o banco devolvesse por último, ora a da Minas Filtros, ora a da WF. */
+      var porId = {};
+      (r.data || []).forEach(function (l) { porId[l.id] = l.data; });
       var achados = {};
-      (r.data || []).forEach(function (l) { achados[idConfigVisivel("config", l.id)] = l.data; });
+      Object.keys(porId).forEach(function (idReal) {
+        var vis = idConfigVisivel("config", idReal);
+        if (idConfigReal("config", vis, adapter.lojaPadrao) === idReal) achados[vis] = porId[idReal];
+      });
       var saida = {};
       (Array.isArray(nomes) ? nomes : Object.keys(achados)).forEach(function (n) {
         saida[n] = Object.prototype.hasOwnProperty.call(achados, n)
