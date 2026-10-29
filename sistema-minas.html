@@ -12118,7 +12118,7 @@ function aplicarRespEstoques(){
   });
   /* o Almoxarifado: quem já responde por ele hoje, pelo perfil */
   if(!responsaveisMarcados(LOC_EMPRESA).length){
-    USUARIOS.filter(function(u){return u.ativo!==false&&ehPerfilAlmox(u.perfil);})
+    USUARIOS.filter(function(u){return u.ativo!==false&&ehDoAlmoxarifado(u.nome);})
       .forEach(function(u){marca(u.nome,LOC_EMPRESA);});
   }
   return {mud:mud,marcados:marcados};
@@ -21192,6 +21192,7 @@ function renderEstEmpresa(){
     $("eeRecCsv").hidden=(eeAba!=="rec"||!podeExportar());
     $("eeFiltro").hidden=(eeAba==="rec");
     var pmv=podeMoverEstoque();$("eeMov").hidden=!pmv;$("eeTransf").hidden=!pmv;
+    $("eeBusca").placeholder=(eeAba==="req")?"Buscar produto, colaborador, pedido ou cliente":"Buscar produto";
   }catch(eR){}
   var q=($("eeBusca").value||"").toLowerCase(),f=$("eeFiltro").value;
   var todos=produtos.filter(function(p){return (p.status||"ativo")==="ativo";});
@@ -21292,10 +21293,16 @@ function renderEstEmpresa(){
   }
   else {
     h.innerHTML="<th>Data</th><th>Tipo</th><th>Colaborador</th><th>Itens</th><th>Situação</th><th></th>";
-    var lr=requisicoes.filter(function(r){return r.loja===lojaAtual||r.lojaOrigem===lojaAtual;})
-      .sort(function(a,b2){return (b2.data||"").localeCompare(a.data||"");});
-    $("eeCount").textContent=lr.length+(lr.length===1?" pedido":" pedidos");
-    if(!lr.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma requisição</div>Os vendedores pedem produto pela tela Estoque Colaborador.</div></td></tr>';return;}
+    var lrTodas=requisicoes.filter(function(r){return r.loja===lojaAtual||r.lojaOrigem===lojaAtual;});
+    /* a BUSCA filtra (29/10, relato dele: digitava "manopla" e a lista continuava inteira):
+       produto (nome e código), colaborador, número do pedido, cliente, tipo e observação */
+    var lr=lrTodas.filter(function(r){return !q||textoBuscaReq(r).indexOf(semAcento(q).toLowerCase())>=0;})
+      /* o que espera o almoxarifado vem primeiro — devolução na frente —, depois o mais novo */
+      .sort(function(a,b2){return ordemReq(a)-ordemReq(b2)||(b2.data||"").localeCompare(a.data||"")||
+        (instanteDoRegistro(b2)-instanteDoRegistro(a));});
+    $("eeCount").textContent=lr.length+(lr.length===1?" pedido":" pedidos")+(q?" de "+lrTodas.length:"");
+    if(!lr.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">'+(q?"Nada com “"+esc(q)+"”":"Nenhuma requisição")+'</div>'+
+      (q?"A busca procura no produto, no colaborador, no número do pedido e no cliente.":"Os vendedores pedem produto pela tela Estoque Colaborador.")+"</div></td></tr>";return;}
     lr.forEach(function(r){
       var sit=r.tipo==="retirada"
         ? (r.status==="pendente"?'<span class="pill p-warn">aguardando aprovação do estoque</span>'
@@ -21304,7 +21311,8 @@ function renderEstEmpresa(){
         :r.status==="pendente"?'<span class="pill p-warn">aguardando o almoxarifado</span>'
         :r.status==="separada"?'<span class="pill p-acc">separada — aguardando o colaborador</span>'
         :r.status==="cancelada"?'<span class="pill p-mut">cancelada</span>'
-        :'<span class="pill p-ok">concluída</span>';
+        :r.status==="recusada"?'<span class="pill p-crit">recusada'+(r.motivoRecusa?": "+esc(r.motivoRecusa):"")+"</span>"
+        :'<span class="pill p-ok">'+(r.tipo==="devolucao"?"recebida"+(r.recebidaPor?" por "+esc(r.recebidaPor):""):"concluída")+"</span>";
       b.innerHTML+="<tr><td>"+esc(dataBR(r.data))+"</td>"+
         "<td>"+(r.tipo==="retirada"?'<span class="pill p-crit">Retirada p/ venda</span><div class="t-sub">'+esc(origemRetiradaNome(r))+"</div>"
           :r.tipo==="requisicao"?(r.origem==="troca"?'<span class="pill p-warn">Pego na troca</span><div class="t-sub">purificador usado do cliente</div>':'<span class="pill p-acc">Requisição</span>')
@@ -21312,18 +21320,26 @@ function renderEstEmpresa(){
           :'<span class="pill p-warn">Devolução</span>')+"</td>"+
         "<td>"+esc(r.colaborador)+"</td>"+
         "<td>"+r.itens.map(function(i){return i.qtd+"× "+esc(i.nome);}).join("<br>")+
-          (r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+"</td>"+
+          (r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+
+          ((r.pedidoNumero&&String(r.obs||"").indexOf(String(r.pedidoNumero))<0)?'<div class="t-sub">Pedido '+esc(r.pedidoNumero)+(r.cliente?" · "+esc(r.cliente):"")+"</div>":"")+"</td>"+
         "<td>"+sit+"</td>"+
         '<td class="num">'+(r.tipo==="retirada"
           ? ((r.status==="pendente"&&podeAprovarRetirada())
             ? '<button class="btn sm" type="button" data-rta="'+r.id+'">Aceitar retirada</button> <button class="btn mut sm" type="button" data-rtr="'+r.id+'">Recusar</button>'
             : (r.status==="pendente"?'<span class="t-sub">só o responsável pelo estoque</span>':""))
+          : (r.status==="pendente"&&r.tipo==="devolucao")
+          ? (podeConferir()
+            ? '<button class="btn sm" type="button" data-rqs="'+r.id+'">Receber</button> '+
+              '<button class="btn mut sm" type="button" data-rqrd="'+r.id+'">Recusar</button>'
+            : '<span class="t-sub">só o almoxarifado recebe</span>')
           : r.status==="pendente"
           ? '<button class="btn ghost sm" type="button" data-rqs="'+r.id+'">'+
             (r.tipo==="requisicao"?"Separar":(r.tipo==="usado"?"Receber o usado":"Receber de volta"))+"</button> "+
             '<button class="btn mut sm" type="button" data-rqc="'+r.id+'">Cancelar</button>'
           : "")+"</td></tr>";
     });
+    Array.prototype.forEach.call(b.querySelectorAll("[data-rqrd]"),function(bt){
+      bt.onclick=function(){recusarDevolucao(bt.getAttribute("data-rqrd"));};});
     Array.prototype.forEach.call(b.querySelectorAll("[data-rqs]"),function(bt){
       bt.onclick=function(){atenderReq(bt.getAttribute("data-rqs"));};});
     Array.prototype.forEach.call(b.querySelectorAll("[data-rqc]"),function(bt){
@@ -21369,6 +21385,36 @@ function donoDaReq(r){
   if(ehLocalLoja(l))return respEstoqueLoja(lojaDoLocal(l))||("Estoque da Loja · "+nomeLojaId(lojaDoLocal(l)));
   return r.colaborador||"";
 }
+/* o texto em que a busca da aba Requisições procura (sem acento, minúsculas) */
+function textoBuscaReq(r){
+  var tipo={retirada:"retirada venda",requisicao:"requisicao reposicao",devolucao:"devolucao",usado:"usado troca"}[r.tipo]||"";
+  return semAcento([tipo,r.colaborador,donoDaReq(r),r.pedidoNumero,r.cliente,r.obs,r.criadoPor,
+    (r.itens||[]).map(function(i){var p=prodPorId(i.pid)||{};return [i.nome,i.cod,p.cod,p.nome].join(" ");}).join(" ")]
+    .join(" ")).toLowerCase();
+}
+/* o que espera o almoxarifado primeiro: devolução, retirada, requisição, usado; depois o resto */
+function ordemReq(r){
+  if(r.status==="pendente")return r.tipo==="devolucao"?0:(r.tipo==="retirada"?1:2);
+  if(r.status==="separada")return 3;
+  return 4;
+}
+/* DEVOLUÇÃO RECUSADA (29/10): o produto continua com o colaborador, e o motivo vai para ele */
+async function recusarDevolucao(id){
+  var r=requisicoes.filter(function(x){return x.id===id;})[0];
+  if(!r||r.tipo!=="devolucao"||r.status!=="pendente")return;
+  if(!podeConferir()){toast("Só o almoxarifado recebe ou recusa devolução.");return;}
+  var m=prompt("Recusar a devolução de "+(r.colaborador||"")+" ("+(r.itens||[]).map(function(i){return i.qtd+"× "+i.nome;}).join(", ")+
+    ").\n\nPor quê? (o produto continua no estoque dele)");
+  if(m===null)return;
+  m=String(m).trim();if(!m){toast("Escreva o motivo da recusa — ele vai para "+(r.colaborador||"o colaborador")+".");return;}
+  var antes={st:r.status,mo:r.motivoRecusa,por:r.recusadaPor,em:r.recusadaEm};
+  r.status="recusada";r.motivoRecusa=m;r.recusadaPor=usuarioAtual;r.recusadaEm=hojeISO();
+  try{await gravaConf("requisicoes",r);}
+  catch(e){r.status=antes.st;r.motivoRecusa=antes.mo;r.recusadaPor=antes.por;r.recusadaEm=antes.em;
+    toast("Não foi salvo: "+((e&&e.message)||e));return;}
+  renderEstEmpresa();renderEstColab();try{renderSino();}catch(e2){}
+  toast("Devolução recusada. O produto continua no estoque de "+(r.colaborador||"quem devolveu")+".");
+}
 async function atenderReq(id){
   var r=requisicoes.filter(function(x){return x.id===id;})[0];
   if(!r)return;
@@ -21394,12 +21440,15 @@ async function atenderReq(id){
     await grava("requisicoes",r);
     toast("Separada. Agora "+donoDaReq(r)+" precisa confirmar o recebimento.");
   } else {
+    if(r.status!=="pendente"){toast("Esta devolução já foi "+(r.status==="recusada"?"recusada":"recebida")+".");return;}
     for(var i=0;i<r.itens.length;i++)
       await lancarMov(r.itens[i].pid,r.itens[i].atendida||r.itens[i].qtd,
         localDaReq(r),LOC_EMPRESA,"Devolução",r.obs,hojeISO(),"");
     r.status="concluida";r.recebidaPor=usuarioAtual;r.recebidaEm=hojeISO();
     await grava("requisicoes",r);
-    toast("Devolução recebida — produtos de volta no almoxarifado.");
+    toast("Devolução recebida — "+(r.itens||[]).map(function(i){return (i.atendida||i.qtd)+"× "+i.nome;}).join(", ")+
+      " de volta no almoxarifado, fora do estoque de "+(r.colaborador||"quem devolveu")+".");
+    try{renderSino();}catch(eS){}
   }
   renderEstEmpresa();renderEstColab();renderProdutos();
 }
@@ -21754,7 +21803,8 @@ function renderEstColab(){
       bt.onclick=function(){abrirReposicaoItem(bt.getAttribute("data-ecr"),"todos");};});
   }
   else if(ecAba==="devolver"){
-    h.innerHTML="<th>Data</th><th>Itens</th><th>Situação</th><th>Recebida por</th><th>Observação</th>";
+    var almoxDev=podeConferir();
+    h.innerHTML="<th>Data</th><th>Itens</th><th>Situação</th><th>Recebida por</th><th>Observação</th>"+(almoxDev?"<th></th>":"");
     $("ecCount").textContent=devol.length+(devol.length===1?" devolução":" devoluções");
     if(!devol.length){b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhuma devolução</div>Use <b>Devolver produto</b> para mandar de volta ao almoxarifado.</div></td></tr>';return;}
     devol.sort(function(a,b2){return (b2.data||"").localeCompare(a.data||"");}).forEach(function(r){
@@ -21762,9 +21812,16 @@ function renderEstColab(){
         "<td>"+r.itens.map(function(i){return i.qtd+"× "+esc(i.nome);}).join("<br>")+"</td>"+
         "<td>"+(r.status==="pendente"?'<span class="pill p-warn">aguardando o almoxarifado</span>':
           r.status==="cancelada"?'<span class="pill p-mut">cancelada</span>':
+          r.status==="recusada"?'<span class="pill p-crit">recusada'+(r.motivoRecusa?": "+esc(r.motivoRecusa):"")+"</span>":
           '<span class="pill p-ok">recebida</span>')+"</td>"+
-        "<td>"+esc(r.recebidaPor||"—")+"</td><td>"+esc(r.obs||"—")+"</td></tr>";
+        "<td>"+esc(r.recebidaPor||r.recusadaPor||"—")+"</td><td>"+esc(r.obs||"—")+"</td>"+
+        (almoxDev?'<td class="num">'+(r.status==="pendente"
+          ?'<button class="btn sm" type="button" data-ecdr="'+r.id+'">Receber</button> <button class="btn mut sm" type="button" data-ecdx="'+r.id+'">Recusar</button>':"")+"</td>":"")+"</tr>";
     });
+    Array.prototype.forEach.call(b.querySelectorAll("[data-ecdr]"),function(bt){
+      bt.onclick=function(){bt.disabled=true;atenderReq(bt.getAttribute("data-ecdr"));};});
+    Array.prototype.forEach.call(b.querySelectorAll("[data-ecdx]"),function(bt){
+      bt.onclick=function(){recusarDevolucao(bt.getAttribute("data-ecdx"));};});
   }
   else {
     h.innerHTML="<th>Data</th><th>Produto</th><th>Movimento</th><th class=\"num\">Qtd</th><th class=\"num\">Saldo depois</th><th>Documento</th>";
@@ -24714,7 +24771,7 @@ function responsavelAlmox(){
   try{marcados=responsaveisDoEstoque(LOC_EMPRESA);}catch(e){}
   if(marcados.length)return marcados[0];
   var ativos=USUARIOS.filter(function(u){return u.ativo!==false;});
-  var e=ativos.filter(function(u){return ehPerfilAlmox(u.perfil);})[0];
+  var e=ativos.filter(function(u){return ehDoAlmoxarifado(u.nome);})[0];
   if(e)return e.nome;
   var m=ativos.filter(function(u){return pode("moverEstoque",u.nome);})[0];
   if(m)return m.nome;
@@ -27091,7 +27148,11 @@ async function salvarNota(){
 
 /* ---------- conferência do almoxarifado ---------- */
 var notaConf=null;
-function podeConferir(){return pode("entradaNF")||ehAlmox();}
+function podeConferir(){
+  if(pode("entradaNF")||ehAlmox()||pode("moverEstoque"))return true;
+  /* quem está marcado como responsável pelo Almoxarifado na ficha recebe devolução (29/10) */
+  try{return respondePeloEstoque(euNoEstoque(),LOC_EMPRESA);}catch(e){return false;}
+}
 function abrirConferencia(n){
   notaConf=n;
   $("nfLista").hidden=true;$("nfForm").hidden=true;$("nfConf").hidden=false;
@@ -45223,7 +45284,17 @@ function responsaveisMarcados(loc){
 function responsaveisPadrao(loc){
   if(loc!==LOC_EMPRESA&&!ehLocalLoja(loc))return [];
   var eq=(typeof EQUIPE!=="undefined"&&EQUIPE)||[];
-  return eq.filter(function(nm){var u=usuarioPor(nm);return !!u&&u.ativo!==false&&ehPerfilAlmox(u.perfil);});
+  return eq.filter(function(nm){var u=usuarioPor(nm);return !!u&&u.ativo!==false&&ehDoAlmoxarifado(nm);});
+}
+/* QUEM É DO ALMOXARIFADO (29/10): decide pela AÇÃO marcada na função ("Acesso completo ao
+   almoxarifado" ou "Movimentar e transferir estoque"), não pelo nome da função — "Estoquista"
+   virou "Almoxarifado" em 28/10 e qualquer nome novo continuaria funcionando. A gestão (ver tudo)
+   fica de fora: ela autoriza tudo de qualquer jeito, mas não é o responsável padrão. */
+function ehDoAlmoxarifado(nm){
+  try{
+    if(pode("verTudo",nm))return false;
+    return podeAcao("almoxarifado",nm)||pode("moverEstoque",nm)||ehPerfilAlmox(perfilDe(nm));
+  }catch(e){return false;}
 }
 function responsaveisDoEstoque(loc){
   var m=responsaveisMarcados(loc);
@@ -47188,6 +47259,17 @@ function pendenciasMF(){
         ir:function(){ir("usuarios");}});
     });
   }catch(e){console.warn("pend estoque sem responsavel",e);}
+  /* 0c. devolução esperando o almoxarifado receber (29/10) */
+  try{
+    if(podeConferir())requisicoes.filter(function(r){return r.tipo==="devolucao"&&r.status==="pendente"&&r.loja===lojaAtual;})
+      .forEach(function(r){
+        põe({chave:"dev:"+r.id,icone:"📦",titulo:"Devolução para receber no almoxarifado",
+          texto:(r.colaborador||"")+" · "+(r.itens||[]).map(function(i){return i.qtd+"× "+i.nome;}).join(", "),
+          quando:String(r.data||""),
+          ir:function(){ir("estEmpresa");var t=$("eeAbas")&&$("eeAbas").querySelector('[data-t="req"]');
+            if(t)t.click();else{eeAba="req";renderEstEmpresa();}}});
+      });
+  }catch(e){console.warn("pend devolucao",e);}
   /* 1. retirada de estoque esperando quem responde pelo estoque */
   try{
     if(podeAprovarRetirada()){
