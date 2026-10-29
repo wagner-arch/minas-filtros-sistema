@@ -1572,6 +1572,9 @@
 .pp-cab{font-size:13.5px;margin-bottom:8px}
 .pp-chips .btn{min-height:42px;min-width:120px}
 #v_ppWrap .pp-chips .btn,#os_ppWrap .pp-chips .btn{min-height:42px!important}
+/* venda reaberta (29/10): forma e parcelas editáveis na ficha do pedido, com tamanho de dedo */
+#pd_formas select[data-pfp]{min-width:96px}
+#pd_addForma{min-height:42px}
 .pp-g{margin-top:8px}
 .pp-foto{max-width:120px;max-height:90px;border-radius:8px;border:1px solid var(--line);margin-top:6px;cursor:pointer;display:block}
 @media (max-width:620px){.pp-chips{display:grid;grid-template-columns:1fr 1fr;gap:8px}.pp-chips .btn{min-width:0;width:100%}
@@ -14592,7 +14595,7 @@ window.__clientesMF=function(){return clientes;};
 window.__achaClienteMF=function(q){return achaCliente(q);};
 /* ganchos do CLIENTE DE TESTE (v376) */
 window.__abrirClienteMF=function(c){return abrirCliente(c);};
-window.__abrirPedidoMF=function(p){return abrirPedido(p);};
+window.__renderPedDetMF=function(){return renderPedDet();};window.__requisicoesListaMF=function(){return requisicoes;};window.__abrirPedidoMF=function(p){return abrirPedido(p);};
 window.__marcarInstalacaoMF=function(v){return marcarInstalacao(v);};
 window.__assinarMF=function(){assinaturaFeita=true;return assinaturaFeita;};
 window.__dadosDashMF=function(q){return dadosDash(q);};
@@ -33418,7 +33421,9 @@ async function manutencaoPelaVenda(ped){
   for(var i=0;i<alvos.length;i++){
     var e=alvos[i].e,item=alvos[i].it;
     e.historico=e.historico||[];
-    e.historico.push({data:dataInstalacaoPedido(ped),hora:ped.hora||"",tecnico:ped.instalador||ped.vendedor||"",
+    /* venda reaberta e aprovada de novo (29/10): a troca já está no histórico deste aparelho */
+    var jaNoHist=e.historico.some(function(h){return h.pedidoId===ped.id&&h.pecas&&h.pecas.some(function(x){return x.pid===item.pid;});});
+    if(!jaNoHist)e.historico.push({data:dataInstalacaoPedido(ped),hora:ped.hora||"",tecnico:ped.instalador||ped.vendedor||"",
       cobranca:"cobrada",forma:resumoPgto(ped),valor:(+item.valor||0)*(+item.qtd||1),
       pecas:[{pid:item.pid,nome:item.nome,cod:item.cod,qtd:item.qtd||1,valor:+item.valor||0}],
       obs:"Trocado na venda "+ped.numero,pedidoId:ped.id,por:usuarioAtual,em:hojeISO()});
@@ -38787,11 +38792,25 @@ function editavel(p){
      depois de aprovado pelo financeiro, impossível editar". Antes só o `p.vendedor` editava —
      quem lançou como prospector ou instalador ficava de fora (v210). */
   if(!p.encerrada)return ehGestor()||deMim(p,CAMPOS_PED);
-  return ehGestor()&&p.reabertura&&p.reabertura.status==="aprovada";
+  return editaReaberta(p);
+}
+/* VENDA REABERTA (29/10, urgente): liberada a alteração, edita a gestão (Administrador e
+   Financeiro) E quem autorizou — o vendedor/instalador que autorizou é quem sabe a peça que
+   faltou. Antes só a gestão editava, e a tela de quem autorizou dizia "Edite os itens e as formas
+   e salve", com o botão Salvar, sem nenhum campo para editar. */
+function editaReaberta(p){
+  var rb=p&&p.reabertura;
+  if(!rb||rb.status!=="aprovada")return false;
+  if(ehGestor())return true;
+  return (rb.precisa||[]).some(function(x){return x.quem===usuarioAtual&&x.ok===true;});
+}
+function versaoPedRasc(p){
+  return JSON.stringify([p.itens||[],p.formas||[],p.reabertura?p.reabertura.status:"",p.status||""]).length+"|"+(p.status||"")+"|"+(p.reabertura?p.reabertura.status:"");
 }
 function abrirPedido(p){
   pedAberto=p;
-  pedRasc={itens:JSON.parse(JSON.stringify(p.itens||[])),formas:JSON.parse(JSON.stringify(p.formas||[]))};
+  pedRasc={id:p.id,versao:versaoPedRasc(p),sujo:false,
+    itens:JSON.parse(JSON.stringify(p.itens||[])),formas:JSON.parse(JSON.stringify(p.formas||[]))};
   $("pedLista").hidden=true;$("pedDet").hidden=false;
   $("pd_titulo").textContent="Pedido "+p.numero+" · "+p.cliente;
   var sp=$("pd_prod");sp.innerHTML="";
@@ -38801,6 +38820,11 @@ function abrirPedido(p){
 }
 function renderPedDet(){
   var p=pedAberto;if(!p)return;
+  /* o rascunho da ficha é do pedido aberto: outro pedido, ou o mesmo atualizado (a autorização
+     chegou pelo banco) e ainda não mexido aqui, recomeça dos itens e formas gravados */
+  if(!pedRasc||pedRasc.id!==p.id||(!pedRasc.sujo&&pedRasc.versao!==versaoPedRasc(p)))
+    pedRasc={id:p.id,versao:versaoPedRasc(p),sujo:false,
+      itens:JSON.parse(JSON.stringify(p.itens||[])),formas:JSON.parse(JSON.stringify(p.formas||[]))};
   try{faixaTeste("pd_testeFaixa",p,"esta venda");}catch(eT){}   /* v376 */
   var ed=editavel(p),r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0);
   /* regra dele (22/09): a ficha do pedido salvo é SÓ LEITURA. Quem quer mudar toca em
@@ -38844,7 +38868,8 @@ function renderPedDet(){
     ti.innerHTML+='<tr><td><div class="t-main"><span class="pd-nome" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+"</span></div>"+
       (subI.length?'<div class="t-sub">'+subI.join(" · ")+"</div>":"")+"</td>"+
       '<td class="num">'+(edInline?'<input type="number" min="1" style="max-width:80px" data-pi="qtd" data-i="'+idx+'" value="'+(i.qtd||1)+'">':(i.qtd||1))+"</td>"+
-      '<td class="num">'+(edInline?'<input type="text" inputmode="decimal" style="max-width:120px" data-pi="valor" data-i="'+idx+'" value="'+brMF(+i.valor||0)+'">':BRL(i.valor))+"</td>"+
+      '<td class="num">'+(edInline?'<input type="text" inputmode="decimal" style="max-width:120px" data-pi="valor" data-i="'+idx+'" value="'+brMF(i.valorBase!=null?(+i.valorBase||0):(+i.valor||0))+'">'+
+        ((i.valorBase!=null&&Math.abs((+i.valor||0)-(+i.valorBase||0))>=0.01)?'<div class="t-sub">cobrado '+BRL(i.valor)+"</div>":""):BRL(i.valor))+"</td>"+
       '<td class="num">'+BRL((+i.valor||0)*(i.qtd||1))+"</td>"+
       '<td class="num">'+(edInline?'<button class="btn mut sm" type="button" data-pirm="'+idx+'">Remover</button>':"")+"</td></tr>";
   });
@@ -38855,10 +38880,23 @@ function renderPedDet(){
        a mesma conta do pedido impresso e dos títulos a receber: divide em centavos e o resto
        fica na 1ª parcela. Forma à vista diz "à vista". */
     var np=Math.max(1,+f.parc||1),tp=textoParcelaForma(f);
+    if(edInline){
+      /* venda reaberta (29/10): muda a forma, as parcelas e o valor; dá para incluir e tirar forma */
+      var optsF=porNomeAZ(formasPgto).filter(function(t){return t.nome!==FORMA_ORC||f.tipo===FORMA_ORC;})
+        .map(function(t){return '<option'+(t.nome===f.tipo?" selected":"")+">"+esc(t.nome)+"</option>";}).join("");
+      var psF=parcelasDe(f.tipo);if(psF.indexOf(np)<0)np=psF[psF.length-1];
+      var optsP=psF.map(function(n){return '<option value="'+n+'"'+(n===np?" selected":"")+">"+n+"×</option>";}).join("");
+      tf.innerHTML+='<tr><td><select data-pft="'+idx+'" aria-label="Forma de pagamento">'+optsF+"</select></td>"+
+        '<td class="num"><select data-pfp="'+idx+'" aria-label="Parcelas" style="max-width:90px">'+optsP+"</select>"+
+        (tp?'<div class="t-sub">'+tp+"</div>":"")+"</td>"+
+        '<td class="num"><input type="text" inputmode="decimal" style="max-width:140px" data-pf="'+idx+'" value="'+brMF(+f.valor||0)+'">'+
+        (pedRasc.formas.length>1?' <button class="btn mut sm" type="button" data-pfrm="'+idx+'">Tirar</button>':"")+"</td></tr>";
+    }else
     tf.innerHTML+="<tr><td>"+esc(f.tipo)+"</td>"+
       '<td class="num">'+(tp||(np>1?np+"×":"à vista"))+"</td>"+
-      '<td class="num">'+(edInline?'<input type="text" inputmode="decimal" style="max-width:140px" data-pf="'+idx+'" value="'+brMF(+f.valor||0)+'">':BRL(f.valor))+"</td></tr>";
+      '<td class="num">'+BRL(f.valor)+"</td></tr>";
   });
+  if(edInline)tf.innerHTML+='<tr><td colspan="3"><button class="btn ghost sm" type="button" id="pd_addForma">+ forma de pagamento</button></td></tr>';
   $("pd_addBox").hidden=!edInline;
 
   /* Composição da venda: aberta só enquanto o pedido está sendo EDITADO. Na consulta (regra dele,
@@ -38916,12 +38954,20 @@ function renderPedDet(){
     if(ehGestor())ac+='<button class="btn ghost" type="button" id="pd_reabrir">Pedir autorização de novo</button>';
   }
   else if(reb&&reb.status==="aprovada"&&p.encerrada){
-    av+='<div class="note ok"><b>Alteração liberada.</b> Autorizada por '+
-      reb.precisa.map(function(x){return esc(x.quem);}).join(" e ")+
-      (reb.precisa.length?"":"ninguém — vendedor e instalador estão inativos no sistema")+
-      ". Edite os itens e as formas e salve.</div>";
-    ac+='<button class="btn" type="button" id="pd_salvar">Salvar alterações</button>'+
-        '<button class="btn mut" type="button" id="pd_desistir">Descartar e reencerrar</button>';
+    var quemAut=reb.precisa.map(function(x){return esc(x.quem);}).join(" e ")||
+      "ninguém — vendedor e instalador estão inativos no sistema";
+    if(edInline){
+      av+='<div class="note ok"><b>Alteração liberada.</b> Autorizada por '+quemAut+
+        (reb.motivo?" · motivo: "+esc(reb.motivo):"")+
+        ". Edite os <b>itens</b> (incluir, tirar, quantidade e valor) e as <b>formas de pagamento</b> (forma, parcelas e valor) aqui em cima e salve. "+
+        "Salvando, a venda <b>volta para a Aprovação Financeira</b> com o total novo; o estoque e a comissão acompanham quando o financeiro aprovar de novo. "+
+        "A assinatura do cliente continua guardada.</div>";
+      ac+='<button class="btn" type="button" id="pd_salvar">Salvar alterações</button>'+
+          '<button class="btn mut" type="button" id="pd_desistir">Descartar e reencerrar</button>';
+    }else{
+      av+='<div class="note ok"><b>Alteração liberada.</b> Autorizada por '+quemAut+
+        ". Quem altera os itens e as formas é "+esc(reb.por||"quem pediu a reabertura")+", a gestão ou quem autorizou.</div>";
+    }
   }
   else if(p.encerrada){
     av+='<div class="note"><b>'+(p.aprovado?"Recebimento aprovado"+(p.aprovadoPor?" por "+esc(p.aprovadoPor):"")+
@@ -39003,6 +39049,10 @@ function recomporFormasPedido(rasc,p){
   if(!rasc||!rasc.formas||!rasc.formas.length)return;
   var novoModelo=(p&&p.modelo==="base")||rasc.itens.some(function(i){return i.valorBase!=null;});
   if(novoModelo){
+    /* na ficha o valor de cada item é o COMERCIAL e o cobrado acompanha a forma do PRÓPRIO pedido
+       (29/10): o valor final "digitado" da venda deixa de travar o cobrado aqui, senão trocar a
+       forma deixava "Sobra/Falta distribuir" */
+    rasc.itens.forEach(function(i){if(!i.planoCobre&&i.valorBase!=null)i.valorFinal=0;});
     normalizarValoresItens(rasc.itens);
     var base=composicaoVenda(rasc.itens,{frete:+((p||{}).frete)||0,desconto:+((p||{}).descontoGeral)||0}).base;
     var fixas=0,alvo=null;
@@ -39016,8 +39066,17 @@ function recomporFormasPedido(rasc,p){
     rasc.formas.forEach(function(f){if(f!==alvo)fixas+=(+f.base||0);});
     alvo.base=centavos(Math.max(0,base-fixas));
     aplicarBrutos(rasc.formas);
-    aplicarCobradoNosItens(rasc.itens,rasc.formas,base,
-      rasc.formas.reduce(function(a,f){return a+(+f.valor||0);},0));
+    /* precoPelaForma lê as formas da tela do Novo Pedido: aqui valem as do pedido aberto (29/10) */
+    var formasTela=formas;
+    try{formas=rasc.formas;
+      aplicarCobradoNosItens(rasc.itens,rasc.formas,base,
+        rasc.formas.reduce(function(a,f){return a+(+f.valor||0);},0));}
+    finally{formas=formasTela;}
+    /* o centavo do arredondamento vai para a forma que recebeu a diferença, como no Novo Pedido (v206) */
+    var cobr=centavos(rasc.itens.reduce(function(a,i){return a+centavos((+i.valor||0)*(i.qtd||1));},0));
+    var somaF=centavos(rasc.formas.reduce(function(a,f){return a+(+f.valor||0);},0));
+    var difC=centavos(cobr-somaF);
+    if(difC!==0&&Math.abs(difC)<=0.05)alvo.valor=centavos((+alvo.valor||0)+difC);
     return;
   }
   /* pedido do modelo antigo: a diferença vai para a maior forma, pelo valor cobrado */
@@ -39032,21 +39091,56 @@ function ligarPedDet(){
   var p=pedAberto;
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-pi]"),function(el){
     el.onchange=function(){
+      pedRasc.sujo=true;
       var i=pedRasc.itens[+el.getAttribute("data-i")];
       if(el.getAttribute("data-pi")==="qtd")i.qtd=Math.max(1,parseInt(el.value,10)||1);
-      else {i.valor=numMF(el.value);if(i.valorBase!=null)i.valorBase=numMF(el.value);}
+      else if(i.valorBase!=null){i.valorBase=numMF(el.value);i.valorFinal=0;}   /* comercial; o cobrado sai pela forma */
+      else i.valor=numMF(el.value);
       recomporFormasPedido(pedRasc,p);
       renderPedDet();};});
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-pirm]"),function(b){
-    b.onclick=function(){pedRasc.itens.splice(+b.getAttribute("data-pirm"),1);recomporFormasPedido(pedRasc,p);renderPedDet();};});
+    b.onclick=function(){pedRasc.sujo=true;pedRasc.itens.splice(+b.getAttribute("data-pirm"),1);recomporFormasPedido(pedRasc,p);renderPedDet();};});
   Array.prototype.forEach.call($("pd_formas").querySelectorAll("[data-pf]"),function(el){
-    el.onchange=function(){pedRasc.formas[+el.getAttribute("data-pf")].valor=numMF(el.value);renderPedDet();};});
+    el.onchange=function(){
+      pedRasc.sujo=true;
+      var fm=pedRasc.formas[+el.getAttribute("data-pf")];
+      fm.valor=numMF(el.value);
+      /* o valor digitado é o que o cliente paga nesta forma: a fatia da venda sai dele (v206) */
+      if(fm.base!=null)fm.base=centavos(fm.valor/(acrescimoForma(fm)||1));
+      renderPedDet();};});
+  Array.prototype.forEach.call($("pd_formas").querySelectorAll("[data-pft],[data-pfp]"),function(el){
+    el.onchange=function(){
+      pedRasc.sujo=true;
+      var ix=+(el.getAttribute("data-pft")||el.getAttribute("data-pfp")),fm=pedRasc.formas[ix];
+      if(el.hasAttribute("data-pft")){fm.tipo=el.value;var psN=parcelasDe(fm.tipo);if(psN.indexOf(+fm.parc||1)<0)fm.parc=psN[psN.length-1];}
+      else fm.parc=+el.value||1;
+      recomporFormasPedido(pedRasc,p);renderPedDet();};});
+  Array.prototype.forEach.call($("pd_formas").querySelectorAll("[data-pfrm]"),function(b){
+    b.onclick=function(){pedRasc.sujo=true;pedRasc.formas.splice(+b.getAttribute("data-pfrm"),1);recomporFormasPedido(pedRasc,p);renderPedDet();};});
+  var addF=$("pd_addForma");
+  if(addF)addF.onclick=function(){
+    pedRasc.sujo=true;
+    var t=formasPgto.some(function(x){return x.nome==="Dinheiro";})?"Dinheiro":((formasPgto[0]||{}).nome||"Dinheiro");
+    pedRasc.formas.push({tipo:t,parc:1,valor:0,base:0});
+    renderPedDet();};
+  var selP=$("pd_prod");
+  if(selP&&!selP.__ligPreco){selP.__ligPreco=true;
+    selP.addEventListener("change",function(){
+      var pr=prodPorId(selP.value);
+      if(pr&&$("pd_valor")&&!$("pd_valor").value)$("pd_valor").value=brMF(precoTabela(pr));});}
   var add=$("pd_add");
   if(add)add.onclick=function(){
     var pr=prodPorId($("pd_prod").value);if(!pr){toast("Escolha o produto.");return;}
     var qp=qtdInformada("pd_qtd");if(!qp)return;
-    pedRasc.itens.push({pid:pr.id,nome:pr.nome,cod:pr.cod,qtd:qp,
-      valor:numMF($("pd_valor").value)||0,serie:"",pontos:+pr.pontos||0,garantia:"Bronze"});
+    var vp=numMF($("pd_valor").value)||precoTabela(pr)||0;
+    pedRasc.sujo=true;
+    /* o item novo segue o modelo do pedido: no modelo base (v206) ele tem valor comercial; no
+       antigo, só o valor cobrado — misturar os dois desmontava a conta das formas */
+    var modeloBase=(p&&p.modelo==="base")||pedRasc.itens.some(function(x){return x.valorBase!=null;});
+    var novoIt={pid:pr.id,nome:pr.nome,cod:pr.cod,qtd:qp,valor:vp,valorTabela:+pr.cheia||0,vinculo:uid(),
+      serie:"",pontos:+pr.pontos||0,garantia:"Bronze",incluidoNaReabertura:true};
+    if(modeloBase){novoIt.valorBase=vp;novoIt.valorFinal=vp;novoIt.precoAuto=false;}
+    pedRasc.itens.push(novoIt);
     recomporFormasPedido(pedRasc,p);
     renderPedDet();limparInclusao("pd_prod","pd_qtd",["pd_valor"]);};
   function on(id,fn){var e=$(id);if(e)e.onclick=fn;}
@@ -39117,14 +39211,17 @@ function ligarPedDet(){
   on("pd_nego",function(){decidir(p,false,"");});
   on("pd_desistir",function(){
     p.reabertura=null;p.status=p.aprovado?"Aprovada":"Encerrada";
-    pedRasc={itens:JSON.parse(JSON.stringify(p.itens||[])),formas:JSON.parse(JSON.stringify(p.formas||[]))};
+    pedRasc=null;
     gravarPedido(p);toast("Alterações descartadas — venda reencerrada.");renderPedDet();render();});
   on("pd_salvar",async function(){
     var r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0);
     if(!pedRasc.itens.length){toast("A venda precisa de ao menos um item.");return;}
     if(r.dif!==0){toast("A soma das formas não bate com o total.");return;}
     /* abaixo da tabela sem autorização (ou com o desconto recusado): pede de novo, com o motivo */
-    var novaSol=null,emEtapa=!p.encerrada&&p.status!=="Cancelada";
+    /* venda reaberta (29/10): depois de salva ela volta para a Aprovação Financeira, então
+       vale a mesma conferência da venda nova (desconto abaixo da tabela pede o motivo) */
+    var eraReaberta=!!(p.encerrada&&p.reabertura&&p.reabertura.status==="aprovada");
+    var novaSol=null,emEtapa=(!p.encerrada||eraReaberta)&&p.status!=="Cancelada";
     if(emEtapa&&r.abaixo&&!p.descontoAutorizado&&(p.descontoRecusado||!p.solicitacaoDesconto)){
       var mt=prompt("Os itens continuam abaixo da tabela. Escreva o motivo do desconto para pedir a autorização ao Administrador:",
         (p.solicitacaoDesconto&&p.solicitacaoDesconto.motivo)||"");
@@ -39160,15 +39257,31 @@ function ligarPedDet(){
       if(novaSol){p.solicitacaoDesconto=novaSol;p.descontoRecusado=null;registrarEvento(p,"Autorização de desconto solicitada: "+novaSol.motivo);}
       if(/^Aguardando|desconto/.test(p.status||""))p.status=etapaVenda(p);
     }
-    var ajEst=0;
-    if(p.encerrada){
-      p.reabertura=null;p.status=(p.aprovado?"Aprovada":"Encerrada")+" · alterada";
-      /* venda já aprovada: o estoque acompanha a alteração na hora — baixa ou devolve a diferença */
-      if(p.aprovado){
-        var antesMov=movEst.length;
-        await ajustarBaixa(p,"Ajuste do pedido "+p.numero,"Ajuste do pedido "+p.numero);
-        ajEst=movEst.length-antesMov;
+    var ajEst=0,titCanc=0,titPagos=0;
+    if(eraReaberta){
+      /* VOLTA PARA A APROVAÇÃO FINANCEIRA (29/10, regra dele): a venda deixa de estar aprovada; a
+         reserva passa a valer pelos itens novos e, quando o financeiro aprovar de novo, a baixa é só
+         da diferença (ajustarBaixa compara com o que já saiu), a reposição é só do que saiu agora e
+         a comissão entra pelo total novo — no mês da PRIMEIRA aprovação, como sempre. As parcelas
+         em aberto são canceladas e refeitas na reaprovação; parcela já recebida fica. */
+      p.reaberturas=(p.reaberturas||[]).concat([{por:p.reabertura.por,quando:p.reabertura.quando,motivo:p.reabertura.motivo,
+        precisa:p.reabertura.precisa,salvaPor:usuarioAtual,salvaEm:iso(new Date()),de:antes.total,para:r.total}]);
+      p.reabertura=null;p.aprovado=false;p.encerrada=false;
+      p.voltouFinanceiro={quando:agoraCarimbo(),por:usuarioAtual,motivo:motivo,de:antes.total,para:r.total};
+      var tits=titulos.filter(function(t){return t.pedidoId===p.id&&t.status!=="cancelado";});
+      for(var it2=0;it2<tits.length;it2++){
+        var tt=tits[it2];
+        if(tt.status==="aberto"&&!(+tt.valorPago>0)){
+          tt.status="cancelado";tt.canceladoMotivo="pedido "+p.numero+" alterado na reabertura — as parcelas são refeitas na nova aprovação";
+          tt.canceladoPor=usuarioAtual;tt.canceladoEm=hojeISO();
+          await grava("titulos",tt);titCanc++;
+        }else titPagos++;
       }
+      p.abaixoTabela=!!r.abaixo;if(!r.abaixo)p.descontoRecusado=null;
+      if(novaSol){p.solicitacaoDesconto=novaSol;p.descontoRecusado=null;registrarEvento(p,"Autorização de desconto solicitada: "+novaSol.motivo);}
+      p.status=etapaVenda(p);
+      registrarEvento(p,"Venda reaberta alterada por "+usuarioAtual+" ("+motivo+"): de "+BRL(antes.total)+" para "+BRL(r.total)+
+        " — voltou para a Aprovação Financeira");
     }
     await gravarPedido(p);
     /* mês de origem já fechado? então a diferença vira crédito ou débito no mês corrente */
@@ -39186,9 +39299,13 @@ function ligarPedDet(){
         }).join("<br>")+"</div>";
       toast("Pedido atualizado. "+gerados.length+" ajuste(s) lançado(s) em "+rotuloComp(compAtual())+".");
     } else {
-      toast("Pedido "+p.numero+" atualizado · faturamento recalculado"+
+      toast(eraReaberta
+        ? ("Pedido "+p.numero+" alterado: "+BRL(antes.total)+" → "+BRL(r.total)+". Voltou para "+p.status.toLowerCase()+
+           (titCanc?" · "+titCanc+" parcela(s) em aberto cancelada(s), refeitas na nova aprovação":"")+
+           (titPagos?" · "+titPagos+" parcela(s) já recebida(s) continuam — confira o Contas a Receber":"")+".")
+        : ("Pedido "+p.numero+" atualizado · faturamento recalculado"+
         (ajEst?" · estoque ajustado ("+ajEst+" movimento(s)). Confira as parcelas no Contas a Receber.":
-          (vendaPendente(p)?" · a reserva de estoque acompanha os itens.":".")));
+          (vendaPendente(p)?" · a reserva de estoque acompanha os itens.":"."))));
     }
     renderPedDet();render();
     if(gerados.length)ir("fatur");});
@@ -42615,6 +42732,9 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
     '<div style="margin:0 0 8px"><button class="btn ghost sm" type="button" data-finver="'+p.id+'">Ver a venda completa</button></div>'+
     htmlRetiradasPedido(p)+
     htmlCreditoVenda(p)+
+    (p.voltouFinanceiro?'<div class="note warn"><b>Venda reaberta e alterada</b> por '+esc(p.voltouFinanceiro.por)+" em "+
+      esc(dataBR(p.voltouFinanceiro.quando))+": de "+BRL(p.voltouFinanceiro.de)+" para "+BRL(p.voltouFinanceiro.para)+
+      (p.voltouFinanceiro.motivo?" · "+esc(p.voltouFinanceiro.motivo):"")+". Aprove de novo: a baixa e a reposição são só da diferença.</div>":"")+
     (p.devolucaoFin?'<div class="note warn"><b>Devolvida</b> por '+esc(p.devolucaoFin.por)+" em "+
       esc(dataBR(p.devolucaoFin.quando))+": "+esc(p.devolucaoFin.motivo)+"</div>":"")+
     (p.obsInstalacao?'<div class="note" style="margin:6px 0"><b>Instalação</b> ('+esc(p.instaladoPor||"—")+", "+
