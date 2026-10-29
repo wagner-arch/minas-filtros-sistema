@@ -1137,8 +1137,11 @@
         }
         return r.data; /* {user, session} */
       },
-      sair: async function () {
-        var r = await sb.auth.signOut();
+      /* SAIR SÓ NESTE APARELHO (29/10). O padrão do supabase-js é "global": sair no computador
+         derrubava também o aplicativo do celular e os outros computadores da mesma pessoa.
+         Desconectar à distância (celular perdido) continua pela função criar-acesso. */
+      sair: async function (escopo) {
+        var r = await sb.auth.signOut({ scope: escopo === "global" ? "global" : "local" });
         if (r && r.error) throw anotar(traduzir(r.error, "sair"));
         return true;
       },

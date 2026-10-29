@@ -1954,7 +1954,7 @@ img{max-width:100%}
       <input id="lg_senha" type="password" autocomplete="current-password" placeholder="••••"></div>
     <div class="fld" id="lg_confWrap" style="margin-top:14px" hidden><label for="lg_senha2">Repita a senha</label>
       <input id="lg_senha2" type="password" autocomplete="new-password"></div>
-    <div class="fld" style="margin-top:14px"><label for="lg_loja">Loja</label><select id="lg_loja"></select></div>
+    <div class="fld" style="margin-top:14px"><label for="lg_loja">Empresa</label><select id="lg_loja"></select></div>
     <div id="lg_alerta"></div>
     <button class="btn" type="button" id="lg_entrar" style="width:100%;margin-top:18px;justify-content:center">Entrar</button>
     <div class="login-pe" id="lg_pe"></div>
@@ -8298,7 +8298,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=458"></script>
+<script src="supabase/adapter.js?v=459"></script>
 <script>
 (function(){
 "use strict";
@@ -8851,7 +8851,9 @@ function travarFundoCarga(travar){
       if(!CARGA.ativa||!t||t.hidden)return;
       if(t.contains(ev.target))return;
       ev.stopPropagation();
-      if(ev.type==="focusin"){try{($("tc_sair")||t).focus();}catch(e){}}
+      /* o foco volta para a TELA, não para o botão Sair: com o foco no Sair, um espaço ou
+         um Enter (rolando a tela) encerrava a sessão sem querer (29/10) */
+      if(ev.type==="focusin"){try{t.setAttribute("tabindex","-1");t.focus();}catch(e){}}
       else ev.preventDefault();
     };
     ["focusin","keydown","click","mousedown","touchstart"].forEach(function(n){
@@ -8935,6 +8937,7 @@ function ligarTelaCarga(){
   };
   var sair=$("tc_sair");
   if(sair)sair.onclick=function(){
+    if(!confirm("Sair do sistema? Para voltar você entra de novo com e-mail e senha."))return;
     CARGA.ativa=false;
     clearInterval(CARGA.relogio);
     travarFundoCarga(false);
@@ -50721,7 +50724,12 @@ function ligar(){
   $("lg_entrar").onclick=entrarSistema;
   $("lg_senha").onkeydown=function(e){if(e.key==="Enter")entrarSistema();};
   $("lg_senha2").onkeydown=function(e){if(e.key==="Enter")entrarSistema();};
-  $("btSair").onclick=sairSistema;
+  /* sair pede confirmação (29/10): um toque sem querer no Sair — rolando a tela — encerrava a
+     sessão e esquecia a empresa escolhida */
+  $("btSair").onclick=function(){
+    if(!confirm("Sair do sistema? Para voltar você entra de novo com e-mail e senha"+(modoBanco()?" e escolhe a empresa.":".")))return;
+    sairSistema();
+  };
   $("dtGerar").onclick=gerarDemo;
   $("dtLimpar").onclick=limparDemo;
   $("cam_tirar").onclick=tirarFoto;
@@ -52670,6 +52678,7 @@ function sairSistema(){
      E APAGA O GUARDADO NO APARELHO (v349): são 22 mil cadastros de clientes gravados
      no celular — quem sai do sistema não deixa a base da loja no aparelho. */
   if(modoBanco()&&db){(async function(){
+    esquecerEmpresaEscolhida();
     try{await cofreApagarTudo();}catch(e){}
     try{await db.auth.sair();}catch(e){}
     location.reload();
@@ -52777,9 +52786,13 @@ function prepararLoginBanco(){
   $("lg_sub").textContent="Entre com o seu e-mail e a sua senha";
   $("lg_entrar").textContent="Entrar";
   var sl=$("lg_loja");
-  if(!sl.options.length)LOJAS.forEach(function(l){var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;sl.appendChild(o);});
-  sl.value=lojaAtual;
-  $("lg_pe").innerHTML="A loja escolhida vale para o Administrador; os demais entram na loja do próprio cadastro. "+
+  /* a empresa nasce SEM escolha (29/10): quem trabalha nas duas tem de escolher a cada entrada */
+  if(!sl.options.length){
+    var o0=document.createElement("option");o0.value="";o0.textContent="— escolha a empresa —";sl.appendChild(o0);
+    LOJAS.forEach(function(l){var o=document.createElement("option");o.value=l.id;o.textContent=l.nome;sl.appendChild(o);});
+  }
+  sl.value="";
+  $("lg_pe").innerHTML="Quem trabalha nas duas empresas escolhe aqui e fica nela até sair. Os demais entram na empresa do próprio cadastro. "+
     "Esqueceu a senha? O Administrador troca no painel do banco (Supabase › Authentication › Users).";
   try{prepararLogo(function(b,branca){var e=$("loginLogo");if(e&&b)enquadrar(e,b,branca||LOGO);});}catch(e){}
   $("lg_email").onkeydown=function(e){if(e.key==="Enter")$("lg_senha").focus();};
@@ -52795,9 +52808,26 @@ async function entrarBanco(){
     alertaLogin((e&&e.message)||"Não foi possível entrar.");$("lg_senha").value="";$("lg_senha").focus();return;
   }
   bt.textContent="Carregando o sistema…";
-  try{await entrarComPerfil();}finally{bt.disabled=false;bt.textContent="Entrar";}
+  try{await entrarComPerfil(true);}finally{bt.disabled=false;bt.textContent="Entrar";}
 }
-async function entrarComPerfil(){
+/* a empresa escolhida no login, guardada no aparelho até a pessoa SAIR (29/10) */
+var CHAVE_EMPRESA="mf_empresa_escolhida";
+function empresaValida(l){return !!l&&LOJAS.some(function(x){return x.id===l;});}
+function escolheEmpresa(p){return !!p&&p.ambas===true;}
+function lerEmpresaEscolhida(uid){
+  try{
+    var x=JSON.parse(localStorage.getItem(CHAVE_EMPRESA)||"null");
+    if(x&&uid&&x.uid===uid&&empresaValida(x.loja))return x.loja;
+  }catch(e){}
+  return "";
+}
+function gravarEmpresaEscolhida(uid,loja){
+  try{localStorage.setItem(CHAVE_EMPRESA,JSON.stringify({uid:uid,loja:loja,em:new Date().toISOString()}));}catch(e){}
+}
+function esquecerEmpresaEscolhida(){try{localStorage.removeItem(CHAVE_EMPRESA);}catch(e){}}
+/* encerra a sessão SÓ neste aparelho: o celular e os outros computadores continuam entrados */
+async function sairSoNesteAparelho(){try{await db.auth.sair();}catch(e){}}
+async function entrarComPerfil(viaSenha){
   var p=null;
   try{p=await db.perfil();}catch(e){alertaLogin("Não consegui ler o seu cadastro no banco: "+((e&&e.message)||e));$("login").hidden=false;return false;}
   if(!p||p.ativo===false){
@@ -52810,8 +52840,42 @@ async function entrarComPerfil(){
   /* o e-mail de quem entrou: e por ele que o banco reconhece a pessoa, e e com ele que o
      sistema sabe que um cadastro da lista e o DELA MESMA (o nome do cadastro pode diferir) */
   try{var ses=await db.auth.sessao();emailLogado=String((ses&&ses.user&&ses.user.email)||"").toLowerCase();}catch(e){emailLogado="";}
-  var escolhida=$("lg_loja").value;
-  lojaAtual=(p.funcao==="Administrador"&&escolhida)?escolhida:(p.loja||escolhida||"mf");
+  /* A EMPRESA ESCOLHIDA NO LOGIN VALE ATÉ SAIR (regra dele, 29/10). Antes, no F5 a empresa era
+     lida do campo da tela de entrada, que ao recarregar volta à empresa do cadastro — quem tinha
+     entrado na WF Filtros reabria na Minas Filtros sem escolher. Agora: quem trabalha nas duas
+     (marca `ambas`) escolhe no login e a escolha fica guardada no aparelho, ligada ao usuário;
+     no F5, ao reabrir o aplicativo ou com a sessão renovada vale a guardada. Sem ela, o sistema
+     pede o login de novo ANTES de mostrar qualquer tela — nunca abre na outra empresa. Quem é
+     de uma empresa só entra sempre na do próprio cadastro. */
+  var uid=(ses&&ses.user&&ses.user.id)||"";
+  var empresa="";
+  if(escolheEmpresa(p)){
+    if(viaSenha){
+      empresa=$("lg_loja").value;
+      if(!empresaValida(empresa)){
+        await sairSoNesteAparelho();
+        alertaLogin("Escolha a empresa em que vai trabalhar e entre de novo.");
+        $("login").hidden=false;try{$("lg_loja").focus();}catch(e){}return false;
+      }
+      gravarEmpresaEscolhida(uid,empresa);
+    }else{
+      empresa=lerEmpresaEscolhida(uid);
+      if(!empresa){
+        await sairSoNesteAparelho();
+        alertaLogin("Entre de novo e escolha a empresa: o sistema não sabe em qual delas você estava.");
+        try{$("lg_email").value=emailLogado||"";}catch(e){}
+        $("login").hidden=false;try{$("lg_senha").focus();}catch(e){}return false;
+      }
+    }
+  }else{
+    empresa=p.loja;
+    if(!empresaValida(empresa)){
+      await sairSoNesteAparelho();
+      alertaLogin("Seu cadastro está sem empresa. Peça ao Administrador para marcar a sua empresa.");
+      $("login").hidden=false;return false;
+    }
+  }
+  lojaAtual=empresa;
   db.lojaPadrao=lojaAtual;
   try{$("loja").value=lojaAtual;}catch(e){}
   $("login").hidden=true;
