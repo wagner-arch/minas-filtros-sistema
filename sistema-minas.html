@@ -1579,6 +1579,19 @@
 .pp-foto{max-width:120px;max-height:90px;border-radius:8px;border:1px solid var(--line);margin-top:6px;cursor:pointer;display:block}
 @media (max-width:620px){.pp-chips{display:grid;grid-template-columns:1fr 1fr;gap:8px}.pp-chips .btn{min-width:0;width:100%}
   .pp-g{grid-template-columns:1fr}#v_ppVence{min-height:47px}}
+/* INVENTÁRIO (v465) */
+.iv-etapas{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 14px}
+.iv-et{font-size:12.5px;padding:4px 10px;border-radius:999px;background:var(--bg-2,#eef1f7);color:var(--ink-3)}
+.iv-et.atual{background:var(--accent);color:#fff;font-weight:600}
+.iv-et.feita{color:var(--ok)}
+.iv-topo{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:6px 0}
+.iv-ents{display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto}
+.iv-ent{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
+.iv-q{font-size:20px;font-weight:700;min-width:44px;text-align:right}
+.iv-falta{margin-top:12px}.iv-falta summary{cursor:pointer;font-weight:600}
+.iv-tot{margin-top:10px;text-align:right}
+#iv_qtd{font-size:18px}
+@media (max-width:620px){.iv-lanc{grid-template-columns:1fr!important}.iv-lanc .fld{grid-column:auto!important}}
 </style>
 
 <!-- ============ AJUSTES DE CELULAR (estilo) — fica logo após o estilo principal
@@ -4363,6 +4376,7 @@ img{max-width:100%}
             <button type="button" data-t="mov">Movimentações</button>
             <button type="button" data-t="req">Requisições</button>
             <button type="button" data-t="rec">Recuperações</button>
+            <button type="button" data-t="inv">Inventário</button>
           </div>
           <input id="eeBusca" placeholder="Buscar produto">
           <select id="eeFiltro" style="max-width:200px">
@@ -6790,6 +6804,33 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- INVENTÁRIO (v465, 29/10, decisões dele): abrir → contagem cega → recontagem obrigatória do
+     que divergiu → o Administrador aprova → ajustes de inventário. Começa pelo Almoxarifado. -->
+<div class="modal" id="invModal" hidden>
+  <div class="box" style="width:min(760px,100%)">
+    <h3 id="iv_titulo">Inventário</h3>
+    <div class="sub" id="iv_sub"></div>
+    <div id="iv_etapas" class="iv-etapas"></div>
+    <div id="iv_novo" hidden>
+      <p class="help">O inventário guarda a foto do saldo agora e abre a <b>contagem cega</b>: quem conta não vê o que o sistema diz. A loja não precisa parar — venda e transferência durante a contagem entram na conta.</p>
+      <div class="fld"><label for="iv_grupo">O que contar</label><select id="iv_grupo"></select></div>
+    </div>
+    <div id="iv_contar" hidden>
+      <div class="note" id="iv_instr"></div>
+      <div class="grid g3 iv-lanc">
+        <div class="fld" style="grid-column:span 2"><label for="iv_prod">Produto <span class="req">*</span></label><select id="iv_prod"></select></div>
+        <div class="fld"><label for="iv_qtd">Quantidade contada <span class="req">*</span></label><input id="iv_qtd" type="number" min="0" step="1" inputmode="numeric" placeholder="—"></div>
+      </div>
+      <div class="fld"><label for="iv_obs">Onde contou / observação</label><input id="iv_obs" placeholder="Ex.: prateleira 3, depósito do fundo"></div>
+      <div class="actions" style="margin-top:6px"><button class="btn" type="button" id="iv_add">Registrar a contagem</button></div>
+      <div id="iv_lista"></div>
+    </div>
+    <div id="iv_revisao" hidden></div>
+    <div id="iv_alerta"></div>
+    <div class="actions" id="iv_acoes"></div>
+  </div>
+</div>
+
 <!-- CONTAGEM DO ESTOQUE DA LOJA (23/10): o responsavel lanca o que contou e a diferenca
      vira movimento de ajuste, com quem contou e quando. -->
 <div class="modal" id="cgModal" hidden>
@@ -8319,7 +8360,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=459"></script>
+<script src="supabase/adapter.js?v=465"></script>
 <script>
 (function(){
 "use strict";
@@ -21493,13 +21534,356 @@ function exportarRecuperacoes(){
   });
   baixarPlanilhaMF("Recuperacoes_de_seminovo_"+nomeLoja(),linhas);
 }
+/* ===== INVENTÁRIO (v465, 29/10) — decisões dele: começa pelo Almoxarifado; o almoxarifado conta
+   e o ADMINISTRADOR aprova; a RECONTAGEM do que divergiu é OBRIGATÓRIA; o produto entra pelo leitor
+   de código de barras OU digitando o código ou o nome (a busca do módulo, campo iv_prod).
+   Como os bons sistemas fazem: (1) abrir guarda a foto do saldo; (2) a contagem é CEGA — quem conta
+   nunca vê o saldo; (3) a loja não para: a diferença de cada produto é medida contra o saldo do
+   momento em que ele foi contado (sis), então venda e transferência no meio entram na conta;
+   (4) o que divergiu é recontado às cegas; (5) o Administrador vê as diferenças em unidades e em R$
+   e aprova; (6) a aprovação lança um "Ajuste de inventário" por produto, com o número do inventário.
+   Coleção própria "inventarios" (de cada empresa), lida quando a tela abre. */
+var inventarios=[],invLido=false,invLendo=null,invAtual=null;
+var INV_ABERTOS=["contagem","recontagem","aprovacao"];
+var INV_SIT={contagem:["1ª contagem","p-acc"],recontagem:["Recontagem","p-warn"],aprovacao:["Aguardando o Administrador","p-warn"],
+  fechado:["Fechado","p-ok"],cancelado:["Cancelado","p-mut"]};
+async function carregarInventarios(forcar){
+  if(invLido&&!forcar)return;
+  if(invLendo)return invLendo;
+  if(!db){invLido=true;return;}
+  invLendo=(async function(){
+    try{var s=await col("inventarios").limit(500).get();
+      inventarios=s.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});invLido=true;}
+    catch(e){console.warn("inventarios",e);}
+    invLendo=null;
+  })();
+  return invLendo;
+}
+function podeContarInv(){return podeMoverEstoque()||podeAutorizarEstoque(LOC_EMPRESA);}
+function podeAprovarInv(){return ehAdministrador();}
+function invDaLoja(){return inventarios.filter(function(v){return v.loja===lojaAtual;});}
+function invAbertoDe(local){return invDaLoja().filter(function(v){return v.local===local&&INV_ABERTOS.indexOf(v.status)>=0;})[0]||null;}
+function ehProdSistemaInv(p){try{return produtoDeSistema(p);}catch(e){return false;}}
+function produtosDoInv(inv){
+  return produtos.filter(function(p){
+    if(inv.grupo&&p.grupo!==inv.grupo)return false;
+    if(ehProdSistemaInv(p))return false;
+    return (p.status||"ativo")==="ativo"||saldoEm(p.id,inv.local)!==0;});
+}
+function itemInv(inv,pid){inv.itens=inv.itens||{};var p=prodPorId(pid)||{};
+  return inv.itens[pid]||(inv.itens[pid]={pid:pid,nome:p.nome||"",cod:p.cod||"",c1:[],c2:[]});}
+function totalFaseInv(it,f){return (it[f]||[]).reduce(function(a,e){return a+(+e.qtd||0);},0);}
+function sisFaseInv(it,f){var l=it[f]||[];return l.length?(+l[l.length-1].sis||0):0;}
+/* diferença final: a da recontagem quando houve, senão a da 1ª contagem */
+function difInv(it){
+  if(it.recontar&&(it.c2||[]).length)return totalFaseInv(it,"c2")-sisFaseInv(it,"c2");
+  return totalFaseInv(it,"c1")-sisFaseInv(it,"c1");
+}
+function proximoNumeroInv(){return invDaLoja().reduce(function(m,v){return Math.max(m,+v.numero||0);},0)+1;}
+function quandoInv(){var d=new Date();return dataBR(hojeISO())+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");}
+async function salvarInv(inv,antes){
+  try{await gravaConf("inventarios",inv);return true;}
+  catch(e){
+    if(antes){Object.keys(inv).forEach(function(k){delete inv[k];});Object.assign(inv,antes);}
+    else{var ix=inventarios.indexOf(inv);if(ix>=0)inventarios.splice(ix,1);}
+    avisarRecusaBanco("iv_alerta",e,"O inventário continua como estava.");return false;}
+}
+function copiaInv(inv){return JSON.parse(JSON.stringify(inv));}
+
+function renderInventarios(h,b){
+  h.innerHTML="<th>Nº</th><th>Estoque</th><th>Aberto</th><th>Situação</th><th class=\"num\">Produtos contados</th><th class=\"num\">Divergências</th>";
+  if(!invLido){carregarInventarios().then(function(){if(eeAba==="inv")renderEstEmpresa();});}
+  var lista=invDaLoja().slice().sort(function(a,b2){return (+b2.numero||0)-(+a.numero||0);});
+  var aberto=invAbertoDe(LOC_EMPRESA);
+  $("eeCount").textContent=lista.length+(lista.length===1?" inventário":" inventários");
+  var topo='<tr class="iv-topo-l"><td colspan="6"><div class="iv-topo">'+
+    (aberto
+      ? "<b>Inventário nº "+aberto.numero+" em andamento</b> · "+esc(INV_SIT[aberto.status][0])+
+        ' <button class="btn sm" type="button" data-ivab="'+esc(aberto.id)+'">Continuar</button>'
+      : (podeContarInv()
+        ? "<b>Balanço do Almoxarifado.</b> Abra o inventário e conte pelo celular, lendo o código de barras ou digitando o código ou o nome. "+
+          '<button class="btn sm" type="button" id="iv_abrirNovo">Abrir inventário do Almoxarifado</button>'
+        : "Quem abre e conta o inventário é o almoxarifado."))+"</div></td></tr>";
+  b.innerHTML=topo;
+  if(!lista.length){b.innerHTML+='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum inventário ainda</div>'+
+    "O primeiro balanço começa no botão acima.</div></td></tr>";}
+  lista.forEach(function(v){
+    var its=Object.keys(v.itens||{}).map(function(k){return v.itens[k];});
+    var cont=its.filter(function(it){return (it.c1||[]).length;}).length;
+    var div=v.status==="contagem"?"—":its.filter(function(it){return difInv(it)!==0;}).length;
+    var st=INV_SIT[v.status]||[v.status,"p-mut"];
+    var tr=document.createElement("tr");tr.className="clickable";tr.setAttribute("data-ivab",v.id);
+    tr.innerHTML="<td><b>"+v.numero+"</b></td><td>"+esc(nomeLocal(v.local))+(v.grupo?'<div class="t-sub">grupo '+esc(v.grupo)+"</div>":"")+"</td>"+
+      "<td>"+esc(v.abertoEm||"")+'<div class="t-sub">'+esc(v.abertoPor||"")+"</div></td>"+
+      '<td><span class="pill '+st[1]+'">'+esc(st[0])+"</span>"+(v.status==="fechado"&&v.aprovadoPor?'<div class="t-sub">aprovado por '+esc(v.aprovadoPor)+"</div>":"")+"</td>"+
+      '<td class="num">'+cont+'</td><td class="num">'+div+"</td>";
+    b.appendChild(tr);
+  });
+  Array.prototype.forEach.call(b.querySelectorAll("[data-ivab]"),function(el){
+    el.onclick=function(ev){ev.stopPropagation();var v=inventarios.filter(function(x){return x.id===el.getAttribute("data-ivab");})[0];if(v)abrirInv(v);};});
+  if($("iv_abrirNovo"))$("iv_abrirNovo").onclick=function(){abrirInv(null);};
+}
+
+function abrirInv(inv){
+  invAtual=inv;
+  $("iv_alerta").innerHTML="";
+  $("invModal").hidden=false;
+  desenharInv();
+}
+function etapasInvHtml(st){
+  var E=[["contagem","1 · Contagem"],["recontagem","2 · Recontagem"],["aprovacao","3 · Aprovação"],["fechado","4 · Ajustes lançados"]];
+  var ix=E.map(function(e){return e[0];}).indexOf(st);
+  if(st==="fechado")ix=4;
+  return E.map(function(e,i){return '<span class="iv-et'+(i<ix?" feita":i===ix?" atual":"")+'">'+(i<ix?"✓ ":"")+e[1]+"</span>";}).join("");
+}
+function desenharInv(){
+  var inv=invAtual;
+  ["iv_novo","iv_contar","iv_revisao"].forEach(function(id){$(id).hidden=true;});
+  var ac=$("iv_acoes");ac.innerHTML="";
+  function bt(id,txt,cls){ac.insertAdjacentHTML("beforeend",'<button class="btn'+(cls?" "+cls:"")+'" type="button" id="'+id+'">'+txt+"</button>");}
+  if(!inv){
+    $("iv_titulo").textContent="Abrir inventário";
+    $("iv_sub").textContent=nomeLocal(LOC_EMPRESA)+" · "+nomeLoja();
+    $("iv_etapas").innerHTML=etapasInvHtml("");
+    var gs={};produtos.forEach(function(p){if(p.grupo)gs[p.grupo]=1;});
+    $("iv_grupo").innerHTML='<option value="">Todo o almoxarifado</option>'+Object.keys(gs).sort(ordAZ)
+      .map(function(g){return '<option value="'+esc(g)+'">Só o grupo '+esc(g)+"</option>";}).join("");
+    $("iv_novo").hidden=false;
+    bt("iv_criar","Abrir o inventário");bt("iv_fechar","Fechar","mut");
+    $("iv_criar").onclick=criarInv;
+  }else{
+    var st=INV_SIT[inv.status]||[inv.status,"p-mut"];
+    $("iv_titulo").textContent="Inventário nº "+inv.numero;
+    $("iv_sub").innerHTML=esc(nomeLocal(inv.local))+(inv.grupo?" · grupo "+esc(inv.grupo):"")+" · aberto em "+esc(inv.abertoEm||"")+
+      " por "+esc(inv.abertoPor||"")+' · <span class="pill '+st[1]+'">'+esc(st[0])+"</span>";
+    $("iv_etapas").innerHTML=inv.status==="cancelado"?"":etapasInvHtml(inv.status);
+    if(inv.status==="contagem"||inv.status==="recontagem"){
+      if(podeContarInv())desenharContagemInv(inv,bt);
+      else{$("iv_revisao").hidden=false;$("iv_revisao").innerHTML='<div class="note">A contagem é do almoxarifado. Quando terminar, ela vem para a aprovação do Administrador.</div>';}
+    }else desenharRevisaoInv(inv,bt);
+    if(INV_ABERTOS.indexOf(inv.status)>=0&&(podeAprovarInv()||inv.abertoPor===usuarioAtual))bt("iv_cancelar","Cancelar o inventário","ghost");
+    bt("iv_fechar","Fechar","mut");
+    if($("iv_cancelar"))$("iv_cancelar").onclick=cancelarInv;
+  }
+  $("iv_fechar").onclick=function(){$("invModal").hidden=true;invAtual=null;if(eeAba==="inv")renderEstEmpresa();};
+  Array.prototype.forEach.call(document.querySelectorAll("#iv_lista [data-ivrm]"),function(x){
+    x.onclick=function(){removerEntradaInv(x.getAttribute("data-ivrm"));};});
+}
+function opcoesProdutosInv(inv){
+  var ps=produtosDoInv(inv).slice().sort(function(a,b2){return ordAZ(a.nome||"",b2.nome||"");});
+  if(inv.status==="recontagem")ps=ps.filter(function(p){var it=(inv.itens||{})[p.id];return it&&it.recontar;});
+  return '<option value="">— escolha —</option>'+ps.map(function(p){
+    return '<option value="'+esc(p.id)+'" data-cod="'+esc(p.cod||"")+'">'+esc(p.nome||"")+"</option>";}).join("");
+}
+function desenharContagemInv(inv,bt){
+  var fase=inv.status==="recontagem"?"c2":"c1";
+  var sel=$("iv_prod"),antes=sel.value;
+  var novas=opcoesProdutosInv(inv);
+  if(sel.__ivOpc!==novas){sel.innerHTML=novas;sel.__ivOpc=novas;}
+  if(antes&&[].some.call(sel.options,function(o){return o.value===antes;}))sel.value=antes;
+  $("iv_contar").hidden=false;
+  var its=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];});
+  if(fase==="c1"){
+    var naoContados=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return saldoEm(p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
+    $("iv_instr").innerHTML="<b>Contagem cega.</b> Leia o código de barras ou digite o código ou o nome, e escreva <b>quantas unidades você contou</b>. "+
+      "O mesmo produto em dois lugares: registre cada lugar, o sistema soma. Pode parar e continuar depois — fica tudo salvo.";
+    var h='<p class="sect-t" style="margin-top:14px">Contados ('+its.filter(function(it){return (it.c1||[]).length;}).length+")</p>"+listaEntradasInv(inv,"c1");
+    if(naoContados.length)h+='<details class="iv-falta"><summary>Ainda não contados: '+naoContados.length+" produto(s) que o sistema diz ter neste estoque</summary>"+
+      '<div class="t-sub">'+naoContados.slice(0,400).map(function(p){return esc(p.nome)+(p.cod?" ("+esc(p.cod)+")":"");}).join(" · ")+
+      '</div><div class="help">O que não for contado entra como <b>zero</b> ao encerrar a contagem e vai para a recontagem.</div></details>';
+    $("iv_lista").innerHTML=h;
+    bt("iv_encerrar1","Encerrar a 1ª contagem");
+    $("iv_encerrar1").onclick=encerrarContagemInv;
+  }else{
+    var rec=its.filter(function(it){return it.recontar;});
+    var feitos=rec.filter(function(it){return (it.c2||[]).length;});
+    $("iv_instr").innerHTML="<b>Recontagem obrigatória</b> dos "+rec.length+" produto(s) que divergiram — de preferência por outra pessoa, também às cegas. "+
+      "A lista de produtos mostra só os que precisam ser recontados.";
+    $("iv_lista").innerHTML='<p class="sect-t" style="margin-top:14px">Recontados: '+feitos.length+" de "+rec.length+"</p>"+listaEntradasInv(inv,"c2")+
+      (rec.length>feitos.length?'<div class="note warn"><b>Falta recontar:</b> '+rec.filter(function(it){return !(it.c2||[]).length;})
+        .map(function(it){return esc(it.nome);}).join(" · ")+"</div>":"");
+    bt("iv_encerrar2","Encerrar a recontagem e mandar para aprovação");
+    $("iv_encerrar2").onclick=encerrarRecontagemInv;
+  }
+  $("iv_add").onclick=registrarContagemInv;
+}
+function listaEntradasInv(inv,fase){
+  var linhas=[];
+  Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];(it[fase]||[]).forEach(function(e,ix){linhas.push({it:it,e:e,ix:ix});});});
+  if(!linhas.length)return '<div class="empty" style="padding:14px"><div class="big">Nada registrado ainda</div></div>';
+  linhas.sort(function(a,b2){return String(b2.e.em||"").localeCompare(String(a.e.em||""));});
+  return '<div class="iv-ents">'+linhas.map(function(l){
+    return '<div class="iv-ent"><div><b>'+esc(l.it.nome)+"</b>"+(l.it.cod?" <code>"+esc(l.it.cod)+"</code>":"")+
+      '<div class="t-sub">'+esc(l.e.por||"")+" · "+esc(l.e.quando||"")+(l.e.obs?" · "+esc(l.e.obs):"")+"</div></div>"+
+      '<div class="iv-q">'+(+l.e.qtd||0)+"</div>"+
+      (l.e.por===usuarioAtual||podeAprovarInv()?'<button class="btn ghost sm" type="button" data-ivrm="'+esc(l.it.pid)+"|"+fase+"|"+l.ix+'">Tirar</button>':"<span></span>")+"</div>";
+  }).join("")+"</div>";
+}
+async function registrarContagemInv(){
+  var inv=invAtual;if(!inv)return;
+  if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem conta é o almoxarifado.</div>';return;}
+  var pid=$("iv_prod").value,qs=String($("iv_qtd").value).trim();
+  if(!pid){$("iv_alerta").innerHTML='<div class="note crit"><b>Escolha o produto</b> — leia o código de barras ou digite o código ou o nome.</div>';return;}
+  if(qs===""||!(+qs>=0)||Math.floor(+qs)!==+qs){$("iv_alerta").innerHTML='<div class="note crit"><b>Escreva a quantidade contada</b> (número inteiro; zero se não achou nenhuma).</div>';return;}
+  var fase=inv.status==="recontagem"?"c2":"c1";
+  if(fase==="c2"&&!((inv.itens||{})[pid]||{}).recontar){$("iv_alerta").innerHTML='<div class="note crit">Este produto não está na recontagem.</div>';return;}
+  var antes=copiaInv(inv),it=itemInv(inv,pid);
+  it[fase]=it[fase]||[];
+  it[fase].push({qtd:+qs,sis:saldoEm(pid,inv.local),por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:$("iv_obs").value.trim()});
+  if(!(await salvarInv(inv,antes)))return;
+  $("iv_alerta").innerHTML="";
+  toast((+qs)+"× "+it.nome+" registrado.");
+  try{limparInclusao($("iv_prod"),$("iv_qtd"),[]);}catch(e){$("iv_prod").value="";$("iv_qtd").value="";}
+  $("iv_obs").value="";
+  desenharInv();
+}
+async function removerEntradaInv(chave){
+  var inv=invAtual;if(!inv)return;var p=chave.split("|"),it=(inv.itens||{})[p[0]];if(!it)return;
+  var e=(it[p[1]]||[])[+p[2]];if(!e)return;
+  if(!confirm("Tirar "+e.qtd+"× "+it.nome+" desta contagem?"))return;
+  var antes=copiaInv(inv);it[p[1]].splice(+p[2],1);
+  if(await salvarInv(inv,antes))desenharInv();
+}
+async function encerrarContagemInv(){
+  var inv=invAtual;if(!inv)return;
+  var naoC=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return saldoEm(p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
+  if(!confirm("Encerrar a 1ª contagem?"+(naoC.length?" "+naoC.length+" produto(s) com saldo no sistema não foram contados e entram como ZERO — eles vão para a recontagem.":"")))return;
+  var antes=copiaInv(inv);
+  naoC.forEach(function(p){var it=itemInv(inv,p.id);it.naoContado=true;
+    it.c1=[{qtd:0,sis:saldoEm(p.id,inv.local),por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:"não encontrado na 1ª contagem"}];});
+  var div=0;
+  Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];
+    if(!(it.c1||[]).length){it.recontar=false;return;}
+    var d=totalFaseInv(it,"c1")-sisFaseInv(it,"c1");it.dif1=d;it.recontar=d!==0;if(it.recontar)div++;});
+  inv.contagem1Fim=quandoInv();inv.contagem1Por=usuarioAtual;
+  if(div){inv.status="recontagem";}
+  else{inv.status="fechado";inv.fechadoEm=quandoInv();inv.semDiferenca=true;}
+  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"1ª contagem encerrada · "+div+" divergência(s)"}]);
+  if(!(await salvarInv(inv,antes)))return;
+  toast(div?div+" produto(s) divergiram e vão para a recontagem.":"Nenhuma diferença: o estoque bateu e o inventário foi fechado.");
+  desenharInv();
+}
+async function encerrarRecontagemInv(){
+  var inv=invAtual;if(!inv)return;
+  var rec=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];}).filter(function(it){return it.recontar;});
+  var falta=rec.filter(function(it){return !(it.c2||[]).length;});
+  if(falta.length){$("iv_alerta").innerHTML='<div class="note crit"><b>A recontagem é obrigatória.</b> Falta recontar: '+
+    falta.map(function(it){return esc(it.nome);}).join(" · ")+"</div>";return;}
+  if(!confirm("Encerrar a recontagem e mandar para a aprovação do Administrador?"))return;
+  var antes=copiaInv(inv);
+  inv.status="aprovacao";inv.recontagemFim=quandoInv();inv.recontagemPor=usuarioAtual;
+  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"Recontagem encerrada · aguardando o Administrador"}]);
+  if(!(await salvarInv(inv,antes)))return;
+  toast("Recontagem encerrada. O inventário foi para a aprovação do Administrador.");
+  desenharInv();
+}
+function resumoDifInv(inv){
+  var vc=podeVerCusto(),its=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];});
+  var lin=its.filter(function(it){return it.recontar||difInv(it)!==0;})
+    .sort(function(a,b2){return ordAZ(a.nome||"",b2.nome||"");});
+  var sobra=0,falta=0;
+  var rows=lin.map(function(it){
+    var d=difInv(it),p=prodPorId(it.pid),cu=p?custoTotalDe(p):0,v=d*cu;
+    if(v>0)sobra+=v;else falta+=v;
+    var sis=(it.recontar&&(it.c2||[]).length)?sisFaseInv(it,"c2"):sisFaseInv(it,"c1");
+    return "<tr><td>"+esc(it.nome)+(it.cod?'<div class="t-sub"><code>'+esc(it.cod)+"</code></div>":"")+"</td>"+
+      '<td class="num">'+sis+'</td><td class="num">'+totalFaseInv(it,"c1")+(it.naoContado?' <span class="t-sub">não achado</span>':"")+"</td>"+
+      '<td class="num">'+((it.c2||[]).length?totalFaseInv(it,"c2"):"—")+"</td>"+
+      '<td class="num" style="color:'+(d>0?"var(--ok)":d<0?"var(--crit)":"inherit")+'"><b>'+(d>0?"+":"")+d+"</b></td>"+
+      (vc?'<td class="num">'+BRL(v)+"</td>":"")+"</tr>";
+  }).join("");
+  return {html:'<div class="tw"><table class="iv-tab"><thead><tr><th>Produto</th><th class="num">No sistema</th><th class="num">1ª contagem</th><th class="num">Recontagem</th><th class="num">Diferença</th>'+
+    (vc?'<th class="num">Valor</th>':"")+"</tr></thead><tbody>"+(rows||'<tr><td colspan="6">Nenhuma diferença.</td></tr>')+"</tbody></table></div>"+
+    (vc?'<div class="iv-tot">Sobras <b>'+BRL(sobra)+"</b> · Faltas <b>"+BRL(falta)+"</b> · Resultado <b>"+BRL(sobra+falta)+"</b></div>":""),
+    lin:lin,sobra:sobra,falta:falta};
+}
+function desenharRevisaoInv(inv,bt){
+  var r=resumoDifInv(inv);
+  var w=$("iv_revisao");w.hidden=false;
+  var cab="";
+  if(inv.status==="aprovacao")cab=podeAprovarInv()
+    ? '<div class="note warn"><b>Confira as diferenças e aprove.</b> Aprovando, cada diferença vira um movimento de Ajuste de inventário no '+esc(nomeLocal(inv.local))+
+      " e o saldo do sistema passa a ser o que foi contado.</div>"
+    : '<div class="note">Contagem e recontagem encerradas. <b>Aguardando a aprovação do Administrador.</b></div>';
+  else if(inv.status==="fechado")cab='<div class="note ok"><b>'+(inv.semDiferenca?"O estoque bateu — nenhum ajuste.":"Ajustes lançados")+"</b>"+
+    (inv.aprovadoPor?" · aprovado por "+esc(inv.aprovadoPor)+" em "+esc(inv.fechadoEm||""):"")+(inv.ajustes?" · "+inv.ajustes.length+" movimento(s) de ajuste":"")+"</div>";
+  else if(inv.status==="cancelado")cab='<div class="note">Cancelado por '+esc(inv.canceladoPor||"")+" em "+esc(inv.canceladoEm||"")+(inv.motivoCancel?" · "+esc(inv.motivoCancel):"")+". Nenhum ajuste foi lançado.</div>";
+  w.innerHTML=cab+r.html;
+  if(inv.status==="aprovacao"&&podeAprovarInv()){
+    bt("iv_aprovar","Aprovar e lançar os ajustes");bt("iv_devolver","Pedir nova recontagem","ghost");
+    $("iv_aprovar").onclick=aprovarInv;$("iv_devolver").onclick=devolverRecontagemInv;
+  }
+}
+async function desfazerMovsInv(feitos){
+  for(var j=0;j<feitos.length;j++){try{await apaga("movest",feitos[j].id);}catch(x){}var ix=movEst.indexOf(feitos[j]);if(ix>=0)movEst.splice(ix,1);}
+}
+async function aprovarInv(){
+  var inv=invAtual;if(!inv)return;
+  if(!podeAprovarInv()){$("iv_alerta").innerHTML='<div class="note crit">Só o Administrador aprova o inventário.</div>';return;}
+  if(inv.status!=="aprovacao")return;
+  var its=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];}).filter(function(it){return difInv(it)!==0;});
+  if(!confirm("Lançar "+its.length+" ajuste(s) de inventário no "+nomeLocal(inv.local)+"?"))return;
+  var feitos=[],doc="Inventário nº "+inv.numero;
+  try{
+    for(var i=0;i<its.length;i++){
+      var it=its[i],d=difInv(it);
+      var m={id:uid(),loja:lojaAtual,produtoId:it.pid,qtd:Math.abs(d),
+        origem:d>0?"ajuste":inv.local,destino:d>0?inv.local:"ajuste",doc:doc,
+        obs:"1ª contagem "+totalFaseInv(it,"c1")+((it.c2||[]).length?" · recontagem "+totalFaseInv(it,"c2"):"")+" · diferença "+(d>0?"+":"")+d,
+        inventarioId:inv.id,centroId:"",data:hojeISO(),por:usuarioAtual,em:new Date().toISOString()};
+      await gravaConf("movest",m);movEst.push(m);feitos.push(m);
+    }
+  }catch(e){
+    await desfazerMovsInv(feitos);
+    avisarRecusaBanco("iv_alerta",e,"Nenhum ajuste ficou lançado; o inventário continua aguardando a aprovação.");return;}
+  var antes=copiaInv(inv);
+  inv.status="fechado";inv.aprovadoPor=usuarioAtual;inv.fechadoEm=quandoInv();inv.ajustes=feitos.map(function(m){return m.id;});
+  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"Aprovado · "+feitos.length+" ajuste(s) lançado(s)"}]);
+  if(!(await salvarInv(inv,antes))){await desfazerMovsInv(feitos);return;}
+  toast("Inventário nº "+inv.numero+" fechado: "+feitos.length+" ajuste(s) lançado(s).");
+  render();desenharInv();
+}
+async function devolverRecontagemInv(){
+  var inv=invAtual;if(!inv||!podeAprovarInv())return;
+  if(!confirm("Pedir nova recontagem dos produtos que divergiram? A recontagem anterior fica guardada."))return;
+  var antes=copiaInv(inv);
+  Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];if(it.recontar){it.c2Anterior=(it.c2Anterior||[]).concat(it.c2||[]);it.c2=[];}});
+  inv.status="recontagem";
+  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"Administrador pediu nova recontagem"}]);
+  if(await salvarInv(inv,antes)){toast("Inventário devolvido para a recontagem.");desenharInv();}
+}
+async function cancelarInv(){
+  var inv=invAtual;if(!inv)return;
+  var mot=prompt("Por que cancelar o inventário nº "+inv.numero+"? Nenhum ajuste será lançado.","");
+  if(mot===null)return;mot=String(mot).trim();
+  if(!mot){$("iv_alerta").innerHTML='<div class="note crit">Escreva o motivo do cancelamento.</div>';return;}
+  var antes=copiaInv(inv);
+  inv.status="cancelado";inv.canceladoPor=usuarioAtual;inv.canceladoEm=quandoInv();inv.motivoCancel=mot;
+  if(await salvarInv(inv,antes)){toast("Inventário cancelado.");desenharInv();}
+}
+async function criarInv(){
+  if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem abre o inventário é o almoxarifado.</div>';return;}
+  await carregarInventarios();
+  if(invAbertoDe(LOC_EMPRESA)){$("iv_alerta").innerHTML='<div class="note crit">Já existe um inventário em andamento neste estoque.</div>';return;}
+  var grupo=$("iv_grupo").value;
+  var inv={id:uid(),loja:lojaAtual,numero:proximoNumeroInv(),local:LOC_EMPRESA,grupo:grupo,status:"contagem",
+    abertoEm:quandoInv(),abertoPor:usuarioAtual,criadoEm:new Date().toISOString(),itens:{},foto:{},historico:[]};
+  produtosDoInv(inv).forEach(function(p){var s=saldoEm(p.id,inv.local);if(s!==0)inv.foto[p.id]=s;});
+  inv.historico.push({quando:inv.abertoEm,por:usuarioAtual,texto:"Inventário aberto"});
+  inventarios.push(inv);
+  if(!(await salvarInv(inv,null)))return;
+  toast("Inventário nº "+inv.numero+" aberto. Comece a contar.");
+  abrirInv(inv);
+}
+window.__inventariosMF=function(){return inventarios;};
+window.__abrirInvMF=function(v){return abrirInv(v);};
 function renderEstEmpresa(){
   $("eeLoja").textContent=nomeLoja();
   try{$("eeResps").innerHTML=htmlRespsEstoque(LOC_EMPRESA);}catch(e){}
   try{
     $("eeRecPer").hidden=(eeAba!=="rec");
     $("eeRecCsv").hidden=(eeAba!=="rec"||!podeExportar());
-    $("eeFiltro").hidden=(eeAba==="rec");
+    $("eeFiltro").hidden=(eeAba==="rec"||eeAba==="inv");$("eeBusca").hidden=(eeAba==="inv");
     var pmv=podeMoverEstoque();$("eeMov").hidden=!pmv;$("eeTransf").hidden=!pmv;
     $("eeBusca").placeholder=(eeAba==="req")?"Buscar produto, colaborador, pedido ou cliente":"Buscar produto";
   }catch(eR){}
@@ -21600,6 +21984,7 @@ function renderEstEmpresa(){
         "<td>"+esc(r.por||m.por||"—")+(r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+"</td></tr>";
     });
   }
+  else if(eeAba==="inv"){renderInventarios(h,b);}
   else {
     h.innerHTML="<th>Data</th><th>Tipo</th><th>Colaborador</th><th>Itens</th><th>Situação</th><th></th>";
     var lrTodas=requisicoes.filter(function(r){return r.loja===lojaAtual||r.lojaOrigem===lojaAtual;});
@@ -47630,6 +48015,16 @@ function pendenciasMF(){
         ir:function(){ir("usuarios");}});
     });
   }catch(e){console.warn("pend estoque sem responsavel",e);}
+  /* 0d. inventário esperando a aprovação do Administrador (v465) */
+  try{
+    if(podeAprovarInv())invDaLoja().filter(function(v){return v.status==="aprovacao";}).forEach(function(v){
+      põe({chave:"inv:"+v.id,icone:"📋",titulo:"Inventário nº "+v.numero+" para aprovar",
+        texto:nomeLocal(v.local)+" · contagem e recontagem encerradas"+(v.recontagemPor?" por "+v.recontagemPor:""),
+        quando:String(v.criadoEm||"").slice(0,10),
+        ir:function(){ir("estEmpresa");var t=$("eeAbas")&&$("eeAbas").querySelector('[data-t="inv"]');
+          if(t)t.click();abrirInv(v);}});
+    });
+  }catch(e){console.warn("pend inventario",e);}
   /* 0c. devolução esperando o almoxarifado receber (29/10) */
   try{
     if(podeConferir())requisicoes.filter(function(r){return r.tipo==="devolucao"&&r.status==="pendente"&&r.loja===lojaAtual;})
@@ -54132,7 +54527,7 @@ function erro(msg){
      começa com o que foi digitado vem primeiro; tocou (ou Enter no primeiro), a
      lista fica com o escolhido e dispara o "change" que já preenche valor, série e
      garantia. A lista continua ali, mostrando o produto escolhido. */
-  var CAMPOS_PRODUTO=["v_prod","or_prod","os_prod","os_peca","os_dprod","pd_prod","mp_prod","nf_prod","es_prod","mn_peca","ins_prod","sc_peca"];
+  var CAMPOS_PRODUTO=["v_prod","or_prod","os_prod","os_peca","os_dprod","pd_prod","mp_prod","nf_prod","es_prod","mn_peca","ins_prod","sc_peca","iv_prod"];
   function ligarBuscaProduto(){
     CAMPOS_PRODUTO.forEach(function(id){
       var sel=document.getElementById(id);

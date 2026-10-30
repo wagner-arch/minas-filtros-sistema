@@ -144,6 +144,8 @@
     remunprest: "loja",
     recibosprest: "loja",
     custodia: "loja",
+    /* INVENTÁRIO (v465): o balanço é de cada empresa, como o estoque */
+    inventarios: "loja",
     /* FERRAMENTAS: eram globais desde a v388; em 23/10 passaram a ser de cada EMPRESA,
        junto com produtos, fornecedores, centros, prestadores e configurações. */
     ferramentas: "loja",
