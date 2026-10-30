@@ -9564,13 +9564,17 @@ async function carregar(){
     if(gAn.mt)await gravarMetas();
     if(gAn.off)await gravarMotivosOff();   /* motivo do sistema que estava inativo volta a valer */
     var as=await jaPedido("col:atendimentos",function(){return col("atendimentos").limit(500).get();});
-    atendimentos=as.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    atendimentos=as.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;})
+      /* LANÇADO EM DOBRO (30/10): a cópia fica no banco, com o motivo, mas não entra em tela,
+         Dashboard, metas nem contagem nenhuma */
+      .filter(function(a){return !a.lancadoEmDobro;});
     var vs=await jaPedido("col:pedidos",function(){return col("pedidos").limit(500).get();});
     pedidos=vs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     /* pedidos pela metade, guardados pelo vendedor (03/10): ficam FORA de pedidos[], então não
        entram em comissão, estoque, metas, financeiro nem relatório — só aparecem na lista */
     try{var rs=await jaPedido("col:rascunhos",function(){return col("rascunhos").limit(300).get();});
-      rascunhos=rs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});}catch(eR){console.warn("rascunhos",eR);}
+      rascunhos=rs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;})
+        .filter(function(r){return !rascunhoEncerrado(r);});}catch(eR){console.warn("rascunhos",eR);}
     /* prestadores de serviço (05/10) */
     try{
       var pz=await jaPedido("col:prestadores",function(){return col("prestadores").limit(300).get();});
@@ -10596,7 +10600,7 @@ function abrirCliente(c){
   },function(){
     try{if(!$("cliForm").hidden&&editandoCli===c)renderCliHist(c);}catch(e){}
   });
-  editandoCli=c||null;$("cliLista").hidden=true;$("cliForm").hidden=false;
+  editandoCli=c||null;marcarEdicao("cliForm",c||null);$("cliLista").hidden=true;$("cliForm").hidden=false;
   var v=c||{};
   try{notaDistritoCli(c);}catch(e){}
   $("c_codigo").value=v.codigo||proxCodigo();
@@ -11200,7 +11204,7 @@ function renderProdutos(){
   try{ajustarApagarBusca();}catch(e){}
 }
 function abrirProduto(p){
-  editandoProd=p||null;$("prodLista").hidden=true;$("prodForm").hidden=false;
+  editandoProd=p||null;marcarEdicao("prodForm",p||null);$("prodLista").hidden=true;$("prodForm").hidden=false;
   $("prodFormTitulo").textContent=p?("Editar produto · "+p.nome):"Novo produto";
   var v=p||{};
   var vcusto=podeVerCusto();
@@ -13942,7 +13946,9 @@ window.completarProdutoMF=function(pid,selId){
   $("prodRapModal").hidden=false;
   setTimeout(function(){$("pr_cheia").focus();},60);
 };
-async function salvarProdutoRapido(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarProdutoRapido(){return travaSalvar("salvarProdutoRapido",salvarProdutoRapido__corpo,this,arguments);}
+async function salvarProdutoRapido__corpo(){
   var ctx=prodRapCtx;if(!ctx)return;
   if(!podeEditarProdutos()){toast(MSG_PROD_SO_CONSULTA);return;}
   var p=prodPorId(ctx.pid);if(!p)return;
@@ -16543,7 +16549,9 @@ function abrirSucata(p,modo){
   }
   $("sucModal").hidden=false;
 }
-async function confirmarSucata(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarSucata(){return travaSalvar("confirmarSucata",confirmarSucata__corpo,this,arguments);}
+async function confirmarSucata__corpo(){
   var x=sucPend;if(!x)return;
   if(!podeAvaliarSucata()){toast("Só o responsável pelo estoque avalia o purificador da sucata.");return;}
   var pu=produtos.filter(function(p){return p.id===x.pid;})[0];
@@ -18108,6 +18116,76 @@ async function salvarPedido(){
 window.__salvandoPedidoMF=function(){return !!salvandoPedidoEm;};
 /* mesmo pedido gravado há pouco (outra aba, ou o mesmo atendimento): pergunta antes de repetir */
 var QUEBRA2=String.fromCharCode(10,10);
+/* ===== UM REGISTRO SÓ (30/10, regra dele: "editar nunca cria outro registro, e tocar duas
+   vezes no botão nunca grava duas vezes") =====
+   travaSalvar: enquanto o banco não responde, o botão fica desligado mostrando "Salvando…" e
+   o segundo toque é ignorado, sem aviso nenhum. A chave é a função + o registro (o primeiro
+   argumento), então aceitar duas requisições diferentes ao mesmo tempo continua possível. */
+var SALVANDO_MF={};
+function botaoQueSalva(){
+  var ev=window.event,t=ev&&ev.target;
+  if(!ev||(ev.type!=="click"&&ev.type!=="keydown"&&ev.type!=="submit"))return null;
+  var b=(t&&t.closest)?t.closest("button"):null;
+  if(!b){var ae=document.activeElement;if(ae&&ae.tagName==="BUTTON")b=ae;}
+  /* o botão que outra gravação já está usando fica com ela */
+  if(!b||b.getAttribute("data-salvando"))return null;
+  return b;
+}
+async function travaSalvar(nome,fn,ctx,args){
+  /* a chave usa os dois primeiros dados (o registro e, quando há, o item): autorizar dois
+     itens do mesmo pedido em seguida continua valendo */
+  function parte(v){return (typeof v==="string"||typeof v==="number")?String(v):((v&&typeof v==="object"&&v.id)?v.id:"");}
+  var chave=nome+"|"+parte(args&&args[0])+"|"+parte(args&&args[1]);
+  if(SALVANDO_MF[chave])return undefined;
+  SALVANDO_MF[chave]=true;
+  var bt=botaoQueSalva(),antes=null;
+  if(bt){antes=bt.innerHTML;bt.setAttribute("data-salvando","1");bt.disabled=true;bt.textContent="Salvando…";}
+  try{return await fn.apply(ctx,args);}
+  finally{
+    delete SALVANDO_MF[chave];
+    if(bt&&bt.getAttribute("data-salvando")){
+      bt.removeAttribute("data-salvando");bt.disabled=false;
+      if(bt.textContent==="Salvando…")bt.innerHTML=antes;
+    }
+  }
+}
+window.__salvandoMF=function(){return SALVANDO_MF;};
+/* o registro em edição fica guardado no PRÓPRIO formulário (data-editid): se a variável da
+   tela se perder no meio do caminho, o salvar acha o registro por ele e grava no mesmo */
+function marcarEdicao(formId,reg){
+  var f=$(formId);if(!f)return;
+  if(reg&&reg.id)f.setAttribute("data-editid",reg.id);else f.removeAttribute("data-editid");
+}
+function edicaoDoForm(formId,lista){
+  var f=$(formId),id=f&&f.getAttribute("data-editid");if(!id)return null;
+  return (lista||[]).filter(function(x){return x&&x.id===id;})[0]||null;
+}
+window.__edicaoDoFormMF=function(f,l){return edicaoDoForm(f,l);};
+window.__editarPedidoMF=function(p){return abrirPedidoParaEditar(p);};
+window.__preencherAtMF=function(c){return preencherCliente(c);};
+/* só para teste: simula a variável da tela perdida no meio da edição */
+window.__perderEdicaoMF=function(){editandoAt=null;editandoOrc=null;editandoOS=null;editandoCli=null;editandoEq=null;editandoProd=null;};
+/* os produtos de um pedido, para comparar uma venda com outra: produto e quantidade */
+function assinaturaItens(lista){
+  var m={};
+  (lista||[]).forEach(function(i){if(!i||!i.pid)return;m[i.pid]=(m[i.pid]||0)+(+i.qtd||1);});
+  return Object.keys(m).sort().map(function(k){return k+":"+m[k];}).join("|");
+}
+/* PEDIDO REPETIDO (30/10, regra dele): a pergunta só aparece quando a venda vem do MESMO
+   atendimento ou atividade de um pedido não cancelado E tem os mesmos produtos, com até
+   R$ 2,00 de diferença no total. Nos outros casos, nenhuma pergunta no caminho. */
+var TOLERANCIA_PEDIDO_IGUAL=2;
+function pedidoRepetido(cliId,origemId,total,itensVenda){
+  if(!cliId||!origemId)return null;
+  var ass=assinaturaItens(itensVenda);
+  return pedidos.filter(function(p){
+    if(p.clienteId!==cliId||p.status==="Cancelada"||p.cancelada)return false;
+    if((p.origemAtiv||"")!==origemId)return false;
+    if(Math.abs((+p.total||0)-(+total||0))>TOLERANCIA_PEDIDO_IGUAL+0.001)return false;
+    return assinaturaItens(p.itens)===ass;
+  })[0]||null;
+}
+window.__pedidoRepetidoMF=function(c,o,t,i){return pedidoRepetido(c,o,t,i);};
 function pedidoIgualRecente(cliId,origemId,total){
   var agora=Date.now();
   return pedidos.filter(function(p){
@@ -18232,9 +18310,9 @@ async function salvarPedidoAgora(){
      a mesma data e a mesma assinatura — não nasce outro (regra dele, 22/09) */
   if(pedEditando)return await aplicarEdicaoPedido(cliSel,r,solDesc);
   var cli=cliSel;
-  var igual=pedidoIgualRecente(cliSel.id,pedOrigemAtiv&&pedOrigemAtiv.id,r.total);
-  if(igual&&!confirm("Já existe o pedido "+igual.numero+" de "+cliSel.nome+", com o mesmo valor ("+BRL(+igual.total||0)+
-    "), gravado há poucos minutos."+QUEBRA2+"Lançar OUTRO pedido mesmo assim?"))return null;
+  var igual=pedidoRepetido(cliSel.id,pedOrigemAtiv&&pedOrigemAtiv.id,r.total,itens);
+  if(igual&&!confirm("Já existe o pedido "+igual.numero+" de "+cliSel.nome+", do mesmo atendimento e com os mesmos produtos ("+
+    BRL(+igual.total||0)+")."+QUEBRA2+"Lançar OUTRO pedido mesmo assim?"))return null;
   var arquivos=ANEXOS.filter(function(a){return a.dados;}).map(function(a){return a.dados;});
   var anexados=arquivos.map(function(a){return a.nome;});
   var ped={id:uid(),loja:lojaAtual,numero:(await numeroNovo("pedido",pedidos,20801)),
@@ -18420,7 +18498,12 @@ async function salvarPedidoAgora(){
     }
   }
   /* o pedido virou venda: o rascunho dele não faz mais sentido (03/10) */
-  if(rascunhoAberto){try{await apagarRascunho(rascunhoAberto.id);}catch(eR){console.warn(eR);}rascunhoAberto=null;}
+  /* RASCUNHO QUE VIROU VENDA (30/10): não se apaga (o banco só deixa a gestão apagar, e a
+     recusa era engolida — o rascunho voltava e virava outro pedido). Fica marcado "virou o
+     pedido N" e sai da lista. Vale também para o rascunho do MESMO cliente e da mesma origem
+     que não foi retomado. */
+  try{await marcarRascunhosDaVenda(ped,rascunhoAberto);}catch(eR){console.warn(eR);}
+  rascunhoAberto=null;
   var fechouAtiv=false,retornoPosVenda=null;
   if(pedOrigemAtiv){
     ped.origemAtiv=pedOrigemAtiv.id;
@@ -18766,7 +18849,9 @@ function avisoPrest(h){
   $("pr_alerta").innerHTML=h?'<div class="note crit">'+h+"</div>":"";
   if(h)try{$("pr_alerta").scrollIntoView({behavior:"smooth",block:"center"});}catch(e){}
 }
-async function salvarPrestador(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarPrestador(){return travaSalvar("salvarPrestador",salvarPrestador__corpo,this,arguments);}
+async function salvarPrestador__corpo(){
   avisoPrest("");
   var nome=$("pr_nome").value.trim(),tel=$("pr_tel").value.trim();
   if(!nome)return avisoPrest("<b>O nome é obrigatório.</b>");
@@ -18927,7 +19012,9 @@ function atualizarSelPrest(){
   $("rp_sel").textContent=m.length?(m.length+" marcado(s) · "+BRL(t)):"nenhum marcado";
   $("rp_recibo").disabled=!m.length;
 }
-async function lancarServicoAvulso(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function lancarServicoAvulso(){return travaSalvar("lancarServicoAvulso",lancarServicoAvulso__corpo,this,arguments);}
+async function lancarServicoAvulso__corpo(){
   if(!podePrestEditar())return toast("Só a gestão administrativa ou o financeiro lança serviço à mão.");
   var quem=$("rp_quem").value;
   if(!quem)return toast("Escolha o prestador primeiro.");
@@ -18947,7 +19034,9 @@ async function lancarServicoAvulso(){
   $("lp_alerta").innerHTML="";
   $("lpModal").hidden=false;
 }
-async function confirmarLancAvulso(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarLancAvulso(){return travaSalvar("confirmarLancAvulso",confirmarLancAvulso__corpo,this,arguments);}
+async function confirmarLancAvulso__corpo(){
   var quem=$("rp_quem").value,pr=prestPorId(quem);
   var d=$("lp_data").value,sid=$("lp_servico").value,v=numMF($("lp_valor").value)||0;
   if(!d||!v)return $("lp_alerta").innerHTML='<div class="note crit"><b>Data e valor são obrigatórios.</b></div>';
@@ -19013,7 +19102,9 @@ function ligarAssinaturaRecibo(){
   cv.ontouchstart=ini;cv.ontouchmove=mov;cv.ontouchend=fim;
   $("rc_limparSig").onclick=function(){ctx.clearRect(0,0,cv.width,cv.height);recSigFeita=false;};
 }
-async function confirmarReciboPrest(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarReciboPrest(){return travaSalvar("confirmarReciboPrest",confirmarReciboPrest__corpo,this,arguments);}
+async function confirmarReciboPrest__corpo(){
   if(!recAberto)return;
   if(!recSigFeita)return $("rc_alerta").innerHTML=
     '<div class="note crit"><b>Falta a assinatura do prestador.</b> Ele assina no quadro acima no momento em que recebe.</div>';
@@ -19162,7 +19253,9 @@ function montarRascunho(){
   r.salvoEm=agoraCarimbo();r.salvoPor=usuarioAtual;
   return r;
 }
-async function salvarRascunhoVenda(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarRascunhoVenda(){return travaSalvar("salvarRascunhoVenda",salvarRascunhoVenda__corpo,this,arguments);}
+async function salvarRascunhoVenda__corpo(){
   if(vendaSemOrigem()){toast("Esta venda precisa nascer de um atendimento ou de uma atividade.");return;}
   var c=clienteDaVenda();
   if(!c){toast("Escolha o cliente antes de guardar o pedido.");irEtapa(1);return;}
@@ -19177,16 +19270,39 @@ async function salvarRascunhoVenda(){
   try{renderPedidos();}catch(e2){}
   toast("Pedido de "+(r.cliente||"cliente")+" guardado como Incompleto. Ele está em Pedidos e volta de onde você parou.");
 }
+/* descartar também é marcação (30/10): a exclusão era recusada pelo banco para o vendedor */
 async function apagarRascunho(id){
   var r=rascunhos.filter(function(x){return x.id===id;})[0];if(!r)return;
+  r.descartadoEm=agoraCarimbo();r.descartadoPor=usuarioAtual;
+  try{await gravaConf("rascunhos",r);}
+  catch(e){delete r.descartadoEm;delete r.descartadoPor;toast("Não foi salvo. Confira a internet e tente de novo.");return;}
   var k=rascunhos.indexOf(r);if(k>=0)rascunhos.splice(k,1);
   if(rascunhoAberto&&rascunhoAberto.id===id)rascunhoAberto=null;
-  try{await apaga("rascunhos",id);}catch(e){console.warn("apagar rascunho",e);}
+  try{renderPedidos();}catch(e2){}
+}
+function rascunhoEncerrado(r){return !!(r&&(r.virouPedido||r.descartadoEm));}
+async function marcarRascunhosDaVenda(ped,aberto){
+  var alvo=rascunhos.filter(function(r){
+    if(rascunhoEncerrado(r))return false;
+    if(aberto&&r.id===aberto.id)return true;
+    /* o mesmo cliente e a mesma origem: o rascunho é desta venda, mesmo sem ter sido retomado */
+    return r.clienteId===ped.clienteId&&(r.loja||lojaAtual)===ped.loja&&
+      !!ped.origemAtiv&&(r.origemAtiv||"")===ped.origemAtiv;
+  });
+  for(var i=0;i<alvo.length;i++){
+    var r=alvo[i];
+    r.virouPedido={id:ped.id,numero:ped.numero,em:agoraCarimbo(),por:usuarioAtual};
+    try{await gravaConf("rascunhos",r);
+      var k=rascunhos.indexOf(r);if(k>=0)rascunhos.splice(k,1);}
+    catch(e){delete r.virouPedido;}
+  }
   try{renderPedidos();}catch(e2){}
 }
 /* volta para a tela da venda exatamente de onde parou */
 function retomarRascunho(r){
   if(!r)return;
+  /* rascunho que já virou venda não volta (30/10) */
+  if(rascunhoEncerrado(r)){toast(r.virouPedido?"Este pedido incompleto já virou o pedido "+r.virouPedido.numero+".":"Este pedido incompleto foi descartado.");return;}
   pedOrigemAtiv=r.origemAtiv?(atendimentos.filter(function(a){return a.id===r.origemAtiv;})[0]||{id:r.origemAtiv}):null;
   pedOrigemOrc=r.orcamentoId?(orcamentos.filter(function(o){return o.id===r.orcamentoId;})[0]||null):null;
   pedOrigemOS=r.osId?(ordens.filter(function(o){return o.id===r.osId;})[0]||null):null;
@@ -19804,7 +19920,9 @@ function localItemForm(){
    Financeira junto do resto da venda (é lá que o estoque muda de mãos, como sempre) —
    aqui fica o aval, com quem pediu, quem decidiu e quando. Recusando, a reserva cai
    sozinha, porque o item deixa de apontar para aquele estoque. */
-async function decidirAutEstoque(pedidoId,itemIx,aceita,motivo){
+/* toque duplo nunca grava duas vezes (30/10) */
+function decidirAutEstoque(){return travaSalvar("decidirAutEstoque",decidirAutEstoque__corpo,this,arguments);}
+async function decidirAutEstoque__corpo(pedidoId,itemIx,aceita,motivo){
   var p=pedidos.filter(function(x){return x.id===pedidoId;})[0];
   if(!p){toast("Pedido não encontrado.");return false;}
   var lista=itensDeEstoque(p),it=lista[itemIx];
@@ -19933,7 +20051,9 @@ async function lancarContagem(){
 }
 /* "Veronica quer 5 × Refil X do seu estoque · pedido N. Você tem 3 — seu estoque vai ficar −2
    e a reposição será pedida depois da aprovação." (30/10, regra dele) */
-async function autorizarDaLista(pedidoId,autId){
+/* toque duplo nunca grava duas vezes (30/10) */
+function autorizarDaLista(){return travaSalvar("autorizarDaLista",autorizarDaLista__corpo,this,arguments);}
+async function autorizarDaLista__corpo(pedidoId,autId){
   var p=pedidos.filter(function(x){return x.id===pedidoId;})[0];if(!p)return false;
   var lista=itensDeEstoque(p),ix=-1;
   for(var i=0;i<lista.length;i++){if(lista[i].autEstoque&&lista[i].autEstoque.id===autId){ix=i;break;}}
@@ -20159,7 +20279,9 @@ async function lancarMovLoja(loja,pid,qtd,origem,destino,doc,obs){
     centroId:"",data:hojeISO(),por:usuarioAtual,em:new Date().toISOString()};
   movEst.push(m);await grava("movest",m);return m;
 }
-async function decidirRetirada(id,aceita){
+/* toque duplo nunca grava duas vezes (30/10) */
+function decidirRetirada(){return travaSalvar("decidirRetirada",decidirRetirada__corpo,this,arguments);}
+async function decidirRetirada__corpo(id,aceita){
   var r=requisicoes.filter(function(x){return x.id===id;})[0];
   if(!r||r.status!=="pendente")return;
   if(!podeAprovarRetirada()){toast("Só o responsável pelo estoque aceita ou recusa a retirada.");return;}
@@ -21485,7 +21607,9 @@ function repoFaltandoDoPedido(p){
 }
 window.__repoFaltandoMF=function(p){return repoFaltandoDoPedido(p);};
 /* CANCELAR A VENDA (saiu de dentro do botão em 30/10, para ser testada e reaproveitada) */
-async function cancelarPedido(p,motivo){
+/* toque duplo nunca grava duas vezes (30/10) */
+function cancelarPedido(){return travaSalvar("cancelarPedido",cancelarPedido__corpo,this,arguments);}
+async function cancelarPedido__corpo(p,motivo){
     motivo=String(motivo||"");
     p.status="Cancelada";p.encerrada=false;p.reabertura=null;
     p.canceladaPor=usuarioAtual;p.canceladaEm=hojeISO();p.motivoCancelamento=motivo.trim();
@@ -21649,7 +21773,9 @@ function renderEsItens(){
   Array.prototype.forEach.call(b.querySelectorAll("[data-esrm]"),function(bt){
     bt.onclick=function(){esItens.splice(+bt.getAttribute("data-esrm"),1);renderEsItens();};});
 }
-async function confirmarEstoque(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarEstoque(){return travaSalvar("confirmarEstoque",confirmarEstoque__corpo,this,arguments);}
+async function confirmarEstoque__corpo(){
   if(!esItens.length){$("es_alerta").innerHTML='<div class="note crit"><b>Adicione ao menos um item.</b></div>';return;}
   var data=$("es_data").value||hojeISO(),obs=$("es_obs").value.trim();
   if(esModo==="req"||esModo==="dev"){
@@ -21916,6 +22042,8 @@ function listaEntradasInv(inv,fase){
       (l.e.por===usuarioAtual||podeAprovarInv()?'<button class="btn ghost sm" type="button" data-ivrm="'+esc(l.it.pid)+"|"+fase+"|"+l.ix+'">Tirar</button>':"<span></span>")+"</div>";
   }).join("")+"</div>";
 }
+/* SEM a trava de toque duplo, de propósito (30/10): no inventário cada leitura do código de
+   barras é uma contagem que SOMA, e quem conta lê um produto atrás do outro bem depressa */
 async function registrarContagemInv(){
   var inv=invAtual;if(!inv)return;
   if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem conta é o almoxarifado.</div>';return;}
@@ -22058,7 +22186,9 @@ async function cancelarInv(){
   inv.status="cancelado";inv.canceladoPor=usuarioAtual;inv.canceladoEm=quandoInv();inv.motivoCancel=mot;
   if(await salvarInv(inv,antes)){toast("Inventário cancelado.");desenharInv();}
 }
-async function criarInv(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function criarInv(){return travaSalvar("criarInv",criarInv__corpo,this,arguments);}
+async function criarInv__corpo(){
   if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem abre o inventário é o almoxarifado.</div>';return;}
   await carregarInventarios();
   if(invAbertoDe(LOC_EMPRESA)){$("iv_alerta").innerHTML='<div class="note crit">Já existe um inventário em andamento neste estoque.</div>';return;}
@@ -22401,7 +22531,9 @@ function ordemReq(r){
   return 4;
 }
 /* DEVOLUÇÃO RECUSADA (29/10): o produto continua com o colaborador, e o motivo vai para ele */
-async function recusarDevolucao(id){
+/* toque duplo nunca grava duas vezes (30/10) */
+function recusarDevolucao(){return travaSalvar("recusarDevolucao",recusarDevolucao__corpo,this,arguments);}
+async function recusarDevolucao__corpo(id){
   var r=requisicoes.filter(function(x){return x.id===id;})[0];
   if(!r||r.tipo!=="devolucao"||r.status!=="pendente")return;
   if(!podeConferir()){toast("Só o almoxarifado recebe ou recusa devolução.");return;}
@@ -22417,7 +22549,9 @@ async function recusarDevolucao(id){
   renderEstEmpresa();renderEstColab();try{renderSino();}catch(e2){}
   toast("Devolução recusada. O produto continua no estoque de "+(r.colaborador||"quem devolveu")+".");
 }
-async function atenderReq(id){
+/* toque duplo nunca grava duas vezes (30/10) */
+function atenderReq(){return travaSalvar("atenderReq",atenderReq__corpo,this,arguments);}
+async function atenderReq__corpo(id){
   var r=requisicoes.filter(function(x){return x.id===id;})[0];
   if(!r)return;
   if(!podeConferir()&&r.tipo==="devolucao"){toast("Só o almoxarifado recebe devolução.");return;}
@@ -22454,7 +22588,9 @@ async function atenderReq(id){
   }
   renderEstEmpresa();renderEstColab();renderProdutos();
 }
-async function confirmarRecebimento(id){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarRecebimento(){return travaSalvar("confirmarRecebimento",confirmarRecebimento__corpo,this,arguments);}
+async function confirmarRecebimento__corpo(id){
   var r=requisicoes.filter(function(x){return x.id===id;})[0];
   if(!r)return;
   for(var i=0;i<r.itens.length;i++){
@@ -22494,7 +22630,9 @@ function abrirReposicaoItem(rid,idx){
   $("rp_sim").textContent=ehTroca?"Sim, recebi na troca — acrescentar ao meu estoque como sucata":"Sim, recebi — adicionar ao meu estoque";
   $("repModal").hidden=false;
 }
-async function confirmarReposicaoItens(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarReposicaoItens(){return travaSalvar("confirmarReposicaoItens",confirmarReposicaoItens__corpo,this,arguments);}
+async function confirmarReposicaoItens__corpo(){
   var x=repPend;if(!x)return;
   var r=x.r,nomes=[];
   /* regra do Wagner (16/09): o usado pego na troca volta ao almoxarifado no dia seguinte — com usado de ontem ou
@@ -24101,7 +24239,9 @@ function abrirCaixa(c){
   $("cx_alerta").innerHTML="";
   ajustarTipoCaixa();
 }
-async function salvarCaixaCad(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarCaixaCad(){return travaSalvar("salvarCaixaCad",salvarCaixaCad__corpo,this,arguments);}
+async function salvarCaixaCad__corpo(){
   var al=$("cx_alerta"),n=$("cx_nome").value.trim(),t=$("cx_tipo").value;
   var cod=$("cx_codigo").value.replace(/\D/g,"");
   var falta=[];
@@ -24686,7 +24826,9 @@ function abrirCentro(c){
   $("ccEdModal").hidden=false;
   setTimeout(function(){$("cce_nome").focus();},60);
 }
-async function salvarCentro(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarCentro(){return travaSalvar("salvarCentro",salvarCentro__corpo,this,arguments);}
+async function salvarCentro__corpo(){
   var c=ccEditando;if(!c)return;
   var tipo=$("cce_tipo").value||"saida",grupo=$("cce_grupo").value.trim(),nome=$("cce_nome").value.trim();
   var cod=$("cce_codigo").value.trim();
@@ -25490,7 +25632,9 @@ function previewTitulo(){
   $("tt_prev").innerHTML='<div class="note"><b>'+n+"× de "+BRL(p)+"</b><br>"+linhas.join("<br>")+
     (n>6?"<br>… e mais "+(n-6)+" parcela(s)":"")+"</div>";
 }
-async function salvarTitulo(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarTitulo(){return travaSalvar("salvarTitulo",salvarTitulo__corpo,this,arguments);}
+async function salvarTitulo__corpo(){
   var desc=$("tt_desc").value.trim(),v=numMF($("tt_valor").value)||0;
   if(!desc||!v||!$("tt_venc").value){
     $("tt_alerta").innerHTML='<div class="note crit"><b>Descrição, valor e vencimento são obrigatórios.</b></div>';return;}
@@ -25547,7 +25691,9 @@ function difBaixa(){
     ? '<div class="note warn"><b>'+(d<0?"Recebido a menos: ":"Recebido a mais: ")+BRL(Math.abs(d))+
       ".</b> A diferença entra no caixa como "+(d<0?"taxa ou desconto":"juros ou acréscimo")+".</div>" : "";
 }
-async function confirmarBaixa(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarBaixa(){return travaSalvar("confirmarBaixa",confirmarBaixa__corpo,this,arguments);}
+async function confirmarBaixa__corpo(){
   if(!bxTit)return;
   var data=$("bx_data").value,cx=$("bx_caixa").value,v=numMF($("bx_valor").value)||0;
   if(!data||!cx||!v){$("bx_alerta").innerHTML='<div class="note crit"><b>Data, caixa e valor são obrigatórios.</b></div>';return;}
@@ -25583,7 +25729,9 @@ function abrirMov(modo){
   $("mv_centro").value="";
   $("movModal").hidden=false;
 }
-async function salvarMov(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarMov(){return travaSalvar("salvarMov",salvarMov__corpo,this,arguments);}
+async function salvarMov__corpo(){
   var cx=$("mv_caixa").value,data=$("mv_data").value,v=numMF($("mv_valor").value)||0,desc=$("mv_desc").value.trim();
   if(!cx||!data||!v||!desc){$("mv_alerta").innerHTML='<div class="note crit"><b>Caixa, data, valor e descrição são obrigatórios.</b></div>';return;}
   if(mvModo==="transf"){
@@ -26267,7 +26415,9 @@ function renderPainelVeic(){
       ". Tudo isso já está na DRE em Saída › Veículos.</p>";
   }
 }
-async function salvarVeiculo(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarVeiculo(){return travaSalvar("salvarVeiculo",salvarVeiculo__corpo,this,arguments);}
+async function salvarVeiculo__corpo(){
   var placa=String($("vc_placa").value||"").toUpperCase().replace(/\s|-/g,"").trim();
   var marca=$("vc_marca").value.trim(),modelo=$("vc_modelo").value.trim();
   var cond=$("vc_cond").value,km=parseInt($("vc_km").value,10);
@@ -26369,7 +26519,9 @@ function renderAvariasVist(){
   Array.prototype.forEach.call(w.querySelectorAll("[data-avrm]"),function(b){
     b.onclick=function(){vsAvarias.splice(+b.getAttribute("data-avrm"),1);renderAvariasVist();};});
 }
-async function salvarVistoria(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarVistoria(){return travaSalvar("salvarVistoria",salvarVistoria__corpo,this,arguments);}
+async function salvarVistoria__corpo(){
   var v=vcAberto;if(!v||!vsCtx)return;
   var falta=ladosReq().filter(function(l){return !vsFotos[l.k];}).map(function(l){return l.n;});
   var km=parseInt($("vs_km").value,10);
@@ -26525,7 +26677,9 @@ function mostrarResponsavelMulta(){
         :" — pela entrega aceita e assinada em "+esc(dataCurta(String(r.aceitoEm||r.de).slice(0,10)))+".")+"</div>"
     : '<div class="note crit"><b>Não achei quem estava com o veículo.</b> Cadastre a entrega do veículo.</div>';
 }
-async function salvarMulta(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarMulta(){return travaSalvar("salvarMulta",salvarMulta__corpo,this,arguments);}
+async function salvarMulta__corpo(){
   var v=vcAberto;if(!v)return;
   var val=numMF($("mt_valor").value)||0,inf=$("mt_infracao").value.trim();
   if(!$("mt_data").value||!$("mt_hora").value||!inf||!(val>0)){
@@ -26580,7 +26734,9 @@ function previaAbast(){
   }
   $("ab_prev").innerHTML=msg.length?'<div class="note">'+msg.join(" ")+"</div>":"";
 }
-async function salvarAbast(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarAbast(){return travaSalvar("salvarAbast",salvarAbast__corpo,this,arguments);}
+async function salvarAbast__corpo(){
   var v=vcAberto;if(!v)return;
   var data=$("ab_data").value,km=parseInt($("ab_km").value,10);
   var lt=numMF($("ab_litros").value)||0,val=numMF($("ab_valor").value)||0;
@@ -26636,7 +26792,9 @@ function sugerirProximaManut(){
       (s.meses?s.meses+" meses":"")+". Pode mudar nos campos abaixo — o sistema avisa quando chegar perto.</div>"
     : "";
 }
-async function salvarManutVeic(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarManutVeic(){return travaSalvar("salvarManutVeic",salvarManutVeic__corpo,this,arguments);}
+async function salvarManutVeic__corpo(){
   var v=vcAberto;if(!v)return;
   var data=$("mc_data").value,km=parseInt($("mc_km").value,10);
   var desc=$("mc_desc").value.trim(),val=numMF($("mc_valor").value)||0;
@@ -28225,7 +28383,9 @@ async function lerArquivoNota(){
   r.onerror=function(){$("nf_import").innerHTML='<div class="note crit"><b>Não consegui abrir o arquivo.</b></div>';};
   r.readAsText(f,"UTF-8");
 }
-async function salvarNota(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarNota(){return travaSalvar("salvarNota",salvarNota__corpo,this,arguments);}
+async function salvarNota__corpo(){
   var forn=$("nf_forn").value,num=$("nf_num").value.trim();
   if(!forn||!num||!$("nf_emissao").value){
     $("nf_alerta").innerHTML='<div class="note crit"><b>Fornecedor, número e emissão são obrigatórios.</b></div>';return;}
@@ -29876,7 +30036,9 @@ function renderPrecoMin(){
     '<p class="help">Estes valores são os comerciais, sem o acréscimo do parcelamento. '+
     "No pedido o vendedor vê os dois já na forma de pagamento escolhida.</p>";
 }
-async function salvarPrecoMin(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarPrecoMin(){return travaSalvar("salvarPrecoMin",salvarPrecoMin__corpo,this,arguments);}
+async function salvarPrecoMin__corpo(){
   if(!ehAdministrador()){
     $("pmn_alerta").innerHTML='<div class="note crit">Só o Administrador muda este percentual.</div>';
     return;
@@ -30007,7 +30169,9 @@ function renderBeneficios(){
   }
   regrasBeneficiosTela();
 }
-async function salvarBeneficios(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarBeneficios(){return travaSalvar("salvarBeneficios",salvarBeneficios__corpo,this,arguments);}
+async function salvarBeneficios__corpo(){
   function n(id){return Math.max(0,Math.round((numMF($(id).value)||0)*100)/100);}
   BENEFICIOS={va:n("bf_va"),assid:{valor:n("bf_assidValor"),porFalta:n("bf_porFalta"),porMinuto:n("bf_porMinuto")},desemp:{valor:n("bf_desemp")}};
   bfSujo=false;
@@ -30975,7 +31139,9 @@ function abrirAjustePonto(quem,data){
   $("pj_horas").hidden=(($("pj_tipo").value)!=="normal");
   $("pontoModal").hidden=false;
 }
-async function salvarAjustePonto(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarAjustePonto(){return travaSalvar("salvarAjustePonto",salvarAjustePonto__corpo,this,arguments);}
+async function salvarAjustePonto__corpo(){
   var data=$("pj_data").value;
   if(!data){$("pj_alerta").innerHTML='<div class="note crit"><b>Informe o dia.</b></div>';return;}
   var p=pontoDe(pjQuem,data);
@@ -31863,7 +32029,9 @@ function abrirCliRapido(cid){
   $("cliRapModal").hidden=false;
   setTimeout(function(){var e=$("cr_tel");if(e)e.focus();},60);
 }
-async function salvarCliRapido(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarCliRapido(){return travaSalvar("salvarCliRapido",salvarCliRapido__corpo,this,arguments);}
+async function salvarCliRapido__corpo(){
   var c=cliPorId(crCliId);
   if(!c)return toast("Cadastro não encontrado.");
   var nome=$("cr_nome").value.trim(),tel=$("cr_tel").value.trim();
@@ -32164,7 +32332,9 @@ function abrirFinalizar(a){
   $("fimModal").hidden=false;
   setTimeout(function(){$("fm_texto").focus();},80);
 }
-async function confirmarFinalizar(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarFinalizar(){return travaSalvar("confirmarFinalizar",confirmarFinalizar__corpo,this,arguments);}
+async function confirmarFinalizar__corpo(){
   var a=fmReg;if(!a)return;
   var txt=$("fm_texto").value.trim();
   if(!fmFalou){
@@ -32834,7 +33004,9 @@ function abrirPedidoDaOS(o,modo,ativ,opc){
   irEtapa(2);   /* a OS abre direto em Itens/Pagamento — os dois na mesma tela (03/10) */
   renderBannerOS();
 }
-async function salvarRascunhoOS(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarRascunhoOS(){return travaSalvar("salvarRascunhoOS",salvarRascunhoOS__corpo,this,arguments);}
+async function salvarRascunhoOS__corpo(){
   var o=pedOrigemOS;if(!o)return;
   if(!itens.length){toast("Inclua ao menos uma peça ou serviço.");irEtapa(2);return;}
   try{calcular();}catch(e){}
@@ -33158,7 +33330,9 @@ function renderCampoOS(){
     if(simples)el.hidden=true;
   });
 }
-async function salvarCampoOS(o){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarCampoOS(){return travaSalvar("salvarCampoOS",salvarCampoOS__corpo,this,arguments);}
+async function salvarCampoOS__corpo(o){
   if(recusaEtapaOS(o,"campo"))return false;
   if(!$("oc_problema").value.trim()){
     $("oc_alerta").innerHTML='<div class="note crit"><b>Escreva o que você encontrou no equipamento.</b></div>';
@@ -35397,7 +35571,7 @@ function exportarManut(){
   baixarPlanilhaMF(nome,linhas);
 }
 function abrirEquip(e){
-  editandoEq=e||null;eqCli=null;
+  editandoEq=e||null;eqCli=null;marcarEdicao("mpForm",e||null);
   $("mpLista").hidden=true;$("mpForm").hidden=false;
   $("mpTitulo").textContent=e?(e.produto+" · "+(e.serie||e.cliente||"sem série")):"Cadastrar equipamento";
   opcoes("mp_prod",produtos.filter(function(p){return +p.manut>0;}),
@@ -35483,7 +35657,9 @@ function ajustarLocalEquip(){
     ? "Obrigatório sem série — ex.: cozinha, ao lado da geladeira"
     : "Cozinha, copa, área externa…";
 }
-async function salvarEquip(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarEquip(){return travaSalvar("salvarEquip",salvarEquip__corpo,this,arguments);}
+async function salvarEquip__corpo(){
   var serie=$("mp_serie").value.trim(),pid=$("mp_prod").value;
   var local=$("mp_local").value.trim();
   if(!$("mp_nome").value.trim()||!pid){
@@ -35500,6 +35676,7 @@ async function salvarEquip(){
     if(dup){$("mp_alerta").innerHTML='<div class="note crit"><b>Já existe equipamento com esta série</b> — '+esc(dup.cliente||"")+".</div>";return null;}
   }
   var p=prodPorId(pid)||{};
+  if(!editandoEq)editandoEq=edicaoDoForm("mpForm",equipamentos);
   var e=editandoEq||{id:uid(),loja:lojaAtual,historico:[],ativo:true,criadoEm:hojeISO()};
   e.cliente=eqCli?eqCli.nome:$("mp_nome").value.trim();e.clienteId=eqCli?eqCli.id:(e.clienteId||"");
   e.produtoId=pid;e.produto=p.nome||"";e.serie=serie;
@@ -35563,7 +35740,9 @@ function notaTrocaFeita(){
     : '<div class="note warn">Próxima troca: <b>'+esc(dataCurta(somaDias(bt.base,n)))+"</b>. Este aparelho tem "+
       esc(bt.qual)+" em <b>"+esc(dataCurta(bt.base))+"</b>, mais recente que a data informada — e é dela que o sistema conta.</div>";
 }
-async function confirmarTrocaFeita(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarTrocaFeita(){return travaSalvar("confirmarTrocaFeita",confirmarTrocaFeita__corpo,this,arguments);}
+async function confirmarTrocaFeita__corpo(){
   var e=tfEq;
   if(!e)return;
   var d=$("tf_data").value,n=+$("tf_dias").value||0;
@@ -35694,7 +35873,9 @@ function renderMnPecas(){
 }
 /* (14/09) a próxima visita NÃO é mais agendada sozinha: o aparelho entra em "Aguardando contato"
    quando o vencimento chega perto, e a visita nasce do atendimento feito pela Manutenção Periódica. */
-async function registrarManut(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function registrarManut(){return travaSalvar("registrarManut",registrarManut__corpo,this,arguments);}
+async function registrarManut__corpo(){
   var e=mnEq||eqPor($("mn_serie").value);
   if(!e){$("mn_alerta").innerHTML='<div class="note crit"><b>Escolha o equipamento na lista.</b> Procure pela série, pelo nome do cliente ou pelo número do pedido.</div>';return;}
   var data=$("mn_data").value;
@@ -36924,7 +37105,7 @@ function abrirOS(o,ctx){
      seguinte, e o botão de ação daquela etapa nascia sem o clique ligado). */
   if(editandoOS!==o){osCorrigindo={};osCardAberto={};}
   if(o)try{migrarPecasOS(o);}catch(e){console.warn("migrar peças da OS",e);}
-  editandoOS=o||null;osOrigemAtiv=(ctx&&ctx.atividade)||null;osCli=null;osCompletaAberta=false;
+  editandoOS=o||null;osOrigemAtiv=(ctx&&ctx.atividade)||null;osCli=null;osCompletaAberta=false;marcarEdicao("osForm",o||null);
   $("osLista").hidden=true;$("osForm").hidden=false;$("osImpressao").hidden=true;
   var sp=$("os_prod");sp.innerHTML="";
   var vazio=document.createElement("option");vazio.value="";vazio.textContent="— escolher —";sp.appendChild(vazio);
@@ -37128,7 +37309,9 @@ function renderHistOS(){
       return '<div class="lt"><div class="cab"><b>'+esc(dataBR(h.quando))+"</b> · "+esc(h.por||"")+"</div>"+
         '<div class="txt">'+esc(h.texto)+"</div></div>";}).join("")+"</div></div>";
 }
-async function salvarOS(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarOS(){return travaSalvar("salvarOS",salvarOS__corpo,this,arguments);}
+async function salvarOS__corpo(){
   var nome=$("os_nome").value.trim(),tel=$("os_tel").value.trim();
   /* mesma regra do pedido (03/10): a OS nasce do atendimento ou da atividade, nunca da tela em
      branco — é lá que fica registrado quem falou com o cliente */
@@ -37140,6 +37323,7 @@ async function salvarOS(){
     return null;
   }
   if(!validarAberturaOS())return null;
+  if(!editandoOS)editandoOS=edicaoDoForm("osForm",ordens);
   var o=editandoOS||{id:uid(),loja:lojaAtual,
     numero:(await numeroNovo("os",ordens,3001)),
     historico:[],criadoEm:hojeISO(),criadoPor:usuarioAtual,atendente:usuarioAtual};
@@ -37718,7 +37902,9 @@ function abrirAtivTecnicoOS(o){
       : "<b>Agende o técnico para analisar esta OS.</b> A OS só é aberta junto com esta atividade: escolha o técnico em Responsável, o dia e a hora. Cancelando, nada é gravado."});
   return true;
 }
-async function criarAtividadeTecnicoOS(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function criarAtividadeTecnicoOS(){return travaSalvar("criarAtividadeTecnicoOS",criarAtividadeTecnicoOS__corpo,this,arguments);}
+async function criarAtividadeTecnicoOS__corpo(){
   /* já tem atividade: uma nova visita usa a janela de atividade */
   if(editandoOS&&ativTecDaOS(editandoOS)){
     var o0=await salvarOS();if(!o0)return;
@@ -37766,7 +37952,9 @@ async function criarAtividadeTecnicoOS(){
     ". Ela já está na agenda do técnico.");
 }
 /* "Abrir OS para o cliente" nas ações do atendimento/atividade: a OS já nasce gravada, com o cliente (regra do Wagner, 14/09) */
-async function criarOSDaAcao(a,c){
+/* toque duplo nunca grava duas vezes (30/10) */
+function criarOSDaAcao(){return travaSalvar("criarOSDaAcao",criarOSDaAcao__corpo,this,arguments);}
+async function criarOSDaAcao__corpo(a,c){
   if(!c||!c.id)c=cliPorId(a.clienteId)||{};
   var o={id:uid(),loja:lojaAtual,numero:(await numeroNovo("os",ordens,3001)),
     historico:[],criadoEm:hojeISO(),criadoPor:usuarioAtual,atendente:usuarioAtual,
@@ -38379,7 +38567,9 @@ function ajustarEtapasOS(){
   /* por último: os blocos acima vão para dentro dos cartões de etapa (07/10) */
   try{ligarCartoesOS();montarCartoesOS();}catch(e){console.warn("cartões da OS",e);}
 }
-async function salvarDiagnosticoOS(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarDiagnosticoOS(){return travaSalvar("salvarDiagnosticoOS",salvarDiagnosticoOS__corpo,this,arguments);}
+async function salvarDiagnosticoOS__corpo(){
   var o=editandoOS;if(!o)return;
   if(recusaEtapaOS(o,etapaDiagOS(o)))return;
   if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") lança o diagnóstico.");return;}
@@ -39041,7 +39231,7 @@ function renderOrcam(){
       if(o)virarVenda(o);};});
 }
 function abrirOrc(o){
-  editandoOrc=o||null;orcCli=null;
+  editandoOrc=o||null;orcCli=null;marcarEdicao("orcForm",o||null);
   $("orcLista").hidden=true;$("orcForm").hidden=false;$("orcProposta").hidden=true;
   $("orcTitulo").textContent=o?("Orçamento "+o.numero+" · "+o.cliente):"Novo orçamento";
   var sv=$("or_vend");sv.innerHTML="";
@@ -39309,7 +39499,7 @@ async function excluirOrcamento(){
   try{await encerrarRetornoOrcamento(o,"Orçamento "+o.numero+" excluído");}catch(eR){}
   /* o funil acompanha: o negócio volta ao que os outros registros disserem */
   try{if(o.clienteId)atualizarFunilCliente(o.clienteId,"orçamento excluído");}catch(e){}
-  editandoOrc=null;
+  editandoOrc=null;marcarEdicao("orcForm",null);
   $("orcForm").hidden=true;$("orcLista").hidden=false;$("orcProposta").hidden=true;
   toast("Orçamento "+o.numero+" excluído.");
   render();
@@ -39333,7 +39523,9 @@ function buscarClienteOrc(){
   });
   box.hidden=false;
 }
-async function salvarOrc(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarOrc(){return travaSalvar("salvarOrc",salvarOrc__corpo,this,arguments);}
+async function salvarOrc__corpo(){
   var nome=$("or_nome").value.trim();
   if(!nome){$("or_alerta").innerHTML='<div class="note crit"><b>Informe o nome do cliente.</b></div>';return null;}
   if(!orcItens.length){$("or_alerta").innerHTML='<div class="note crit"><b>Adicione ao menos um item.</b></div>';return null;}
@@ -39349,6 +39541,7 @@ async function salvarOrc(){
     }
   }
   var r=calcOrc();
+  if(!editandoOrc)editandoOrc=edicaoDoForm("orcForm",orcamentos);
   var o=editandoOrc||{id:uid(),loja:lojaAtual,situacao:"aberto",
     numero:(await numeroNovo("orcamento",orcamentos,1001)),
     data:iso(new Date())};
@@ -39374,7 +39567,7 @@ async function salvarOrc(){
      preenchida e o motivo aparece escrito (regra dele, 09/10) */
   try{await gravaConf("orcamentos",o);}
   catch(eGr){
-    if(orcNovo){orcamentos=orcamentos.filter(function(x){return x!==o;});editandoOrc=null;}
+    if(orcNovo){orcamentos=orcamentos.filter(function(x){return x!==o;});editandoOrc=null;marcarEdicao("orcForm",null);}
     avisarRecusaBanco("or_alerta",eGr,"O orçamento continua aqui na tela — tente de novo.");
     return null;
   }
@@ -39712,7 +39905,9 @@ function buscarClienteNa(){
   });
   box.hidden=false;
 }
-async function criarAtividadeRetorno(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function criarAtividadeRetorno(){return travaSalvar("criarAtividadeRetorno",criarAtividadeRetorno__corpo,this,arguments);}
+async function criarAtividadeRetorno__corpo(){
   if(!naCtx)return;
   if(!$("na_nomeWrap").hidden){
     var dig=$("na_nome").value.trim();
@@ -39750,6 +39945,14 @@ async function criarAtividadeRetorno(){
       return;}
     naCtx.osId=osNovaAberta.id;
     $("na_obs").value=$("na_obs").value.replace(/^OS nova/,"OS "+osNovaAberta.numero);
+  }
+  /* a mesma atividade já está aberta? não nasce outra e não pergunta: abre a que existe (30/10) */
+  var igualN=atividadeIgualAberta(naCtx.clienteId,$("na_resp").value,$("na_data").value,naTipos.join(" · "),naCtx.origemAtiv||"");
+  if(igualN){
+    $("ativModal").hidden=true;naCtx=null;
+    toast("Esta atividade já está marcada — abrindo a que existe.");
+    try{ir("ativ");abrirDetalhes(igualN);}catch(eI){}
+    return igualN;
   }
   /* já tem compromisso nesse horário? avisa e mostra os horários livres (24/10) */
   var cfN=conflitoDeAgenda($("na_resp").value,$("na_data").value,$("na_hora").value,"",null);
@@ -40921,7 +41124,9 @@ function faltaFechoPrest(p){
   if(g>0&&!instPrestNota&&!p.prestNota)return "Você informou gasto com peças — <b>anexe a nota</b> ou zere o valor.";
   return "";
 }
-async function gravarFechoPrest(p){
+/* toque duplo nunca grava duas vezes (30/10) */
+function gravarFechoPrest(){return travaSalvar("gravarFechoPrest",gravarFechoPrest__corpo,this,arguments);}
+async function gravarFechoPrest__corpo(p){
   var pz=prestadorDoPedido(p);if(!pz)return null;
   if(instPrestSigFeita){try{p.prestAssinatura=$("ins_prSig").toDataURL("image/png");}catch(e){}}
   if(instPrestFoto)p.prestFoto=instPrestFoto;
@@ -41061,7 +41266,9 @@ function renderInstalacao(){
   $("ins_obs").readOnly=!edita;
   $("ins_finalizar").hidden=!edita;$("ins_salvar").hidden=!edita;
 }
-async function finalizarInstalacao(p,obs){
+/* toque duplo nunca grava duas vezes (30/10) */
+function finalizarInstalacao(){return travaSalvar("finalizarInstalacao",finalizarInstalacao__corpo,this,arguments);}
+async function finalizarInstalacao__corpo(p,obs){
   if(!podeInstalar(p)){toast("Só "+(respInstalacao(p)||"o responsável")+", o vendedor ou a gestão finalizam a instalação.");return false;}
   if((p.status||"").indexOf("instalação")<0||p.instaladoEm){toast("Esta instalação não está pendente.");return false;}
   obs=String(obs||"").trim();
@@ -41708,7 +41915,9 @@ function planoDoFormulario(){
     grupos:[].slice.call($("pl_grupos").querySelectorAll("input:checked")).map(function(c){return c.value;}),
     direitos:lerDireitosForm()};
 }
-async function salvarPlano(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarPlano(){return travaSalvar("salvarPlano",salvarPlano__corpo,this,arguments);}
+async function salvarPlano__corpo(){
   var f=planoDoFormulario();
   var erro=!f.garantia?"Informe o nome do plano na venda (ex.: Premium III).":
     f.garantia.toLowerCase()==="bronze"?"Bronze é a garantia padrão, sem plano.":
@@ -42196,6 +42405,15 @@ function movimentoJaTemCartao(c,desde){
     return negocios.some(function(n){
       return n.clienteId===c.id&&n.loja===lojaAtual&&n[campo]===id;});
   }
+  /* pedido feito a partir do MESMO atendimento de um pedido que já tem cartão é a mesma
+     negociação: usa aquele cartão (30/10) */
+  function pedidoNoCartao(p){
+    if(emAlgumCartao("pedidoId",p.id))return true;
+    if(!p.origemAtiv)return false;
+    return negocios.some(function(n){
+      if(n.clienteId!==c.id||n.loja!==lojaAtual||!n.pedidoId||n.ativo===false)return false;
+      var pn=pedPorId(n.pedidoId);return !!(pn&&pn.origemAtiv===p.origemAtiv);});
+  }
   /* TODO pedido e TODO orçamento do período, não só o que o `etapaPelosDados` escolheu:
      com dois pedidos no mesmo dia ele devolve um deles, e se for justamente o que já tem
      cartão a trava barrava o OUTRO, que é venda nova de verdade (o caso da CONSTRUMELO,
@@ -42203,7 +42421,7 @@ function movimentoJaTemCartao(c,desde){
   var peds=pedidos.filter(function(p){
     return p.clienteId===c.id&&p.loja===lojaAtual&&p.status!=="Cancelada"&&!p.cancelada&&
       String(p.data||"")>=d;});
-  if(peds.some(function(p){return !emAlgumCartao("pedidoId",p.id);}))return false;
+  if(peds.some(function(p){return !pedidoNoCartao(p);}))return false;
   var orcs=orcamentos.filter(function(o){
     return o.clienteId===c.id&&o.loja===lojaAtual&&String(o.data||"")>=d&&o.situacao!=="perdido";});
   if(orcs.some(function(o){return !emAlgumCartao("orcamentoId",o.id);}))return false;
@@ -42243,7 +42461,19 @@ function negocioNovo(c,etapa,via,desde,resp){
   negocios.push(n);return n;
 }
 /* chamado depois de salvar atendimento, orçamento e pedido: cria o negócio do lead ou anda o cartão */
-async function atualizarFunilCliente(cid,motivo,quem){
+/* UMA ATUALIZAÇÃO POR CLIENTE DE CADA VEZ (30/10): duas gravações juntas do mesmo cliente
+   (toque duplo, atendimento e pedido no mesmo instante) não enxergavam o cartão uma da outra e
+   criavam dois. A segunda agora espera a primeira e encontra o cartão que ela criou. */
+var FILA_FUNIL={};
+function atualizarFunilCliente(cid,motivo,quem){
+  if(!cid)return Promise.resolve(null);
+  var antes=FILA_FUNIL[cid]||Promise.resolve();
+  var vez=antes.then(function(){return atualizarFunilClienteAgora(cid,motivo,quem);},
+    function(){return atualizarFunilClienteAgora(cid,motivo,quem);});
+  FILA_FUNIL[cid]=vez.catch(function(){});
+  return vez;
+}
+async function atualizarFunilClienteAgora(cid,motivo,quem){
   if(!cid)return null;
   var c=cliPorId(cid);if(!c)return null;
   if(ehClienteTeste(c))return null;   /* cliente de treinamento não entra no funil (v376) */
@@ -42582,7 +42812,9 @@ function abrirNegocio(n,etapaSugerida){
   $("negModal").hidden=false;
 }
 function ajustarPerdaNeg(){$("ng_perdaWrap").hidden=$("ng_etapa").value!=="perdido";}
-async function salvarNegocio(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarNegocio(){return travaSalvar("salvarNegocio",salvarNegocio__corpo,this,arguments);}
+async function salvarNegocio__corpo(){
   var n=negAberto,etapa=$("ng_etapa").value;
   if(!n){
     var cid=$("ng_cli").value;
@@ -42981,7 +43213,9 @@ function ligarMensagensZap(){
   });
   if($("mzSalvar"))$("mzSalvar").onclick=salvarMensagensZap;
 }
-async function salvarMensagensZap(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarMensagensZap(){return travaSalvar("salvarMensagensZap",salvarMensagensZap__corpo,this,arguments);}
+async function salvarMensagensZap__corpo(){
   var al=$("mz_alerta");
   if(!ehAdministrador()){al.innerHTML='<div class="note crit">Só o Administrador altera estes textos.</div>';return false;}
   var tela=lerTextosTelaZap(),tela2={},erros=[];
@@ -44689,6 +44923,7 @@ function renderChipsTipos(){
 function abrirAtend(a){
   if(a&&a.natureza==="atividade"){var tvA=bloqueada(a);if(tvA){avisarBloqueio(tvA);return;}}
   editandoAt=a||null;clienteVinc=null;atendManutEq=null;atendAniv=null;
+  marcarEdicao("atendForm",a||null);
   $("atendLista").hidden=true;$("atendForm").hidden=false;$("atendFecha").hidden=true;
   $("atendTitulo").textContent=a?("Editar · "+(a.cliente||"")):"Novo atendimento";
   opcoesOrigem("at_origem",(a&&a.origem)||"");
@@ -45085,7 +45320,11 @@ function editarAtendDaLista(a){
   var m=$("detModal");if(m)m.hidden=true;
   ir("atend");abrirAtend(a);
 }
-async function salvarAtend(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarAtend(){return travaSalvar("salvarAtend",salvarAtend__corpo,this,arguments);}
+async function salvarAtend__corpo(){
+  /* a variável da tela se perdeu? o formulário diz qual registro estava sendo editado (30/10) */
+  if(!editandoAt)editandoAt=edicaoDoForm("atendForm",atendimentos);
   /* a trava da tela vale também aqui (regra da v321): atividade agendada só muda o horário,
      e no mesmo dia; compromisso de outro ou atividade finalizada não muda nada */
   var modoEd=modoEdicaoAtend(editandoAt);
@@ -45101,7 +45340,7 @@ async function salvarAtend(){
     try{await gravaConf("atendimentos",editandoAt);}
     catch(e){$("at_alerta").innerHTML='<div class="note crit"><b>Não foi salvo.</b> '+esc(e&&e.message||e)+"</div>";return;}
     toast("Horário da atividade atualizado.");
-    $("atendForm").hidden=true;$("atendLista").hidden=false;editandoAt=null;render();return;
+    $("atendForm").hidden=true;$("atendLista").hidden=false;editandoAt=null;marcarEdicao("atendForm",null);render();return;
   }
   var nome=$("at_nome").value.trim(),tel=$("at_tel").value.trim();
   if(!nome||!tel){$("at_alerta").innerHTML='<div class="note crit"><b>Nome e telefone são obrigatórios.</b></div>';return;}
@@ -45207,6 +45446,13 @@ async function salvarAtend(){
   if(endMudou&&clienteVinc.geo&&clienteVinc.geo===$("at_geo").value.trim())
     clienteVinc.geoOrigem=($("at_geo").__geoExato===clienteVinc.geo)?"exato":"endereco";
   if(endMudou&&db){try{await col("clientes").doc(clienteVinc.id).set(clienteVinc);}catch(e){console.warn(e);}}
+  /* ATENDIMENTO JÁ ABERTO (30/10, regra dele): um atendimento "novo" do mesmo cliente, da mesma
+     pessoa, no mesmo dia, enquanto o anterior ainda está aberto, continua no que já existe */
+  var continuou=false;
+  if(!editandoAt){
+    var jaAberto=atendimentoAbertoIgual(clienteVinc.id,$("at_colab").value,$("at_data").value);
+    if(jaAberto){editandoAt=jaAberto;continuou=true;}
+  }
   var a=editandoAt||{id:uid(),loja:lojaAtual};
   var veioDeAtividade=(a.natureza==="atividade");
   a.natureza="atendimento";a.clienteId=clienteVinc.id;a.cliente=clienteVinc.nome;
@@ -45237,7 +45483,9 @@ async function salvarAtend(){
   }
   /* funil de vendas: cria o cartão do lead ou anda para Em atendimento */
   try{await atualizarFunilCliente(a.clienteId,"atendimento",a.colaborador||usuarioAtual);}catch(eF){console.warn("funil",eF);}
-  editandoAt=null;atendManutEq=null;atendAniv=null;
+  editandoAt=null;marcarEdicao("atendForm",null);atendManutEq=null;atendAniv=null;
+  marcarEdicao("atendForm",null);
+  if(continuou)setTimeout(function(){toast("Continuando o atendimento já aberto.");},300);
 
   /* fase 2 — encerramento */
   atendPend=a;completoSel="";motivosSel=[];falouSel="";
@@ -45311,7 +45559,29 @@ function afAjustarEquip(at){
   if(!at)return;
   try{montarEscolhaPurificador("af",at.clienteId,tiposDeManut(at.tipos||[]),at.manutEquipId||at.equipId||"");}catch(e){console.warn(e);}
 }
+/* o atendimento ainda aberto deste cliente, desta pessoa, neste dia (30/10) */
+function atendimentoAbertoIgual(cid,quem,data){
+  if(!cid||!data)return null;
+  return atendimentos.filter(function(x){
+    return x.loja===lojaAtual&&x.natureza==="atendimento"&&!x.zapAuto&&!x.lancadoEmDobro&&
+      x.clienteId===cid&&(x.colaborador||"")===(quem||"")&&String(x.data||"").slice(0,10)===String(data).slice(0,10)&&
+      x.status==="aberto"&&!x.eraAtividade;
+  }).sort(function(p,q){return instanteDoRegistro(q)-instanteDoRegistro(p);})[0]||null;
+}
+/* ATIVIDADE IGUAL (30/10): mesmo cliente, mesma pessoa, mesma data e mesmo tipo, ainda aberta
+   — não nasce outra; quem pediu é levado à que existe */
+function atividadeIgualAberta(cid,quem,data,tipo,excetoId){
+  if(!cid||!data)return null;
+  return atendimentos.filter(function(x){
+    return x.loja===lojaAtual&&x.natureza==="atividade"&&x.id!==excetoId&&!x.lancadoEmDobro&&
+      x.clienteId===cid&&(x.colaborador||"")===(quem||"")&&String(x.data||"").slice(0,10)===String(data).slice(0,10)&&
+      (x.tipo||"")===(tipo||"")&&x.status!=="finalizado"&&x.status!=="cancelada"&&!x.finalizado&&x.situacao!=="reagendada";
+  })[0]||null;
+}
+window.__atividadeIgualMF=function(c,q,d,t,e){return atividadeIgualAberta(c,q,d,t,e);};
 async function agendarFuturaDoAtend(at){
+  var igualF=atividadeIgualAberta(at.clienteId,$("af_resp").value,$("af_data").value,at.tipo,"");
+  if(igualF){setTimeout(function(){toast("Já existe esta atividade aberta — fica a que já existe.");},300);return igualF;}
   var f={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:at.clienteId,cliente:at.cliente,
     criadoPor:usuarioAtual,
     colaborador:$("af_resp").value,tipos:(at.tipos||[]).slice(),tipo:at.tipo,
@@ -45323,7 +45593,9 @@ async function agendarFuturaDoAtend(at){
   try{await atualizarFunilCliente(f.clienteId,"atendimento",f.colaborador||usuarioAtual);}catch(eF){console.warn("funil",eF);}
   return f;
 }
-async function fecharAtend(comFutura){
+/* toque duplo nunca grava duas vezes (30/10) */
+function fecharAtend(){return travaSalvar("fecharAtend",fecharAtend__corpo,this,arguments);}
+async function fecharAtend__corpo(comFutura){
   if(!atendPend)return;
   /* contato de aniversariante: pergunta se conseguiu o contato (regra do Wagner, 14/09) */
   if(ehAtendAniv(atendPend)){perguntarContatoAniv();return;}
@@ -50615,7 +50887,9 @@ function mostrarFotoFerr(){
   if(ferrFotoAtual){im.src=ferrFotoAtual;im.alt="Foto da ferramenta";}
   else{im.removeAttribute("src");im.alt="Sem foto";}
 }
-async function salvarFerr(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarFerr(){return travaSalvar("salvarFerr",salvarFerr__corpo,this,arguments);}
+async function salvarFerr__corpo(){
   if(!ehGestorFerr())return;
   var quem=$("fe_quem").value,nome=($("fe_nome").value||"").trim();
   var qtd=Math.max(1,Math.round(numMF($("fe_qtd").value)||0));
@@ -50694,7 +50968,9 @@ function abrirBaixaFerr(f){
   $("fb_alerta").innerHTML="";
   $("ferrBaixaModal").hidden=false;
 }
-async function confirmarBaixaFerr(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarBaixaFerr(){return travaSalvar("confirmarBaixaFerr",confirmarBaixaFerr__corpo,this,arguments);}
+async function confirmarBaixaFerr__corpo(){
   var f=ferrBaixaAtual;if(!f)return;
   if(!ehGestorFerr())return;
   if(!$("fb_data").value){
@@ -50735,7 +51011,9 @@ function abrirPassarFerr(f){
   $("fpa_alerta").innerHTML="";
   $("ferrPassarModal").hidden=false;
 }
-async function confirmarPassarFerr(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function confirmarPassarFerr(){return travaSalvar("confirmarPassarFerr",confirmarPassarFerr__corpo,this,arguments);}
+async function confirmarPassarFerr__corpo(){
   var f=ferrPassarAtual;if(!f)return;
   if(!ehGestorFerr())return;
   var para=$("fpa_quem").value,data=$("fpa_data").value,obs=($("fpa_obs").value||"").trim();
@@ -50900,7 +51178,9 @@ function assinaturaFerrRecortada(){
     return t.toDataURL("image/png");
   }catch(e){return "";}
 }
-async function gravarTermoFerr(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function gravarTermoFerr(){return travaSalvar("gravarTermoFerr",gravarTermoFerr__corpo,this,arguments);}
+async function gravarTermoFerr__corpo(){
   if(!ehGestorFerr())return;
   var nome=ferrTermoQuem;if(!nome)return;
   if(!ferrSigFeita){
@@ -51311,7 +51591,7 @@ function ir(s,doMenu){
   try{fecharSino();}catch(e){}
 }
 function resetarProdutos(){
-  editandoProd=null;
+  editandoProd=null;marcarEdicao("prodForm",null);
   if($("prodForm"))$("prodForm").hidden=true;
   if($("prodLista"))$("prodLista").hidden=false;
   if($("prodBusca"))$("prodBusca").value="";
@@ -51320,7 +51600,7 @@ function resetarProdutos(){
   try{renderProdutos();}catch(e){console.warn(e);}
 }
 function resetarOS(){
-  editandoOS=null;osOrigemAtiv=null;osCli=null;osCompletaAberta=false;
+  editandoOS=null;marcarEdicao("osForm",null);osOrigemAtiv=null;osCli=null;osCompletaAberta=false;
   if($("osForm"))$("osForm").hidden=true;
   if($("osLista"))$("osLista").hidden=false;
   if($("osBusca"))$("osBusca").value="";
@@ -51328,7 +51608,7 @@ function resetarOS(){
   try{renderOS();}catch(e){console.warn(e);}
 }
 function resetarOrcamentos(){
-  editandoOrc=null;orcCli=null;
+  editandoOrc=null;marcarEdicao("orcForm",null);orcCli=null;
   if($("orcForm"))$("orcForm").hidden=true;
   if($("orcLista"))$("orcLista").hidden=false;
   if($("orcBusca"))$("orcBusca").value="";
@@ -51692,7 +51972,7 @@ function ligar(){
   $("usApagar").onclick=apagarColaborador;
   $("usPerdido").onclick=desconectarAcessoColaborador;
   $("u_addFilho").onclick=function(){usFilhos.push({nome:"",nasc:""});renderFilhos();};
-  $("usSalvar").onclick=async function(){
+  $("usSalvar").onclick=function(){return travaSalvar("usSalvar",async function(){
     var n=$("u_nome").value.trim();
     if(!n){$("u_alerta").innerHTML='<div class="note crit"><b>O nome é obrigatório.</b></div>';return;}
     var dup=USUARIOS.filter(function(u){return u.nome===n&&u!==editandoUs;})[0];
@@ -51743,7 +52023,7 @@ function ligar(){
     await gravarUsuarios();sincronizarEquipe();aplicarPerfil();
     if(dPerm){try{await registrarLogPerm(Object.assign({alvo:"usuario",nome:n},dPerm,{quando:undefined}));}catch(eLg){console.warn("permlog",eLg);}}
     editandoUs=null;$("usForm").hidden=true;$("usLista").hidden=false;
-    renderUsuarios();render();toast("Colaborador salvo.");};
+    renderUsuarios();render();toast("Colaborador salvo.");},this,arguments);};
 
   $("fcNova").onclick=function(){
     var n=$("fcNome").value.trim();
@@ -51934,7 +52214,7 @@ function ligar(){
   $("fnBusca").oninput=renderFornec;
   $("fnNovo").onclick=function(){abrirFornec(null);};
   $("fnCancelar").onclick=function(){$("fnForm").hidden=true;$("fnLista").hidden=false;editandoFn=null;};
-  $("fnSalvar").onclick=async function(){
+  $("fnSalvar").onclick=function(){return travaSalvar("fnSalvar",async function(){
     var n=$("fn_nome").value.trim(),d=$("fn_doc").value.trim();
     if(!n||!d){$("fn_alerta").innerHTML='<div class="note crit"><b>Razão social e documento são obrigatórios.</b></div>';return;}
     var dup=fornecedores.filter(function(f){return f.doc===d&&(!editandoFn||f.id!==editandoFn.id);})[0];
@@ -51948,7 +52228,7 @@ function ligar(){
     if(!editandoFn)fornecedores.push(f);
     await grava("fornecedores",f);editandoFn=null;
     $("fnForm").hidden=true;$("fnLista").hidden=false;
-    renderFornec();opcoesFinanceiro();toast("Fornecedor salvo.");};
+    renderFornec();opcoesFinanceiro();toast("Fornecedor salvo.");},this,arguments);};
 
   ["rcBusca","cpBusca"].forEach(function(id){$(id).oninput=function(){renderReceber();renderPagar();};});
   ["rcSit","rcDe","rcAte"].forEach(function(id){$(id).onchange=renderReceber;});
@@ -52257,7 +52537,7 @@ function ligar(){
   };
   /* (14/09) sem "Registrar manutenção": a manutenção é feita pelo atendimento (dois cliques no nome) → pedido com
      a atividade futura (instalação) → aprovação financeira, que dá a baixa (regra do Wagner) */
-  $("mpCancelar").onclick=function(){$("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;};
+  $("mpCancelar").onclick=function(){$("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;marcarEdicao("mpForm",null);};
   $("mp_nome").oninput=function(){eqCli=null;$("mp_achou").innerHTML="";buscarClienteEq();};
   $("mp_nome").onblur=function(){setTimeout(function(){$("mp_sug").hidden=true;},180);};
   $("mp_prod").onchange=function(){$("mp_dias").value="";notaEquip();};
@@ -52265,7 +52545,7 @@ function ligar(){
   $("mp_serie").oninput=ajustarLocalEquip;
   $("mpSalvar").onclick=async function(){
     var e=await salvarEquip();if(!e)return;
-    $("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;
+    $("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;marcarEdicao("mpForm",null);
     renderManut();toast("Equipamento "+(e.serie||e.produto||"")+" salvo.");};
   $("mpAgendar").onclick=async function(){var e=await salvarEquip();if(e)agendarVisita(e);};
   $("mpDesativar").onclick=async function(){
@@ -52274,7 +52554,7 @@ function ligar(){
     if(m===null)return;
     editandoEq.ativo=false;editandoEq.desativadoEm=hojeISO();editandoEq.desativadoMotivo=m.trim();
     await grava("equipamentos",editandoEq);
-    $("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;
+    $("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;marcarEdicao("mpForm",null);
     renderManut();toast("Equipamento desativado.");};
   $("mn_serie").oninput=buscarSerie;
   $("mn_serie").onblur=function(){setTimeout(function(){$("mn_sug").hidden=true;},180);};
@@ -52323,7 +52603,7 @@ function ligar(){
   $("osNova").onclick=function(){abrirAssistenteOS(null);};
   if($("osCustodia"))$("osCustodia").onclick=abrirCustodia;
   ligarAssistenteOS();
-  $("osCancelar").onclick=function(){$("osForm").hidden=true;$("osLista").hidden=false;editandoOS=null;osOrigemAtiv=null;};
+  $("osCancelar").onclick=function(){$("osForm").hidden=true;$("osLista").hidden=false;editandoOS=null;marcarEdicao("osForm",null);osOrigemAtiv=null;};
   /* janela do recebimento do Serviço de Orçamento */
   $("orc_forma").onchange=ajustarParcelasOrcamento;
   $("orc_parc").onchange=notaRecebimentoOrcamento;
@@ -52452,7 +52732,7 @@ function ligar(){
     .forEach(function(id){var el=$(id);if(el)el.oninput=mostrarFaltantes;});
   ["c_sexo","c_tipo","c_origem","c_tipoAt"].forEach(function(id){$(id).addEventListener("change",mostrarFaltantes);});
   $("c_tipo").addEventListener("change",toggleTipoPJ);
-  $("cliSalvar").onclick=async function(){
+  $("cliSalvar").onclick=function(){return travaSalvar("cliSalvar",async function(){
     /* o aviso da tentativa anterior sai da tela antes de tentar de novo */
     if($("c_alerta"))$("c_alerta").innerHTML="";
     /* cadastro novo só pelo Atendimento (ficha completa aberta de lá) */
@@ -52478,6 +52758,7 @@ function ligar(){
       var dup=clientes.filter(function(c){return c.loja===lojaAtual&&c.doc===doc&&(!editandoCli||c.id!==editandoCli.id);})[0];
       if(dup){toast("Já existe cadastro com este documento: "+dup.nome);return;}
     }
+    if(!editandoCli)editandoCli=edicaoDoForm("cliForm",clientes);
     var c=editandoCli||{id:uid(),loja:lojaAtual,criadoEm:iso(new Date()),criadoPor:usuarioAtual};
     if(!c.codigo)c.codigo=$("c_codigo").value||proxCodigo();
     c.tipo=dados.tipo;c.indicado=$("c_indicado").value;
@@ -52542,7 +52823,7 @@ function ligar(){
       return;
     }
     var eraLead=lead;
-    editandoCli=null;$("cliForm").hidden=true;$("cliLista").hidden=false;
+    editandoCli=null;marcarEdicao("cliForm",null);$("cliForm").hidden=true;$("cliLista").hidden=false;
     leadDireto=false;
     toast((eraLead?"Lead ":"Cliente ")+c.codigo+" salvo.");render();
     if(voltaAtend){voltarDoLead(c);}
@@ -52551,7 +52832,7 @@ function ligar(){
       try{escolherClienteVenda(c);atualizarEtapas();calcular();}catch(e){}
       toast("Cadastro de "+c.nome+" completo — continue o pedido.");
     }
-  };
+  },this,arguments);};
 
   $("prodCancelar").onclick=function(){$("prodForm").hidden=true;$("prodLista").hidden=false;};
   $("prodBusca").oninput=renderProdutos;
@@ -52594,7 +52875,7 @@ function ligar(){
     $("p_compProd").value="";$("p_compQtd").value="1";
     try{$("p_compProd").dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}
     renderComposicaoProd();};
-  $("prodSalvar").onclick=async function(){
+  $("prodSalvar").onclick=function(){return travaSalvar("prodSalvar",async function(){
     avisoProduto("");
     /* a trava vale por dentro, não só no botão (regra da v321) */
     if(!podeEditarProdutos()){avisoProduto("<b>Não foi salvo.</b> "+esc(MSG_PROD_SO_CONSULTA));return;}
@@ -52622,6 +52903,7 @@ function ligar(){
         (inat===outros.length?" (inativo)":"")+
         ". O produto foi salvo assim mesmo — para juntar os cadastros, use <b>Produtos repetidos</b>.";
     }
+    if(!editandoProd)editandoProd=edicaoDoForm("prodForm",produtos);
     var p=editandoProd||{id:uid()};
     var grupo=$("p_grupo").value.trim(),subgrupo=$("p_subgrupo").value.trim();
     if(!grupo||!subgrupo){
@@ -52715,11 +52997,11 @@ function ligar(){
     }
     /* o toast confirma a composição: é a prova de que o cadastro pegou (v249) */
     var txComp=textoComposicao(p);
-    editandoProd=null;$("prodForm").hidden=true;$("prodLista").hidden=false;
+    editandoProd=null;marcarEdicao("prodForm",null);$("prodForm").hidden=true;$("prodLista").hidden=false;
     toast("Produto salvo."+(txComp?" "+nome+" vem com "+txComp+" — eles entram junto no pedido, no orçamento e na OS.":""));
     if(avisoCod)avisoProdutoAtencao(avisoCod);
     opcoesProduto();render();
-  };
+  },this,arguments);};
   $("v_prod").onchange=sincronizarValor;$("v_add").onclick=addItem;
   if($("v_paEquip"))$("v_paEquip").onchange=function(){aoEscolherAparelhoPlano(true);};
   /* o estoque de onde o item sai (23/10): trocar refaz a nota dos saldos */
@@ -53044,7 +53326,7 @@ function ligar(){
 
   $("orcBusca").oninput=renderOrcam;$("orcFiltro").onchange=renderOrcam;
   $("orcNovo").onclick=function(){abrirOrc(null);};
-  $("orcCancelar").onclick=function(){$("orcForm").hidden=true;$("orcLista").hidden=false;editandoOrc=null;};
+  $("orcCancelar").onclick=function(){$("orcForm").hidden=true;$("orcLista").hidden=false;editandoOrc=null;marcarEdicao("orcForm",null);};
   $("or_nome").oninput=function(){orcCli=null;$("or_achou").innerHTML="";buscarClienteOrc();};
   $("or_nome").onblur=function(){setTimeout(function(){$("or_sug").hidden=true;},180);};
   $("or_prod").onchange=function(){$("or_valor").__manual=false;sincOrcValor();};
@@ -53133,10 +53415,10 @@ function ligar(){
 
   $("orcSalvar").onclick=async function(){
     var o=await salvarOrc();if(!o)return;
-    $("orcForm").hidden=true;$("orcLista").hidden=false;editandoOrc=null;
+    $("orcForm").hidden=true;$("orcLista").hidden=false;editandoOrc=null;marcarEdicao("orcForm",null);
     renderOrcam();pedirRetornoOrc(o);};
   $("orcImprimir").onclick=async function(){var o=await salvarOrc();if(o)verProposta(o);};
-  $("opVoltar").onclick=function(){$("orcProposta").hidden=true;$("orcLista").hidden=false;editandoOrc=null;renderOrcam();};
+  $("opVoltar").onclick=function(){$("orcProposta").hidden=true;$("orcLista").hidden=false;editandoOrc=null;marcarEdicao("orcForm",null);renderOrcam();};
   $("opImprimir").onclick=function(){window.print();};
 
   $("motAdd").onclick=async function(){
@@ -53357,7 +53639,9 @@ function renderPgLinhas(){
     bt.onclick=function(){pgLinhas.splice(+bt.getAttribute("data-rmpg"),1);renderPgLinhas();};
   });
 }
-async function salvarPgto(){
+/* toque duplo nunca grava duas vezes (30/10) */
+function salvarPgto(){return travaSalvar("salvarPgto",salvarPgto__corpo,this,arguments);}
+async function salvarPgto__corpo(){
   var nome=$("pg_nome").value.trim();
   if(!nome){toast("Dê um nome à forma de pagamento.");return;}
   var dup=formasPgto.filter(function(f){return f.nome===nome&&(!editandoPg||f!==editandoPg);})[0];
