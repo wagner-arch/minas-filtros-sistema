@@ -3956,8 +3956,18 @@ img{max-width:100%}
           </div>
         </div>
 
+        <!-- v463 (29/10, regra dele): a conversão do Dashboard só conta conversa de verdade -->
+        <div class="sect" id="at_secFalou">
+          <p class="sect-t">2 · Conseguiu falar com o cliente? <span class="req">*</span></p>
+          <div class="chips" id="at_falou">
+            <button type="button" data-f="sim" aria-pressed="false">Sim, falei com o cliente</button>
+            <button type="button" data-f="nao" aria-pressed="false">Não consegui falar</button>
+          </div>
+          <p class="help">É esta resposta que diz se o contato entra na conversão do Dashboard.</p>
+        </div>
+
         <div class="sect" id="at_secMotivos">
-          <p class="sect-t">2 · Motivo do encerramento</p>
+          <p class="sect-t">3 · Motivo do encerramento</p>
           <div class="chips" id="at_motivos"></div>
           <p class="help">Marque um ou mais. Cadastre em Configurações › Motivos de Finalização.</p>
         </div>
@@ -8138,6 +8148,14 @@ img{max-width:100%}
     <h3 style="text-align:center">Finalizar atividade</h3>
     <div class="sub" id="fm_sub" style="text-align:center"></div>
     <div class="note" id="fm_obs"></div>
+
+    <div class="sect" style="margin-top:16px">
+      <p class="sect-t">Conseguiu falar com o cliente? <span class="req">*</span></p>
+      <div class="chips" id="fm_falou">
+        <button type="button" data-f="sim" aria-pressed="false">Sim, falei com o cliente</button>
+        <button type="button" data-f="nao" aria-pressed="false">Não consegui falar</button>
+      </div>
+    </div>
 
     <div class="sect" style="margin-top:16px">
       <p class="sect-t">O que aconteceu? <span class="req">*</span></p>
@@ -15123,7 +15141,7 @@ window.__calcOrcMF=function(){return calcOrc();};
 window.__virarVendaMF=function(o){return virarVenda(o);};
 window.__chaveEndItemMF=function(i,ix){return chaveEndItem(i,ix);};
 window.__abrirFinalizarMF=function(a){return abrirFinalizar(a);};
-window.__marcarMotivoMF=function(m,a){if(a)atendPend=a;motivosSel=[m];completoSel="sim";atAjustarVendido();return {motivos:motivosSel,temAtend:!!atendPend,ehVendido:ehVendido(motivosSel)};};
+window.__marcarMotivoMF=function(m,a){if(a)atendPend=a;motivosSel=[m];completoSel="sim";falouSel="sim";atAjustarVendido();return {motivos:motivosSel,temAtend:!!atendPend,ehVendido:ehVendido(motivosSel)};};
 window.__vendaOkMF=function(p){return abrirVendaOk(p);};
 window.__brMF=function(n){return brMF(n);};
 window.__calcularMF=function(){return calcular();};
@@ -18353,6 +18371,7 @@ async function salvarPedidoAgora(){
     if(fp){
       pedOrigemAtiv.motivos=fp.motivos;
       if(fp.completo)pedOrigemAtiv.completo=fp.completo;
+      if(fp.falou===true||fp.falou===false)pedOrigemAtiv.falouCliente=fp.falou;
       if(fp.texto){
         pedOrigemAtiv.resultado=fp.texto;
         pedOrigemAtiv.obs=(pedOrigemAtiv.obs?pedOrigemAtiv.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): "+fp.texto;
@@ -31251,7 +31270,8 @@ var fmReg=null,fmMotivos=[],fmRetorno="";
 function abrirFinalizar(a){
   var tvF=bloqueada(a);
   if(tvF){avisarBloqueio(tvF);return;}
-  fmReg=a;fmMotivos=[];fmRetorno="";
+  fmReg=a;fmMotivos=[];fmRetorno="";fmFalou="";
+  Array.prototype.forEach.call($("fm_falou").querySelectorAll("button"),function(b){b.setAttribute("aria-pressed","false");});
   $("fm_sub").textContent=(a.cliente||"—")+" · "+dataCurta(a.data||"")+(a.inicio?" às "+a.inicio:"");
   $("fm_obs").innerHTML=a.obs
     ? "<b>O que estava combinado:</b><br>"+esc(a.obs)
@@ -31279,6 +31299,10 @@ function abrirFinalizar(a){
 async function confirmarFinalizar(){
   var a=fmReg;if(!a)return;
   var txt=$("fm_texto").value.trim();
+  if(!fmFalou){
+    $("fm_alerta").innerHTML='<div class="note crit"><b>Responda se conseguiu falar com o cliente.</b> É isso que entra na conversão do Dashboard.</div>';return;}
+  if(fmFalou==="nao"&&ehVendido(fmMotivos)){
+    $("fm_alerta").innerHTML='<div class="note crit"><b>Vendido sem falar com o cliente?</b> Confira a primeira resposta.</div>';return;}
   if(motivos.length&&!fmMotivos.length){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Marque o que aconteceu.</b> É esse motivo que alimenta o Dashboard e as metas.</div>';return;}
   if(!txt){
@@ -31297,7 +31321,7 @@ async function confirmarFinalizar(){
     var pedV=pedidoDoRegistro(a)||pedidoDaInstalacaoAtiv(a);
     if(!pedV){
       /* guarda o que foi escrito: o pedido salvo conclui a atividade com isso */
-      a.fechoPendente={motivos:fmMotivos.slice(),texto:txt,retorno:fmRetorno};
+      a.fechoPendente={motivos:fmMotivos.slice(),texto:txt,retorno:fmRetorno,falou:fmFalou==="sim"};
       $("fimModal").hidden=true;fmReg=null;
       await abrirPedidoPelaVenda(a,"Pedido iniciado ao concluir como Vendido");
       return;
@@ -31310,6 +31334,7 @@ async function confirmarFinalizar(){
   a.status="finalizado";a.situacao="concluida";
   a.concluidaSemAtendimento=true;a.concluidaPor=usuarioAtual;a.concluidaEm=hojeISO();
   a.motivos=fmMotivos.slice();
+  a.falouCliente=(fmFalou==="sim");
   a.resultado=txt;
   a.obs=(a.obs?a.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): "+txt;
   a.acoes=a.acoes||[];
@@ -42394,7 +42419,7 @@ async function registrarAtendZap(ctx,msg,modo){
     tel:ctx.telUsado||c.tel||"",doc:c.doc||"",cidade:c.cidade||"",uf:c.uf||"",origem:c.origem||"",
     colaborador:usuarioAtual,tipos:tiposZ,tipo:tiposZ.join(" · "),data:hojeISO(),inicio:agoraHM(),fim:agoraHM(),
     obs:"Mensagem enviada pelo WhatsApp:\n"+(msg||"(sem texto)"),
-    assunto:assunto,status:"finalizado",completo:"",motivos:[MOT_RETORNO_OS],iniciativa:"ativo",
+    assunto:assunto,status:"finalizado",completo:"",motivos:[MOT_RETORNO_OS],falouCliente:false,iniciativa:"ativo",
     zapAuto:true,zapEm:carimbo,zapModo:modo||"",zapOrigem:ctx.origem||"",
     criadoEm:iso(new Date()),criadoPor:usuarioAtual,historico:[{quando:agoraCarimbo(),por:usuarioAtual,texto:linha}]};
   if(eq)a.manutEquipId=eq.id;
@@ -43816,6 +43841,7 @@ function renderMotivos(){
 }
 
 /* ---------- atendimentos e atividades ---------- */
+var falouSel="",fmFalou="";
 var atendimentos=[],editandoAt=null,tiposSel=[],motivosSel=[],completoSel="",atendPend=null,clienteVinc=null,iniSel="passivo";
 /* "cadastrar como contato novo" quando o telefone bate mas é outra pessoa (07/10) */
 var atForcarNovo=false;
@@ -44387,7 +44413,8 @@ async function salvarAtend(){
   editandoAt=null;atendManutEq=null;atendAniv=null;
 
   /* fase 2 — encerramento */
-  atendPend=a;completoSel="";motivosSel=[];
+  atendPend=a;completoSel="";motivosSel=[];falouSel="";
+  Array.prototype.forEach.call($("at_falou").querySelectorAll("button"),function(b){b.setAttribute("aria-pressed","false");});
   $("atendForm").hidden=true;$("atendFecha").hidden=false;
   $("at_resumo").innerHTML="<b>Atendimento salvo</b> · "+esc(a.cliente)+" · "+esc(dataBR(a.data))+(a.inicio?" às "+esc(a.inicio):"")+
     " · "+esc(a.tipo||"—")+
@@ -44406,7 +44433,7 @@ async function salvarAtend(){
   if($("at_conflito"))$("at_conflito").innerHTML="";
   /* contato de aniversariante: a pergunta Sim/Não substitui "completo" e motivo, e não cria atividade */
   var anivF=ehAtendAniv(a);
-  $("at_secCompleto").hidden=anivF;$("at_secMotivos").hidden=anivF;$("at_btnFuturo").hidden=anivF;
+  $("at_secCompleto").hidden=anivF;$("at_secFalou").hidden=anivF;$("at_secMotivos").hidden=anivF;$("at_btnFuturo").hidden=anivF;
   if(anivF)$("at_resumo").insertAdjacentHTML("beforeend","<br><br><b>Contato Aniversariante.</b> Clique em <b>Finalizar atendimento</b>: "+
     "o sistema pergunta se você conseguiu fazer contato com o aniversariante. Não gera atividade.");
   Array.prototype.forEach.call($("at_completo").querySelectorAll("button"),function(b){b.setAttribute("aria-pressed","false");});
@@ -44447,7 +44474,9 @@ function atAjustarVendido(){
 }
 function validaFecho(){
   if(!completoSel){$("at_fechaAlerta").innerHTML='<div class="note warn"><b>Responda se o atendimento foi completo.</b></div>';return false;}
+  if(!falouSel){$("at_fechaAlerta").innerHTML='<div class="note warn"><b>Responda se conseguiu falar com o cliente.</b> É isso que entra na conversão do Dashboard.</div>';return false;}
   if(!motivosSel.length){$("at_fechaAlerta").innerHTML='<div class="note warn"><b>Marque ao menos um motivo</b> de encerramento.</div>';return false;}
+  if(falouSel==="nao"&&ehVendido(motivosSel)){$("at_fechaAlerta").innerHTML='<div class="note warn"><b>Vendido sem falar com o cliente?</b> Confira a resposta de cima.</div>';return false;}
   return true;
 }
 /* a atividade futura combinada no fecho do atendimento */
@@ -44492,13 +44521,14 @@ async function fecharAtend(comFutura){
   /* Vendido sem pedido não fecha: abre a venda, e o pedido salvo fecha o atendimento */
   if(ehVendido(motivosSel)&&!pedidoDoRegistro(atendPend)){
     var pend=atendPend;
-    pend.fechoPendente={motivos:motivosSel.slice(),completo:completoSel,texto:""};
+    pend.fechoPendente={motivos:motivosSel.slice(),completo:completoSel,texto:"",falou:falouSel==="sim"};
     if(comFutura)await agendarFuturaDoAtend(pend);
     atendPend=null;$("atendFecha").hidden=true;$("atendLista").hidden=false;render();
     await abrirPedidoPelaVenda(pend,"Pedido iniciado ao finalizar o atendimento como Vendido");
     return;
   }
   atendPend.completo=completoSel;atendPend.motivos=motivosSel.slice();atendPend.status="finalizado";
+  atendPend.falouCliente=(falouSel==="sim");
   delete atendPend.fechoPendente;
   {try{dividirPelaAtividade(atendPend);}catch(eDv){}if(db){try{await col("atendimentos").doc(atendPend.id).set(atendPend);}catch(e){console.warn(e);}}}
   if(comFutura){
@@ -48679,7 +48709,7 @@ async function responderContatoAniv(sim){
   $("anivModal").hidden=true;
   var c=cliPorId(a.clienteId);
   var ci=cicloAnivAtend(a,c),daPagina=!!(a.aniversario&&a.aniversario.origem==="aniversariantes");
-  a.completo=sim?"sim":"nao";a.motivos=[sim?MOT_ANIV_OK:MOT_ANIV_NAO];a.status="finalizado";
+  a.completo=sim?"sim":"nao";a.motivos=[sim?MOT_ANIV_OK:MOT_ANIV_NAO];a.status="finalizado";a.falouCliente=!!sim;
   if(ci)a.aniversario={ano:ci.ano,data:ci.data,contatado:sim,origem:daPagina?"aniversariantes":""};
   delete a.fechoPendente;
   {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
@@ -51395,6 +51425,10 @@ function ligar(){
   $("mn_fechar").onclick=function(){$("manutModal").hidden=true;mnEq=null;};
   $("fm_ok").onclick=confirmarFinalizar;
   $("fm_fechar").onclick=function(){$("fimModal").hidden=true;if(fmReg)abrirDetalhes(fmReg);fmReg=null;};
+  Array.prototype.forEach.call($("fm_falou").querySelectorAll("button"),function(b){
+    b.onclick=function(){fmFalou=b.getAttribute("data-f");
+      Array.prototype.forEach.call($("fm_falou").querySelectorAll("button"),function(x){
+        x.setAttribute("aria-pressed",String(x===b));});$("fm_alerta").innerHTML="";};});
   Array.prototype.forEach.call($("fm_retorno").querySelectorAll("button"),function(b){
     b.onclick=function(){fmRetorno=b.getAttribute("data-r");
       Array.prototype.forEach.call($("fm_retorno").querySelectorAll("button"),function(x){
@@ -52250,6 +52284,12 @@ function ligar(){
   $("at_nome").oninput=function(){clienteVinc=null;$("at_achou").innerHTML="";ajustarOrigemAt();marcarTipoPessoaAt(tipoPessoaAt,false);buscarCliente();};
   $("at_leadCompleto").onclick=abrirLeadCompleto;
   $("at_nome").onblur=function(){setTimeout(function(){$("at_sug").hidden=true;},180);};
+  Array.prototype.forEach.call($("at_falou").querySelectorAll("button"),function(b){
+    b.onclick=function(){
+      falouSel=b.getAttribute("data-f");
+      Array.prototype.forEach.call($("at_falou").querySelectorAll("button"),function(x){
+        x.setAttribute("aria-pressed",String(x===b));});
+      $("at_fechaAlerta").innerHTML="";};});
   Array.prototype.forEach.call($("at_completo").querySelectorAll("button"),function(b){
     b.onclick=function(){
       completoSel=b.getAttribute("data-c");
