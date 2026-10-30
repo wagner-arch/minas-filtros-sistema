@@ -2546,6 +2546,7 @@ img{max-width:100%}
             <div class="fld"><label for="p_markup">Markup sobre o custo</label><input id="p_markup" readonly></div>
           </div>
           <div id="p_custoNota"></div>
+          <div id="p_histPreco"></div>
         </div>
 
         <div class="sect">
@@ -11213,6 +11214,7 @@ function abrirProduto(p){
   var v=p||{};
   var vcusto=podeVerCusto();
   $("p_secCusto").hidden=!vcusto;
+  renderHistPreco(p);
   ["cod","nome","pop","marca","grupo","subgrupo","barras","cheiaMax","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca","pctMinimo"].forEach(function(k){
     var el=$("p_"+k);if(!el)return;
     if(!vcusto&&CAMPOS_CUSTO_PROD.indexOf(k)>=0){el.value="";return;}
@@ -11328,6 +11330,55 @@ function opcoesComposicao(){
   if(atual)s.value=atual;
 }
 var CAMPOS_CUSTO_PROD=["custo","frete","ipi","st","federais","icms"];
+/* HISTÓRICO DE CUSTO E PREÇO (30/10, regra dele): cada alteração fica no próprio produto, com quem,
+   quando, de quanto para quanto e por onde. Só quem tem "Ver custo" vê, na ficha do produto.
+   Todo caminho que muda esses valores passa por aqui: tire a foto ANTES e registre DEPOIS. */
+var CAMPOS_HIST_PRECO=[["custo","Custo do produto"],["frete","Frete por unidade"],["ipi","IPI por unidade"],
+  ["st","Substituição Tributária"],["federais","Impostos federais"],["icms","ICMS creditado"],
+  ["cheiaMax","Tabela 100% máxima"],["cheia","Tabela 100% mínima"],["campanha","Tabela 70% mínima"],
+  ["minimo","Campanha mínima"],["pctMinimo","Mínimo deste produto (%)"]];
+function fotoPrecoProd(p){
+  var cru={};
+  CAMPOS_HIST_PRECO.forEach(function(c){if(p&&Object.prototype.hasOwnProperty.call(p,c[0]))cru[c[0]]=p[c[0]];});
+  return {cru:cru,hist:(p&&p.histPreco)?p.histPreco.slice():null};
+}
+function registrarHistPreco(p,foto,origem){
+  var novas=[],quando=agoraCarimbo();
+  CAMPOS_HIST_PRECO.forEach(function(c){
+    var de=+foto.cru[c[0]]||0,para=+p[c[0]]||0;
+    if(Math.abs(de-para)<0.005)return;
+    novas.push({quando:quando,por:usuarioAtual,campo:c[0],de:de,para:para,origem:origem});
+  });
+  if(novas.length)p.histPreco=(p.histPreco||[]).concat(novas);
+  return novas.length;
+}
+/* o banco recusou: os valores e o histórico voltam ao que eram, e a próxima tentativa registra de novo */
+function desfazerHistPreco(p,foto){
+  CAMPOS_HIST_PRECO.forEach(function(c){
+    if(Object.prototype.hasOwnProperty.call(foto.cru,c[0]))p[c[0]]=foto.cru[c[0]];else delete p[c[0]];
+  });
+  if(foto.hist)p.histPreco=foto.hist;else delete p.histPreco;
+}
+function renderHistPreco(p){
+  var box=$("p_histPreco");if(!box)return;
+  if(!podeVerCusto()){box.innerHTML="";return;}
+  var rot={},pct={pctMinimo:true};
+  CAMPOS_HIST_PRECO.forEach(function(c){rot[c[0]]=c[1];});
+  function val(h,v){return pct[h.campo]?String(v).replace(".",",")+"%":BRL(v);}
+  var l=((p&&p.histPreco)||[]).slice().reverse();
+  box.innerHTML='<p class="help" style="margin:16px 0 6px"><b>Histórico de custo e preço</b></p>'+(l.length
+    ?'<div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:4px 12px">'+
+      l.map(function(h){
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>'+esc(rot[h.campo]||h.campo)+"</b>: "+
+          esc(val(h,h.de))+" → <b>"+esc(val(h,h.para))+"</b>"+
+          '<div class="t-sub">'+esc(dataBR(h.quando))+" · "+esc(h.por||"—")+" · "+esc(h.origem||"")+"</div></div>";
+      }).join("")+"</div>"
+    :'<p class="help" style="margin:0">Nenhuma alteração registrada ainda. As alterações passam a aparecer aqui a partir de 30/10/2026.</p>');
+}
+window.__abrirPlanoMF=function(p){return abrirPlano(p);};
+window.__notasMF=function(){return notas;};
+window.__abrirConfMF=function(n){return abrirConferencia(n);};
+window.__fundirRepetidoMF=function(a,b){return fundirRepetido(a,b);};
 function custoDe(p){
   /* custo de aquisição = produto + frete + impostos que não geram crédito − ICMS creditado */
   return Math.round((((+p.custo||0)+(+p.frete||0)+(+p.ipi||0)+(+p.st||0)+(+p.federais||0)-(+p.icms||0)))*100)/100;
@@ -11707,7 +11758,7 @@ function indiceProdAtu(){
 /* Quem manda é o NOME. O código só desempata quando o mesmo nome existe em dois cadastros.
    Código que bate num produto de OUTRO nome não atualiza nada: fica separado como conflito —
    senão o preço da lista entraria no produto errado (defeito pego no teste). */
-function acharProdutoImp(it,idx){
+function acharProdutoAtu(it,idx){
   var c=String(it.cod||"").toUpperCase().trim();
   var L=idx.porNome[normProdImp(it.nome)]||[];
   if(L.length===1)
@@ -11732,7 +11783,7 @@ function previaImport(){
     if(vistos[chaveN]||(chaveC&&vistos[chaveC])){repete.push(i);return;}
     vistos[chaveN]=true;
     if(chaveC)vistos[chaveC]=true;
-    var ach=acharProdutoImp(i,idx);
+    var ach=acharProdutoAtu(i,idx);
     if(ach&&ach.ambiguo){i.ambiguo=ach.ambiguo;ambiguos.push(i);return;}
     if(ach&&ach.conflitoCod){i.conflito=ach.conflitoCod;conflitos.push(i);return;}
     if(!ach){novos.push(i);return;}
@@ -11817,10 +11868,11 @@ async function importarProdutos(){
   if(querAtualizar){
     for(var k=0;k<atualizar.length;k++){
       var it=atualizar[k],p=it.alvo;
-      var antesCod=p.cod,antesCheia=p.cheia,antesMarca=p.marca,antesCompletar=p.completar;
+      var antesCod=p.cod,antesMarca=p.marca,antesCompletar=p.completar,fotoImp=fotoPrecoProd(p);
       try{
         if(it.trocaCod){p.codAnterior=p.cod||"";p.cod=String(it.cod).trim();}
         if(it.trocaPreco)p.cheia=+it.cheia;
+        registrarHistPreco(p,fotoImp,"Importação de lista");
         if(!String(p.marca||"").trim()&&String(it.marca||"").trim())p.marca=it.marca;
         p.completar=((p.grupo||GRUPO_COMPLETAR)===GRUPO_COMPLETAR||!(+p.cheia>0));
         p.atualizadoEm=hojeISO();p.atualizadoPor=usuarioAtual;
@@ -11829,7 +11881,7 @@ async function importarProdutos(){
         if(it.trocaPreco)mudPreco++;
         feitos++;
       }catch(e){
-        p.cod=antesCod;p.cheia=antesCheia;p.marca=antesMarca;p.completar=antesCompletar;
+        p.cod=antesCod;p.marca=antesMarca;p.completar=antesCompletar;desfazerHistPreco(p,fotoImp);
         erros++;console.warn("atualizar",it.cod,e);
       }
       passo();
@@ -11851,6 +11903,7 @@ async function importarProdutos(){
           serie:(n.serie==="sim"?"sim":"nao"),status:"ativo",estmin:{},local:{},estoqueMigrado:true,
           importado:true,criadoEm:hojeISO(),criadoPor:usuarioAtual};
         np.completar=(grupo===GRUPO_COMPLETAR||!(+np.cheia>0));
+        registrarHistPreco(np,{cru:{}},"Importação de lista");
         produtos.push(np);
         if(db)await col("produtos").doc(np.id).set(np);
         if(comEst&&n.qtd>0)await lancarMov(np.id,n.qtd,"ajuste",LOC_EMPRESA,DOC_IMPORT,"Quantidade da lista importada",hojeISO(),"");
@@ -12428,7 +12481,7 @@ function abrirDuplicados(){
    repetido que sai. Só preenche buraco: nada que já esteja preenchido é sobrescrito. */
 var CAMPOS_FUNDE=["cod","cheia","campanha","minimo","custo","frete","marca","barras","un","pop","pontos","manut","gar"];
 function fundirRepetido(fica,sai){
-  var mudou=false;
+  var mudou=false,fotoFu=fotoPrecoProd(fica);
   CAMPOS_FUNDE.forEach(function(k){
     var a=fica[k],b=sai[k];
     var vazio=(k==="cod"||k==="marca"||k==="barras"||k==="un"||k==="pop")?!String(a||"").trim():!(+a>0);
@@ -12443,6 +12496,7 @@ function fundirRepetido(fica,sai){
   if(mudou){
     fica.completar=((fica.grupo||GRUPO_COMPLETAR)===GRUPO_COMPLETAR||!(+fica.cheia>0));
     fica.juntadoDe=(fica.juntadoDe||[]).concat([{cod:sai.cod||"",nome:sai.nome||"",quando:hojeISO(),por:usuarioAtual}]);
+    registrarHistPreco(fica,fotoFu,"Junção de produtos repetidos");
   }
   return mudou;
 }
@@ -13961,11 +14015,12 @@ async function salvarProdutoRapido__corpo(){
     $("pr_alerta").innerHTML='<div class="note crit"><b>Faltam dados.</b> Preço, grupo e subgrupo são os três que fazem o produto aparecer na venda.</div>';
     return;
   }
-  var antes={cheia:p.cheia,grupo:p.grupo,subgrupo:p.subgrupo,completar:p.completar};
+  var antes={grupo:p.grupo,subgrupo:p.subgrupo,completar:p.completar},fotoRap=fotoPrecoProd(p);
   p.cheia=cheia;p.grupo=g;p.subgrupo=sg;p.completar=false;
+  registrarHistPreco(p,fotoRap,"Completar cadastro na venda");
   try{await grava("produtos",p);}
   catch(e){
-    p.cheia=antes.cheia;p.grupo=antes.grupo;p.subgrupo=antes.subgrupo;p.completar=antes.completar;
+    p.grupo=antes.grupo;p.subgrupo=antes.subgrupo;p.completar=antes.completar;desfazerHistPreco(p,fotoRap);
     $("pr_alerta").innerHTML='<div class="note crit"><b>O banco não aceitou.</b> '+esc(e&&e.message||"")+"</div>";return;
   }
   /* o grupo novo entra no cadastro de grupos, como o Salvar produto faz */
@@ -28561,7 +28616,7 @@ async function darEntrada(){
       (it.qtdConf!=null&&it.qtdConf!==it.qtd?"Conferido "+q+" de "+it.qtd+". "+(it.obsConf||""):(n.obsConf||"")),
       n.entrada,"");
     var freteUnit=Math.round(((+it.freteRateado||0)/(it.qtd||1))*100)/100;
-    var antes=custoTotalDe(p);
+    var antes=custoTotalDe(p),fotoNF=fotoPrecoProd(p);
     p.custo=Math.round((+it.custo||0)*100)/100;
     p.frete=freteUnit;
     /* impostos vêm por item na nota; guardamos por unidade */
@@ -28569,6 +28624,7 @@ async function darEntrada(){
     p.st=Math.round(((+it.st||0)/(it.qtd||1))*100)/100;
     p.federais=Math.round(((+it.federais||0)/(it.qtd||1))*100)/100;
     p.icms=Math.round(((+it.icms||0)/(it.qtd||1))*100)/100;
+    registrarHistPreco(p,fotoNF,"Entrada da NF "+n.numero);
     p.custoNF=n.numero;p.custoEm=n.entrada;p.custoForn=(fEnt&&fEnt.nome)||"";
     p.historicoCusto=(p.historicoCusto||[]);
     p.historicoCusto.push({nota:n.numero,data:n.entrada,fornecedor:(fEnt&&fEnt.nome)||"",
@@ -42201,7 +42257,9 @@ async function salvarPlano__corpo(){
       custo:0,pontos:0,manut:0,gar:12,serie:"nao",estoque:0,estoqueMigrado:true};
     produtos.push(pl);
   }
+  var fotoPl=fotoPrecoProd(pl);
   Object.keys(f).forEach(function(k2){pl[k2]=f[k2];});
+  registrarHistPreco(pl,fotoPl,"Planos de Garantia");
   if(!pl.contrato)pl.contrato=pl.nome;
   await grava("produtos",pl);
   $("plForm").hidden=true;$("plLista").hidden=false;$("srCard").hidden=false;editandoPlano=null;
@@ -53244,6 +53302,7 @@ function ligar(){
       await gravarGruposProd();
     }catch(eGC){console.warn("cadastro de grupos",eGC);}
     p.un=$("p_un").value;p.barras=$("p_barras").value.trim();
+    var fotoPreco=fotoPrecoProd(p);
     ["cheiaMax","cheia","campanha","minimo","custo","frete","ipi","st","federais","icms","pontos","manut","gar","troca"].forEach(function(k){
       /* quem não vê custo não mexe nele: o que estava gravado continua */
       if(CAMPOS_CUSTO_PROD.indexOf(k)>=0&&!podeVerCusto())return;
@@ -53253,6 +53312,7 @@ function ligar(){
     /* preço mínimo e local da instalação (22/10) */
     var pct=numMF($("p_pctMinimo").value)||0;
     if(pct>0&&pct<=100)p.pctMinimo=pct;else delete p.pctMinimo;
+    registrarHistPreco(p,fotoPreco,"Ficha do produto");
     p.pedeLocal=($("p_pedeLocal").value==="sim")?"sim":"nao";
     /* produtos que vão junto (v248) */
     if(prodComposto.length)p.composto=JSON.parse(JSON.stringify(prodComposto));else delete p.composto;
@@ -53269,6 +53329,7 @@ function ligar(){
        perdem em silêncio — a ficha continua aberta com o motivo escrito (v249) */
     if(db){try{await col("produtos").doc(p.id).set(p);}catch(e){
       if(eraNovo)produtos=produtos.filter(function(x){return x!==p;});
+      desfazerHistPreco(p,fotoPreco);
       avisoProduto("<b>O banco não aceitou salvar "+esc(nome)+": "+esc(String(e&&e.message||e))+"</b><br>"+
         "O cadastro continua aqui na tela — corrija e salve de novo. Nada foi gravado.");
       return;}}
