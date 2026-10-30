@@ -30221,6 +30221,7 @@ function temTipo(a,lista){
    motivos que querem dizer "não falei com ninguém". Ficam no código porque a lista de Configurações
    de Meta guardava só "Não atendeu", nome que saiu na v272 — e com isso NENHUM atendimento era
    lido como sem contato. A lista de Configurações continua somando a esta. */
+var DIAS_CONVERSAO=30;   /* prazo da venda depois da conversa, para a conversão (v464) */
 var MOTIVOS_SEM_CONTATO=["Não atendeu","Não atendeu o telefone","Não estava no endereço (visita)",
   "Telefone errado / não existe","Aniversariante sem contato"];
 function motivoEhSemContato(m){return !!motivoSemContato[m]||MOTIVOS_SEM_CONTATO.indexOf(m)>=0;}
@@ -30247,9 +30248,8 @@ function realizadoMetas(quem,de,ate){
   var ats=atendimentos.filter(function(a){
     return !ehTeste(a)&&a.loja===lojaAtual&&a.natureza==="atendimento"&&a.data>=de&&a.data<=ate&&meu(a.colaborador);});
   var criadas=atendimentos.filter(function(a){
-    return !ehTeste(a)&&a.loja===lojaAtual&&meu(a.colaborador)&&
-      (a.criadoEm||a.data)>=de&&(a.criadoEm||a.data)<=ate&&
-      (a.natureza==="atividade"||a.eraAtividade);});
+    return !ehTeste(a)&&a.loja===lojaAtual&&(a.natureza==="atividade"||a.eraAtividade)&&
+      (a.criadoEm||a.data)>=de&&(a.criadoEm||a.data)<=ate&&meu(criadorDaAtividade(a));});
   var vds=pedidos.filter(function(p){
     return !ehTeste(p)&&p.loja===lojaAtual&&p.data>=de&&p.data<=ate&&p.status!=="Cancelada"&&
       (!quem||p.vendedor===quem||p.prospector===quem||p.instalador===quem);});
@@ -30666,8 +30666,8 @@ function dadosDash(quem){
   var ats=atendimentos.filter(function(a){
     return !ehTeste(a)&&a.loja===lojaAtual&&a.natureza==="atendimento"&&noPeriodo(a.data,j)&&meu(a.colaborador);});
   var criadas=atendimentos.filter(function(a){
-    return !ehTeste(a)&&a.loja===lojaAtual&&meu(a.colaborador)&&noPeriodo(a.criadoEm||a.data,j)&&
-      (a.natureza==="atividade"||a.eraAtividade);});
+    return !ehTeste(a)&&a.loja===lojaAtual&&(a.natureza==="atividade"||a.eraAtividade)&&
+      noPeriodo(a.criadoEm||a.data,j)&&meu(criadorDaAtividade(a));});
   var feitas=ats.filter(function(a){return a.eraAtividade;});
   var vds=pedidos.filter(function(p){
     return !ehTeste(p)&&p.loja===lojaAtual&&noPeriodo(p.data,j)&&p.status!=="Cancelada"&&
@@ -30690,7 +30690,24 @@ function dadosDash(quem){
      contatos em que ela conseguiu falar com o cliente (houveContato) */
   var vdsVend=vds.filter(function(p){return !quem||p.vendedor===quem;});
   var conversas=ats.filter(houveContato);
+  /* v464 (29/10, o 500% do print dele): a conversão passou a ser POR CLIENTE — dos clientes com quem
+     a pessoa conversou no período, quantos compraram DELA (como vendedora) em até DIAS_CONVERSAO
+     dias depois da primeira conversa do período. Nunca passa de 100%; quem ainda está dentro do
+     prazo aparece como "em andamento". */
+  var priConv={};
+  conversas.forEach(function(a){if(!a.clienteId)return;if(!priConv[a.clienteId]||a.data<priConv[a.clienteId])priConv[a.clienteId]=a.data;});
+  var hj=hojeISO(),convPed=[],convCli=0,convAberto=0,cliConv=Object.keys(priConv);
+  cliConv.forEach(function(cid){
+    var d0=priConv[cid],lim=somaDias(d0,DIAS_CONVERSAO);
+    var ped=pedidos.filter(function(p){
+      return !ehTeste(p)&&p.loja===lojaAtual&&p.clienteId===cid&&p.status!=="Cancelada"&&
+        (!quem||p.vendedor===quem)&&String(p.data||"")>=d0&&String(p.data||"")<=lim;})
+      .sort(function(x,y){return String(x.data).localeCompare(String(y.data));})[0];
+    if(ped){convCli++;convPed.push(ped);}
+    else if(lim>=hj)convAberto++;
+  });
   return {j:j,ats:ats,criadas:criadas,feitas:feitas,vds:vds,aprov:aprov,vdsVend:vdsVend,conversas:conversas,
+    convCli:convCli,convTotal:cliConv.length,convAberto:convAberto,convPed:convPed,
     cAt:porCanal(ats),cFeitas:porCanal(feitas),cPass:porCanal(pass),cAtivo:porCanal(ativo),
     pass:pass,ativo:ativo,
     fat:aprov.reduce(function(a,p){return a+(+p.total||0);},0),
@@ -30714,7 +30731,7 @@ var DASH_ALVOS={
   feitas:{tela:"atend",t:"Atividades realizadas",l:"feitas"},
   vds:{tela:"pedidos",t:"Vendas realizadas",l:"vds"},
   fat:{tela:"pedidos",t:"Faturamento (aprovado no financeiro)",l:"aprov"},
-  conv:{tela:"pedidos",t:"Conversão (vendas como vendedor)",l:"vdsVend"}
+  conv:{tela:"pedidos",t:"Conversão (clientes conversados que compraram)",l:"convPed"}
 };
 function abrirFiltroDash(k){
   var def=DASH_ALVOS[k];if(!def)return;
@@ -30722,8 +30739,9 @@ function abrirFiltroDash(k){
   var ids={};lista.forEach(function(r){ids[r.id]=1;});
   var extra="";
   if(k==="fat")extra=" · "+BRL(d.dep)+" de faturamento depreciado aprovado no financeiro (pela data da aprovação) · "+BRL(d.meta)+" para o prêmio de meta";
-  if(k==="conv"){var n=d.conversas.length;
-    extra=" · "+(n?Math.round(d.vdsVend.length/n*100):0)+"% de conversão: estas são as vendas como vendedor, contra "+n+" conversa"+(n===1?"":"s")+" com cliente no período";}
+  if(k==="conv"){var n=d.convTotal;
+    extra=" · "+(n?Math.round(d.convCli/n*100):0)+"% de conversão: "+d.convCli+" de "+n+" cliente"+(n===1?"":"s")+" conversado"+(n===1?"":"s")+
+      " no período compraram como vendedor em até "+DIAS_CONVERSAO+" dias";}
   filtroDash={k:k,tela:def.tela,ids:ids,n:lista.length,titulo:def.t,
     rot:d.j.rot+" · "+(quem||"equipe toda")+extra,de:d.j.de,ate:d.j.ate,quem:quem};
   if(ir(def.tela)===false){filtroDash=null;return;}
@@ -30811,8 +30829,8 @@ function renderDash(){
   if(!$("dashData").value)$("dashData").value=dashRef;
   if(!$("dashAte").value)$("dashAte").value=dashFim;
   var d=dadosDash(quem);
-  var totalContatos=d.conversas.length;
-  var conv=totalContatos?Math.round(d.vdsVend.length/totalContatos*100):0;
+  var totalContatos=d.convTotal;
+  var conv=totalContatos?Math.round(d.convCli/totalContatos*100):0;
   $("dashRel").textContent=d.j.rot+(quem?" · "+quem:" · equipe toda")+
     (dashPeriodo==="hoje"?" · atualiza sozinho":"");
   $("dashSub").textContent=quem
@@ -30857,8 +30875,8 @@ function renderDash(){
     kpiVai("fat","Faturamento depreciado",BRL(d.dep),d.aprov.length
       ? (quem?BRL(d.meta)+" vai para o prêmio de meta de "+esc(quem):BRL(d.meta)+" conta na meta da equipe")
       : "nenhuma venda aprovada no financeiro")+
-    kpiVai("conv","Conversão",conv+"%",d.vdsVend.length+" venda"+(d.vdsVend.length===1?"":"s")+" como vendedor em "+totalContatos+
-      " conversa"+(totalContatos===1?"":"s")+" com cliente"+(d.ats.length>totalContatos?" ("+(d.ats.length-totalContatos)+" sem falar com o cliente ficam fora)":""));
+    kpiVai("conv","Conversão",conv+"%",d.convCli+" de "+totalContatos+" cliente"+(totalContatos===1?"":"s")+" conversado"+(totalContatos===1?"":"s")+
+      " compraram como vendedor em até "+DIAS_CONVERSAO+" dias"+(d.convAberto?" · "+d.convAberto+" ainda dentro do prazo":""));
   (function(){
     var w=$("dashTopo");if(w.__ligDash)return;w.__ligDash=true;
     function alvo(ev){var el=ev.target&&ev.target.closest?ev.target.closest("[data-dashk]"):null;return el?el.getAttribute("data-dashk"):"";}
@@ -30909,7 +30927,7 @@ function renderDash(){
     var x=dadosDash(n);
     if(!x.ats.length&&!x.criadas.length&&!x.vds.length&&!x.aprov.length)return;
     algum=true;
-    var cv=x.conversas.length?Math.round(x.vdsVend.length/x.conversas.length*100):0;
+    var cv=x.convTotal?Math.round(x.convCli/x.convTotal*100):0;
     b.innerHTML+="<tr><td><b>"+esc(n)+'</b><div class="t-sub">'+esc(perfilDe(n))+"</div></td>"+
       '<td class="num">'+x.ats.length+'</td><td class="num">'+x.cAt.mensagem+'</td><td class="num">'+x.cAt.ligacao+
       '</td><td class="num">'+x.cAt.abordagem+"</td>"+
@@ -45076,6 +45094,15 @@ function agendadorDe(a){
     });
     return melhor?(melhor.colaborador||""):"";
   }catch(e){return "";}
+}
+/* v464 (regra dele, 29/10): "Atividades criadas" é de quem CRIOU a atividade, não de quem executa —
+   a Veronica marca as visitas e o Guilherme e o Thiago executam. Sem criadoPor gravado, vale a
+   mesma dedução do agendadorDe; sem nada, quem executa. */
+function criadorDaAtividade(a){
+  if(!a)return "";
+  if(a.criadoPor)return a.criadoPor;
+  var d=agendadorDe(a.natureza==="atividade"?a:Object.assign({},a,{natureza:"atividade"}));
+  return d||a.colaborador||"";
 }
 function podeEditarAtiv(a){
   if(!a)return true;
