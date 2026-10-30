@@ -1592,6 +1592,11 @@
 .iv-tot{margin-top:10px;text-align:right}
 #iv_qtd{font-size:18px}
 @media (max-width:620px){.iv-lanc{grid-template-columns:1fr!important}.iv-lanc .fld{grid-column:auto!important}}
+/* v467: os gráficos de Origens não encostam na borda do cartão (print dele, 30/10) */
+#ogGraficos{padding:6px 24px 14px}
+#ogGraficos .grid.g3{gap:28px}
+#ogGraficos .barras.vlarga .bv{min-width:112px}
+@media (max-width:620px){#ogGraficos{padding:4px 14px 12px}}
 </style>
 
 <!-- ============ AJUSTES DE CELULAR (estilo) — fica logo após o estilo principal
@@ -5547,6 +5552,9 @@ img{max-width:100%}
           <!-- filtro por situação (pedido dele, 20/09) -->
           <select id="ogFiltro" style="max-width:170px"><option value="">Todas</option><option value="ativas">Só ativas</option><option value="inativas">Só inativas</option></select>
           <span class="sp"></span><span class="count" id="ogCount"></span>
+          <!-- v467 (pedido dele, 30/10): o que está na tela, com os gráficos, num arquivo -->
+          <button class="btn ghost" type="button" id="ogPdf" hidden>Baixar PDF</button>
+          <button class="btn ghost" type="button" id="ogCsv" hidden>Baixar planilha</button>
         </div>
         <div id="ogGraficos"></div>
         <div class="tw"><table>
@@ -24673,6 +24681,100 @@ function barrasLista(itens,cor,larga){
       '<span class="bv">'+(x.txt!=null?esc(x.txt):(+x.v||0))+"<em>"+(x.sub!=null?esc(x.sub):pct+"%")+"</em></span></div>";
   }).join("")+"</div>";
 }
+/* ===== ORIGENS EM ARQUIVO (v467, pedido dele, 30/10: "gerar gráficos desse filtro e gerar arquivo
+   para baixar desse filtro, com essa planilha de informações e do gráfico", "com todas as
+   informações dessa tela"). PDF A4 com o cabeçalho da empresa, os filtros, os quatro números, os
+   três gráficos e a tabela; planilha (CSV, abre no Excel) com os mesmos números. Só quem pode
+   exportar (o Administrador, regra dele de 05/10). As cores são fixas: o papel é branco também
+   no tema escuro. */
+var ogDados=null;
+function resumoOrigens(){
+  renderOrigens();
+  var d=ogDados||{linhas:[],J:janelaOrigens(),filtro:""};
+  var com=d.linhas.filter(function(x){return x.cads>0;});
+  var t={c:0,v:0,fat:0};com.forEach(function(x){t.c+=x.cads;t.v+=x.vend;t.fat+=x.fat;});
+  t.conv=t.c?Math.round(t.v/t.c*100):0;
+  var qs=multiValores("ogQuais");
+  var filtros=["Período: "+d.J.rot+(d.J.de||d.J.ate?" ("+(d.J.de?dataBR(d.J.de):"início")+" a "+(d.J.ate?dataBR(d.J.ate):"hoje")+")":""),
+    "Origens: "+(qs.length?qs.join(", "):"todas"),
+    "Situação: "+(d.filtro==="ativas"?"só ativas":d.filtro==="inativas"?"só inativas":"todas"),
+    "Empresa: "+nomeLoja()];
+  return {d:d,linhas:d.linhas,com:com,t:t,filtros:filtros};
+}
+function barrasPdf(itens,cor,fmt){
+  if(!itens.length)return '<div style="color:#666;padding:6px 0">Nada no período.</div>';
+  var max=Math.max.apply(null,itens.map(function(x){return x.v;}).concat([1]));
+  return itens.map(function(x){
+    return '<div style="display:flex;align-items:center;gap:6px;margin:3px 0;font-size:10.5px">'+
+      '<span style="width:92px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(x.n)+"</span>"+
+      '<span style="flex:1;height:10px;background:#eef1f7;border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:'+
+        ((x.v/max)*100).toFixed(1)+"%;background:"+cor+'"></i></span>'+
+      '<span style="width:'+(fmt?"104":"46")+'px;flex:none;text-align:right;font-weight:700;white-space:nowrap">'+esc(fmt?fmt(x.v):String(x.v))+
+        ' <span style="font-weight:400;color:#666">'+esc(x.sub||"")+"</span></span></div>";
+  }).join("");
+}
+function htmlPdfOrigens(r){
+  var t=r.t,com=r.com;
+  var porCad=com.slice().sort(function(a,b){return b.cads-a.cads;}).map(function(x){return {n:x.n,v:x.cads,sub:t.c?Math.round(x.cads/t.c*100)+"%":"0%"};});
+  var porVen=com.slice().sort(function(a,b){return b.vend-a.vend;}).map(function(x){return {n:x.n,v:x.vend,sub:x.pct+"%"};});
+  var porFat=com.filter(function(x){return x.fat>0;}).sort(function(a,b){return b.fat-a.fat;})
+    .map(function(x){return {n:x.n,v:x.fat,sub:t.fat?Math.round(x.fat/t.fat*100)+"%":"0%"};});
+  function kpi(l,v){return '<div style="flex:1;border:1px solid #c9d3e6;border-radius:6px;padding:8px 10px"><div style="font-size:10px;color:#555">'+l+
+    '</div><div style="font-size:17px;font-weight:700;margin-top:2px">'+v+"</div></div>";}
+  function caixa(tit,corpo){return '<div style="flex:1;min-width:0;border:1px solid #c9d3e6;border-radius:6px;padding:8px 10px">'+
+    '<div style="font-size:10.5px;font-weight:700;color:#1f3f8f;text-transform:uppercase;margin-bottom:4px">'+tit+"</div>"+corpo+"</div>";}
+  var td='style="border:0;border-bottom:1px solid #dde3ef;padding:4px 6px;color:#111"',tn='style="border:0;border-bottom:1px solid #dde3ef;padding:4px 6px;text-align:right;color:#111"';
+  var linhas=r.linhas.slice().sort(function(a,b){return b.cads-a.cads||ordAZ(a.n,b.n);});
+  var tab='<table style="width:100%;border-collapse:collapse;font-size:10.5px;margin-top:6px"><thead><tr style="background:#1f3f8f;color:#fff">'+
+    ["Origem","Cadastros","% dos cadastros","Viraram venda","Conversão","Faturamento","Ticket médio","Situação"].map(function(h,i){
+      return '<th style="border:0;background:#1f3f8f;color:#fff;padding:5px 6px;text-align:'+(i&&i<7?"right":"left")+'">'+h+"</th>";}).join("")+"</tr></thead><tbody>"+
+    linhas.map(function(x){
+      return "<tr><td "+td+"><b>"+esc(x.n)+"</b></td><td "+tn+">"+x.cads+"</td><td "+tn+">"+(t.c?Math.round(x.cads/t.c*100):0)+"%</td>"+
+        "<td "+tn+">"+x.vend+"</td><td "+tn+">"+x.pct+"%</td><td "+tn+">"+BRL(x.fat)+"</td>"+
+        "<td "+tn+">"+(x.vend?BRL(x.fat/x.vend):"—")+"</td><td "+td+">"+(x.ativa?"Ativa":"Inativa")+"</td></tr>";}).join("")+
+    '<tr style="font-weight:700;background:#eef1f7"><td '+td+">Total</td><td "+tn+">"+t.c+"</td><td "+tn+">100%</td><td "+tn+">"+t.v+
+      "</td><td "+tn+">"+t.conv+"%</td><td "+tn+">"+BRL(t.fat)+"</td><td "+tn+">"+(t.v?BRL(t.fat/t.v):"—")+"</td><td "+td+"></td></tr>"+
+    "</tbody></table>";
+  return '<div class="docm docp" style="background:#fff;color:#111"><div class="os-cab">'+cabecalhoEmpresaDoc()+"</div>"+
+    '<div style="font-size:16px;font-weight:700;color:#1f3f8f;margin:4px 0 2px">RELATÓRIO DE ORIGENS</div>'+
+    '<div style="font-size:10.5px;color:#444;margin-bottom:8px">'+r.filtros.map(esc).join(" · ")+" · gerado em "+esc(dataBR(hojeISO()))+" por "+esc(usuarioAtual)+"</div>"+
+    '<div style="display:flex;gap:8px;margin-bottom:8px">'+kpi("Cadastros no período",t.c)+kpi("Viraram venda",t.v)+kpi("Conversão",t.conv+"%")+
+      kpi("Faturamento desses cadastros",BRL(t.fat))+"</div>"+
+    '<div style="display:flex;gap:8px;margin-bottom:8px">'+caixa("Cadastros por origem",barrasPdf(porCad,"#2e4fd6"))+
+      caixa("Vendas por origem (e a conversão)",barrasPdf(porVen,"#1d8a4e"))+caixa("Faturamento por origem",barrasPdf(porFat,"#c47a12",valorCurto))+"</div>"+
+    tab+'<div style="font-size:9.5px;color:#666;margin-top:8px">Cadastros: clientes e leads criados no período, pela origem gravada no cadastro. '+
+      "Viraram venda: desses, os que têm pedido. Faturamento: total dos pedidos não cancelados desses cadastros.</div></div>";
+}
+async function baixarPdfOrigens(){
+  if(!podeExportar())return recusaExport();
+  var r=resumoOrigens(),bt=$("ogPdf"),txt=bt?bt.textContent:"";
+  if(bt){bt.disabled=true;bt.textContent="Gerando o PDF…";}
+  var tmp=document.createElement("div");
+  tmp.style.cssText="position:absolute;left:-10000px;top:0;width:794px;background:#fff";
+  var folha=document.createElement("div");folha.className="pdf-captura";folha.style.cssText="width:794px;background:#fff";
+  folha.innerHTML=htmlPdfOrigens(r);tmp.appendChild(folha);document.body.appendChild(tmp);
+  try{
+    var arq=await pdfDoElemento(folha,"Relatorio_de_Origens_"+String(nomeLoja()).replace(/[^A-Za-z0-9]+/g,"_")+"_"+hojeISO()+".pdf",
+      {mode:["css"],avoid:["tr"]},[8,0,8,0]);
+    baixarArquivo(arq);toast("Relatório de Origens baixado: "+arq.name);
+  }catch(e){toast("Não deu para gerar o PDF: "+((e&&e.message)||e));}
+  finally{tmp.remove();if(bt){bt.disabled=false;bt.textContent=txt;}}
+}
+function baixarCsvOrigens(){
+  if(!podeExportar())return recusaExport();
+  var r=resumoOrigens(),t=r.t;
+  function n(v){return String(Math.round(v*100)/100).replace(".",",");}
+  var L=[["Relatório de Origens"]].concat(r.filtros.map(function(x){return [x];}))
+    .concat([["Gerado em "+dataBR(hojeISO())+" por "+usuarioAtual],[""],
+      ["Cadastros no período","Viraram venda","Conversão","Faturamento desses cadastros"],[t.c,t.v,t.conv+"%",n(t.fat)],[""],
+      ["Origem","Cadastros","% dos cadastros","Viraram venda","Conversão","Faturamento","Ticket médio","Situação"]]);
+  r.linhas.slice().sort(function(a,b){return b.cads-a.cads||ordAZ(a.n,b.n);}).forEach(function(x){
+    L.push([x.n,x.cads,(t.c?Math.round(x.cads/t.c*100):0)+"%",x.vend,x.pct+"%",n(x.fat),x.vend?n(x.fat/x.vend):"",x.ativa?"Ativa":"Inativa"]);});
+  L.push(["Total",t.c,"100%",t.v,t.conv+"%",n(t.fat),t.v?n(t.fat/t.v):"",""]);
+  baixarPlanilhaMF("Relatorio_de_Origens_"+nomeLoja()+"_"+hojeISO(),L);
+}
+window.__baixarPdfOrigensMF=baixarPdfOrigens;window.__htmlPdfOrigensMF=function(){return htmlPdfOrigens(resumoOrigens());};
+window.__csvOrigensMF=baixarCsvOrigens;
 /* período da tela de Origens (05/10) */
 function janelaOrigens(){
   var p=$("ogPeriodo")?$("ogPeriodo").value:"tudo",h=hojeISO();
@@ -24711,7 +24813,7 @@ function renderOrigens(){
     var cads=baseCli.filter(function(c){return c.origem===nm;});
     var venderam=cads.filter(function(c){return vendasDe(c.id).length>0;});
     var pct=cads.length?Math.round(venderam.length/cads.length*100):0;
-    paraGrafico.push({n:nm,cads:cads.length,vend:venderam.length,pct:pct,
+    paraGrafico.push({n:nm,cads:cads.length,vend:venderam.length,pct:pct,ativa:at,
       fat:venderam.reduce(function(s,c){
         return s+vendasDe(c.id).filter(function(p){return p.status!=="Cancelada";})
           .reduce(function(t,p){return t+(+p.total||0);},0);},0)});
@@ -24725,6 +24827,9 @@ function renderOrigens(){
         ' <button class="btn mut sm" type="button" data-ogrm="'+i+'">Remover</button>')+"</td></tr>";
   });
   if(!b.innerHTML)b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma origem nesta visão</div>Troque o filtro acima.</div></td></tr>';
+  /* o que está na tela, para o PDF e a planilha (v467) */
+  ogDados={J:J,linhas:paraGrafico.slice(),filtro:f};
+  if($("ogPdf")){var pe=podeExportar();$("ogPdf").hidden=!pe;$("ogCsv").hidden=!pe;}
   /* ===== gráficos do que está filtrado (pedido dele, 05/10) ===== */
   if($("ogGraficos")){
     var comCad=paraGrafico.filter(function(x){return x.cads>0;});
@@ -51479,6 +51584,7 @@ function ligar(){
     $("gpNome").onkeydown=function(e){if(e.key==="Enter")$("gpAdd").click();};
     $("gpBusca").oninput=renderGruposProd;
   }
+  if($("ogPdf"))$("ogPdf").onclick=baixarPdfOrigens;if($("ogCsv"))$("ogCsv").onclick=baixarCsvOrigens;
   $("ogAdd").onclick=async function(){
     var n=$("ogNome").value.trim();
     if(!n){toast("Escreva a origem.");return;}
