@@ -4388,6 +4388,7 @@ img{max-width:100%}
             <button type="button" data-t="req">Requisições</button>
             <button type="button" data-t="rec">Recuperações</button>
             <button type="button" data-t="inv">Inventário</button>
+            <button type="button" data-t="neg" id="eeAbaNeg">Estoques negativos</button>
           </div>
           <input id="eeBusca" placeholder="Buscar produto">
           <select id="eeFiltro" style="max-width:200px">
@@ -5820,6 +5821,8 @@ img{max-width:100%}
           <p class="sect-t">Quem responde por cada estoque</p>
           <p class="help">A escolha <b>mudou de lugar em 23/10</b>: ela é feita na ficha de cada colaborador, em <b>Estoques sob responsabilidade</b>. Ali uma pessoa responde por quantos estoques quisermos, e um estoque pode ter mais de um responsável — qualquer um deles autoriza. Aqui ficou só a consulta.</p>
           <div id="em_respLojas"></div>
+          <label class="chk" style="margin-top:12px"><input type="checkbox" id="en_permitir"><span>Permitir estoque negativo dos colaboradores<span class="ajuda">Ligada, a venda sai do estoque escolhido mesmo sem saldo (ele fica negativo) e a reposição é pedida ao almoxarifado depois da aprovação financeira. Desligada, o item sem saldo não entra no pedido. Use ligada até o balanço geral.</span></span></label>
+          <div id="en_nota"></div>
         </div>
         <div class="sect">
           <p class="sect-t">Redes — viram QR Code no cabeçalho dos documentos e no rodapé da proposta</p>
@@ -8793,7 +8796,7 @@ var LEITURAS_BOOT=[
 ];
 var CONFIGS_BOOT=["formas_pagamento","usuarios","funcoes","empresa","origens","tipos_atendimento",
   "motivos_finalizacao","tipos_off","motivos_off","canais_tipo","metas","faixas_comissao",
-  "preco","beneficios","abonos_premio","adiantamentos","celebracoes","padroes_lanc","serie","grupos_produtos","mensagens_zap","plano_pergunta"];
+  "preco","beneficios","abonos_premio","adiantamentos","celebracoes","padroes_lanc","serie","grupos_produtos","mensagens_zap","plano_pergunta","estoque_negativo"];
 var PRE_BOOT={};
 function pedirJa(chave,fn){
   try{var p=fn();if(p&&p.catch)p.catch(function(){});PRE_BOOT[chave]=p;}catch(e){console.warn("aquecer",chave,e);}
@@ -9522,6 +9525,8 @@ async function carregar(){
     if(gsr.exists&&gsr.data()&&Array.isArray(gsr.data().grupos))GRUPOS_SERIE=gsr.data().grupos;
     var gmz=await jaPedido("cfg:mensagens_zap",function(){return db.doc("config/mensagens_zap").get();});
     if(gmz.exists&&gmz.data()&&gmz.data().textos)MSG_ZAP={textos:gmz.data().textos||{},textos2:gmz.data().textos2||{},quem:gmz.data().quem||{}};
+    try{var gen=await jaPedido("cfg:estoque_negativo",function(){return db.doc("config/estoque_negativo").get();});
+      if(gen.exists&&gen.data())CFG_ESTNEG={permitir:gen.data().permitir!==false,por:gen.data().por||"",em:gen.data().em||""};}catch(eEn){}
     var gpc=await jaPedido("cfg:preco",function(){return db.doc("config/preco").get();});
     if(gpc.exists&&gpc.data()&&+gpc.data().pctMinimo>0)CFG_PRECO.pctMinimo=+gpc.data().pctMinimo;
     var gbf=await jaPedido("cfg:beneficios",function(){return db.doc("config/beneficios").get();});
@@ -16290,12 +16295,23 @@ function addItem(){
     if(comPlano){toast("Com plano "+gar+", o número de série é obrigatório — é por ele que o plano fica amarrado ao aparelho.");return;}
     if(!confirm("Este produto costuma ter número de série e ele não foi informado.\n\nIncluir assim mesmo?"))return;
   }
-  /* sem estoque disponível para quem entrega: pergunta de onde retirar (regra do Wagner, 14/09) */
-  if(!addItem.__retiradaOk){
-    var faltaEst=faltaEstoqueVenda(p,qtd);
-    if(faltaEst>0){abrirRetirada(p,qtd,faltaEst);return;}
+  /* SEM SALDO NO ESTOQUE ESCOLHIDO (30/10, regra dele): a venda NÃO cria mais a "Retirada p/
+     venda" do almoxarifado. Com o estoque negativo permitido, o item sai do estoque escolhido
+     e ele fica negativo; a reposição é pedida depois da aprovação financeira. Desligado, o
+     item não entra. (A janela de 14/09 e a retirada antiga continuam só para o histórico.) */
+  var faltaEst=faltaEstoqueVenda(p,qtd),avisoNegItem="";
+  if(faltaEst>0){
+    var locF=localItemForm();
+    var ficaF=saldoEm(p.id,locF)-((reservasDe(locF)[p.id])||0)-noCarrinhoDe(p.id,locF)-qtd;
+    if(!estoqueNegativoPermitido()&&locF!==LOC_EMPRESA){
+      toast("Sem saldo: "+nomeLocal(locF)+" tem "+(ficaF+qtd)+" disponível e o estoque negativo está desligado. Escolha um estoque com saldo.");
+      try{$("v_estoque").focus();}catch(e){}
+      return;
+    }
+    avisoNegItem=(locF===localVendaForm()?"Seu estoque":nomeLocal(locF))+" vai ficar "+ficaF+
+      (locF===LOC_EMPRESA?".":" — a reposição será pedida ao almoxarifado depois da aprovação.");
   }
-  var retiradaSel=addItem.__retiradaOk||null;addItem.__retiradaOk=null;
+  var retiradaSel=null;addItem.__retiradaOk=null;
   var idxAntes=itens.length;
   var vinculo=uid();
   /* cliente com plano vigente (regra do Wagner, 14/09): o que o plano ainda cobre sai sem custo;
@@ -16326,11 +16342,7 @@ function addItem(){
     if(cobV&&cobV.esgotado)msgPlano="O plano "+cobV.esgotado.e.plano+" não cobrirá "+p.nome+
       ": os direitos do plano para essa peça já foram esgotados. Cobrado pelo valor normal.";
   }
-  if(retiradaSel&&itens[idxAntes]){
-    itens[idxAntes].retirada=retiradaSel;
-    msgPlano=(msgPlano?msgPlano+" ":"")+retiradaSel.qtd+"× "+p.nome+" com retirada do estoque geral"+
-      " — ao salvar o pedido, a solicitação vai para o responsável pelo estoque.";
-  }
+  if(avisoNegItem)msgPlano=(msgPlano?msgPlano+" ":"")+avisoNegItem;
   /* o plano entra como linha da venda, amarrada ao produto que ele cobre */
   if(plano){
     itens.push({pid:plano.id,nome:plano.nome,cod:plano.cod,qtd:qtd,
@@ -17370,7 +17382,8 @@ function calcular(){
         '<span class="nome-item" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+'</span></div><div class="t-sub"><code>'+esc(i.cod)+"</code> · "+garPill+
         (i.serie?" · série "+esc(i.serie):"")+(i.local?" · "+esc(i.local):"")+
         (i.planoCobre?' · <span class="pill p-ok">coberto pelo plano '+esc(i.planoCobre.garantia)+"</span>":"")+
-        (i.retirada?' · <span class="pill p-warn">'+i.retirada.qtd+" com retirada do estoque geral</span>":"")+
+        (i.retirada&&i.retirada.status!=="cancelada"?' · <span class="pill p-warn">'+i.retirada.qtd+" com retirada do estoque geral</span>":"")+
+        pillNegItem(i)+
         /* de qual estoque este item sai, e se ainda espera autorização (23/10) */
         seloEstoqueItem(i)+
         /* produto composto (v248): diz de onde a linha veio, para o vendedor saber o que pode tirar */
@@ -18268,17 +18281,8 @@ async function salvarPedidoAgora(){
   var eraLead=(cli&&ehLead(cli));
   /* produto sem estoque de quem entrega: solicitação de retirada para o responsável pelo estoque (regra do Wagner, 14/09) */
   var nRetiradas=0;
-  for(var ir2=0;ir2<(ped.itens||[]).length;ir2++){
-    var itR=ped.itens[ir2];if(!itR.retirada)continue;
-    var rqR={id:uid(),loja:lojaAtual,tipo:"retirada",lojaOrigem:itR.retirada.loja||lojaAtual,
-      colaborador:responsavelVenda(ped)||ped.vendedor||usuarioAtual,
-      itens:[{pid:itR.pid,nome:itR.nome,cod:itR.cod,qtd:+itR.retirada.qtd||0,atendida:+itR.retirada.qtd||0}],
-      obs:"Retirada para o pedido "+ped.numero+" · "+ped.cliente+" · "+origemRetiradaNome({loja:lojaAtual,lojaOrigem:itR.retirada.loja}),
-      data:hojeISO(),status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual,
-      pedidoId:ped.id,pedidoNumero:ped.numero,cliente:ped.cliente};
-    itR.retirada.reqId=rqR.id;itR.retirada.status="pendente";
-    requisicoes.push(rqR);await grava("requisicoes",rqR);nRetiradas++;
-  }
+  /* 30/10 (regra dele): a venda NÃO cria mais a "Retirada p/ venda" do almoxarifado. Sem saldo,
+     o item sai do estoque escolhido (pode ficar negativo) e a reposição vem na aprovação. */
   /* item que sai do estoque de outra pessoa: o dono é avisado agora que a venda foi salva.
      O pedido de autorização já nasceu no item (addItem); aqui ele vira aviso de verdade. */
   try{
@@ -19762,7 +19766,9 @@ function precisaAutorizacaoEstoque(loc,quem){
   if(!loc)return false;
   var q=quem||euNoEstoque();
   if(loc===locColab(q))return false;                 /* é o meu estoque */
-  if(loc===LOC_EMPRESA)return false;                 /* almoxarifado tem o caminho da retirada */
+  /* ESTOQUE GERAL escolhido de propósito (30/10): o almoxarifado recebe o mesmo pedido de
+     Autorizar/Recusar dos outros estoques. Quem é do almoxarifado vende dele direto. */
+  if(loc===LOC_EMPRESA)return !(ehAlmox(q)||respondePeloEstoque(q,loc));
   if(respondePeloEstoque(q,loc))return false;
   return true;
 }
@@ -19834,7 +19840,8 @@ async function decidirAutEstoque(pedidoId,itemIx,aceita,motivo){
     (it.qtd||1)+"× "+it.nome+" · pedido "+p.numero+(aceita?"":" · "+a.motivo));}catch(e){}
   render();
   toast(aceita
-    ? "Autorizado. "+(it.qtd||1)+"× "+it.nome+" sai do "+nomeLocal(a.local)+" quando o financeiro aprovar o pedido "+p.numero+"."
+    ? "Autorizado. "+(it.qtd||1)+"× "+it.nome+" sai do "+nomeLocal(a.local)+" quando o financeiro aprovar o pedido "+p.numero+
+      (a.local===LOC_EMPRESA?" (sem reposição).":" — a reposição é pedida ao almoxarifado logo depois.")
     : "Recusado. "+a.pedidaPor+" foi avisado e precisa trocar a origem do item no pedido "+p.numero+".");
   return true;
 }
@@ -19924,8 +19931,41 @@ async function lancarContagem(){
   toast("Contagem lançada: "+feitos+" ajuste"+(feitos>1?"s":"")+" de inventário no "+nomeLocal(cgLocal)+".");
   render();try{renderEstColab();renderEstEmpresa();}catch(e){}
 }
+/* "Veronica quer 5 × Refil X do seu estoque · pedido N. Você tem 3 — seu estoque vai ficar −2
+   e a reposição será pedida depois da aprovação." (30/10, regra dele) */
+async function autorizarDaLista(pedidoId,autId){
+  var p=pedidos.filter(function(x){return x.id===pedidoId;})[0];if(!p)return false;
+  var lista=itensDeEstoque(p),ix=-1;
+  for(var i=0;i<lista.length;i++){if(lista[i].autEstoque&&lista[i].autEstoque.id===autId){ix=i;break;}}
+  if(ix<0){toast("Esta autorização não está mais no pedido.");return false;}
+  var it=lista[ix];
+  var txt=textoAutEstoque(p,it,it.autEstoque).replace(/<[^>]+>/g,"");
+  if(!confirm(txt+"\n\nAutorizar?"))return false;
+  var ok=await decidirAutEstoque(pedidoId,ix,true,"");
+  if(ok){try{renderEstColab();renderEstEmpresa();renderFin();}catch(e){}}
+  return ok;
+}
+function ligarBotoesAut(raiz){
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-ecauts]"),function(bt){
+    bt.onclick=function(){var v=bt.getAttribute("data-ecauts").split("|");autorizarDaLista(v[0],v[1]);};});
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-ecautn]"),function(bt){
+    bt.onclick=function(){var v=bt.getAttribute("data-ecautn").split("|");abrirAutEstoque(v[0],v[1],true);};});
+}
+window.__textoAutEstMF=function(p,it,a){return textoAutEstoque(p,it,a);};
+function textoAutEstoque(p,it,a){
+  var loc=a.local,q=+(it.qtd||1),geral=(loc===LOC_EMPRESA);
+  var tem=saldoEm(it.pid,loc)-((reservasDe(loc,p.id)[it.pid])||0),fica=tem-q;
+  var eu=podeAutorizarEstoque(loc)&&loc===locColab(euNoEstoque());
+  var deQ=geral?"do estoque geral (almoxarifado)":(eu?"do seu estoque":"do "+nomeLocal(loc));
+  var t="<b>"+esc(a.pedidaPor||"Alguém")+"</b> quer <b>"+q+"× "+esc(it.nome||"")+"</b> "+deQ+" · pedido "+esc(p.numero)+". ";
+  t+=(geral?"O almoxarifado tem ":(eu?"Você tem ":nomeLocal(loc)+" tem "))+"<b>"+tem+"</b>";
+  if(fica<0)t+=" — "+(geral?"o almoxarifado":(eu?"seu estoque":"o estoque"))+" vai ficar <b>"+fica+"</b>"+
+    (geral?".":" e a reposição será pedida depois da aprovação.");
+  else t+=(geral?" — sai do almoxarifado na aprovação, sem reposição.":" — depois da aprovação a reposição de "+q+" é pedida ao almoxarifado.");
+  return t;
+}
 var autPend2=null;
-function abrirAutEstoque(pedidoId,autId){
+function abrirAutEstoque(pedidoId,autId,recusar){
   var p=pedidos.filter(function(x){return x.id===pedidoId;})[0];
   if(!p){toast("Pedido não encontrado.");return;}
   var lista=itensDeEstoque(p),ix=-1;
@@ -19937,6 +19977,7 @@ function abrirAutEstoque(pedidoId,autId){
   $("aut_sub").textContent="Pedido "+p.numero+" · "+(p.cliente||"");
   var cli=cliPorId(p.clienteId);
   $("aut_det").innerHTML=
+    '<div class="note" style="margin:0 0 8px">'+textoAutEstoque(p,it,a)+"</div>"+
     "<b>"+esc((it.qtd||1)+"× "+it.nome)+"</b>"+(it.cod?" <code>"+esc(it.cod)+"</code>":"")+"<br>"+
     "Sai do <b>"+esc(nomeLocal(a.local))+"</b><br>"+
     "Quem pediu: <b>"+esc(a.pedidaPor||"")+"</b>"+(a.pedidaEm?" · "+dataBR(a.pedidaEm.slice(0,10)):"")+"<br>"+
@@ -19951,10 +19992,14 @@ function abrirAutEstoque(pedidoId,autId){
   var podeDecidir=(a.status==="pendente"&&podeAutorizarEstoque(a.local));
   $("aut_sim").hidden=!podeDecidir;$("aut_nao").hidden=!podeDecidir;
   $("aut_motivoWrap").hidden=true;$("aut_motivo").value="";$("aut_alerta").innerHTML="";
+  $("aut_nao").textContent="Recusar";
   if(a.status==="pendente"&&!podeDecidir)
     $("aut_alerta").innerHTML='<div class="note warn">Quem responde por este estoque é <b>'+
       esc(donoDoEstoque(a.local)||"ninguém ainda")+"</b>. Além deles, só a gestão autoriza.</div>";
   $("autEstModal").hidden=false;
+  /* "Recusar" da lista abre a janela já pedindo o motivo */
+  if(recusar&&podeDecidir){$("aut_motivoWrap").hidden=false;$("aut_nao").textContent="Confirmar a recusa";
+    try{$("aut_motivo").focus();}catch(e){}}
 }
 /* monta o campo "Sai de qual estoque": o meu, o da loja aberta e os dos colegas */
 function opcoesEstoqueItem(){
@@ -19962,7 +20007,12 @@ function opcoesEstoqueItem(){
   var ant=String(s.value||""),eu=euNoEstoque();
   s.innerHTML="";
   function add(v,txt){var o=document.createElement("option");o.value=v;o.textContent=txt;s.appendChild(o);}
-  add("meu","Meu estoque"+(eu?" · "+eu:""));
+  /* "meu" é o estoque de quem ENTREGA a venda (o vendedor do pedido, ou o técnico na
+     instalação) — o nome que aparece é o dele, para não parecer o de quem está logado */
+  var donoMeu=localVendaForm(),nomeMeu=(donoMeu.indexOf("colab:")===0)?donoMeu.slice(6):nomeLocal(donoMeu);
+  add("meu",(nomeMeu===eu?"Meu estoque":"Estoque de quem vende")+(nomeMeu?" · "+nomeMeu:""));
+  /* o estoque geral só quando o vendedor escolhe de propósito (30/10) — nunca sozinho */
+  add(LOC_EMPRESA,"Estoque geral (almoxarifado)");
   /* o razão de estoque é de cada loja, então o balcão oferecido é o da loja aberta */
   add(locLoja(lojaAtual),"Estoque da Loja · "+nomeLoja()+
     (respEstoqueLoja(lojaAtual)?" · "+respEstoqueLoja(lojaAtual):" · sem responsável"));
@@ -19989,7 +20039,10 @@ function notaEstoqueItem(){
   var ops=[],s=$("v_estoque");
   if(s)Array.prototype.forEach.call(s.options,function(o){
     var lc=(o.value==="meu")?localVendaForm():o.value;
-    var disp=saldoEm(p.id,lc)-((reservasDe(lc)[p.id])||0);
+    var disp=saldoEm(p.id,lc)-((reservasDe(lc)[p.id])||0)-noCarrinhoDe(p.id,lc);
+    /* o saldo vai no próprio texto da opção (30/10): "Meu estoque · 0 · Guilherme · 3" */
+    if(!o.__base)o.__base=o.textContent;
+    o.textContent=o.__base+" — "+disp+" disponível";
     ops.push({v:o.value,nome:o.value==="meu"?"Meu estoque":nomeLocal(lc),disp:disp,
       res:(reservasDe(lc)[p.id])||0,aqui:(o.value===String(s.value))});
   });
@@ -19997,13 +20050,39 @@ function notaEstoqueItem(){
     return (o.aqui?"<b>":"")+esc(o.nome)+" "+o.disp+(o.res?" ("+o.res+" reservado"+(o.res>1?"s":"")+")":"")+(o.aqui?"</b>":"");
   }).join(" · ");
   var aut=precisaAutorizacaoEstoque(loc,eu),dono=donoDoEstoque(loc);
-  el.innerHTML=linha+"<br>"+(aut
+  var qd=parseInt(($("v_qtd")&&$("v_qtd").value)||"",10)||0;
+  var fica=saldoEm(p.id,loc)-((reservasDe(loc)[p.id])||0)-noCarrinhoDe(p.id,loc)-qd;
+  var avNeg="";
+  if(qd>0&&fica<0){
+    var deQuem=(loc===localVendaForm())?"Seu estoque":("O "+nomeLocal(loc));
+    avNeg='<div class="note '+(estoqueNegativoPermitido()||loc===LOC_EMPRESA?"warn":"crit")+'" style="margin-top:6px">'+
+      (estoqueNegativoPermitido()||loc===LOC_EMPRESA
+        ? deQuem+" vai ficar <b>"+fica+"</b>"+(loc===LOC_EMPRESA?" — o almoxarifado fica devendo até a próxima entrada."
+          :" — a reposição será pedida ao almoxarifado depois da aprovação.")
+        : "Não tem saldo: o estoque negativo está desligado. Escolha um estoque com saldo.")+"</div>";
+  }
+  el.innerHTML=linha+avNeg+"<br>"+(aut
     ? ('<span class="pill p-warn">precisa de autorização</span> '+
        (dono?esc(dono)+" responde por este estoque e vai receber o pedido quando a venda for salva"+
              (responsaveisDoEstoque(loc).length>1?" — o primeiro que responder decide.":".")
             :"este estoque está <b>sem responsável</b> — peça ao Administrador para marcar alguém na ficha do colaborador.")+
        " O pedido pode ser finalizado, mas o financeiro só aprova depois da resposta.")
     : '<span class="pill p-ok">sai direto</span> você responde por este estoque.');
+}
+/* "vai ficar −N" na linha do item do pedido em montagem (30/10) */
+function pillNegItem(i){
+  if(!i||!i.pid||ehPlano(i)||ehServico(i)||i.planoCobre)return "";
+  var loc=i.estoque||localVendaForm();
+  var exc=(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"";
+  var fica=saldoEm(i.pid,loc)-((reservasDe(loc,exc)[i.pid])||0)-noCarrinhoDe(i.pid,loc);
+  if(fica>=0)return "";
+  return ' · <span class="pill p-warn" title="A reposição é pedida ao almoxarifado depois da aprovação">'+
+    esc(loc===localVendaForm()?"seu estoque":nomeLocal(loc))+" vai ficar "+fica+"</span>";
+}
+function noCarrinhoDe(pid,loc){
+  return itens.filter(function(i){
+    return i.pid===pid&&!ehPlano(i)&&!ehServico(i)&&(i.estoque?i.estoque:localVendaForm())===loc;})
+    .reduce(function(a,i){return a+(+i.qtd||0);},0);
 }
 function faltaEstoqueVenda(p,qtd,localEscolhido){
   if(!p||p.grupo==="Planos"||/servi|m[ãa]o de obra/i.test(p.grupo||""))return 0;
@@ -21345,10 +21424,11 @@ function saidasLiquidas(p){
     var i=k.indexOf("|");return {pid:k.slice(0,i),local:k.slice(i+1),qtd:m[k]};});
 }
 /* reservas das vendas ainda não aprovadas, no estoque de um local: {produtoId: qtd} */
-function reservasDe(local){
+function reservasDe(local,excluirId){
   var r={};
   pedidos.forEach(function(p){
     if(p.loja!==lojaAtual||!vendaPendente(p))return;
+    if(excluirId&&p.id===excluirId)return;
     var saiu={},pede={};
     /* o que já saiu deste pedido NAQUELE estoque, e o que ele ainda pede dali */
     saidasLiquidas(p).forEach(function(s){if(s.local===local)saiu[s.pid]=(saiu[s.pid]||0)+s.qtd;});
@@ -21383,6 +21463,102 @@ async function ajustarBaixa(p,docBaixa,docEstorno){
   }
   return baixou;
 }
+/* o que falta pedir em reposição para este pedido, por estoque: {local:[{pid,qtd}]}.
+   Só estoque de colaborador e Estoque da Loja repõem — o almoxarifado é a origem. */
+function repoFaltandoDoPedido(p){
+  var saiu={},pedido={};
+  saidasLiquidas(p).forEach(function(x){
+    if(x.local.indexOf("colab:")!==0&&!ehLocalLoja(x.local))return;
+    var k=x.pid+"|"+x.local;saiu[k]=(saiu[k]||0)+x.qtd;});
+  requisicoes.forEach(function(r){
+    if(r.origem!=="reposicao"||r.pedidoId!==p.id||r.status==="cancelada")return;
+    var l=localDaReq(r);
+    (r.itens||[]).forEach(function(i){var k=i.pid+"|"+l;pedido[k]=(pedido[k]||0)+(+i.qtd||0);});
+  });
+  var out={};
+  Object.keys(saiu).forEach(function(k){
+    var q=saiu[k]-(pedido[k]||0);if(q<=0)return;
+    var c=k.indexOf("|"),pid=k.slice(0,c),l=k.slice(c+1);
+    (out[l]=out[l]||[]).push({pid:pid,qtd:q,local:l});
+  });
+  return out;
+}
+window.__repoFaltandoMF=function(p){return repoFaltandoDoPedido(p);};
+/* CANCELAR A VENDA (saiu de dentro do botão em 30/10, para ser testada e reaproveitada) */
+async function cancelarPedido(p,motivo){
+    motivo=String(motivo||"");
+    p.status="Cancelada";p.encerrada=false;p.reabertura=null;
+    p.canceladaPor=usuarioAtual;p.canceladaEm=hojeISO();p.motivoCancelamento=motivo.trim();
+    await gravarPedido(p);
+    var abertos=titulos.filter(function(t){return t.pedidoId===p.id&&t.status==="aberto";});
+    for(var i=0;i<abertos.length;i++){abertos[i].status="cancelado";await grava("titulos",abertos[i]);}
+    /* estorno: só o que de fato saiu (líquido de estornos anteriores) volta para onde saiu.
+       Venda ainda não aprovada não tinha baixa — a reserva some sozinha. */
+    var devolvidas=await estornarVenda(p,motivo.trim());
+    /* AS REQUISIÇÕES QUE FICAM ABERTAS (21/10): a de reposição, que já era cancelada, e
+       também a de RETIRADA — a venda cancelada não tem mais por que tirar nada do estoque. */
+    /* REPOSIÇÃO JÁ ACEITA (30/10, regra dele): quem recebe o produto de volta do cliente é o
+       colaborador — o estorno acima devolve para o estoque dele, e o sistema cria sozinho uma
+       DEVOLUÇÃO para o almoxarifado, no nome dele, com a mesma quantidade da reposição aceita.
+       Reposição ainda pendente só é cancelada (logo abaixo) e não gera devolução. */
+    var nDevol=await devolverReposicaoAceita(p);
+    var reps=requisicoes.filter(function(r){return r.pedidoId===p.id&&r.origem!=="cancelamento"&&
+      ["pendente","separada"].indexOf(r.status)>=0;});
+    for(var rp=0;rp<reps.length;rp++){
+      reps[rp].status="cancelada";
+      reps[rp].motivoRecusa="pedido "+p.numero+" cancelado";
+      await grava("requisicoes",reps[rp]);
+    }
+    /* O APARELHO QUE A VENDA CRIOU FICA INATIVO (21/10): sem isto ele continuava na
+       Manutenção Periódica cobrando a troca de um purificador que ninguém comprou.
+       Nada se apaga — fica o motivo e a linha no histórico do aparelho. */
+    var apsCanc=equipamentos.filter(function(e){return e.pedidoId===p.id&&e.ativo!==false;});
+    for(var ac2=0;ac2<apsCanc.length;ac2++){
+      var eC=apsCanc[ac2];
+      eC.ativo=false;eC.desativadoEm=hojeISO();eC.desativadoPor=usuarioAtual;
+      eC.desativadoMotivo="pedido "+p.numero+" cancelado: "+motivo.trim();
+      eC.historico=(eC.historico||[]).concat([{por:usuarioAtual,data:hojeISO()+" "+agoraHM(),
+        texto:"Aparelho desativado porque o pedido "+p.numero+" foi cancelado"}]);
+      await grava("equipamentos",eC);
+    }
+    registrarEvento(p,"Cancelada: "+motivo.trim());await gravarPedido(p);
+    toast("Pedido "+p.numero+" cancelado · "+abertos.length+" título(s) cancelado(s)"+
+      (devolvidas?" · "+devolvidas+" unidade(s) de volta ao estoque":" · reserva de estoque liberada")+
+      (reps.length?(" · "+reps.length+" requisição(ões) cancelada(s)"):"")+
+      (nDevol?(" · "+nDevol+" devolução(ões) ao almoxarifado criada(s) da reposição já aceita"):"")+
+      (apsCanc.length?(" · "+apsCanc.length+" aparelho(s) desativado(s)"):"")+".");
+    try{renderPedDet();}catch(e0){}
+    render();
+    try{renderEstEmpresa();renderEstColab();}catch(e){}
+}
+/* a reposição deste pedido que o colaborador JÁ aceitou (item a item) volta ao almoxarifado
+   por devolução, nunca em dobro: uma devolução por reposição, achada pelo reposicaoId */
+async function devolverReposicaoAceita(p){
+  var n=0;
+  var reps=requisicoes.filter(function(r){return r.origem==="reposicao"&&r.pedidoId===p.id&&r.status!=="cancelada";});
+  for(var i=0;i<reps.length;i++){
+    var r=reps[i];
+    var aceitos=(r.itens||[]).filter(function(it){return it.recebido||r.status==="concluida";});
+    if(!aceitos.length)continue;
+    var ja=requisicoes.some(function(d){return d.tipo==="devolucao"&&d.reposicaoId===r.id&&
+      d.status!=="cancelada"&&d.status!=="recusada";});
+    if(ja)continue;
+    var l=localDaReq(r);
+    var dv={id:uid(),loja:r.loja||p.loja||lojaAtual,tipo:"devolucao",colaborador:r.colaborador||"",local:l,
+      itens:aceitos.map(function(it){var q=+(it.atendida||it.qtd)||0;
+        return {pid:it.pid,nome:it.nome,cod:it.cod,qtd:q,atendida:q};}),
+      obs:"Devolução · pedido "+p.numero+" cancelado (a reposição já tinha sido aceita)",
+      data:hojeISO(),status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual,
+      origem:"cancelamento",reposicaoId:r.id,pedidoId:p.id,pedidoNumero:p.numero,cliente:p.cliente||""};
+    requisicoes.push(dv);
+    try{await gravaConf("requisicoes",dv);n++;}
+    catch(e){requisicoes.splice(requisicoes.indexOf(dv),1);
+      toast("Atenção: a devolução de "+(r.colaborador||nomeLocal(l))+" NÃO foi gravada. Lance pela tela do estoque.");}
+  }
+  return n;
+}
+window.__cancelarPedidoMF=function(p,m){return cancelarPedido(p,m);};
+window.__devolverRepMF=function(p){return devolverReposicaoAceita(p);};
 async function estornarVenda(p,obs){
   var por=saidasLiquidas(p),n=0;
   for(var i=0;i<por.length;i++){
@@ -21904,7 +22080,9 @@ function renderEstEmpresa(){
   try{
     $("eeRecPer").hidden=(eeAba!=="rec");
     $("eeRecCsv").hidden=(eeAba!=="rec"||!podeExportar());
-    $("eeFiltro").hidden=(eeAba==="rec"||eeAba==="inv");$("eeBusca").hidden=(eeAba==="inv");
+    if(eeAba==="neg"&&!veEstoquesNegativos())eeAba="saldo";
+    if($("eeAbaNeg"))$("eeAbaNeg").hidden=!veEstoquesNegativos();
+    $("eeFiltro").hidden=(eeAba==="rec"||eeAba==="inv"||eeAba==="neg");$("eeBusca").hidden=(eeAba==="inv");
     var pmv=podeMoverEstoque();$("eeMov").hidden=!pmv;$("eeTransf").hidden=!pmv;
     $("eeBusca").placeholder=(eeAba==="req")?"Buscar produto, colaborador, pedido ou cliente":"Buscar produto";
   }catch(eR){}
@@ -22006,6 +22184,7 @@ function renderEstEmpresa(){
     });
   }
   else if(eeAba==="inv"){renderInventarios(h,b);}
+  else if(eeAba==="neg"){renderEstoquesNegativos(h,b,q);}
   else {
     h.innerHTML="<th>Data</th><th>Tipo</th><th>Colaborador</th><th>Itens</th><th>Situação</th><th></th>";
     var lrTodas=requisicoes.filter(function(r){return r.loja===lojaAtual||r.lojaOrigem===lojaAtual;});
@@ -22016,6 +22195,30 @@ function renderEstEmpresa(){
       .sort(function(a,b2){return ordemReq(a)-ordemReq(b2)||(b2.data||"").localeCompare(a.data||"")||
         (instanteDoRegistro(b2)-instanteDoRegistro(a));});
     $("eeCount").textContent=lr.length+(lr.length===1?" pedido":" pedidos")+(q?" de "+lrTodas.length:"");
+    /* VENDAS QUE ESCOLHERAM O ESTOQUE GERAL (30/10): o almoxarifado autoriza ou recusa aqui
+       também, com o mesmo pedido dos outros estoques */
+    var autsG=autorizacoesEstoque({status:"pendente",local:LOC_EMPRESA}).filter(function(x){
+      return !q||((x.item.nome||"")+" "+(x.ped.numero||"")+" "+(x.ped.cliente||"")+" "+(x.aut.pedidaPor||""))
+        .toLowerCase().indexOf(q)>=0;});
+    if(autsG.length){
+      b.innerHTML+='<tr class="ec-grupo"><td colspan="6"><b>Vendas que saem do estoque geral</b> · '+autsG.length+
+        (autsG.length===1?" pedido de autorização":" pedidos de autorização")+"</td></tr>";
+      autsG.forEach(function(x){
+        var podeEu=podeAutorizarEstoque(LOC_EMPRESA);
+        b.innerHTML+="<tr><td>"+esc(dataBR((x.aut.pedidaEm||"").slice(0,10)))+"</td>"+
+          '<td><span class="pill p-warn">Venda do estoque geral</span></td>'+
+          "<td>"+esc(x.aut.pedidaPor||"")+"</td>"+
+          "<td>"+(x.item.qtd||1)+"× "+esc(x.item.nome||"")+'<div class="t-sub">Pedido '+esc(x.ped.numero)+
+            (x.ped.cliente?" · "+esc(x.ped.cliente):"")+"</div>"+
+            '<div class="t-sub">'+textoAutEstoque(x.ped,x.item,x.aut)+"</div></td>"+
+          '<td><span class="pill p-warn">aguardando autorização</span></td>'+
+          '<td class="num">'+(podeEu
+            ? '<button class="btn sm" type="button" data-ecauts="'+esc(x.ped.id)+"|"+esc(x.aut.id)+'">Autorizar</button> '+
+              '<button class="btn mut sm" type="button" data-ecautn="'+esc(x.ped.id)+"|"+esc(x.aut.id)+'">Recusar</button>'
+            : '<span class="t-sub">só o almoxarifado</span>')+"</td></tr>";
+      });
+    }
+    if(!lr.length&&autsG.length){ligarBotoesAut(b);return;}
     if(!lr.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">'+(q?"Nada com “"+esc(q)+"”":"Nenhuma requisição")+'</div>'+
       (q?"A busca procura no produto, no colaborador, no número do pedido e no cliente.":"Os vendedores pedem produto pela tela Estoque Colaborador.")+"</div></td></tr>";return;}
     lr.forEach(function(r){
@@ -22032,7 +22235,7 @@ function renderEstEmpresa(){
         "<td>"+(r.tipo==="retirada"?'<span class="pill p-crit">Retirada p/ venda</span><div class="t-sub">'+esc(origemRetiradaNome(r))+"</div>"
           :r.tipo==="requisicao"?(r.origem==="troca"?'<span class="pill p-warn">Pego na troca</span><div class="t-sub">purificador usado do cliente</div>':'<span class="pill p-acc">Requisição</span>')
           :r.tipo==="usado"?'<span class="pill p-warn">Usado da troca</span><div class="t-sub">sai da responsabilidade do vendedor</div>'
-          :'<span class="pill p-warn">Devolução</span>')+"</td>"+
+          :'<span class="pill p-warn">Devolução</span>'+(r.origem==="cancelamento"?'<div class="t-sub">venda cancelada depois da reposição</div>':""))+"</td>"+
         "<td>"+esc(r.colaborador)+"</td>"+
         "<td>"+r.itens.map(function(i){return i.qtd+"× "+esc(i.nome);}).join("<br>")+
           (r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+
@@ -22053,6 +22256,7 @@ function renderEstEmpresa(){
             '<button class="btn mut sm" type="button" data-rqc="'+r.id+'">Cancelar</button>'
           : "")+"</td></tr>";
     });
+    ligarBotoesAut(b);
     Array.prototype.forEach.call(b.querySelectorAll("[data-rqrd]"),function(bt){
       bt.onclick=function(){recusarDevolucao(bt.getAttribute("data-rqrd"));};});
     Array.prototype.forEach.call(b.querySelectorAll("[data-rqs]"),function(bt){
@@ -22067,6 +22271,89 @@ function renderEstEmpresa(){
     Array.prototype.forEach.call(b.querySelectorAll("[data-rtr]"),function(bt){
       bt.onclick=function(){decidirRetirada(bt.getAttribute("data-rtr"),false);};});
   }
+}
+/* ESTOQUES NEGATIVOS (30/10, regra dele): enquanto o balanço não é feito, a venda pode deixar o
+   estoque de um colaborador negativo. Esta lista mostra quem, qual produto, quanto, de qual
+   pedido veio e a reposição ligada. Entra também quem VAI ficar negativo quando a venda pendente
+   for aprovada (o saldo menos o que está reservado). Some sozinho quando a reposição é aceita. */
+function veEstoquesNegativos(){return ehGestor()||ehAlmox()||podeConferir()||podeAcao("autorizarEstoque");}
+function estoquesNegativos(somenteLocal){
+  var saldo={};
+  movEst.forEach(function(m){
+    if(m.loja!==lojaAtual)return;
+    [[m.destino,1],[m.origem,-1]].forEach(function(par){
+      var l=par[0];if(!l||(l.indexOf("colab:")!==0&&!ehLocalLoja(l)))return;
+      if(somenteLocal&&l!==somenteLocal)return;
+      var k=m.produtoId+"|"+l;saldo[k]=(saldo[k]||0)+par[1]*(+m.qtd||0);});
+  });
+  /* o que as vendas pendentes reservam em cada estoque */
+  var res={},pedsRes={};
+  pedidos.forEach(function(p){
+    if(p.loja!==lojaAtual||!vendaPendente(p))return;
+    var sai={};saidasLiquidas(p).forEach(function(x){sai[x.pid+"|"+x.local]=(sai[x.pid+"|"+x.local]||0)+x.qtd;});
+    itensDeEstoque(p).forEach(function(it){
+      var l=localDoItemVenda(p,it);
+      if(l.indexOf("colab:")!==0&&!ehLocalLoja(l))return;
+      if(somenteLocal&&l!==somenteLocal)return;
+      var k=it.pid+"|"+l,q=Math.max(0,(it.qtd||1)-(sai[k]||0));if(!q)return;
+      res[k]=(res[k]||0)+q;(pedsRes[k]=pedsRes[k]||[]).push(p.numero);
+    });
+  });
+  Object.keys(res).forEach(function(k){if(!(k in saldo))saldo[k]=0;});
+  var out=[];
+  Object.keys(saldo).forEach(function(k){
+    var c=k.indexOf("|"),pid=k.slice(0,c),l=k.slice(c+1);
+    var sd=saldo[k],rs=res[k]||0,fica=sd-rs;
+    if(sd>=0&&fica>=0)return;
+    var pr=prodPorId(pid)||{};
+    /* as reposições ainda não aceitas deste produto para este estoque */
+    var reps=requisicoes.filter(function(r){
+      return r.origem==="reposicao"&&localDaReq(r)===l&&r.status!=="cancelada"&&r.status!=="concluida"&&
+        (r.itens||[]).some(function(i){return i.pid===pid&&!i.recebido;});});
+    out.push({pid:pid,nome:pr.nome||pid,cod:pr.cod||"",local:l,saldo:sd,reservado:rs,fica:fica,
+      pedidosPendentes:pedsRes[k]||[],reposicoes:reps});
+  });
+  return out.sort(function(a,b){return a.fica-b.fica;});
+}
+window.__estoquesNegativosMF=function(l){return estoquesNegativos(l);};
+window.__veNegMF=function(){return veEstoquesNegativos();};
+window.__renderEstEmpresaMF=function(){return renderEstEmpresa();};
+function htmlReposNeg(x){
+  if(!x.reposicoes.length)return x.saldo<0?'<span class="pill p-crit">sem reposição pedida</span>':
+    '<span class="t-sub">a reposição é pedida na aprovação</span>';
+  return x.reposicoes.map(function(r){
+    var it=(r.itens||[]).filter(function(i){return i.pid===x.pid;})[0]||{};
+    return '<span class="pill '+(r.status==="separada"?"p-acc":"p-warn")+'">reposição de '+(+it.qtd||0)+" · "+
+      (r.status==="separada"?"separada, falta aceitar":"aguardando o almoxarifado")+"</span>"+
+      (r.pedidoNumero?' <span class="t-sub">pedido '+esc(r.pedidoNumero)+"</span>":"");
+  }).join("<br>");
+}
+/* no Estoque Colaborador: os itens negativos daquele estoque, com a reposição ligada (30/10) */
+function htmlNegativosDoEstoque(loc){
+  if(ecTipo==="ferr")return "";
+  var l=estoquesNegativos(loc);if(!l.length)return "";
+  return '<div class="note warn" style="margin:8px 0"><b>'+l.length+(l.length===1?" produto negativo":" produtos negativos")+
+    " neste estoque</b> — a venda saiu sem saldo e a reposição do almoxarifado devolve o que saiu:<br>"+
+    l.map(function(x){return esc(x.nome)+": <b>"+x.fica+"</b>"+(x.reservado?" (contando "+x.reservado+" de venda a aprovar)":"")+" · "+htmlReposNeg(x);}).join("<br>")+
+    "</div>";
+}
+function renderEstoquesNegativos(h,b,q){
+  h.innerHTML='<th>Estoque</th><th>Produto</th><th class="num">Saldo hoje</th><th class="num">Reservado</th><th class="num">Fica</th><th>De onde veio · reposição</th>';
+  var l=estoquesNegativos().filter(function(x){
+    return !q||(x.nome+" "+x.cod+" "+nomeLocal(x.local)+" "+x.pedidosPendentes.join(" ")+" "+
+      x.reposicoes.map(function(r){return r.pedidoNumero||"";}).join(" ")).toLowerCase().indexOf(q)>=0;});
+  $("eeCount").textContent=l.length+(l.length===1?" produto negativo":" produtos negativos");
+  if(!l.length){b.innerHTML='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum estoque negativo</div>'+
+    "Quando uma venda sair de um estoque sem saldo, ele aparece aqui até a reposição ser aceita.</div></td></tr>";return;}
+  l.forEach(function(x){
+    b.innerHTML+="<tr><td>"+esc(nomeLocal(x.local))+"</td>"+
+      '<td><div class="t-main">'+esc(x.nome)+"</div>"+(x.cod?'<div class="t-sub"><code>'+esc(x.cod)+"</code></div>":"")+"</td>"+
+      '<td class="num"'+(x.saldo<0?' style="color:var(--crit)"':"")+"><b>"+x.saldo+"</b></td>"+
+      '<td class="num">'+(x.reservado||"—")+"</td>"+
+      '<td class="num" style="color:var(--crit)"><b>'+x.fica+"</b></td>"+
+      "<td>"+(x.pedidosPendentes.length?'<div class="t-sub">venda a aprovar: pedido '+esc(x.pedidosPendentes.join(", "))+"</div>":"")+
+        htmlReposNeg(x)+"</td></tr>";
+  });
 }
 /* O QUE O PESSOAL PEDE DO ESTOQUE GERAL (28/10, pedido dele com o print do financeiro travado):
    a retirada para venda (vendeu sem estoque e pede do almoxarifado) e a requisição de produto.
@@ -22342,7 +22629,7 @@ function renderEstColab(){
   try{var bgA=$("ecAutBadge");if(bgA){
     var nA=autorizacoesParaMim().length+(podeAprovarRetirada()?pedidosAoEstoqueGeral().filter(function(r){return localDaReq(r)===loc;}).length:0);
     bgA.textContent=nA||"";bgA.hidden=!nA||ecTipo==="ferr";}}catch(eBg){}
-  try{$("ecResps").innerHTML=htmlRespsEstoque(loc);}catch(e){}
+  try{$("ecResps").innerHTML=htmlRespsEstoque(loc)+htmlNegativosDoEstoque(loc);}catch(e){}
   var q=($("ecBusca").value||"").toLowerCase();
 
   var reserv=reservasDe(loc);
@@ -22452,13 +22739,18 @@ function renderEstColab(){
         "<td>"+esc(a.pedidaPor||"")+'<div class="t-sub">'+(a.pedidaEm?esc(dataBR(a.pedidaEm.slice(0,10))):"")+"</div></td>"+
         "<td>"+sit+(a.status==="recusada"&&a.motivo?'<div class="t-sub">'+esc(a.motivo)+"</div>":"")+
           (a.status!=="pendente"&&a.decididoPor?'<div class="t-sub">por '+esc(a.decididoPor)+"</div>":"")+"</td>"+
-        '<td class="num"><button class="btn sm'+(euDecido?"":" ghost")+'" type="button" data-ecaut="'+
-          esc(x.ped.id)+"|"+esc(a.id)+'">'+(euDecido?"Responder":"Ver")+"</button></td></tr>";
+        '<td class="num">'+(euDecido
+          ? '<button class="btn sm" type="button" data-ecauts="'+esc(x.ped.id)+"|"+esc(a.id)+'">Autorizar</button> '+
+            '<button class="btn mut sm" type="button" data-ecautn="'+esc(x.ped.id)+"|"+esc(a.id)+'">Recusar</button>'
+          : '<button class="btn ghost sm" type="button" data-ecaut="'+esc(x.ped.id)+"|"+esc(a.id)+'">Ver</button>')+
+        (pend?'<div class="t-sub" style="text-align:left;margin-top:4px">'+textoAutEstoque(x.ped,x.item,a)+"</div>":"")+
+        "</td></tr>";
     });
     Array.prototype.forEach.call(b.querySelectorAll("[data-ecaut]"),function(bt){
       bt.onclick=function(){
         var v=bt.getAttribute("data-ecaut").split("|");
         abrirAutEstoque(v[0],v[1]);};});
+    ligarBotoesAut(b);
     Array.prototype.forEach.call(b.querySelectorAll("[data-ecrta]"),function(bt){
       bt.onclick=function(){decidirRetirada(bt.getAttribute("data-ecrta"),true);};});
     Array.prototype.forEach.call(b.querySelectorAll("[data-ecrtr]"),function(bt){
@@ -29548,6 +29840,11 @@ function resumoPonto(quem,c){
 /* PREÇO MÍNIMO (22/10): o percentual padrão da empresa, que só o Administrador muda.
    Fica em `config/preco`, como os outros ajustes da casa. */
 var CFG_PRECO={pctMinimo:70};
+/* ESTOQUE NEGATIVO DOS COLABORADORES (30/10, regra dele): enquanto o balanço geral não é feito,
+   a venda sai do estoque escolhido mesmo sem saldo e ele fica negativo; a reposição vem depois
+   da aprovação financeira. Desligada, volta a regra antiga: sem saldo, o item não entra. */
+var CFG_ESTNEG={permitir:true};
+function estoqueNegativoPermitido(){return CFG_ESTNEG.permitir!==false;}
 async function gravarCfgPreco(){
   if(!db)return;
   await db.doc("config/preco").set(CFG_PRECO);
@@ -32454,18 +32751,7 @@ async function aplicarEdicaoPedido(cli,r,solDesc){
   /* item incluído na edição sem estoque de quem entrega: a solicitação de retirada é criada agora
      (a dos itens que já estavam continua valendo, com o mesmo pedido) */
   var novasReq=0;
-  for(var iq=0;iq<(p.itens||[]).length;iq++){
-    var itE=p.itens[iq];
-    if(!itE.retirada||itE.retirada.reqId)continue;
-    var rqE={id:uid(),loja:p.loja||lojaAtual,tipo:"retirada",lojaOrigem:itE.retirada.loja||p.loja||lojaAtual,
-      colaborador:responsavelVenda(p)||p.vendedor||usuarioAtual,
-      itens:[{pid:itE.pid,nome:itE.nome,cod:itE.cod,qtd:+itE.retirada.qtd||0,atendida:+itE.retirada.qtd||0}],
-      obs:"Retirada para o pedido "+p.numero+" · "+p.cliente,
-      data:hojeISO(),status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual,
-      pedidoId:p.id,pedidoNumero:p.numero,cliente:p.cliente};
-    itE.retirada.reqId=rqE.id;itE.retirada.status="pendente";
-    requisicoes.push(rqE);await grava("requisicoes",rqE);novasReq++;
-  }
+  /* 30/10: nenhuma retirada nova nasce na edição (regra do estoque que pode ficar negativo) */
   try{var novosPi=resumoPlanosInformados(p);if(novosPi.length)p.planosInformados=(p.planosInformados||[]).filter(function(x){
     return !novosPi.some(function(y){return y.equipId===x.equipId;});}).concat(novosPi);}catch(ePi){}
   var falhou="";
@@ -40133,42 +40419,8 @@ function ligarPedDet(){
     var pagos=titulos.filter(function(t){return t.pedidoId===p.id&&t.status==="pago";});
     if(pagos.length&&!confirm(pagos.length+" parcela(s) já foram recebidas. "+
       "Cancelar assim mesmo? Os recebimentos ficam no caixa e você precisa lançar a devolução na mão.")){return;}
-    p.status="Cancelada";p.encerrada=false;p.reabertura=null;
-    p.canceladaPor=usuarioAtual;p.canceladaEm=hojeISO();p.motivoCancelamento=motivo.trim();
-    await gravarPedido(p);
-    var abertos=titulos.filter(function(t){return t.pedidoId===p.id&&t.status==="aberto";});
-    for(var i=0;i<abertos.length;i++){abertos[i].status="cancelado";await grava("titulos",abertos[i]);}
-    /* estorno: só o que de fato saiu (líquido de estornos anteriores) volta para onde saiu.
-       Venda ainda não aprovada não tinha baixa — a reserva some sozinha. */
-    var devolvidas=await estornarVenda(p,motivo.trim());
-    /* AS REQUISIÇÕES QUE FICAM ABERTAS (21/10): a de reposição, que já era cancelada, e
-       também a de RETIRADA — a venda cancelada não tem mais por que tirar nada do estoque. */
-    var reps=requisicoes.filter(function(r){return r.pedidoId===p.id&&
-      ["pendente","separada"].indexOf(r.status)>=0;});
-    for(var rp=0;rp<reps.length;rp++){
-      reps[rp].status="cancelada";
-      reps[rp].motivoRecusa="pedido "+p.numero+" cancelado";
-      await grava("requisicoes",reps[rp]);
-    }
-    /* O APARELHO QUE A VENDA CRIOU FICA INATIVO (21/10): sem isto ele continuava na
-       Manutenção Periódica cobrando a troca de um purificador que ninguém comprou.
-       Nada se apaga — fica o motivo e a linha no histórico do aparelho. */
-    var apsCanc=equipamentos.filter(function(e){return e.pedidoId===p.id&&e.ativo!==false;});
-    for(var ac2=0;ac2<apsCanc.length;ac2++){
-      var eC=apsCanc[ac2];
-      eC.ativo=false;eC.desativadoEm=hojeISO();eC.desativadoPor=usuarioAtual;
-      eC.desativadoMotivo="pedido "+p.numero+" cancelado: "+motivo.trim();
-      eC.historico=(eC.historico||[]).concat([{por:usuarioAtual,data:hojeISO()+" "+agoraHM(),
-        texto:"Aparelho desativado porque o pedido "+p.numero+" foi cancelado"}]);
-      await grava("equipamentos",eC);
-    }
-    registrarEvento(p,"Cancelada: "+motivo.trim());await gravarPedido(p);
-    toast("Pedido "+p.numero+" cancelado · "+abertos.length+" título(s) cancelado(s)"+
-      (devolvidas?" · "+devolvidas+" unidade(s) de volta ao estoque":" · reserva de estoque liberada")+
-      (reps.length?(" · "+reps.length+" requisição(ões) cancelada(s)"):"")+
-      (apsCanc.length?(" · "+apsCanc.length+" aparelho(s) desativado(s)"):"")+".");
-    renderPedDet();render();
-    try{renderEstEmpresa();renderEstColab();}catch(e){}});
+    await cancelarPedido(p,motivo);
+  });
   on("pd_reativar",async function(){
     /* reativada, volta para a etapa em que estava: reserva de novo, baixa na aprovação */
     p.aprovado=false;p.encerrada=false;p.devolucaoFin=null;
@@ -40348,13 +40600,12 @@ async function aprovarVenda(p,caixaId){
     var baixou=await ajustarBaixa(p,"Pedido "+p.numero,"Estorno do pedido "+p.numero);
     /* 2. o que saiu volta pela reposição — UMA requisição por estoque que teve baixa,
        porque desde 23/10 o pedido pode tirar produto de mais de um estoque */
-    var porLocal={};
-    baixou.forEach(function(b){
-      var l=b.local||loc;
-      if(l.indexOf("colab:")!==0&&!ehLocalLoja(l))return;  /* almoxarifado é a origem, não repõe */
-      (porLocal[l]=porLocal[l]||[]).push(b);
-    });
+    /* SEM DUPLICAR (30/10): a quantidade da reposição é o que saiu de cada estoque por este
+       pedido (líquido de estornos) MENOS o que já foi pedido em reposição não cancelada do
+       mesmo pedido, produto e estoque. Reaprovar uma venda reaberta só repõe a diferença. */
+    var porLocal=repoFaltandoDoPedido(p);
     var locs=Object.keys(porLocal);
+    var falhouRepo=0;
     for(var ilr=0;ilr<locs.length;ilr++){
       var lr=locs[ilr];
       var rq={id:uid(),loja:p.loja,tipo:"requisicao",local:lr,
@@ -40367,8 +40618,13 @@ async function aprovarVenda(p,caixaId){
         data:hojeISO(),status:"pendente",
         criadoEm:hojeISO(),criadoPor:usuarioAtual,origem:"reposicao",pedidoId:p.id,
         cliente:p.cliente||"",pedidoNumero:p.numero};
-      requisicoes.push(rq);await grava("requisicoes",rq);
+      requisicoes.push(rq);
+      /* gravação conferida: recusada pelo banco, a reposição sai da memória e o aviso diz */
+      try{await gravaConf("requisicoes",rq);}
+      catch(eRq){requisicoes.splice(requisicoes.indexOf(rq),1);falhouRepo++;}
     }
+    if(falhouRepo)setTimeout(function(){toast("Atenção: "+falhouRepo+" reposição(ões) do pedido "+p.numero+
+      " NÃO foram gravadas. Aprovar de novo não refaz a aprovação — peça a reposição pela tela do estoque.");},2500);
     /* 3. parcelas no Contas a Receber, com o caixa de destino (venda antiga já tinha) */
     var parcelas=titulos.filter(function(t){return t.pedidoId===p.id&&t.status!=="cancelado";});
     if(!parcelas.length)parcelas=await gerarReceberDoPedido(p);
@@ -46253,7 +46509,27 @@ function lojasQueRespondo(quem){
   return LOJAS.filter(function(l){return respondePorLoja(q,l.id);});
 }
 /* só consulta: quem responde por cada estoque desta empresa, com atalho para a ficha */
+function renderEstNegCfg(){
+  var c=$("en_permitir");if(!c)return;
+  c.checked=estoqueNegativoPermitido();
+  var adm=ehAdministrador();c.disabled=!adm;
+  $("en_nota").innerHTML=(adm?"":'<div class="help">Só o Administrador liga e desliga.</div>')+
+    (CFG_ESTNEG.por?'<div class="help">Última mudança: '+esc(CFG_ESTNEG.por)+" em "+esc(dataCurta(CFG_ESTNEG.em||""))+".</div>":"");
+}
+async function salvarEstNegCfg(){
+  var c=$("en_permitir");if(!c)return;
+  if(!ehAdministrador()){c.checked=estoqueNegativoPermitido();toast("Só o Administrador liga e desliga o estoque negativo.");return;}
+  var antes=JSON.parse(JSON.stringify(CFG_ESTNEG));
+  CFG_ESTNEG={permitir:!!c.checked,por:usuarioAtual,em:hojeISO()};
+  try{if(db)await db.doc("config/estoque_negativo").set(CFG_ESTNEG);}
+  catch(e){CFG_ESTNEG=antes;c.checked=estoqueNegativoPermitido();toast("Não foi salvo: "+((e&&e.message)||e));return;}
+  renderEstNegCfg();
+  toast(CFG_ESTNEG.permitir?"Estoque negativo permitido: a venda sai mesmo sem saldo e a reposição vem depois da aprovação."
+    :"Estoque negativo desligado: sem saldo no estoque escolhido, o item não entra no pedido.");
+}
+window.__cfgEstNegMF=function(v){if(v!==undefined)CFG_ESTNEG={permitir:!!v};return CFG_ESTNEG;};
 function renderRespLojas(){
+  try{renderEstNegCfg();}catch(eEn){}
   var box=$("em_respLojas");if(!box)return;
   box.innerHTML=estoquesDaEmpresa(lojaAtual).filter(function(e){return !e.pessoa;})
     .map(function(e){return htmlRespsEstoque(e.loc);}).join("")+
@@ -51335,6 +51611,7 @@ function ligar(){
   $("plNovo").onclick=function(){abrirPlano(null);};
   $("srSalvar").onclick=salvarSerieGrupos;
   if($("pp_ligada"))$("pp_ligada").onchange=salvarPerguntaPlanoCfg;
+  if($("en_permitir"))$("en_permitir").onchange=salvarEstNegCfg;
   $("srGrupos").onchange=function(){srSujo=true;};
   $("plSalvar").onclick=salvarPlano;
   $("plPrevia").onclick=previaPlano;
@@ -52447,6 +52724,8 @@ function ligar(){
   if($("v_paEquip"))$("v_paEquip").onchange=function(){aoEscolherAparelhoPlano(true);};
   /* o estoque de onde o item sai (23/10): trocar refaz a nota dos saldos */
   if($("v_estoque"))$("v_estoque").onchange=function(){try{notaEstoqueItem();}catch(e){}};
+  /* a quantidade muda o aviso "vai ficar −N" (30/10) */
+  if($("v_qtd"))$("v_qtd").addEventListener("input",function(){try{notaEstoqueItem();}catch(e){}});
   if($("ecContagem"))$("ecContagem").onclick=function(){abrirContagem($("ecQuem")?$("ecQuem").value:"");};
   if($("cg_fechar"))$("cg_fechar").onclick=function(){$("cgModal").hidden=true;};
   if($("cg_ok"))$("cg_ok").onclick=lancarContagem;
