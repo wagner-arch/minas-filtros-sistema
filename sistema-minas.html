@@ -2798,6 +2798,8 @@ img{max-width:100%}
               <div class="fld"><label for="v_vend">Vendedor · 60%</label><select id="v_vend"></select></div>
               <div class="fld"><label for="v_inst">Instalador · 20%</label><select id="v_inst"></select></div>
             </div>
+            <p class="help" id="v_prospAjuda"></p>
+            <div class="fld" id="v_prospMotivoWrap" hidden><label for="v_prospMotivo">Motivo da troca do prospector <span class="req">*</span></label><input id="v_prospMotivo" placeholder="Fica registrado no histórico do pedido"></div>
             <p class="help" id="v_instAjuda">Instalador em branco: o vendedor acumula os 20%.</p>
           </div>
 
@@ -9367,6 +9369,7 @@ async function carregar(){
   try{migrarEditarProdutos(funcoes);}catch(e){console.warn(e);}
   try{migrarVerCustos(funcoes);}catch(e){console.warn(e);}
   try{migrarPlanosInf(funcoes);}catch(e){console.warn(e);}
+  try{migrarAlterarProspector(funcoes);}catch(e){console.warn(e);}
   normalizarNomeAlmox();
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
@@ -9611,6 +9614,7 @@ async function carregar(){
     try{prodPermMigradas=migrarEditarProdutos(funcoes);}catch(ePp){console.warn("permissão de produtos",ePp);}
     try{custoMigradas=migrarVerCustos(funcoes);}catch(eCu){console.warn("custo interno",eCu);}
     try{planoInfMigradas=migrarPlanosInf(funcoes);}catch(ePi){console.warn("planos informados",ePi);}
+    try{prospMigradas=migrarAlterarProspector(funcoes);}catch(ePs){console.warn("alterar prospector",ePs);}
     normalizarNomeAlmox();
     await migrarTelasNovas();
     try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
@@ -16839,12 +16843,23 @@ function renderFormas(){
    instalador e fica com os 20% — na tela o campo mostra isso */
 function ajustarInstalador(){
   var si=$("v_inst");if(!si||!$("v_idata"))return;
-  /* pedido das peças e serviços de uma OS: o técnico é o instalador e fica com os 20% */
-  if(pedOrigemOS){
-    si.value=pedOrigemOS.tecnico||$("v_vend").value;si.disabled=true;
-    var ajo=$("v_instAjuda");if(ajo)ajo.textContent="OS "+pedOrigemOS.numero+": o técnico ("+(pedOrigemOS.tecnico||"—")+") é o instalador e fica com os 20%.";
-    return;}
   var temInst=!!$("v_idata").value,vend=$("v_vend").value,aj=$("v_instAjuda");
+  /* instalação futura por prestador (30/10): o campo mostra o prestador, travado, e os 20% não vão para ninguém */
+  if(temInst&&ehValorPrest(valorIresp())){
+    var rotP=rotuloPrestador(valorIresp());
+    garantirOpcaoSel(si,rotP);si.value=rotP;si.disabled=true;
+    if(aj)aj.textContent="Instalação por prestador: ele recebe pela tabela dele, à parte. Os 20% de instalador não vão para nenhum colaborador.";
+    return;
+  }
+  /* pedido de OS (30/10): o instalador é quem executou o serviço, seja técnico ou vendedor; com
+     instalação futura, vale o responsável por ela, logo abaixo */
+  var osV=osDaVendaTela();
+  if(osV&&!(temInst&&valorIresp())){
+    var exV=executorDaOS(osV)||vend;
+    garantirOpcaoSel(si,exV);si.value=exV;si.disabled=true;
+    if(aj)aj.textContent="OS "+osV.numero+": "+(exV||"—")+" executou o serviço, é o instalador e fica com os 20%.";
+    return;
+  }
   /* v210: instalação feita na entrega, sem agendamento — o instalador é escolhido e fica com os 20% */
   if(!temInst&&temInstalacaoVenda()==="agora"){
     si.disabled=false;
@@ -16856,6 +16871,10 @@ function ajustarInstalador(){
   if(!temInst){
     si.value=vend;si.disabled=true;
     if(aj)aj.textContent="Sem instalação futura: o vendedor ("+(vend||"—")+") é o instalador e fica com os 20%.";
+  }else if(valorIresp()&&!ehValorPrest(valorIresp())){
+    /* 30/10: o instalador é o responsável pela instalação futura, e o campo fica travado nele */
+    garantirOpcaoSel(si,valorIresp());si.value=valorIresp();si.disabled=true;
+    if(aj)aj.textContent="Instalação futura: "+valorIresp()+" é o responsável pela instalação e fica com os 20%.";
   }else{
     si.disabled=false;
     if(aj)aj.textContent=si.value
@@ -17237,6 +17256,7 @@ function extrasVenda(){
     desconto:(dFinal>0?baseDoFinal(dFinal,1,0):0),descontoFinal:dFinal};
 }
 function calcular(){
+  try{aplicarProspectorVenda();}catch(eAp){}
   normalizarValoresItens(itens);
   normalizarFormasVenda(formas);
   redepreciarItensDigitados(itens);
@@ -17549,10 +17569,12 @@ function calcular(){
   /* "em qual tabela esse produto vai cair" (regra dele, 20/09): a Comissão ao vivo diz item por
      item, com o depreciado unitário que foi comparado com a tabela. Refeito a cada mudança. */
   $("c_faixas").innerHTML=htmlFaixasComissao(linhasFaixa,total,dep);
-  $("r_p").textContent=BRL(base*.2);$("r_v").textContent=BRL(base*.6);$("r_i").textContent=BRL(base*.2);
+  /* instalação futura por prestador: os 20% de instalador não vão para ninguém (30/10) */
+  var semInst=!!($("v_idata")&&$("v_idata").value&&ehValorPrest(valorIresp()));
+  $("r_p").textContent=BRL(base*.2);$("r_v").textContent=BRL(base*.6);$("r_i").textContent=semInst?"não vai para ninguém":BRL(base*.2);
   $("pt_p").textContent=(pontos*.2).toFixed(1).replace(".",",")+" pts";
   $("pt_v").textContent=(pontos*.6).toFixed(1).replace(".",",")+" pts";
-  $("pt_i").textContent=(pontos*.2).toFixed(1).replace(".",",")+" pts";
+  $("pt_i").textContent=semInst?"prestador recebe à parte":(pontos*.2).toFixed(1).replace(".",",")+" pts";
   try{atualizarEtapas();}catch(e){}
   $("v_alerta").innerHTML=abaixo?'<div class="note crit"><b>Abaixo da tabela.</b> Ao finalizar, você escreve o motivo e a autorização é pedida ao Administrador. Até ele autorizar, o item entra com faturamento zerado; ao autorizar, ele escolhe a tabela que vale para a comissão (100%, 70%, campanha ou sem comissão).</div>':"";
 
@@ -18308,8 +18330,23 @@ async function salvarPedidoAgora(){
   var solDesc=r.abaixo?descSolResp:null;descSolResp=null;
   /* pedido reaberto pelo botão "Editar o pedido": atualiza o MESMO pedido, com o mesmo número,
      a mesma data e a mesma assinatura — não nasce outro (regra dele, 22/09) */
-  if(pedEditando)return await aplicarEdicaoPedido(cliSel,r,solDesc);
+  if(pedEditando){
+    if(trocaDeProspector()===false){
+      toast("Escreva o motivo da troca do prospector — ele fica no histórico do pedido.");
+      try{irEtapa(5);$("v_prospMotivo").focus();}catch(eM2){}
+      return null;
+    }
+    return await aplicarEdicaoPedido(cliSel,r,solDesc);
+  }
   var cli=cliSel;
+  /* o prospector trocado à mão (só quem pode) exige o motivo, que vai para o histórico (30/10) */
+  try{aplicarProspectorVenda();}catch(eAp){}
+  var trocaP=trocaDeProspector();
+  if(trocaP===false){
+    toast("Escreva o motivo da troca do prospector — ele fica no histórico do pedido.");
+    try{irEtapa(5);$("v_prospMotivo").focus();}catch(eM){}
+    return null;
+  }
   var igual=pedidoRepetido(cliSel.id,pedOrigemAtiv&&pedOrigemAtiv.id,r.total,itens);
   if(igual&&!confirm("Já existe o pedido "+igual.numero+" de "+cliSel.nome+", do mesmo atendimento e com os mesmos produtos ("+
     BRL(+igual.total||0)+")."+QUEBRA2+"Lançar OUTRO pedido mesmo assim?"))return null;
@@ -18322,9 +18359,7 @@ async function salvarPedidoAgora(){
     /* regra do Wagner (12/09): sem instalação futura, ou sem instalador informado, o vendedor é o
        instalador e fica com os 20% */
     /* v210: três respostas para a instalação — não / na entrega, sem agendamento / agendada */
-    instalador:($("v_idata").value
-      ?($("v_inst").value||$("v_iresp").value||$("v_vend").value)
-      :(execSemAgenda()?($("v_inst").value||$("v_vend").value):$("v_vend").value)),
+    instalador:instaladorDaVenda(),
     instalacaoAgora:(temInstalacaoVenda()==="agora"&&!$("v_idata").value),
     /* prestador: o responsável vira o NOME dele (texto), e o estoque continua com o vendedor */
     respInstalacao:$("v_idata").value?(ehValorPrest(valorIresp())
@@ -18347,13 +18382,21 @@ async function salvarPedidoAgora(){
     prestadorId:(ehValorPrest(valorIresp())?idDoValorPrest(valorIresp()):""),
     creditoPlano:(credV>0?montarCreditoPlano(cliSel.id,credV):null)};
   /* pedido das peças e serviços de uma OS interna (regra do Wagner, 14/09) */
+  /* de onde veio o prospector (30/10) */
+  try{
+    var spG=$("v_prosp");
+    if(!ped.prospector)ped.prospector=(spG&&spG.__regra)||ped.vendedor||"";
+    ped.prospectorRegra=(spG&&spG.__regra)||"";
+    if(spG&&spG.__ligada)ped.atividadeAgendadaId=spG.__ligada;
+    if(trocaP){ped.prospectorAlterado=[trocaP];
+      registrarEvento(ped,"Prospector alterado de "+(trocaP.de||"—")+" para "+trocaP.para+" por "+trocaP.por+" · "+trocaP.motivo);}
+  }catch(ePg){console.warn("prospector",ePg);}
   var osDoPed=pedOrigemOS,ativContatoOS=pedOSAtiv,msgOSFim="",servAtendPed=pedOSServAtend;
   /* orçamento de origem: guardado aqui porque `limparPedido` zera a variável no fim (26/09) */
   var orcDoPed=pedOrigemOrc;
   if(orcDoPed){ped.orcamentoId=orcDoPed.id;ped.orcamentoNumero=orcDoPed.numero;}
   if(osDoPed){
     ped.osId=osDoPed.id;ped.osNumero=osDoPed.numero;ped.osLocal=osDoPed.local||"";
-    if(osDoPed.tecnico)ped.instalador=osDoPed.tecnico;
     ped.obs=(ped.obs?ped.obs+"\n":"")+"Referente à OS "+osDoPed.numero+(servAtendPed?" · cliente não aprovou o serviço: cobrado o serviço de atendimento":"")+".";
   }
   var eraLead=(cli&&ehLead(cli));
@@ -19315,7 +19358,8 @@ function retomarRascunho(r){
   try{
     if($("v_frete"))$("v_frete").value=r.frete?brMF(r.frete):"";
     if($("v_descGeral"))$("v_descGeral").value=r.descontoEspecial?brMF(r.descontoEspecial):"";
-    if(r.prospector)$("v_prosp").value=r.prospector;
+    /* o prospector vem da regra (30/10) — o guardado no rascunho podia ser o de quem estava logado */
+    try{$("v_prosp").__manual=false;aplicarProspectorVenda();}catch(eRp){}
     if(r.vendedor)$("v_vend").value=r.vendedor;
     if(r.instalador)$("v_inst").value=r.instalador;
     if(r.respInstalacao&&$("v_iresp"))$("v_iresp").value=r.respInstalacao;
@@ -19345,10 +19389,13 @@ function limparPedido(){
      valor do usuário anterior, e o pedido nascia no nome de outra pessoa — some da lista
      de "Meus pedidos" de quem vendeu */
   if(EQUIPE.indexOf(usuarioAtual)>=0){
-    ["v_prosp","v_vend","v_inst"].forEach(function(id){
+    ["v_vend","v_inst"].forEach(function(id){
       var s=$(id);if(s&&[].slice.call(s.options).some(function(o){return o.value===usuarioAtual||o.textContent===usuarioAtual;}))s.value=usuarioAtual;
     });
   }
+  /* o prospector NÃO é quem está logado: ele vem da origem da venda (30/10) */
+  try{var sp0=$("v_prosp");if(sp0){sp0.value="";sp0.__manual=false;sp0.__base="";}
+    if($("v_prospMotivo"))$("v_prospMotivo").value="";prospLigadaAvisada="";}catch(eP0){}
   if($("v_frete"))$("v_frete").value="";
   if($("v_descGeral"))$("v_descGeral").value="";
   instRespVenda="";try{marcarInstalacao("");}catch(e){}
@@ -30379,7 +30426,8 @@ function renderExtratoRem(){
     return "<tr><td>"+esc(dataCurta(v.p.data))+"</td>"+
       "<td>"+esc(v.p.cliente||"—")+'<div class="t-sub">pedido '+esc(v.p.numero)+"</div></td>"+
       "<td>"+esc(produtoMaisCaro(v.p))+"</td>"+
-      "<td>"+v.pos.map(function(q){return '<div style="margin:2px 0"><span class="pill p-acc">'+q.n+" "+q.pct+"%</span> "+BRL(q.v)+"</div>";}).join("")+"</td>"+
+      "<td>"+v.pos.map(function(q){return '<div style="margin:2px 0"><span class="pill p-acc">'+q.n+" "+q.pct+"%</span> "+BRL(q.v)+"</div>";}).join("")+
+        (ehInstPrestador(v.p)?'<div class="t-sub">Instalação por '+esc(v.p.instalador)+": os 20% não vão para ninguém.</div>":"")+"</td>"+
       '<td class="num"><b>'+BRL(v.pos.reduce(function(t,q){return t+q.v;},0))+"</b></td></tr>";
   }).join("")+x.ajustes.map(function(a){
     return "<tr><td>"+esc(dataCurta(a.quando))+"</td><td>Ajuste · pedido "+esc(String(a.pedido))+
@@ -32283,6 +32331,191 @@ function pedidoDoRegistro(a){
   return pedidos.filter(function(p){return p.origemAtiv&&p.origemAtiv===a.id&&p.status!=="Cancelada";})[0]||null;
 }
 /* abre a venda com o cliente e o vendedor já escolhidos; o pedido salvo fecha a origem */
+/* ===== PROSPECTOR PELA ORIGEM DA VENDA (30/10, regra dele) =====
+   prospector = quem AGENDOU a atividade de onde a venda nasceu. Remarcada ou retorno: quem
+   agendou a PRIMEIRA da sequência. Criada pelo sistema (lembrete do orçamento, contato da OS):
+   quem fez o orçamento ou abriu a OS. Atendimento da própria pessoa: ela mesma — a não ser que o
+   cliente tenha uma atividade agendada por OUTRA pessoa, aberta ou concluída hoje: aí a venda
+   se liga a ela (a mais recente), para o prospector não se perder. */
+function ehRegAtividade(a){return !!a&&(a.natureza==="atividade"||!!a.eraAtividade);}
+function primeiraDaSequencia(a){
+  var x=a,g=0;
+  while(x&&x.origemAtiv&&g<20){
+    var pai=atendPorId(x.origemAtiv);
+    if(!pai||pai===x||!ehRegAtividade(pai))break;
+    x=pai;g++;
+  }
+  return x;
+}
+function agendadorDaVenda(a){
+  if(!a)return "";
+  if(!ehRegAtividade(a))return a.colaborador||"";
+  var f=primeiraDaSequencia(a)||a;
+  if(f.autoVenc&&f.origemOrc){
+    var o=orcamentos.filter(function(x){return x.id===f.origemOrc;})[0];
+    if(o)return o.criadoPor||o.vendedor||f.colaborador||"";
+  }
+  if(f.osEtapa&&f.osId){
+    var os=ordens.filter(function(x){return x.id===f.osId;})[0];
+    if(os)return os.atendente||os.criadoPor||f.colaborador||"";
+  }
+  if(f.criadoPor)return f.criadoPor;
+  return agendadorDe(Object.assign({},f,{natureza:"atividade"}))||f.colaborador||"";
+}
+function atividadesAgendadasPara(cid,quem,excetoId){
+  if(!cid)return [];
+  var hoje=hojeISO();
+  return atendimentos.filter(function(a){
+    if(a.loja&&a.loja!==lojaAtual)return false;
+    if(a.clienteId!==cid||!ehRegAtividade(a)||a.lancadoEmDobro||a.id===excetoId)return false;
+    if(a.status==="cancelada"||a.status==="cancelado"||a.situacao==="reagendada")return false;
+    if((a.status==="finalizado"||a.finalizado)&&String(a.concluidaEm||a.data||"").slice(0,10)!==hoje)return false;
+    var ag=agendadorDaVenda(a);
+    return !!ag&&ag!==(quem||"");
+  }).sort(function(x,y){return instanteDoRegistro(y)-instanteDoRegistro(x);});
+}
+/* a origem é uma atividade agendada por OUTRA pessoa: vale ela. Sem origem, com atendimento ou com
+   atividade da própria pessoa, procura a que outra pessoa agendou para o cliente (a mais recente) */
+function resolverProspector(reg,cid,quemFez,reserva){
+  var quem=quemFez||(reg&&reg.colaborador)||"";
+  var ativ=!!(reg&&ehRegAtividade(reg)),ag=ativ?agendadorDaVenda(reg):"";
+  if(ativ&&ag&&ag!==quem)return {quem:ag,ligada:null,reg:reg};
+  var lista=atividadesAgendadasPara(cid,quem,reg&&reg.id);
+  if(lista.length)return {quem:agendadorDaVenda(lista[0]),ligada:lista[0],reg:lista[0],varias:lista.length>1};
+  if(ativ)return {quem:ag||quem||reserva||"",ligada:null,reg:reg};
+  return {quem:(reg&&reg.colaborador)||reserva||"",ligada:null,reg:reg||null};
+}
+/* a OS e o orçamento guardam a atividade ligada num campo próprio — a origem deles não muda */
+function prospectorDaOS(o){
+  if(!o)return {quem:"",ligada:null};
+  var lig=o.atividadeAgendadaId&&atendPorId(o.atividadeAgendadaId);
+  if(lig)return {quem:agendadorDaVenda(lig),ligada:null,reg:lig};
+  var r=(o.origemAtiv&&atendPorId(o.origemAtiv))||null;
+  return resolverProspector(r,o.clienteId,o.atendente||o.criadoPor,o.atendente||o.criadoPor);
+}
+function prospectorDoOrc(o){
+  if(!o)return {quem:"",ligada:null};
+  var lig=o.atividadeAgendadaId&&atendPorId(o.atividadeAgendadaId);
+  if(lig)return {quem:agendadorDaVenda(lig),ligada:null,reg:lig};
+  var r=(o.origemAtiv&&atendPorId(o.origemAtiv))||null;
+  return resolverProspector(r,o.clienteId,o.criadoPor||o.vendedor,o.criadoPor||o.vendedor);
+}
+/* quem executou a OS: pelo que a pessoa FEZ, não pela função (30/10) — técnico ou vendedor */
+function executorDaOS(o){
+  if(!o)return "";
+  return (o.execucao&&o.execucao.por)||o.servicoRealizadoPor||o.tecnico||o.diagnosticoPor||"";
+}
+function osDaVendaTela(){
+  if(pedOrigemOS)return pedOrigemOS;
+  if(pedEditando&&pedEditando.osId)return ordens.filter(function(x){return x.id===pedEditando.osId;})[0]||null;
+  return null;
+}
+/* instalação futura por prestador (30/10): o pedido guarda "prestador: nome" no instalador. Esse texto
+   nunca é o nome de um colaborador, então os 20% não entram na comissão, nas metas nem na folha */
+function ehInstPrestador(p){return !!p&&String(p.instalador||"").indexOf("prestador: ")===0;}
+function rotuloPrestador(valor){
+  var pr=prestPorId(idDoValorPrest(valor));
+  return "prestador: "+((pr&&pr.nome)||"terceirizado");
+}
+function prospectorDaVendaAtual(){
+  var cli=null;try{cli=clienteDaVenda();}catch(e){}
+  var cid=cli&&cli.id;
+  if(pedOrigemOS)return prospectorDaOS(pedOrigemOS);
+  if(pedOrigemOrc)return prospectorDoOrc(pedOrigemOrc);
+  if(pedOrigemAtiv&&pedOrigemAtiv.id){
+    var r=atendPorId(pedOrigemAtiv.id)||pedOrigemAtiv;
+    return resolverProspector(r,cid||r.clienteId,r.colaborador,r.colaborador);
+  }
+  return {quem:"",ligada:null};
+}
+window.__prospectorVendaMF=function(){return prospectorDaVendaAtual();};
+window.__agendadorDaVendaMF=function(a){return agendadorDaVenda(a);};
+window.__prospectorDaOSMF=function(o){return prospectorDaOS(o);};
+window.__ligarAtivAgendadaMF=function(r,q){return ligarAtividadeAgendada(r,q);};
+window.__iniciarVendaDeOSMF=function(o){pedOrigemOS=o;pedOrigemAtiv=null;pedOrigemOrc=null;};
+window.__abrirPedidoDaOSMF=function(o,m,a,op){return abrirPedidoDaOS(o,m,a,op);};
+window.__abrirPedidoParaEditarMF=function(p){return abrirPedidoParaEditar(p);};
+window.__executorDaOSMF=function(o){return executorDaOS(o);};
+window.__posicoesMF=function(p,q){return posicoesNaVenda(p,q);};
+window.__rateioMF=function(p,b,pt){return rateio(p,b,pt);};
+window.__extratoRemMF=function(q,c){return extratoRemuneracao(q,c);};
+/* a atividade agendada por outra pessoa, ligada sozinha a uma OS ou orçamento novo (30/10) */
+function ligarAtividadeAgendada(reg,quem){
+  if(!reg||reg.atividadeAgendadaId)return null;
+  var origem=reg.origemAtiv&&atendPorId(reg.origemAtiv);
+  if(origem&&ehRegAtividade(origem)&&agendadorDaVenda(origem)!==quem)return null;
+  var lista=atividadesAgendadasPara(reg.clienteId,quem,origem&&origem.id);
+  if(!lista.length)return null;
+  var lig=lista[0];
+  reg.atividadeAgendadaId=lig.id;
+  /* o aviso rápido só quando há mais de uma: é aí que a pessoa precisa saber qual foi ligada */
+  if(lista.length>1)setTimeout(function(){toast("Ligado à atividade de "+dataBR(String(lig.data||"").slice(0,10))+" agendada por "+agendadorDaVenda(lig)+", a mais recente.");},400);
+  return lig;
+}
+var prospLigadaAvisada="";
+function garantirOpcaoSel(s,v){
+  if(!s||!v)return;
+  if(![].slice.call(s.options).some(function(o){return o.value===v;})){
+    var op=document.createElement("option");op.value=v;op.textContent=v;s.appendChild(op);}
+}
+/* o campo Prospector: preenchido pela regra e travado; quem tem "Alterar o prospector" troca */
+function aplicarProspectorVenda(){
+  var s=$("v_prosp");if(!s)return;
+  var pode=false;try{pode=podeAcao("alterarProspector");}catch(e){}
+  s.disabled=!pode;
+  /* a trava vale por dentro: sem a permissão, nem forçando a tela o prospector muda */
+  if(!pode)s.__manual=false;
+  var aj=$("v_prospAjuda"),w=$("v_prospMotivoWrap");
+  var base;
+  if(pedEditando){
+    base=pedEditando.prospector||"";
+    if(!s.__manual){garantirOpcaoSel(s,base);s.value=base;}
+    if(aj)aj.textContent="Prospector gravado no pedido: "+(base||"—")+(pode?" — para trocar, escolha outro e escreva o motivo.":".");
+  }else{
+    var r=prospectorDaVendaAtual();
+    base=r.quem||"";
+    s.__regra=base;s.__ligada=r.ligada?r.ligada.id:"";
+    if(!s.__manual){garantirOpcaoSel(s,base);s.value=base;}
+    if(aj){
+      var ref=r.reg,txt;
+      if(!base)txt="O prospector vem da atividade ou do atendimento de onde a venda nasceu.";
+      else if(r.ligada)txt="Prospector: "+base+" — a venda foi ligada à atividade de "+dataBR(String(r.ligada.data||"").slice(0,10))+" que "+base+" agendou para este cliente.";
+      else if(ref&&ehRegAtividade(ref))txt="Prospector: "+base+", que agendou a atividade de onde a venda nasceu.";
+      else txt="Prospector: "+base+", que fez o atendimento de onde a venda nasceu.";
+      aj.textContent=txt+(pode?" Para trocar, escolha outro e escreva o motivo.":"");
+    }
+    if(r.ligada&&r.varias&&prospLigadaAvisada!==r.ligada.id){
+      prospLigadaAvisada=r.ligada.id;
+      toast("Ligado à atividade de "+dataBR(String(r.ligada.data||"").slice(0,10))+" agendada por "+base+", a mais recente.");
+    }
+  }
+  s.__base=base;
+  if(w)w.hidden=!(s.__manual&&s.value!==base);
+}
+window.__aplicarProspectorMF=function(){return aplicarProspectorVenda();};
+/* a troca do prospector por quem pode: devolve o texto do registro, ou false se faltar o motivo */
+function trocaDeProspector(){
+  var s=$("v_prosp");if(!s||!s.__manual||s.value===(s.__base||""))return "";
+  var podeT=false;try{podeT=podeAcao("alterarProspector");}catch(e){}
+  if(!podeT)return "";
+  var mot=($("v_prospMotivo")&&$("v_prospMotivo").value||"").trim();
+  if(!mot)return false;
+  return {de:s.__base||"",para:s.value,por:usuarioAtual,em:agoraCarimbo(),motivo:mot};
+}
+/* o instalador da venda, num lugar só (30/10): com instalação futura é o RESPONSÁVEL por ela
+   (antes o campo da tela vinha primeiro, e ficava com o vendedor). Por prestador, "prestador: nome".
+   No pedido de OS é quem executou o serviço — também ao editar, senão ele perdia os 20% */
+function instaladorDaVenda(){
+  var vend=$("v_vend").value,inst=$("v_inst").value,resp=valorIresp(),temData=!!$("v_idata").value;
+  if(temData&&ehValorPrest(resp))return rotuloPrestador(resp);
+  if(temData&&resp)return resp;
+  var osV=osDaVendaTela();
+  if(osV)return executorDaOS(osV)||(pedEditando&&pedEditando.instalador)||vend;
+  if(pedEditando&&pedEditando.osId&&pedEditando.instalador)return pedEditando.instalador;
+  if(temData)return inst||vend;
+  return execSemAgenda()?(inst||vend):vend;
+}
+window.__instaladorVendaMF=function(){return instaladorDaVenda();};
 async function abrirPedidoPelaVenda(a,texto){
   var c=cliPorId(a.clienteId)||{};
   pedOrigemAtiv=a;   /* a origem vem ANTES de abrir a tela, senão o bloqueio da v276 pega */
@@ -32831,7 +33064,8 @@ function abrirPedidoParaEditar(p){
     /* o campo é o valor FINAL (v234); pedido antigo só tem o comercial, então é convertido */
     if($("v_descGeral"))$("v_descGeral").value=brMF((+p.descontoEspecial>0)?+p.descontoEspecial
       :((+p.descontoGeral>0)?cobradoPara(+p.descontoGeral):0));
-    if(p.prospector)$("v_prosp").value=p.prospector;
+    if(p.prospector){garantirOpcaoSel($("v_prosp"),p.prospector);$("v_prosp").value=p.prospector;}
+    $("v_prosp").__manual=false;if($("v_prospMotivo"))$("v_prospMotivo").value="";
     if(p.vendedor)$("v_vend").value=p.vendedor;
     if(p.instalador)$("v_inst").value=p.instalador;
     $("v_obs").value=p.obs||"";
@@ -32884,10 +33118,12 @@ async function aplicarEdicaoPedido(cli,r,solDesc){
   p.modelo="base";p.totalBase=r.totalBase;p.acrescimo=r.acrescimo;
   p.frete=(r.comp?r.comp.frete:0);p.descontoGeral=(r.comp?r.comp.desc:0);
   p.descontoEspecial=(r.comp?r.comp.descFinal:0);
-  p.prospector=$("v_prosp").value;p.vendedor=$("v_vend").value;
-  p.instalador=($("v_idata").value
-    ?($("v_inst").value||$("v_iresp").value||$("v_vend").value)
-    :(execSemAgenda()?($("v_inst").value||$("v_vend").value):$("v_vend").value));
+  /* o prospector gravado só muda por quem pode, com o motivo no histórico (30/10) */
+  var trE=trocaDeProspector();
+  if(trE){p.prospector=trE.para;p.prospectorAlterado=(p.prospectorAlterado||[]).concat([trE]);
+    registrarEvento(p,"Prospector alterado de "+(trE.de||"—")+" para "+trE.para+" por "+trE.por+" · "+trE.motivo);}
+  p.vendedor=$("v_vend").value;
+  p.instalador=instaladorDaVenda();
   p.respInstalacao=$("v_idata").value?(ehValorPrest(valorIresp())
     ?((prestPorId(idDoValorPrest(valorIresp()))||{}).nome||$("v_vend").value)
     :(valorIresp()||$("v_inst").value||$("v_vend").value)):"";
@@ -32984,8 +33220,10 @@ function abrirPedidoDaOS(o,modo,ativ,opc){
   ir("venda");
   try{limparPedido();}catch(e){}
   pedOrigemOS=o;pedOSModo=modo||"tecnico";pedOSAtiv=ativ||null;
-  var atd=o.atendente||o.criadoPor||usuarioAtual;
-  try{escolherClienteVenda(c);$("v_prosp").value=atd;$("v_vend").value=atd;}catch(e){}
+  /* OS (30/10), pelo que cada um FEZ: prospector = quem abriu ou agendou; vendedor = quem executou e
+     fechou a venda, técnico ou vendedor; instalador = quem fez o serviço */
+  var quemExec=executorDaOS(o)||usuarioAtual;
+  try{escolherClienteVenda(c);garantirOpcaoSel($("v_vend"),quemExec);$("v_vend").value=quemExec;aplicarProspectorVenda();}catch(e){}
   /* instalação futura, se houver, sugere o técnico da OS como responsável */
   try{if(o.tecnico&&[].slice.call($("v_iresp").options).some(function(x){return (x.value||x.textContent)===o.tecnico;}))$("v_iresp").value=o.tecnico;}catch(e){}
   /* a peça que o técnico marcou como "não usei" na execução NÃO vai para o pedido (09/10) */
@@ -34124,7 +34362,8 @@ function rateio(p,base,pontos){
   function soma(n,v,pt){if(!n)return;if(!m[n])m[n]={valor:0,pontos:0};m[n].valor+=v;m[n].pontos+=pt;}
   soma(p.prospector,base*.2,pontos*.2);
   soma(p.vendedor,base*.6,pontos*.6);
-  soma(p.instalador||p.vendedor,base*.2,pontos*.2);
+  /* instalação por prestador: os 20% não vão para ninguém (30/10) */
+  if(!ehInstPrestador(p))soma(p.instalador||p.vendedor,base*.2,pontos*.2);
   return m;
 }
 async function gravarFechamento(f){if(db){try{await col("fechamentos").doc(f.id).set(f);}catch(e){console.warn(e);}}}
@@ -36759,6 +36998,8 @@ async function osaAbrirOS(){
     if(OSA.quando==="tecnico")o.prazoOrcamento=OSA.prazo;
     /* o grava() do arquivo engole erro do banco (defeito conhecido): aqui NÃO pode, senão a OS
        nasceria só na memória e sumiria no próximo F5. Gravação direta, erro vai para o catch. */
+    /* técnico abrindo a OS direto: a atividade que outra pessoa agendou para o cliente é ligada (30/10) */
+    try{ligarAtividadeAgendada(o,usuarioAtual);}catch(eLg){}
     if(db)await col("ordens").doc(o.id).set(o);
     ordens.push(o);
 
@@ -37382,6 +37623,8 @@ async function salvarOS__corpo(){
       o.historico.push({quando:hojeISO(),por:usuarioAtual,
         texto:"Aberta a partir da atividade de "+osOrigemAtiv.data+(osOrigemAtiv.inicio?" às "+osOrigemAtiv.inicio:"")});
     }
+    /* sem atividade de outra pessoa na origem: a que ela agendou para o cliente é ligada (30/10) */
+    try{ligarAtividadeAgendada(o,o.atendente||usuarioAtual);}catch(eLg){}
     ordens.push(o);
   } else if(statusAntes!==o.status){
     o.historico.push({quando:hojeISO(),por:usuarioAtual,
@@ -37966,6 +38209,7 @@ async function criarOSDaAcao__corpo(a,c){
     teste:marcaTeste(c)||undefined};   /* OS de treinamento (v376) */
   o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"OS aberta às "+o.hora+" a partir "+(a.natureza==="atividade"?"da atividade":"do atendimento")+
     " de "+dataCurta(a.data||"")+" · atendente "+usuarioAtual});
+  try{ligarAtividadeAgendada(o,usuarioAtual);}catch(eLg){}
   ordens.push(o);await grava("ordens",o);
   await registrarAcaoAtiv(a,"os",o.id,o.numero,"OS "+o.numero+" aberta");
   return o;
@@ -39563,6 +39807,8 @@ async function salvarOrc__corpo(){
     await concluirAtivPorAcao(orcOrigemAtiv,"Concluída pelo orçamento "+o.numero);
     orcOrigemAtiv=null;
   }
+  /* orçamento sem atividade de outra pessoa na origem: a que ela agendou para o cliente é ligada (30/10) */
+  if(orcNovo){try{ligarAtividadeAgendada(o,o.vendedor||usuarioAtual);}catch(eLg){}}
   /* banco recusando, o orçamento NÃO fica como salvo: o novo sai da lista, a tela continua
      preenchida e o motivo aparece escrito (regra dele, 09/10) */
   try{await gravaConf("orcamentos",o);}
@@ -40177,7 +40423,12 @@ async function virarVenda(o){
   catch(eGr){return avisarRecusaBanco("or_alerta",eGr,"O orçamento não foi marcado — tente de novo antes de abrir a venda.");}
   render();ir("venda");
   try{escolherClienteVenda(c);atualizarEtapas();}catch(e){}
-  try{$("v_vend").value=o.vendedor;}catch(e){}
+  /* vendedor (30/10): quem executou a atividade de origem; sem ela, quem está fazendo a venda */
+  try{
+    var ativO=o.origemAtiv&&atendPorId(o.origemAtiv);
+    var vendO=(ativO&&ehRegAtividade(ativO)&&ativO.colaborador)||(EQUIPE.indexOf(usuarioAtual)>=0?usuarioAtual:"")||o.vendedor;
+    garantirOpcaoSel($("v_vend"),vendO);$("v_vend").value=vendO;
+  }catch(e){}
   try{if($("v_descGeral"))$("v_descGeral").value=(dPed>0)?brMF(dPed):"";}catch(e){}
   calcular();
   toast("Orçamento "+o.numero+" carregado no pedido: "+(o.itens||[]).length+" item(ns), "+
@@ -40306,6 +40557,11 @@ function renderPedDet(){
   papeis.forEach(function(x){
     var antes=p.base*x.f,depois=r.base*x.f,mudou=Math.abs(antes-depois)>=0.005;
     var at=x.q?colabAtivo(x.q):false;
+    if(x.p==="Instalador"&&ehInstPrestador(p)){
+      tb.innerHTML+="<tr><td>"+x.p+"</td><td>"+esc(x.q)+'</td><td class="num">—</td><td class="num">não vai para ninguém</td>'+
+        '<td><span class="pill p-mut">prestador</span></td></tr>';
+      return;
+    }
     tb.innerHTML+="<tr><td>"+x.p+"</td><td>"+esc(x.q||"—")+"</td>"+
       '<td class="num">'+(x.f*100)+"%</td>"+
       '<td class="num">'+BRL(antes)+(mudou?' <span class="pill p-warn">→ '+BRL(depois)+"</span>":"")+"</td>"+
@@ -43110,7 +43366,7 @@ function camposDesconhecidosZap(t){
   return r;
 }
 function exemploVarsZap(oiTexto){
-  var base={cliente:"Maria",vendedor:primeiroNome(usuarioAtual)||"Wagner",loja:nomeLoja()||"Minas Filtros",
+  var base={cliente:"Maria",vendedor:primeiroNome(usuarioAtual)||"o vendedor",loja:nomeLoja()||"Minas Filtros",
     empresa:EMPRESA.razao||nomeLoja()||"Minas Filtros",produto:"PURIFICADOR TOP LIFE",valor:BRL(150),
     parcela:"2/5",documento:"Pedido 20801",vencimento:dataCurta(somaDias(hojeISO(),5)),atividade:"visita",
     data:dataCurta(somaDias(hojeISO(),1)),hora:"14:00",numero:"20801",
@@ -44467,7 +44723,7 @@ function checarPendencias(){
    {p:"Instalador",q:p.instalador||p.vendedor,f:.2}].forEach(function(x){
     var eu=(x.q===usuarioAtual);
     tb.innerHTML+="<tr><td>"+x.p+"</td><td>"+esc(x.q||"—")+(eu?' <span class="pill p-acc">você</span>':"")+"</td>"+
-      '<td class="num">'+BRL(p.base*x.f)+"</td></tr>";
+      '<td class="num">'+((x.p==="Instalador"&&ehInstPrestador(p))?"não vai para ninguém":BRL(p.base*x.f))+"</td></tr>";
   });
   $("au_estoque").textContent="Estoque envolvido: "+
     (p.itens||[]).reduce(function(a,i){return a+(i.qtd||1);},0)+" unidade(s) na responsabilidade de "+
@@ -45651,7 +45907,8 @@ function iso(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"
 function mesmoDia(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();}
 
 /* ---------- alerta de 15 min + bloqueio por atividade atrasada ---------- */
-var usuarioAtual="Wagner",alertados={},agPend=null,bloqPend=null,timerAg=null;
+/* nenhum nome como padrão (30/10): com banco, quem entra é o do login. Na demonstração, o primeiro Administrador da lista */
+var usuarioAtual=(modoBanco()?"":((USUARIOS.filter(function(u){return u.perfil==="Administrador";})[0]||{}).nome||"")),alertados={},agPend=null,bloqPend=null,timerAg=null;
 /* ---------- funções e permissões ---------- */
 /* OS GRUPOS DO MENU (16/10, pedido dele): "Operações" deixou de existir e tudo que estava nele
    veio para COMERCIAL; dentro de cada grupo os itens ficam em ORDEM ALFABÉTICA.
@@ -45703,7 +45960,10 @@ var ACOES=[
   ["almoxarifado","Ver e gerir todos os estoques (contagens, autorizações e relatórios de estoque)"],
   /* 28/10 (regra dele: "apareceu opção para os vendedores atualizar os preços, isso não pode
      acontecer"): cadastrar, alterar, importar e ativar/desativar produto vira permissão */
-  ["editarProdutos","Cadastrar e alterar produtos e preços (inclui importar lista)"]
+  ["editarProdutos","Cadastrar e alterar produtos e preços (inclui importar lista)"],
+  /* 30/10 (regra dele): o prospector vem da origem da venda e fica travado; só quem tem esta
+     permissão troca, com o motivo registrado no histórico do pedido */
+  ["alterarProspector","Alterar o prospector do pedido (fica registrado no histórico)"]
 ];
 var TODAS_TELAS=GRUPOS_TELA.reduce(function(a,g){return a.concat(g.telas.map(function(t){return t[0];}));},[]);
 /* as telas do dia a dia, que as funções padrão recebem. NÃO é o grupo do menu: o grupo
@@ -45724,7 +45984,7 @@ var SEED_FUNCOES=[
     acoes:["verTudo","aprovarFinanceiro","reabrirVenda","baixarTitulos","exportar"]},
   {nome:"Gerente",desc:"Acompanha a equipe e aprova desconto",
     telas:TELAS_OPERACAO.concat(["estEmpresa","faturamento","fatur","metasop"]),
-    acoes:["verTudo","aprovarDesconto","editarMetas","exportar"]},
+    acoes:["verTudo","aprovarDesconto","editarMetas","exportar","alterarProspector"]},
   {nome:"Vendedor",desc:"Vende, atende e cuida do próprio estoque",telas:TELAS_OPERACAO.slice(),acoes:[]},
   {nome:"Prospector",desc:"Prospecta e agenda",
     telas:["dash","agenda","ponto","metasop","ativ","atend","leads","clientes","produtos"],acoes:[]},
@@ -45798,7 +46058,8 @@ var ACOES_POR_PERFIL_ANTES={exportar:["Administrador"],apagarRegistros:["Adminis
   corrigirCadastro:["Administrador"],aprovarCredito:["Financeiro","Administrador"],
   autorizarEstoque:["Administrador","Gerente"],almoxarifado:["Administrador","Estoquista","Almoxarifado"],
   editarProdutos:["Administrador","Almoxarifado","Estoquista","Financeiro","Gerente"],
-  verCustos:["Administrador"],conferirPlanosInf:["Administrador","Financeiro"]};
+  verCustos:["Administrador"],conferirPlanosInf:["Administrador","Financeiro"],
+  alterarProspector:["Administrador","Gerente"]};
 function ehTravaAdmin(n,tipo,k,perfil){
   return (perfil||perfilDe(n))==="Administrador"&&TRAVA_ADMIN[tipo].indexOf(k)>=0;
 }
@@ -45919,6 +46180,27 @@ function migrarPlanosInf(lista){
   return feitas;
 }
 var planoInfMigradas=[];
+/* ALTERAR O PROSPECTOR (30/10): a ação nova nasce no Administrador e no Gerente, uma vez (marca prospV) */
+var PROSP_VERSAO="2026-10-30";
+function migrarAlterarProspector(lista){
+  var feitas=[];
+  (lista||[]).forEach(function(f){
+    if(!f||f.prospV)return;
+    var a=(f.acoes||[]).slice();
+    if((f.nome==="Administrador"||f.nome==="Gerente")&&a.indexOf("alterarProspector")<0)a.push("alterarProspector");
+    f.acoes=a;f.prospV=PROSP_VERSAO;feitas.push(f.nome);
+  });
+  return feitas;
+}
+var prospMigradas=[];
+async function gravarMigracaoProspector(){
+  if(!db||!prospMigradas.length||!ehAdministrador())return 0;
+  try{await gravarFuncoesConf();}catch(e){console.warn("alterar prospector",e);return 0;}
+  prospMigradas=[];
+  try{await registrarLogPerm({alvo:"migracao",nome:"Prospector",
+    texto:"Prospector (30/10): \"Alterar o prospector do pedido\" nasceu no Administrador e no Gerente."});}catch(e){}
+  return 1;
+}
 async function gravarMigracaoPlanosInf(){
   if(!db||!planoInfMigradas.length||!ehAdministrador())return 0;
   try{await gravarFuncoesConf();}catch(e){console.warn("planos informados",e);return 0;}
@@ -51621,7 +51903,8 @@ function montarSelects(){
   ["v_prosp","v_vend","v_inst","v_iresp","agendaPessoa"].forEach(function(id){
     var s=$(id);s.innerHTML=(id==="v_inst"||id==="v_iresp"||id==="agendaPessoa")?'<option value="">'+(id==="agendaPessoa"?"Equipe toda":"—")+"</option>":"";
     EQUIPE.forEach(function(n){var o=document.createElement("option");o.textContent=n;s.appendChild(o);});});
-  $("v_prosp").value="Wagner";$("v_vend").value="Wagner";
+  $("v_prosp").value="";
+  if(EQUIPE.indexOf(usuarioAtual)>=0)$("v_vend").value=usuarioAtual;
   var su=$("usuario");EQUIPE.forEach(function(n){var o=document.createElement("option");o.textContent=n;su.appendChild(o);});
   su.value=usuarioAtual;
 }
@@ -53006,6 +53289,12 @@ function ligar(){
   if($("v_paEquip"))$("v_paEquip").onchange=function(){aoEscolherAparelhoPlano(true);};
   /* o estoque de onde o item sai (23/10): trocar refaz a nota dos saldos */
   if($("v_estoque"))$("v_estoque").onchange=function(){try{notaEstoqueItem();}catch(e){}};
+  /* trocar o prospector (só quem pode): pede o motivo, que vai para o histórico (30/10) */
+  if($("v_prosp"))$("v_prosp").addEventListener("change",function(){
+    var s=$("v_prosp");s.__manual=(s.value!==(s.__base||""));
+    if($("v_prospMotivoWrap"))$("v_prospMotivoWrap").hidden=!s.__manual;
+    if(s.__manual)try{$("v_prospMotivo").focus();}catch(e){}
+  });
   /* a quantidade muda o aviso "vai ficar −N" (30/10) */
   if($("v_qtd"))$("v_qtd").addEventListener("input",function(){try{notaEstoqueItem();}catch(e){}});
   if($("ecContagem"))$("ecContagem").onclick=function(){abrirContagem($("ecQuem")?$("ecQuem").value:"");};
@@ -53064,7 +53353,7 @@ function ligar(){
   /* o botao "Desconto de troca" do pagamento SAIU em 21/10: a caixa verde do item ("Lancar a
      troca de R$ X") ja e o lugar de lancar a troca, e dois caminhos para a mesma coisa
      confundem (licao da v326). A troca lancada aparece no resumo do pagamento como linha. */
-  ["v_vend","v_idata","v_inst"].forEach(function(id){$(id).addEventListener("change",function(){ajustarInstalador();calcular();});});
+  ["v_vend","v_idata","v_inst","v_iresp"].forEach(function(id){if($(id))$(id).addEventListener("change",function(){ajustarInstalador();calcular();});});
   $("v_idata").addEventListener("input",ajustarInstalador);
   /* O FINALIZAR ABRE A REVISÃO (21/10): o vendedor confere tudo junto e só então confirma.
      Editando um pedido já salvo, a revisão não entra no caminho — ali o fluxo é outro. */
@@ -54191,6 +54480,8 @@ async function continuarBoot(){
   await passoBoot("ler o banco",async function(){
     try{await carregar();}catch(e){erro("carregar: "+e.message);}
   });
+  /* a venda começa com quem entrou nos papéis de vendedor e instalador (30/10): sem nome fixo no código */
+  try{if(usuarioAtual&&EQUIPE.indexOf(usuarioAtual)>=0){$("v_vend").value=usuarioAtual;$("v_inst").value=usuarioAtual;}}catch(e){}
   /* estoque antigo guardado no produto vira movimento "Estoque inicial", uma vez só */
   await passoBoot("grupos e subgrupos",normalizarGruposProdutos);
   /* o cadastro de Grupos de Produtos recolhe o que já está escrito nos produtos (v180) */
@@ -54219,6 +54510,7 @@ async function continuarBoot(){
   await passoBoot("permissão de produtos",gravarMigracaoProdPerm);
   await passoBoot("custo interno",gravarMigracaoCustos);
   await passoBoot("planos informados",gravarMigracaoPlanosInf);
+  await passoBoot("alterar prospector",gravarMigracaoProspector);
   /* os 12 status novos passaram a conduzir a tela: as OS já gravadas ganham o status certo, uma
      vez só, deduzido da lista antiga (pedido dele, 09/10) */
   await passoBoot("acerto do status das OS",ajustarSitOS);
