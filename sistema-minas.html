@@ -1597,6 +1597,12 @@
 #ogGraficos .grid.g3{gap:28px}
 #ogGraficos .barras.vlarga .bv{min-width:112px}
 @media (max-width:620px){#ogGraficos{padding:4px 14px 12px}}
+/* v468: quadro dos grupos principais no Dashboard */
+.kpi-grupos{grid-column:span 2}
+.dg-lista{display:grid;grid-template-columns:1fr 1fr;gap:4px 18px;margin-top:8px}
+.dg-l{display:flex;justify-content:space-between;gap:8px;font-size:14px;border-bottom:1px solid var(--line);padding:3px 0}
+.dg-l b{font-size:17px}
+@media (max-width:620px){.kpi-grupos{grid-column:auto}.dg-lista{grid-template-columns:1fr}}
 </style>
 
 <!-- ============ AJUSTES DE CELULAR (estilo) — fica logo após o estilo principal
@@ -24695,11 +24701,17 @@ function resumoOrigens(){
   var t={c:0,v:0,fat:0};com.forEach(function(x){t.c+=x.cads;t.v+=x.vend;t.fat+=x.fat;});
   t.conv=t.c?Math.round(t.v/t.c*100):0;
   var qs=multiValores("ogQuais");
-  var filtros=["Período: "+d.J.rot+(d.J.de||d.J.ate?" ("+(d.J.de?dataBR(d.J.de):"início")+" a "+(d.J.ate?dataBR(d.J.ate):"hoje")+")":""),
+  /* v468 (pedido dele, 30/10): o período sai SEMPRE com as datas — em "desde sempre", do
+     primeiro cadastro da empresa até hoje */
+  var deP=d.J.de,ateP=d.J.ate||hojeISO();
+  if(!deP){deP=clientes.filter(function(c){return c.loja===lojaAtual&&c.criadoEm;})
+    .reduce(function(m,c){var x=String(c.criadoEm).slice(0,10);return (!m||x<m)?x:m;},"")||ateP;}
+  var periodoTxt=dataBR(deP)+" a "+dataBR(ateP)+" ("+d.J.rot+")";
+  var filtros=["Período: "+periodoTxt,
     "Origens: "+(qs.length?qs.join(", "):"todas"),
     "Situação: "+(d.filtro==="ativas"?"só ativas":d.filtro==="inativas"?"só inativas":"todas"),
     "Empresa: "+nomeLoja()];
-  return {d:d,linhas:d.linhas,com:com,t:t,filtros:filtros};
+  return {d:d,linhas:d.linhas,com:com,t:t,filtros:filtros,periodo:periodoTxt,deP:deP,ateP:ateP};
 }
 function barrasPdf(itens,cor,fmt){
   if(!itens.length)return '<div style="color:#666;padding:6px 0">Nada no período.</div>';
@@ -24737,7 +24749,9 @@ function htmlPdfOrigens(r){
     "</tbody></table>";
   return '<div class="docm docp" style="background:#fff;color:#111"><div class="os-cab">'+cabecalhoEmpresaDoc()+"</div>"+
     '<div style="font-size:16px;font-weight:700;color:#1f3f8f;margin:4px 0 2px">RELATÓRIO DE ORIGENS</div>'+
-    '<div style="font-size:10.5px;color:#444;margin-bottom:8px">'+r.filtros.map(esc).join(" · ")+" · gerado em "+esc(dataBR(hojeISO()))+" por "+esc(usuarioAtual)+"</div>"+
+    '<div style="display:inline-block;background:#eef2fa;border:1px solid #c9d3e6;border-radius:6px;padding:5px 10px;margin:2px 0 6px;font-size:12.5px">'+
+      '<b style="color:#1f3f8f">PERÍODO DO FILTRO:</b> '+esc(r.periodo)+"</div>"+
+    '<div style="font-size:10.5px;color:#444;margin-bottom:8px">'+r.filtros.slice(1).map(esc).join(" · ")+" · gerado em "+esc(dataBR(hojeISO()))+" por "+esc(usuarioAtual)+"</div>"+
     '<div style="display:flex;gap:8px;margin-bottom:8px">'+kpi("Cadastros no período",t.c)+kpi("Viraram venda",t.v)+kpi("Conversão",t.conv+"%")+
       kpi("Faturamento desses cadastros",BRL(t.fat))+"</div>"+
     '<div style="display:flex;gap:8px;margin-bottom:8px">'+caixa("Cadastros por origem",barrasPdf(porCad,"#2e4fd6"))+
@@ -24754,7 +24768,7 @@ async function baixarPdfOrigens(){
   var folha=document.createElement("div");folha.className="pdf-captura";folha.style.cssText="width:794px;background:#fff";
   folha.innerHTML=htmlPdfOrigens(r);tmp.appendChild(folha);document.body.appendChild(tmp);
   try{
-    var arq=await pdfDoElemento(folha,"Relatorio_de_Origens_"+String(nomeLoja()).replace(/[^A-Za-z0-9]+/g,"_")+"_"+hojeISO()+".pdf",
+    var arq=await pdfDoElemento(folha,"Relatorio_de_Origens_"+String(nomeLoja()).replace(/[^A-Za-z0-9]+/g,"_")+"_"+r.deP+"_a_"+r.ateP+".pdf",
       {mode:["css"],avoid:["tr"]},[8,0,8,0]);
     baixarArquivo(arq);toast("Relatório de Origens baixado: "+arq.name);
   }catch(e){toast("Não deu para gerar o PDF: "+((e&&e.message)||e));}
@@ -24771,7 +24785,7 @@ function baixarCsvOrigens(){
   r.linhas.slice().sort(function(a,b){return b.cads-a.cads||ordAZ(a.n,b.n);}).forEach(function(x){
     L.push([x.n,x.cads,(t.c?Math.round(x.cads/t.c*100):0)+"%",x.vend,x.pct+"%",n(x.fat),x.vend?n(x.fat/x.vend):"",x.ativa?"Ativa":"Inativa"]);});
   L.push(["Total",t.c,"100%",t.v,t.conv+"%",n(t.fat),t.v?n(t.fat/t.v):"",""]);
-  baixarPlanilhaMF("Relatorio_de_Origens_"+nomeLoja()+"_"+hojeISO(),L);
+  baixarPlanilhaMF("Relatorio_de_Origens_"+nomeLoja()+"_"+r.deP+"_a_"+r.ateP,L);
 }
 window.__baixarPdfOrigensMF=baixarPdfOrigens;window.__htmlPdfOrigensMF=function(){return htmlPdfOrigens(resumoOrigens());};
 window.__csvOrigensMF=baixarCsvOrigens;
@@ -31156,6 +31170,23 @@ function janela(){
   return {de:d.getFullYear()+"-01-01",ate:d.getFullYear()+"-12-31",rot:"Ano de "+d.getFullYear()};
 }
 function noPeriodo(data,j){return data&&data>=j.de&&data<=j.ate;}
+/* os grupos que o quadro "Produtos dos grupos principais" separa (regra dele, 30/10), pelo nome do
+   grupo no cadastro, sem acento nem maiúscula; o plano de garantia entra também pelo ehPlano */
+var GRUPOS_DASH=[["Purificadores",/purificador/],["Refis Recorrentes",/refi[sl]? recorrent/],["Bebedouros",/bebedouro/],
+  ["Geradores de Ozônio",/ozonio/],["Planos de Garantia",/plano/]];
+function grupoDashDoItem(i){
+  var p=prodPorId(i.pid)||{};
+  if(ehPlano(i))return "Planos de Garantia";
+  var g=semAcento(String(p.grupo||i.grupo||"")).toLowerCase();
+  for(var k=0;k<GRUPOS_DASH.length;k++)if(GRUPOS_DASH[k][1].test(g))return GRUPOS_DASH[k][0];
+  return "";
+}
+function qtdProdutosDash(lista){
+  var tot=0,gr={};GRUPOS_DASH.forEach(function(x){gr[x[0]]=0;});
+  lista.forEach(function(p){(p.itens||[]).forEach(function(i){
+    var q=+i.qtd||1;tot+=q;var g=grupoDashDoItem(i);if(g)gr[g]+=q;});});
+  return {total:tot,grupos:gr};
+}
 function dadosDash(quem){
   var j=janela();
   function meu(n){return !quem||n===quem;}
@@ -31203,7 +31234,21 @@ function dadosDash(quem){
     if(ped){convCli++;convPed.push(ped);}
     else if(lim>=hj)convAberto++;
   });
+  /* v468 (pedido dele, 30/10): PREVISÃO = as aprovadas no período (o quadro Faturamento) + as
+     pendentes JÁ ASSINADAS que esperam o financeiro, de qualquer data (como o quadro das
+     pendentes). Pedido incompleto não entra (ele nem é pedido) e venda sem assinatura também não. */
+  var assinPend=vendasPendentes(quem).filter(function(p){return !!(p.assinaturaImg||p.assinadoPeloLink);});
+  var prevPed=aprov.concat(assinPend.filter(function(p){return aprov.indexOf(p)<0;}));
+  function depDe(l){return Math.round(l.reduce(function(a,p){return a+valorDepreciadoPedido(p);},0)*100)/100;}
+  function metaDe(l){return Math.round(l.reduce(function(a,p){
+    if(!quem)return a+valorDepreciadoPedido(p);
+    return a+posicoesNaVenda(p,quem).reduce(function(t,x){return t+x.v;},0);},0)*100)/100;}
+  /* PRODUTOS VENDIDOS (v468): unidades dos itens das vendas do período (as mesmas do quadro
+     Vendas realizadas); e os grupos que ele nomeou, contados à parte */
+  var prodVds=qtdProdutosDash(vds),prodPrev=qtdProdutosDash(prevPed);
   return {j:j,ats:ats,criadas:criadas,feitas:feitas,vds:vds,aprov:aprov,vdsVend:vdsVend,conversas:conversas,
+    prevPed:prevPed,prevAprov:aprov.length,prevAssin:assinPend.length,prevDep:depDe(prevPed),prevMeta:metaDe(prevPed),
+    prevQtd:prodPrev.total,prodQtd:prodVds.total,prodGrupos:prodVds.grupos,
     convCli:convCli,convTotal:cliConv.length,convAberto:convAberto,convPed:convPed,
     cAt:porCanal(ats),cFeitas:porCanal(feitas),cPass:porCanal(pass),cAtivo:porCanal(ativo),
     pass:pass,ativo:ativo,
@@ -31228,7 +31273,9 @@ var DASH_ALVOS={
   feitas:{tela:"atend",t:"Atividades realizadas",l:"feitas"},
   vds:{tela:"pedidos",t:"Vendas realizadas",l:"vds"},
   fat:{tela:"pedidos",t:"Faturamento (aprovado no financeiro)",l:"aprov"},
-  conv:{tela:"pedidos",t:"Conversão (clientes conversados que compraram)",l:"convPed"}
+  conv:{tela:"pedidos",t:"Conversão (clientes conversados que compraram)",l:"convPed"},
+  prev:{tela:"pedidos",t:"Aprovadas + assinadas esperando o financeiro",l:"prevPed"},
+  prod:{tela:"pedidos",t:"Vendas do período (produtos vendidos)",l:"vds"}
 };
 function abrirFiltroDash(k){
   var def=DASH_ALVOS[k];if(!def)return;
@@ -31373,7 +31420,16 @@ function renderDash(){
       ? (quem?BRL(d.meta)+" vai para o prêmio de meta de "+esc(quem):BRL(d.meta)+" conta na meta da equipe")
       : "nenhuma venda aprovada no financeiro")+
     kpiVai("conv","Conversão",conv+"%",d.convCli+" de "+totalContatos+" cliente"+(totalContatos===1?"":"s")+" conversado"+(totalContatos===1?"":"s")+
-      " compraram como vendedor em até "+DIAS_CONVERSAO+" dias"+(d.convAberto?" · "+d.convAberto+" ainda dentro do prazo":""));
+      " compraram como vendedor em até "+DIAS_CONVERSAO+" dias"+(d.convAberto?" · "+d.convAberto+" ainda dentro do prazo":""))+
+    /* v468: previsão, produtos vendidos e os grupos principais (pedido dele, 30/10) */
+    kpiVai("prev","Aprovadas + assinadas a aprovar",BRL(d.prevDep),
+      d.prevAprov+" aprovada"+(d.prevAprov===1?"":"s")+" + "+d.prevAssin+" assinada"+(d.prevAssin===1?"":"s")+" esperando o financeiro · "+
+      BRL(d.prevMeta)+(quem?" para o prêmio de meta de "+esc(quem):" na meta da equipe")+" · "+d.prevQtd+" produto"+(d.prevQtd===1?"":"s"))+
+    kpiVai("prod","Produtos vendidos",String(d.prodQtd),d.vds.length+" venda"+(d.vds.length===1?"":"s")+" no período")+
+    '<div class="kpi kpi-grupos" data-dashk="prod" role="button" tabindex="0" title="Ver as vendas"><div class="l">Produtos vendidos dos grupos principais</div>'+
+      '<div class="dg-lista">'+GRUPOS_DASH.map(function(g){var n=d.prodGrupos[g[0]]||0;
+        return '<div class="dg-l"><span>'+esc(g[0])+'</span><b>'+n+"</b></div>";}).join("")+"</div>"+
+      '<div class="l kpi-ver">toque para ver</div></div>';
   (function(){
     var w=$("dashTopo");if(w.__ligDash)return;w.__ligDash=true;
     function alvo(ev){var el=ev.target&&ev.target.closest?ev.target.closest("[data-dashk]"):null;return el?el.getAttribute("data-dashk"):"";}
