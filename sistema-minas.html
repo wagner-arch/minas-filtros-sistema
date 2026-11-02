@@ -1591,6 +1591,14 @@
 .iv-falta{margin-top:12px}.iv-falta summary{cursor:pointer;font-weight:600}
 .iv-tot{margin-top:10px;text-align:right}
 #iv_qtd{font-size:18px}
+#iv_series{margin:4px 0 10px;padding:10px;border:1px solid var(--line);border-radius:10px}
+.iv-sc{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;justify-content:space-between}
+.iv-sls{display:flex;flex-direction:column;gap:6px;max-height:320px;overflow:auto}
+.iv-sl{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:6px;align-items:center}
+.iv-sn{text-align:right;color:var(--mut,#667);font-variant-numeric:tabular-nums}
+.iv-sl input{font-size:16px;min-width:0}
+.iv-ent-bts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.iv-ser-l{padding:6px 0;border-top:1px solid var(--line)}
 @media (max-width:620px){.iv-lanc{grid-template-columns:1fr!important}.iv-lanc .fld{grid-column:auto!important}}
 /* v467: os gráficos de Origens não encostam na borda do cartão (print dele, 30/10) */
 #ogGraficos{padding:6px 24px 14px}
@@ -6841,6 +6849,7 @@ img{max-width:100%}
         <div class="fld" style="grid-column:span 2"><label for="iv_prod">Produto <span class="req">*</span></label><select id="iv_prod"></select></div>
         <div class="fld"><label for="iv_qtd">Quantidade contada <span class="req">*</span></label><input id="iv_qtd" type="number" min="0" step="1" inputmode="numeric" placeholder="—"></div>
       </div>
+      <div id="iv_series" hidden></div>
       <div class="fld"><label for="iv_obs">Onde contou / observação</label><input id="iv_obs" placeholder="Ex.: prateleira 3, depósito do fundo"></div>
       <div class="actions" style="margin-top:6px"><button class="btn" type="button" id="iv_add">Registrar a contagem</button></div>
       <div id="iv_lista"></div>
@@ -8388,7 +8397,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=465"></script>
+<script src="supabase/adapter.js?v=477"></script>
 <script>
 (function(){
 "use strict";
@@ -22086,6 +22095,213 @@ async function salvarInv(inv,antes){
     avisarRecusaBanco("iv_alerta",e,"O inventário continua como estava.");return false;}
 }
 function copiaInv(inv){return JSON.parse(JSON.stringify(inv));}
+/* ===== NÚMERO DE SÉRIE NO INVENTÁRIO (02/11, etapa 1 do controle por série). Só para os grupos da
+   lista da configuração (GRUPOS_SERIE; hoje, Purificadores), respeitando o produto marcado "nunca".
+   Opcional: nada aqui trava a contagem. Na 1ª contagem as séries vão junto com a quantidade; na
+   recontagem, para continuar cega, elas só aparecem depois de registrar a quantidade.
+   As séries ficam na entrada da contagem (e.series) e, ao fechar o inventário, na coleção "series"
+   de cada empresa, como "em estoque" no local contado. As próximas etapas só mudam o local. */
+var IVS={pid:"",linhas:[],alvo:null,soma:false,sujo:false};
+var seriesCad=[],seriesLidas=false,ivsCliIdx=null,ivsCliTam=-1;
+function invPedeSerie(p){return !!p&&String(p.serie||"")!=="nunca"&&temSerieGrupo(p);}
+function normSerie(s){return String(s||"").trim().toUpperCase();}
+function serieLimpa(l){return (l||[]).map(function(s){return String(s||"").trim();}).filter(Boolean);}
+function faseInvAtual(inv){return inv.status==="recontagem"?"c2":"c1";}
+function seriesDaFase(it,f){var o=[];(it[f]||[]).forEach(function(e){o=o.concat(e.series||[]);});return o;}
+/* o que vale ao fechar: a recontagem, se alguém conferiu; senão a 1ª contagem. Recontou e não achou nenhum: nenhuma. */
+function seriesFinaisInv(it){
+  var lista;
+  if(it.recontar&&(it.c2||[]).length&&totalFaseInv(it,"c2")===0)lista=[];
+  else if(it.recontar&&(it.c2||[]).some(function(e){return Array.isArray(e.series);}))lista=seriesDaFase(it,"c2");
+  else lista=seriesDaFase(it,"c1");
+  var vistas={};
+  return serieLimpa(lista).filter(function(s){var n=normSerie(s);if(vistas[n])return false;vistas[n]=1;return true;});
+}
+function ivsAparelhoDaSerie(n){
+  if(!ivsCliIdx||ivsCliTam!==equipamentos.length){
+    ivsCliIdx=new Map();ivsCliTam=equipamentos.length;
+    equipamentos.forEach(function(e){if(e.serie&&e.ativo!==false&&(!e.loja||e.loja===lojaAtual))ivsCliIdx.set(normSerie(e.serie),e);});
+  }
+  return ivsCliIdx.get(n)||null;
+}
+function ivsChaveRascunho(pid){
+  var a=IVS.alvo;return "mf_ivser_"+(invAtual?invAtual.id:"")+"_"+(a?a.pid+"_"+a.fase+"_"+a.ix:pid+"_novo");
+}
+function ivsGuardaRascunho(){
+  try{var k=ivsChaveRascunho(IVS.pid);
+    if(serieLimpa(IVS.linhas).length)localStorage.setItem(k,JSON.stringify({linhas:IVS.linhas,qtd:$("iv_qtd").value,soma:IVS.soma}));
+    else localStorage.removeItem(k);}catch(e){}
+}
+function ivsTiraRascunho(){try{localStorage.removeItem(ivsChaveRascunho(IVS.pid));}catch(e){}}
+function ivsLeRascunho(){try{return JSON.parse(localStorage.getItem(ivsChaveRascunho(IVS.pid))||"null");}catch(e){return null;}}
+function ivsZerar(){IVS.pid="";IVS.linhas=[];IVS.alvo=null;IVS.soma=false;IVS.sujo=false;}
+/* a recontagem parte da última lista conferida (de uma recontagem devolvida, se houver), sem o que já foi para outra entrada */
+function ivsBaseRecontagem(it,ix){
+  var ant=seriesDaFase({c2:it.c2Anterior||[]},"c2"),base=ant.length?ant:seriesDaFase(it,"c1"),usadas={};
+  (it.c2||[]).forEach(function(e,i){if(i!==ix)(e.series||[]).forEach(function(s){usadas[normSerie(s)]=1;});});
+  return serieLimpa(base).filter(function(s){return !usadas[normSerie(s)];});
+}
+function ivsQtdAlvo(){
+  if(IVS.alvo){var it=(invAtual.itens||{})[IVS.alvo.pid],e=it&&(it[IVS.alvo.fase]||[])[IVS.alvo.ix];return e?(+e.qtd||0):0;}
+  var q=String($("iv_qtd").value).trim();return q===""?0:Math.max(0,Math.floor(+q)||0);
+}
+function ivsTotalLinhas(){
+  var q=ivsQtdAlvo(),ult=-1;IVS.linhas.forEach(function(s,i){if(String(s||"").trim())ult=i;});
+  if(!IVS.alvo&&(IVS.soma||!q))return Math.min(500,serieLimpa(IVS.linhas).length+1);
+  return Math.min(500,Math.max(q,ult+1));
+}
+function ivsLinhaHtml(i){
+  return '<div class="iv-sl"><span class="iv-sn">'+(i+1)+'</span><input data-ivs="'+i+'" autocomplete="off" placeholder="digite ou leia" value="'+esc(IVS.linhas[i]||"")+'">'+
+    '<button class="btn ghost sm" type="button" data-ivsl="'+i+'">ler</button></div>';
+}
+function ivsLigarLinhas(box){
+  Array.prototype.forEach.call(box.querySelectorAll("[data-ivs]"),function(c){
+    if(c.__ligado)return;c.__ligado=true;
+    c.addEventListener("input",function(){
+      IVS.linhas[+c.getAttribute("data-ivs")]=c.value;IVS.sujo=true;ivsDepoisDeMudar();});});
+  Array.prototype.forEach.call(box.querySelectorAll("[data-ivsl]"),function(b){
+    if(b.__ligado)return;b.__ligado=true;
+    b.onclick=function(){var c=box.querySelector('[data-ivs="'+b.getAttribute("data-ivsl")+'"]');
+      if(window.__lerCodigoMF)window.__lerCodigoMF(c);};});
+}
+function ivsDepoisDeMudar(){
+  /* começando do zero, a quantidade acompanha as séries */
+  if(!IVS.alvo&&(IVS.soma||String($("iv_qtd").value).trim()===""||+$("iv_qtd").value===0)){
+    IVS.soma=true;var n=serieLimpa(IVS.linhas).length;$("iv_qtd").value=n?String(n):"";
+  }
+  var box=$("ivs_linhas");
+  if(box){var tem=box.querySelectorAll("[data-ivs]").length,quer=ivsTotalLinhas();
+    if(quer>tem){var h="";for(var i=tem;i<quer;i++)h+=ivsLinhaHtml(i);box.insertAdjacentHTML("beforeend",h);ivsLigarLinhas(box);}}
+  ivsPintarAvisos();ivsGuardaRascunho();
+}
+function ivsPintarAvisos(){
+  var cont=$("ivs_cont"),av=$("ivs_avisos");if(!cont||!av)return;
+  var f=serieLimpa(IVS.linhas),q=ivsQtdAlvo();
+  cont.textContent=f.length+" de "+(q||f.length)+" preenchidos";
+  var L=[],vistas={},rep={};
+  f.forEach(function(s){var n=normSerie(s);if(vistas[n])rep[s]=1;vistas[n]=1;});
+  Object.keys(rep).forEach(function(s){L.push("A série <b>"+esc(s)+"</b> foi lida duas vezes.");});
+  /* a mesma série em outra contagem deste inventário */
+  var inv=invAtual,fase=inv?faseInvAtual(inv):"c1",fora={};
+  if(inv)Object.keys(inv.itens||{}).forEach(function(k){(inv.itens[k][fase]||[]).forEach(function(e,ix){
+    if(IVS.alvo&&IVS.alvo.pid===k&&IVS.alvo.fase===fase&&IVS.alvo.ix===ix)return;
+    (e.series||[]).forEach(function(s){fora[normSerie(s)]=inv.itens[k].nome||"outra contagem";});});});
+  f.forEach(function(s){var n=normSerie(s);if(fora[n])L.push("A série <b>"+esc(s)+"</b> já foi registrada nesta contagem ("+esc(fora[n])+").");});
+  f.forEach(function(s){var e=ivsAparelhoDaSerie(normSerie(s));
+    if(e)L.push("A série <b>"+esc(s)+"</b> já está num aparelho de cliente: "+esc(e.cliente||"sem nome")+".");});
+  if(q&&f.length>q)L.push("Há <b>"+f.length+" séries para "+q+" unidade(s)</b>.");
+  av.innerHTML=L.length?'<div class="note warn">'+L.join("<br>")+"</div>":"";
+  return L;
+}
+function ivsDesenhar(){
+  var w=$("iv_series");if(!w)return;
+  var inv=invAtual,fase=inv?faseInvAtual(inv):"c1",pid=IVS.alvo?IVS.alvo.pid:$("iv_prod").value,p=prodPorId(pid);
+  if(!inv||!invPedeSerie(p)){w.hidden=true;w.innerHTML="";if(!IVS.alvo){IVS.pid="";IVS.linhas=[];IVS.soma=false;}return;}
+  if(!IVS.alvo&&fase==="c2"){
+    w.hidden=false;w.innerHTML='<div class="help">Registre primeiro a quantidade. Depois aparecem os números de série para conferir e corrigir.</div>';return;
+  }
+  if(IVS.pid!==pid){
+    IVS.pid=pid;IVS.linhas=[];IVS.soma=false;IVS.sujo=false;
+    var ras=ivsLeRascunho();
+    if(ras&&ras.linhas){IVS.linhas=ras.linhas;IVS.sujo=true;
+      if(!IVS.alvo){IVS.soma=!!ras.soma;if(ras.qtd!==undefined&&String($("iv_qtd").value).trim()==="")$("iv_qtd").value=ras.qtd;}}
+  }
+  var tit=IVS.alvo?"Números de série de "+esc(p.nome||"")+" (opcional)":"Números de série (opcional)";
+  var h='<div class="iv-sc"><span class="sect-t" style="margin:0">'+tit+'</span> <b id="ivs_cont"></b></div>'+
+    '<div class="actions" style="margin:6px 0"><button class="btn sm" type="button" id="ivs_seq">Ler em sequência</button>'+
+    (IVS.alvo?'<button class="btn sm" type="button" id="ivs_salvar">Salvar as séries</button><button class="btn ghost sm" type="button" id="ivs_fechar">Fechar sem mudar</button>':"")+"</div>"+
+    '<div id="ivs_avisos"></div><div id="ivs_linhas" class="iv-sls">';
+  for(var i=0,n=ivsTotalLinhas();i<n;i++)h+=ivsLinhaHtml(i);
+  w.innerHTML=h+"</div>";w.hidden=false;
+  ivsLigarLinhas($("ivs_linhas"));
+  $("ivs_seq").onclick=function(){if(window.__lerSeqMF)window.__lerSeqMF(ivsReceber);};
+  if($("ivs_salvar"))$("ivs_salvar").onclick=function(){ivsSalvarAlvo(true);};
+  if($("ivs_fechar"))$("ivs_fechar").onclick=function(){ivsTiraRascunho();ivsZerar();desenharInv();};
+  ivsPintarAvisos();
+}
+/* uma leitura da sequência: entra na próxima linha vazia e devolve o que a janela da câmera mostra */
+function ivsReceber(txt){
+  var t=String(txt||"").trim();if(!t)return null;
+  var i=0;while(String(IVS.linhas[i]||"").trim())i++;
+  IVS.linhas[i]=t;IVS.sujo=true;
+  ivsDepoisDeMudar();
+  var c=document.querySelector('#ivs_linhas [data-ivs="'+i+'"]');if(c)c.value=t;
+  var n=normSerie(t),rep=serieLimpa(IVS.linhas).filter(function(s){return normSerie(s)===n;}).length>1,e=ivsAparelhoDaSerie(n);
+  var q=ivsQtdAlvo(),nf=serieLimpa(IVS.linhas).length;
+  return {cont:nf+" de "+(q||nf),ultima:t,
+    aviso:rep?"Esta série já foi lida.":e?"Esta série já está num aparelho de cliente.":(q&&nf>q)?"Há mais séries do que a quantidade.":""};
+}
+/* a recontagem registrou a quantidade: abre a conferência daquela entrada */
+function ivsAbrirEntrada(pid,fase,ix){
+  var it=(invAtual.itens||{})[pid],e=it&&(it[fase]||[])[ix];if(!e)return;
+  IVS.alvo={pid:pid,fase:fase,ix:ix};IVS.pid="";
+  ivsDesenhar();
+  if(!IVS.sujo){IVS.linhas=Array.isArray(e.series)?e.series.slice():(fase==="c2"?ivsBaseRecontagem(it,ix):[]);ivsDesenhar();}
+}
+async function ivsSalvarAlvo(mostrar){
+  var a=IVS.alvo,inv=invAtual;if(!a||!inv)return true;
+  var it=(inv.itens||{})[a.pid],e=it&&(it[a.fase]||[])[a.ix];if(!e){ivsZerar();return true;}
+  var antes=copiaInv(inv),s=serieLimpa(IVS.linhas);
+  if(s.length||a.fase==="c2")e.series=s;else delete e.series;
+  if(!(await salvarInv(inv,antes)))return false;
+  ivsTiraRascunho();ivsZerar();
+  if(mostrar){toast(s.length+" série(s) salva(s).");desenharInv();}
+  return true;
+}
+async function carregarSeries(){
+  if(seriesLidas||!db)return;
+  var s=await col("series").limit(30000).get();
+  if(s.truncado||s.parouPorFalha)throw new Error("a lista de séries não veio inteira");
+  seriesCad=s.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});seriesLidas=true;
+}
+/* grava as séries do inventário como "em estoque". Uma série já cadastrada daquele produto só muda
+   de situação e ganha uma linha no histórico: nunca vira um segundo registro. */
+async function registrarSeriesInv(inv){
+  var lista=[];
+  Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];
+    seriesFinaisInv(it).forEach(function(s){lista.push({it:it,s:s});});});
+  var feitos=[];
+  if(!lista.length)return {n:0,feitos:feitos};
+  await carregarSeries();
+  var hoje=quandoInv(),texto="Inventário nº "+inv.numero+": em estoque em "+nomeLocal(inv.local);
+  try{
+    for(var i=0;i<lista.length;i++){
+      var x=lista[i],n=normSerie(x.s);
+      var ja=seriesCad.filter(function(d){return d.produtoId===x.it.pid&&d.serieNorm===n;})[0];
+      var antes=ja?JSON.parse(JSON.stringify(ja)):null;
+      var d=ja||{id:uid(),loja:lojaAtual,serie:x.s,serieNorm:n,produtoId:x.it.pid,produto:x.it.nome||"",criadoEm:new Date().toISOString(),historico:[]};
+      d.situacao="estoque";d.local=inv.local;d.inventarioId=inv.id;d.inventarioNumero=inv.numero;d.em=new Date().toISOString();d.por=usuarioAtual;
+      d.historico=(d.historico||[]).concat([{quando:hoje,por:usuarioAtual,texto:texto}]);
+      await gravaConf("series",d);
+      if(!ja)seriesCad.push(d);
+      feitos.push({d:d,antes:antes});
+    }
+  }catch(e){await desfazerSeriesInv(feitos);throw e;}
+  return {n:lista.length,feitos:feitos};
+}
+async function desfazerSeriesInv(feitos){
+  for(var j=0;j<feitos.length;j++){var f=feitos[j];
+    try{
+      if(f.antes){Object.keys(f.d).forEach(function(k){delete f.d[k];});Object.assign(f.d,f.antes);await grava("series",f.d);}
+      else{await apaga("series",f.d.id);var ix=seriesCad.indexOf(f.d);if(ix>=0)seriesCad.splice(ix,1);}
+    }catch(x){console.warn("desfazer série",x);}
+  }
+}
+function resumoSeriesInv(inv){
+  var its=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];}).filter(function(it){return invPedeSerie(prodPorId(it.pid))||seriesFinaisInv(it).length;});
+  if(!its.length)return "";
+  var tot=0;
+  var h=its.sort(function(a,b2){return ordAZ(a.nome||"",b2.nome||"");}).map(function(it){
+    var s=seriesFinaisInv(it),q=(it.recontar&&(it.c2||[]).length)?totalFaseInv(it,"c2"):totalFaseInv(it,"c1");tot+=s.length;
+    var cli=s.filter(function(x){return ivsAparelhoDaSerie(normSerie(x));});
+    return '<div class="iv-ser-l"><b>'+esc(it.nome)+"</b> · "+s.length+" de "+q+" séries"+
+      (s.length?'<div class="t-sub">'+s.map(esc).join(" · ")+"</div>":"")+
+      (cli.length?'<div class="t-sub" style="color:var(--warn)">Já em aparelho de cliente: '+cli.map(esc).join(" · ")+"</div>":"")+"</div>";
+  }).join("");
+  return '<details class="iv-falta"><summary>Números de série: '+tot+" lido(s)"+(inv.seriesRegistradas?" · "+inv.seriesRegistradas+" em estoque no "+esc(nomeLocal(inv.local)):"")+"</summary>"+h+"</details>";
+}
+window.__ivsMF=function(){return IVS;};window.__ivsReceberMF=ivsReceber;window.__seriesCadMF=function(){return seriesCad;};
+window.__invPedeSerieMF=invPedeSerie;
 
 function renderInventarios(h,b){
   h.innerHTML="<th>Nº</th><th>Estoque</th><th>Aberto</th><th>Situação</th><th class=\"num\">Produtos contados</th><th class=\"num\">Divergências</th>";
@@ -22123,6 +22339,7 @@ function renderInventarios(h,b){
 
 function abrirInv(inv){
   invAtual=inv;
+  ivsZerar();
   $("iv_alerta").innerHTML="";
   $("invModal").hidden=false;
   desenharInv();
@@ -22165,6 +22382,8 @@ function desenharInv(){
   $("iv_fechar").onclick=function(){$("invModal").hidden=true;invAtual=null;if(eeAba==="inv")renderEstEmpresa();};
   Array.prototype.forEach.call(document.querySelectorAll("#iv_lista [data-ivrm]"),function(x){
     x.onclick=function(){removerEntradaInv(x.getAttribute("data-ivrm"));};});
+  Array.prototype.forEach.call(document.querySelectorAll("#iv_lista [data-ivse]"),function(x){
+    x.onclick=async function(){if(!(await ivsSalvarSeSujo()))return;var c=x.getAttribute("data-ivse").split("|");ivsAbrirEntrada(c[0],c[1],+c[2]);try{$("iv_series").scrollIntoView();}catch(e){}};});
 }
 function opcoesProdutosInv(inv){
   var ps=produtosDoInv(inv).slice().sort(function(a,b2){return ordAZ(a.nome||"",b2.nome||"");});
@@ -22203,6 +22422,10 @@ function desenharContagemInv(inv,bt){
     $("iv_encerrar2").onclick=encerrarRecontagemInv;
   }
   $("iv_add").onclick=registrarContagemInv;
+  if(!sel.__ivsLigado){sel.__ivsLigado=true;sel.addEventListener("change",function(){if(!IVS.alvo)ivsDesenhar();});}
+  var qt=$("iv_qtd");
+  if(!qt.__ivsLigado){qt.__ivsLigado=true;qt.addEventListener("input",function(){if(!IVS.alvo){IVS.soma=false;ivsDesenhar();ivsGuardaRascunho();}});}
+  ivsDesenhar();
 }
 function listaEntradasInv(inv,fase){
   var linhas=[];
@@ -22213,7 +22436,8 @@ function listaEntradasInv(inv,fase){
     return '<div class="iv-ent"><div><b>'+esc(l.it.nome)+"</b>"+(l.it.cod?" <code>"+esc(l.it.cod)+"</code>":"")+
       '<div class="t-sub">'+esc(l.e.por||"")+" · "+esc(l.e.quando||"")+(l.e.obs?" · "+esc(l.e.obs):"")+"</div></div>"+
       '<div class="iv-q">'+(+l.e.qtd||0)+"</div>"+
-      (l.e.por===usuarioAtual||podeAprovarInv()?'<button class="btn ghost sm" type="button" data-ivrm="'+esc(l.it.pid)+"|"+fase+"|"+l.ix+'">Tirar</button>':"<span></span>")+"</div>";
+      '<div class="iv-ent-bts">'+(invPedeSerie(prodPorId(l.it.pid))?'<button class="btn ghost sm" type="button" data-ivse="'+esc(l.it.pid)+"|"+fase+"|"+l.ix+'">Séries'+(serieLimpa(l.e.series).length?" ("+serieLimpa(l.e.series).length+")":"")+"</button>":"")+
+      (l.e.por===usuarioAtual||podeAprovarInv()?'<button class="btn ghost sm" type="button" data-ivrm="'+esc(l.it.pid)+"|"+fase+"|"+l.ix+'">Tirar</button>':"")+"</div></div>";
   }).join("")+"</div>";
 }
 /* SEM a trava de toque duplo, de propósito (30/10): no inventário cada leitura do código de
@@ -22226,18 +22450,33 @@ async function registrarContagemInv(){
   if(qs===""||!(+qs>=0)||Math.floor(+qs)!==+qs){$("iv_alerta").innerHTML='<div class="note crit"><b>Escreva a quantidade contada</b> (número inteiro; zero se não achou nenhuma).</div>';return;}
   var fase=inv.status==="recontagem"?"c2":"c1";
   if(fase==="c2"&&!((inv.itens||{})[pid]||{}).recontar){$("iv_alerta").innerHTML='<div class="note crit">Este produto não está na recontagem.</div>';return;}
+  if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
   var antes=copiaInv(inv),it=itemInv(inv,pid);
   it[fase]=it[fase]||[];
-  it[fase].push({qtd:+qs,sis:saldoEm(pid,inv.local),por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:$("iv_obs").value.trim()});
+  var ent={qtd:+qs,sis:saldoEm(pid,inv.local),por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:$("iv_obs").value.trim()};
+  var pedeS=invPedeSerie(prodPorId(pid)),sr=(pedeS&&fase==="c1")?serieLimpa(IVS.linhas):[];
+  if(sr.length)ent.series=sr;
+  it[fase].push(ent);
   if(!(await salvarInv(inv,antes)))return;
   $("iv_alerta").innerHTML="";
-  toast((+qs)+"× "+it.nome+" registrado.");
-  try{limparInclusao($("iv_prod"),$("iv_qtd"),[]);}catch(e){$("iv_prod").value="";$("iv_qtd").value="";}
+  toast((+qs)+"× "+it.nome+" registrado"+(sr.length?" com "+sr.length+" série(s)":"")+".");
+  if(pedeS&&fase==="c1"){ivsTiraRascunho();ivsZerar();}
+  $("iv_prod").value="";$("iv_qtd").value="";
+  try{limparInclusao("iv_prod","iv_qtd",[]);}catch(e){}
   $("iv_obs").value="";
+  if(pedeS&&fase==="c2")IVS.alvo={pid:pid,fase:fase,ix:it[fase].length-1};
   desenharInv();
+  if(pedeS&&fase==="c2")ivsAbrirEntrada(pid,fase,it[fase].length-1);
+}
+/* conferência aberta com alteração: grava antes de seguir, para nada se perder */
+async function ivsSalvarSeSujo(){
+  if(!IVS.alvo)return true;
+  if(IVS.sujo)return ivsSalvarAlvo(false);
+  ivsZerar();return true;
 }
 async function removerEntradaInv(chave){
   var inv=invAtual;if(!inv)return;var p=chave.split("|"),it=(inv.itens||{})[p[0]];if(!it)return;
+  if(IVS.alvo)ivsZerar();
   var e=(it[p[1]]||[])[+p[2]];if(!e)return;
   if(!confirm("Tirar "+e.qtd+"× "+it.nome+" desta contagem?"))return;
   var antes=copiaInv(inv);it[p[1]].splice(+p[2],1);
@@ -22245,6 +22484,7 @@ async function removerEntradaInv(chave){
 }
 async function encerrarContagemInv(){
   var inv=invAtual;if(!inv)return;
+  if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
   var naoC=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return saldoEm(p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
   if(!confirm("Encerrar a 1ª contagem?"+(naoC.length?" "+naoC.length+" produto(s) com saldo no sistema não foram contados e entram como ZERO — eles vão para a recontagem.":"")))return;
   var antes=copiaInv(inv);
@@ -22255,15 +22495,24 @@ async function encerrarContagemInv(){
     if(!(it.c1||[]).length){it.recontar=false;return;}
     var d=totalFaseInv(it,"c1")-sisFaseInv(it,"c1");it.dif1=d;it.recontar=d!==0;if(it.recontar)div++;});
   inv.contagem1Fim=quandoInv();inv.contagem1Por=usuarioAtual;
+  /* bateu tudo: fecha sem passar pelo Administrador, e as séries são registradas aqui mesmo */
+  var regS=null;
+  if(!div){
+    try{regS=await registrarSeriesInv(inv);}
+    catch(eS){Object.keys(inv).forEach(function(k){delete inv[k];});Object.assign(inv,antes);
+      avisarRecusaBanco("iv_alerta",eS,"O inventário continua na contagem.");desenharInv();return;}
+    if(regS.n)inv.seriesRegistradas=regS.n;
+  }
   if(div){inv.status="recontagem";}
   else{inv.status="fechado";inv.fechadoEm=quandoInv();inv.semDiferenca=true;}
   inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"1ª contagem encerrada · "+div+" divergência(s)"}]);
-  if(!(await salvarInv(inv,antes)))return;
+  if(!(await salvarInv(inv,antes))){if(regS)await desfazerSeriesInv(regS.feitos);return;}
   toast(div?div+" produto(s) divergiram e vão para a recontagem.":"Nenhuma diferença: o estoque bateu e o inventário foi fechado.");
   desenharInv();
 }
 async function encerrarRecontagemInv(){
   var inv=invAtual;if(!inv)return;
+  if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
   var rec=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];}).filter(function(it){return it.recontar;});
   var falta=rec.filter(function(it){return !(it.c2||[]).length;});
   if(falta.length){$("iv_alerta").innerHTML='<div class="note crit"><b>A recontagem é obrigatória.</b> Falta recontar: '+
@@ -22307,7 +22556,7 @@ function desenharRevisaoInv(inv,bt){
   else if(inv.status==="fechado")cab='<div class="note ok"><b>'+(inv.semDiferenca?"O estoque bateu — nenhum ajuste.":"Ajustes lançados")+"</b>"+
     (inv.aprovadoPor?" · aprovado por "+esc(inv.aprovadoPor)+" em "+esc(inv.fechadoEm||""):"")+(inv.ajustes?" · "+inv.ajustes.length+" movimento(s) de ajuste":"")+"</div>";
   else if(inv.status==="cancelado")cab='<div class="note">Cancelado por '+esc(inv.canceladoPor||"")+" em "+esc(inv.canceladoEm||"")+(inv.motivoCancel?" · "+esc(inv.motivoCancel):"")+". Nenhum ajuste foi lançado.</div>";
-  w.innerHTML=cab+r.html;
+  w.innerHTML=cab+r.html+resumoSeriesInv(inv);
   if(inv.status==="aprovacao"&&podeAprovarInv()){
     bt("iv_aprovar","Aprovar e lançar os ajustes");bt("iv_devolver","Pedir nova recontagem","ghost");
     $("iv_aprovar").onclick=aprovarInv;$("iv_devolver").onclick=devolverRecontagemInv;
@@ -22335,10 +22584,16 @@ async function aprovarInv(){
   }catch(e){
     await desfazerMovsInv(feitos);
     avisarRecusaBanco("iv_alerta",e,"Nenhum ajuste ficou lançado; o inventário continua aguardando a aprovação.");return;}
+  var regS;
+  try{regS=await registrarSeriesInv(inv);}
+  catch(eS){
+    await desfazerMovsInv(feitos);
+    avisarRecusaBanco("iv_alerta",eS,"Nenhum ajuste ficou lançado; o inventário continua aguardando a aprovação.");return;}
   var antes=copiaInv(inv);
   inv.status="fechado";inv.aprovadoPor=usuarioAtual;inv.fechadoEm=quandoInv();inv.ajustes=feitos.map(function(m){return m.id;});
-  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"Aprovado · "+feitos.length+" ajuste(s) lançado(s)"}]);
-  if(!(await salvarInv(inv,antes))){await desfazerMovsInv(feitos);return;}
+  if(regS.n)inv.seriesRegistradas=regS.n;
+  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"Aprovado · "+feitos.length+" ajuste(s) lançado(s)"+(regS.n?" · "+regS.n+" série(s) em estoque":"")}]);
+  if(!(await salvarInv(inv,antes))){await desfazerMovsInv(feitos);await desfazerSeriesInv(regS.feitos);return;}
   toast("Inventário nº "+inv.numero+" fechado: "+feitos.length+" ajuste(s) lançado(s).");
   render();desenharInv();
 }
@@ -57278,6 +57533,29 @@ function erro(msg){
      sozinho. Usa o leitor nativo do navegador quando existe (Android) e,
      quando não existe (iPhone), carrega a biblioteca ZXing. */
   var zxingPronto=false,zxLeitor=null,codStream=null,codParar=null,codAlvo=null;
+  /* LER EM SEQUÊNCIA (02/11): a câmera fica aberta e cada leitura vai para quem pediu, com um bip.
+     A mesma etiqueta parada na frente da câmera conta uma vez só. */
+  var codSeq=null,codSeqUlt="",codSeqEm=0,codSom=null;
+  function bipCodigo(aviso){
+    try{
+      if(codSom){
+        var o=codSom.createOscillator(),g=codSom.createGain();
+        o.frequency.value=aviso?440:1200;g.gain.value=0.25;
+        o.connect(g);g.connect(codSom.destination);o.start();o.stop(codSom.currentTime+(aviso?0.35:0.12));
+      }
+      if(navigator.vibrate)navigator.vibrate(aviso?[80,60,80]:60);
+    }catch(e){}
+  }
+  function entregarSeq(txt,digitado){
+    var agora=Date.now();
+    if(!digitado&&txt===codSeqUlt&&agora-codSeqEm<2500){codSeqEm=agora;return;}
+    codSeqUlt=txt;codSeqEm=agora;
+    var r=null;try{r=codSeq(txt);}catch(e){console.warn("leitura em sequência",e);}
+    var av=document.getElementById("codAviso");
+    if(av&&r)av.innerHTML='<div class="note'+(r.aviso?" warn":" ok")+'"><b>'+r.cont+"</b> · última: "+
+      String(r.ultima).replace(/[<>&]/g,"")+(r.aviso?"<br><b>"+r.aviso+"</b>":"")+"</div>";
+    bipCodigo(!!(r&&r.aviso));
+  }
 
   function carregarZXing(cb){
     if(zxingPronto){cb();return;}
@@ -57313,6 +57591,7 @@ function erro(msg){
     document.getElementById("codFechar").onclick=function(){fecharCodigo();};
     document.getElementById("codUsar").onclick=function(){
       var v=(document.getElementById("codManual").value||"").trim();
+      if(v&&codSeq){entregarSeq(v,true);document.getElementById("codManual").value="";try{document.getElementById("codManual").focus();}catch(e){}return;}
       if(v)aplicarCodigo(v);
       else fecharCodigo();
     };
@@ -57320,7 +57599,7 @@ function erro(msg){
 
   function fecharCodigo(){
     try{if(codParar)codParar();}catch(e){}
-    codParar=null;
+    codParar=null;codSeq=null;codSeqUlt="";
     try{
       if(codStream)codStream.getTracks().forEach(function(t){t.stop();});
     }catch(e){}
@@ -57330,6 +57609,7 @@ function erro(msg){
   }
 
   function aplicarCodigo(txt){
+    if(codSeq){entregarSeq(txt);return;}
     if(codAlvo){
       codAlvo.value=txt;
       codAlvo.__escolhido=txt;
@@ -57342,10 +57622,20 @@ function erro(msg){
     try{toast("Código lido: "+txt);}catch(e){}
   }
 
-  function lerCodigo(campo){
+  function lerEmSequencia(receber){
+    try{var AC=window.AudioContext||window.webkitAudioContext;if(AC&&!codSom)codSom=new AC();if(codSom&&codSom.resume)codSom.resume();}catch(e){}
+    abrirLeitor(null,receber);
+  }
+  function lerCodigo(campo){abrirLeitor(campo,null);}
+  window.__lerCodigoMF=lerCodigo;window.__lerSeqMF=lerEmSequencia;
+  function abrirLeitor(campo,receber){
     codAlvo=campo;
     montarModalCodigo();
+    codSeq=receber;codSeqUlt="";
     var m=document.getElementById("codModal"),av=document.getElementById("codAviso");
+    document.querySelector("#codModal h3").textContent=receber?"Ler em sequência":"Ler código de barras";
+    document.getElementById("codUsar").textContent=receber?"Incluir este número":"Usar este número";
+    document.getElementById("codFechar").textContent=receber?"Terminar":"Cancelar";
     document.getElementById("codManual").value="";
     m.hidden=false;
     av.innerHTML='<div class="note">Abrindo a câmera…</div>';
@@ -57394,7 +57684,7 @@ function erro(msg){
       if(!vivo)return;
       det.detect(v).then(function(cods){
         if(!vivo)return;
-        if(cods&&cods.length&&cods[0].rawValue){aplicarCodigo(String(cods[0].rawValue).trim());return;}
+        if(cods&&cods.length&&cods[0].rawValue){aplicarCodigo(String(cods[0].rawValue).trim());if(vivo)setTimeout(laco,350);return;}
         setTimeout(laco,250);
       },function(){if(vivo)setTimeout(laco,400);});
     })();
@@ -57450,8 +57740,10 @@ function erro(msg){
           if(t){
             t=String(t).trim();
             /* a mesma leitura duas vezes seguidas: reflexo não vira número errado */
-            if(t===anterior){vivo=false;aplicarCodigo(t);return;}
-            anterior=t;
+            if(t===anterior){
+              if(codSeq){aplicarCodigo(t);anterior="";}
+              else{vivo=false;aplicarCodigo(t);return;}
+            }else anterior=t;
           }
         }
       }catch(e){}
