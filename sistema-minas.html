@@ -6915,6 +6915,14 @@ img{max-width:100%}
 </div>
 
 <!-- pedido sem assinatura: o sistema pergunta em vez de travar (regra dele, 03/10) -->
+<div class="modal" id="compModal" hidden>
+  <div class="box" style="width:min(460px,100%)">
+    <h3>Compromisso</h3>
+    <div class="sub" id="cmp_quem"></div>
+    <div class="tw"><table><tbody id="cmp_linhas"></tbody></table></div>
+    <div class="actions"><button class="btn mut" type="button" id="cmp_fechar">Fechar</button></div>
+  </div>
+</div>
 <div class="modal" id="assModal" hidden>
   <div class="box" style="width:min(560px,100%)">
     <h3>Pedido não assinado</h3>
@@ -8406,14 +8414,66 @@ function avisarTruncado(colecao,total,trazidos){
   try{
     window.__truncado[colecao]={total:total,trazidos:trazidos,quando:agoraCarimbo()};
     console.warn("Leitura cortada em "+colecao+": "+trazidos+" de "+total);
-    var b=$("banner");
-    if(b&&!b.__banco){
-      b.hidden=false;
-      b.innerHTML="<b>Lista incompleta:</b> o sistema leu "+trazidos+" de "+total+" registros de <b>"+
-        esc(colecao)+"</b>. Avise o suporte antes de apagar ou criar coisa nesta tela.";
-    }
+    mostrarAvisoLimites();
   }catch(e){console.warn("avisarTruncado",e);}
 }
+/* O ADMINISTRADOR FICA SABENDO ANTES DE CORTAR (02/11, v473). O corte pelo teto só acendia a
+   faixa para quem estivesse entrando, sem dizer o que se perde, e a 90% do teto não havia
+   aviso nenhum. Agora o Administrador vê no sino quando a lista chega a 90% e, cortada, também
+   na faixa do topo. Os outros usuários não veem: não têm o que fazer com isso.
+   A leitura que parou porque a REDE caiu é outra coisa e continua avisando a todos. */
+var LIMITE_AVISO=0.9;
+var LIMITE_VISTO={};
+var NOMES_LISTA={atendimentos:"Atendimentos e atividades",pedidos:"Pedidos",negocios:"Funil de vendas",
+  requisicoes:"Requisições de estoque",titulos:"Contas a pagar e a receber",movs:"Movimentos de caixa",
+  movest:"Movimentos de estoque",orcamentos:"Orçamentos",ordens:"Ordens de serviço",clientes:"Clientes",
+  equipamentos:"Aparelhos",produtos:"Produtos",solicitacoes:"Solicitações",pontos:"Cartão de ponto",
+  ajustes:"Ajustes de comissão",notas:"Notas fiscais",centros:"Centros de custo",fornecedores:"Fornecedores"};
+function nomeDaLista(c){return NOMES_LISTA[c]||c;}
+/* chamada quando cada coleção da entrada chega */
+function anotarLimite(c,snap){
+  if(!snap)return;
+  var lidos=+snap.size||0;
+  LIMITE_VISTO[c]={lidos:lidos,total:Math.max(+snap.total||0,lidos),teto:tetoBoot(c)};
+  /* veio inteira: um corte anotado antes (a rede caiu e o "Tentar de novo" resolveu) não vale mais */
+  if(!snap.truncado&&!snap.parouPorFalha)delete window.__truncado[c];
+}
+/* o que está cortado pelo teto ou perto dele; "rede" é a leitura que parou pela metade */
+function listasNoLimite(){
+  var L=[],vistos={};
+  Object.keys(window.__truncado||{}).forEach(function(c){
+    var t=window.__truncado[c],teto=tetoBoot(c);
+    vistos[c]=true;
+    /* teto desconhecido é leitura sob demanda (ferramentas, inventários): ela só para no teto */
+    L.push({c:c,lidos:t.trazidos,total:t.total,teto:teto||t.trazidos,cortada:true,rede:!!teto&&t.trazidos<teto});
+  });
+  Object.keys(LIMITE_VISTO).forEach(function(c){
+    var v=LIMITE_VISTO[c];
+    if(vistos[c]||!v.teto||v.total<v.teto*LIMITE_AVISO)return;
+    L.push({c:c,lidos:v.lidos,total:v.total,teto:v.teto,cortada:false,rede:false});
+  });
+  return L;
+}
+function mostrarAvisoLimites(){
+  var b=$("banner");
+  if(!b||b.__banco)return;
+  var L=listasNoLimite();
+  var redes=L.filter(function(x){return x.rede;});
+  var cortes=ehAdministrador()?L.filter(function(x){return x.cortada&&!x.rede;}):[];
+  var html="";
+  if(redes.length)html+=redes.map(function(x){
+    return "<b>Lista incompleta:</b> a internet falhou e o sistema leu "+milhar(x.lidos)+" de "+milhar(x.total)+
+      " registros de <b>"+esc(nomeDaLista(x.c))+"</b>. Recarregue a página antes de apagar ou criar coisa nesta tela.";
+  }).join("<br>");
+  if(cortes.length)html+=(html?"<br>":"")+cortes.map(function(x){
+    return "<b>Lista cortada:</b> o sistema carregou só os "+milhar(x.lidos)+" mais recentes de "+milhar(x.total)+
+      " registros de <b>"+esc(nomeDaLista(x.c))+"</b>. Os mais antigos não aparecem nas telas, no Dashboard nem nas metas. "+
+      "Peça ao suporte para subir o limite.";
+  }).join("<br>");
+  if(html!==b.__limites){b.__limites=html;b.innerHTML=html;}
+  b.hidden=!html;
+}
+function milhar(n){return (+n||0).toLocaleString("pt-BR");}
 /* A FAIXA DIZ O QUE REALMENTE ACONTECEU (23/10) — são DUAS coisas diferentes:
    (a) alguma GRAVAÇÃO ficou pendurada: aí sim "o último registro NÃO foi gravado";
    (b) o servidor caiu ou a internet oscilou: pode ter sido uma LEITURA, e dizer que
@@ -8783,12 +8843,15 @@ function unidadeDoc(id){return UNIDADES[id||lojaAtual]||nomeLoja();}
    está a caminho, na mesma ordem de antes. Nenhuma regra mudou: quem trata cada resposta
    continua sendo o mesmo trecho de código, com os mesmos try/catch. */
 var LEITURAS_BOOT=[
-  /* 02/11 (v473): atendimentos 5.000; requisições, orçamentos e OS 3.000. Com 500 os mais antigos
-     sumiam da tela. O carregar() repete estes quatro números: mudou aqui, muda lá. */
-  ["clientes",30000],["produtos",3000],["atendimentos",5000],["pedidos",500],["negocios",1000],
+  /* OS TETOS DE 02/11 (v473 e v474). Medido no banco: a Minas Filtros tinha 495 atendimentos e entravam
+     uns 66 por dia; 18 requisições, 24 cartões do funil, 26 movimentos de estoque e 8 pedidos por
+     dia. O teto é só o máximo: o que se baixa é o que existe.
+     É por esta lista que o carregar() lê também (tetoBoot): não há mais dois números para a
+     mesma coisa, que foi o que anulou a correção da v325. */
+  ["clientes",30000],["produtos",3000],["atendimentos",5000],["pedidos",3000],["negocios",5000],
   ["solicitacoes",1000],["orcamentos",3000],["fechamentos",200],["ajustes",500],["facial",200],
-  ["pontos",2000],["caixas",100],["centros",200],["fornecedores",300],["titulos",1000],
-  ["movs",1000],["movest",6000],["requisicoes",3000],["ordens",3000],["notas",300],
+  ["pontos",2000],["caixas",100],["centros",2000],["fornecedores",300],["titulos",5000],
+  ["movs",5000],["movest",30000],["requisicoes",3000],["ordens",3000],["notas",300],
   /* 30.000 e não 1.000 (13/10): a v325 subiu o teto no carregar(), mas AQUI continuou em mil —
      e é este pedido que vale, porque o carregar() só recolhe o que já está a caminho. Resultado:
      a correção da v325 estava anulada e o sistema trabalhava com 1.000 dos 16.386 aparelhos,
@@ -8799,6 +8862,11 @@ var LEITURAS_BOOT=[
   ["prestadores",300],["servprest",200],["remunprest",3000],["recibosprest",1000],
   ["custodia",1000]
 ];
+/* um lugar só para o teto de cada coleção */
+function tetoBoot(c){
+  for(var i=0;i<LEITURAS_BOOT.length;i++)if(LEITURAS_BOOT[i][0]===c)return LEITURAS_BOOT[i][1];
+  return 0;
+}
 var CONFIGS_BOOT=["formas_pagamento","usuarios","funcoes","empresa","origens","tipos_atendimento",
   "motivos_finalizacao","tipos_off","motivos_off","canais_tipo","metas","faixas_comissao",
   "preco","beneficios","abonos_premio","adiantamentos","celebracoes","padroes_lanc","serie","grupos_produtos","mensagens_zap","plano_pergunta","estoque_negativo"];
@@ -9266,7 +9334,7 @@ function aquecerBoot(){
          E é por aqui que entra o GUARDADO NO APARELHO (v349): a coleção grande só é
          baixada quando o banco diz que mudou. */
       lerGrandeGuardada(c,a[1],c==="clientes"?{aoAndar:clientesChegando,fonte:"docs_sem_anexo"}:undefined),
-      function(snap){marcarCarga(c,true,snap.size,snap.total||snap.size);});
+      function(snap){marcarCarga(c,true,snap.size,snap.total||snap.size);anotarLimite(c,snap);});
   });
   /* as pequenas, em grupo. Vindo o grupo cheio (ou falhando), cada coleção se vira sozinha —
      é a rede de segurança para nenhuma lista chegar cortada em silêncio. */
@@ -9283,7 +9351,7 @@ function aquecerBoot(){
       guardar("col:"+c,pg.then(function(m){
         return (m&&m[c])?m[c]:col(c).limit(tetos[c]).get();
       },function(){return col(c).limit(tetos[c]).get();}),
-      function(snap){marcarCarga(c,true,snap.size,snap.size);});
+      function(snap){marcarCarga(c,true,snap.size,snap.size);anotarLimite(c,snap);});
     });
   });
   /* as configurações, todas numa chamada só */
@@ -9437,7 +9505,7 @@ async function carregar(){
        recalculado. Quem abrir Clientes antes disso vê "carregando os cadastros", não uma lista
        vazia — que foi o susto do teste com o Renan (v204). */
     lerClientesDoBanco();
-    var ps=await jaPedido("col:produtos",function(){return col("produtos").limit(3000).get();});
+    var ps=await jaPedido("col:produtos",function(){return col("produtos").limit(tetoBoot("produtos")).get();});
     produtos=ps.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     /* PRODUTO DE SISTEMA NÃO DUPLICA (29/10). Em 28/10, entrando na WF, alguém que não via o
        catálogo da Minas Filtros fez o sistema criar outro Plano Premium I, Plano Premium II e
@@ -9569,43 +9637,43 @@ async function carregar(){
     if(gAn.m)await gravarMotivos();
     if(gAn.mt)await gravarMetas();
     if(gAn.off)await gravarMotivosOff();   /* motivo do sistema que estava inativo volta a valer */
-    var as=await jaPedido("col:atendimentos",function(){return col("atendimentos").limit(5000).get();});
+    var as=await jaPedido("col:atendimentos",function(){return col("atendimentos").limit(tetoBoot("atendimentos")).get();});
     atendimentos=as.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;})
       /* LANÇADO EM DOBRO (30/10): a cópia fica no banco, com o motivo, mas não entra em tela,
          Dashboard, metas nem contagem nenhuma */
       .filter(function(a){return !a.lancadoEmDobro;});
-    var vs=await jaPedido("col:pedidos",function(){return col("pedidos").limit(500).get();});
+    var vs=await jaPedido("col:pedidos",function(){return col("pedidos").limit(tetoBoot("pedidos")).get();});
     pedidos=vs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     /* pedidos pela metade, guardados pelo vendedor (03/10): ficam FORA de pedidos[], então não
        entram em comissão, estoque, metas, financeiro nem relatório — só aparecem na lista */
-    try{var rs=await jaPedido("col:rascunhos",function(){return col("rascunhos").limit(300).get();});
+    try{var rs=await jaPedido("col:rascunhos",function(){return col("rascunhos").limit(tetoBoot("rascunhos")).get();});
       rascunhos=rs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;})
         .filter(function(r){return !rascunhoEncerrado(r);});}catch(eR){console.warn("rascunhos",eR);}
     /* prestadores de serviço (05/10) */
     try{
-      var pz=await jaPedido("col:prestadores",function(){return col("prestadores").limit(300).get();});
+      var pz=await jaPedido("col:prestadores",function(){return col("prestadores").limit(tetoBoot("prestadores")).get();});
       prestadores=pz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-      var sz=await jaPedido("col:servprest",function(){return col("servprest").limit(200).get();});
+      var sz=await jaPedido("col:servprest",function(){return col("servprest").limit(tetoBoot("servprest")).get();});
       servPrest=sz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-      var rz=await jaPedido("col:remunprest",function(){return col("remunprest").limit(3000).get();});
+      var rz=await jaPedido("col:remunprest",function(){return col("remunprest").limit(tetoBoot("remunprest")).get();});
       remunPrest=rz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-      var cz=await jaPedido("col:recibosprest",function(){return col("recibosprest").limit(1000).get();});
+      var cz=await jaPedido("col:recibosprest",function(){return col("recibosprest").limit(tetoBoot("recibosprest")).get();});
       recibosPrest=cz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-      var kz=await jaPedido("col:custodia",function(){return col("custodia").limit(1000).get();});
+      var kz=await jaPedido("col:custodia",function(){return col("custodia").limit(tetoBoot("custodia")).get();});
       custodia=kz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     }catch(ePz){console.warn("prestadores",ePz);}
-    var ng=await jaPedido("col:negocios",function(){return col("negocios").limit(1000).get();});
+    var ng=await jaPedido("col:negocios",function(){return col("negocios").limit(tetoBoot("negocios")).get();});
     negocios=ng.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;})
       /* cartão desativado (as cópias repetidas de 23/10) fica no banco, mas não volta ao funil */
       .filter(function(x){return x.ativo!==false;});
     negociosLidos=true;   /* a varredura do funil só roda depois desta linha (23/10) */
-    var sl=await jaPedido("col:solicitacoes",function(){return col("solicitacoes").limit(1000).get();});
+    var sl=await jaPedido("col:solicitacoes",function(){return col("solicitacoes").limit(tetoBoot("solicitacoes")).get();});
     solicitacoes=sl.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var os=await jaPedido("col:orcamentos",function(){return col("orcamentos").limit(3000).get();});
+    var os=await jaPedido("col:orcamentos",function(){return col("orcamentos").limit(tetoBoot("orcamentos")).get();});
     orcamentos=os.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var fc=await jaPedido("col:fechamentos",function(){return col("fechamentos").limit(200).get();});
+    var fc=await jaPedido("col:fechamentos",function(){return col("fechamentos").limit(tetoBoot("fechamentos")).get();});
     fechamentos=fc.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var aj=await jaPedido("col:ajustes",function(){return col("ajustes").limit(500).get();});
+    var aj=await jaPedido("col:ajustes",function(){return col("ajustes").limit(tetoBoot("ajustes")).get();});
     ajustes=aj.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var fu=await jaPedido("cfg:funcoes",function(){return db.doc("config/funcoes").get();});
     if(fu.exists&&fu.data()&&fu.data().lista&&fu.data().lista.length){funcoes=fu.data().lista;}
@@ -9623,10 +9691,10 @@ async function carregar(){
     try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
     /* foto de referência de cada um (coleção própria: cada pessoa grava a sua) */
     try{
-      var fc=await jaPedido("col:facial",function(){return col("facial").limit(200).get();});
+      var fc=await jaPedido("col:facial",function(){return col("facial").limit(tetoBoot("facial")).get();});
       faciais=fc.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     }catch(eFc){console.warn("facial",eFc);}
-    var pt=await jaPedido("col:pontos",function(){return col("pontos").limit(2000).get();});
+    var pt=await jaPedido("col:pontos",function(){return col("pontos").limit(tetoBoot("pontos")).get();});
     pontos=pt.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var us=await jaPedido("cfg:usuarios",function(){return db.doc("config/usuarios").get();});
     if(us.exists&&us.data()&&us.data().lista&&us.data().lista.length){USUARIOS=us.data().lista;}
@@ -9639,7 +9707,7 @@ async function carregar(){
     var og=await jaPedido("cfg:origens",function(){return db.doc("config/origens").get();});
     if(og.exists&&og.data()&&og.data().lista&&og.data().lista.length){ORIGENS=og.data().lista;}
     else{await gravarOrigens();}
-    var cxs=await jaPedido("col:caixas",function(){return col("caixas").limit(100).get();});
+    var cxs=await jaPedido("col:caixas",function(){return col("caixas").limit(tetoBoot("caixas")).get();});
     caixas=cxs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     if(!caixas.length){
       for(var ci=0;ci<SEED_CAIXAS.length;ci++){
@@ -9648,42 +9716,42 @@ async function carregar(){
         caixas.push(nc);await grava("caixas",nc);}
     }
     await amarrarCaixasDasFormas();
-    var ccs=await jaPedido("col:centros",function(){return col("centros").limit(2000).get();});
+    var ccs=await jaPedido("col:centros",function(){return col("centros").limit(tetoBoot("centros")).get();});
     centros=ccs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     if(!centros.length){
       for(var cj=0;cj<SEED_CENTROS.length;cj++){
         var nk=JSON.parse(JSON.stringify(SEED_CENTROS[cj]));nk.id=uid();
         centros.push(nk);await grava("centros",nk);}
     }
-    var fs=await jaPedido("col:fornecedores",function(){return col("fornecedores").limit(300).get();});
+    var fs=await jaPedido("col:fornecedores",function(){return col("fornecedores").limit(tetoBoot("fornecedores")).get();});
     fornecedores=fs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var ts2=await jaPedido("col:titulos",function(){return col("titulos").limit(1000).get();});
+    var ts2=await jaPedido("col:titulos",function(){return col("titulos").limit(tetoBoot("titulos")).get();});
     titulos=ts2.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var ms2=await jaPedido("col:movs",function(){return col("movs").limit(1000).get();});
+    var ms2=await jaPedido("col:movs",function(){return col("movs").limit(tetoBoot("movs")).get();});
     movs=ms2.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var me=await jaPedido("col:movest",function(){return col("movest").limit(6000).get();});
+    var me=await jaPedido("col:movest",function(){return col("movest").limit(tetoBoot("movest")).get();});
     movEst=me.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var rq=await jaPedido("col:requisicoes",function(){return col("requisicoes").limit(3000).get();});
+    var rq=await jaPedido("col:requisicoes",function(){return col("requisicoes").limit(tetoBoot("requisicoes")).get();});
     requisicoes=rq.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var eqs=await jaPedido("col:equipamentos",function(){return col("equipamentos").limit(30000).get();});
+    var eqs=await jaPedido("col:equipamentos",function(){return col("equipamentos").limit(tetoBoot("equipamentos")).get();});
     equipamentos=eqs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var od=await jaPedido("col:ordens",function(){return col("ordens").limit(3000).get();});
+    var od=await jaPedido("col:ordens",function(){return col("ordens").limit(tetoBoot("ordens")).get();});
     ordens=od.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var ns2=await jaPedido("col:notas",function(){return col("notas").limit(300).get();});
+    var ns2=await jaPedido("col:notas",function(){return col("notas").limit(tetoBoot("notas")).get();});
     notas=ns2.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var vcs=await jaPedido("col:veiculos",function(){return col("veiculos").limit(100).get();});
+    var vcs=await jaPedido("col:veiculos",function(){return col("veiculos").limit(tetoBoot("veiculos")).get();});
     veiculos=vcs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var abs=await jaPedido("col:abastecimentos",function(){return col("abastecimentos").limit(2000).get();});
+    var abs=await jaPedido("col:abastecimentos",function(){return col("abastecimentos").limit(tetoBoot("abastecimentos")).get();});
     abastecimentos=abs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var mvc=await jaPedido("col:manutveic",function(){return col("manutveic").limit(1000).get();});
+    var mvc=await jaPedido("col:manutveic",function(){return col("manutveic").limit(tetoBoot("manutveic")).get();});
     manutVeic=mvc.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var pss=await jaPedido("col:posses",function(){return col("posses").limit(500).get();});
+    var pss=await jaPedido("col:posses",function(){return col("posses").limit(tetoBoot("posses")).get();});
     posses=pss.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var vst=await jaPedido("col:vistorias",function(){return col("vistorias").limit(500).get();});
+    var vst=await jaPedido("col:vistorias",function(){return col("vistorias").limit(tetoBoot("vistorias")).get();});
     vistorias=vst.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var mlt=await jaPedido("col:multas",function(){return col("multas").limit(500).get();});
+    var mlt=await jaPedido("col:multas",function(){return col("multas").limit(tetoBoot("multas")).get();});
     multas=mlt.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
-    var usd=await jaPedido("col:usados",function(){return col("usados").limit(500).get();});
+    var usd=await jaPedido("col:usados",function(){return col("usados").limit(tetoBoot("usados")).get();});
     usados=usd.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var pd=await jaPedido("cfg:padroes_lanc",function(){return db.doc("config/padroes_lanc").get();});
     if(pd.exists&&pd.data()&&pd.data().lista&&pd.data().lista.length)PADROES_LANC=pd.data().lista;
@@ -15057,6 +15125,8 @@ window.__realizadoMetasMF=function(q,d,a){return realizadoMetas(q,d,a);};
 window.__temposMF=function(){return TEMPOS_BOOT;};
 /* ganchos da tela de preparo, para os testes */
 window.__etapasCargaMF=function(){return ETAPAS_CARGA;};
+window.__listasNoLimiteMF=function(){return listasNoLimite();};
+window.__tetoBootMF=function(c){return tetoBoot(c);};
 window.__cargaMF=function(){return CARGA;};
 window.__falharCargaMF=function(t){falhaCarga(t||"os cadastros");};
 /* estado da leitura dos cadastros, para o teste da lista vazia (06/10) */
@@ -32176,7 +32246,44 @@ async function salvarCliRapido__corpo(){
   try{if(detReg&&!$("detModal").hidden)abrirDetalhes(detReg);}catch(e2){}
   render();
 }
+/* AGENDA: VER O COMPROMISSO, NÃO OS DETALHES (decisão dele de 23/10, programada em 02/11).
+   Quem não é Administrador nem Gerente, no compromisso de outra pessoa, vê só data, hora, tipo,
+   cliente, cidade e responsável. A pergunta é pelo PERFIL, como no rastreio: o Financeiro tem
+   "ver tudo" e fica de fora de propósito. Quem divide o cliente (27/10) continua vendo inteiro.
+   Sem perfil conhecido, fecha. */
+var PERFIS_AGENDA_TUDO=["Administrador","Gerente"];
+function veTudoDaAgenda(){return PERFIS_AGENDA_TUDO.indexOf(perfilDe(usuarioAtual))>=0;}
+function soCompromisso(a){
+  if(!a||veTudoDaAgenda())return false;
+  if(a.natureza!=="atividade"&&!a.eraAtividade)return false;
+  if([a.colaborador,a.prospector,a.vendedor,a.instalador,agendadorDe(a)]
+    .some(function(n){return n&&n===usuarioAtual;}))return false;
+  return !(a.clienteId&&a.colaborador&&dividemCliente(a.clienteId,usuarioAtual,a.colaborador));
+}
+function soCompromissoPed(p){
+  if(!p||veTudoDaAgenda()||deMim(p,CAMPOS_PED))return false;
+  return !(p.clienteId&&respInstalacao(p)&&dividemCliente(p.clienteId,usuarioAtual,respInstalacao(p)));
+}
+function mostrarCompromisso(o){
+  $("cmp_quem").textContent="Este compromisso é de "+(o.resp||"outro colaborador")+".";
+  $("cmp_linhas").innerHTML=[["Data",dataCurta(o.data)],["Hora",(o.hora||"—")+(o.fim?" – "+o.fim:"")],["Tipo",o.tipo||"—"],
+    ["Cliente",o.cliente||"—"],["Cidade",o.cidade||"—"],["Responsável",o.resp||"—"]].map(function(l){
+      return "<tr><td><b>"+esc(l[0])+"</b></td><td>"+esc(l[1])+"</td></tr>";}).join("");
+  $("cmp_fechar").onclick=function(){$("compModal").hidden=true;};
+  $("compModal").hidden=false;
+}
+function abrirCompromisso(a){
+  mostrarCompromisso({data:a.data,hora:a.inicio,fim:a.fim,tipo:a.tipo,cliente:a.cliente,
+    cidade:cidadeDoEvento(a,a.clienteId),resp:a.colaborador});
+}
+function abrirCompromissoPed(p){
+  var pr=String(p.instalacao||"").split(" ");
+  mostrarCompromisso({data:pr[0],hora:pr[1],tipo:"Instalação",cliente:p.cliente,
+    cidade:cidadeDoEvento(p,p.clienteId),resp:respInstalacao(p)});
+}
+window.__soCompromissoMF=function(a){return soCompromisso(a);};
 function abrirDetalhes(a){
+  if(soCompromisso(a)){abrirCompromisso(a);return;}
   var tvD=bloqueada(a);
   if(tvD){avisarBloqueio(tvD);return;}
   detReg=a;
@@ -32595,6 +32702,7 @@ function fmAjustarVendido(){
 /* finalizar a atividade sempre pergunta o que aconteceu — sem isso o histórico morre */
 var fmReg=null,fmMotivos=[],fmRetorno="";
 function abrirFinalizar(a){
+  if(soCompromisso(a)){abrirCompromisso(a);return;}
   var tvF=bloqueada(a);
   if(tvF){avisarBloqueio(tvF);return;}
   fmReg=a;fmMotivos=[];fmRetorno="";fmFalou="";
@@ -32755,6 +32863,7 @@ async function concluirAtivPorAcao(a,texto,situacao){
 /* as ações que o vendedor pode tomar a partir da atividade ou do atendimento */
 var acReg=null;
 function abrirAcoes(a){
+  if(soCompromisso(a)){abrirCompromisso(a);return;}
   acReg=a;
   var c=cliPorId(a.clienteId)||{};
   var ativ=(a.natureza==="atividade");
@@ -41356,6 +41465,8 @@ function atualizarTotaisPedido(p){
 /* modo "venda": a mesma janela, só leitura — o financeiro vê a venda completa para aprovar
    (pedido do Wagner, 12/09), sem depender de acesso à tela de Pedidos */
 function abrirInstalacao(p,modo){
+  /* o Financeiro abre pelo cartão da aprovação: quem é da gestão continua entrando por aqui */
+  if(!modo&&!ehGestor()&&soCompromissoPed(p)){abrirCompromissoPed(p);return;}
   instAberta=p;instModo=modo||"instalacao";
   if(!Array.isArray(p.materiaisInstalacao))p.materiaisInstalacao=[];
   var sp=$("ins_prod");sp.innerHTML="";
@@ -42847,6 +42958,9 @@ async function sincronizarFunil(){
     if(!funilRetentar)funilRetentar=setTimeout(function(){funilRetentar=0;sincronizarFunil();},1500);
     return 0;
   }
+  /* cartões cortados pelo teto: um cartão antigo fora da lista pareceria não existir, e a
+     varredura criaria outro para o mesmo cliente */
+  if(window.__truncado&&window.__truncado.negocios)return 0;
   funilSincPromessa=(async function(){
   var limite=somaDias(hojeISO(),-90),feitos=0;
   /* quem tem movimento recente sai de listas pequenas (orçamentos e atendimentos), não de
@@ -43910,7 +44024,7 @@ function ligarWhatsApp(){
       var e=equipPorId(alvo.getAttribute("data-zapeq"));if(!e)return;
       abrirWhatsApp({cliente:e.clienteId||null,nome:e.cliente,equip:e,origem:"manutenção periódica"});return;}
     if(alvo.hasAttribute("data-zapativ")){
-      var a=atendPorId(alvo.getAttribute("data-zapativ"));if(!a)return;
+      var a=atendPorId(alvo.getAttribute("data-zapativ"));if(!a||soCompromisso(a))return;
       abrirWhatsApp({cliente:a.clienteId||null,nome:a.cliente,tel:a.tel,ativ:a.natureza==="atividade"?a:null,origem:(a.tipo||"atividade")});return;}
     var href=alvo.getAttribute("href")||"",mt=/wa\.me\/(\d+)/.exec(href),mx=/[?&]text=([^&]*)/.exec(href);
     var texto="";try{texto=mx?decodeURIComponent(mx[1].replace(/\+/g," ")):"";}catch(er){texto="";}
@@ -45237,6 +45351,7 @@ function renderChipsTipos(){
   });
 }
 function abrirAtend(a){
+  if(soCompromisso(a)){abrirCompromisso(a);return;}
   if(a&&a.natureza==="atividade"){var tvA=bloqueada(a);if(tvA){avisarBloqueio(tvA);return;}}
   editandoAt=a||null;clienteVinc=null;atendManutEq=null;atendAniv=null;
   marcarEdicao("atendForm",a||null);
@@ -49073,6 +49188,18 @@ function pendenciasMF(){
         ir:function(){ir("usuarios");}});
     });
   }catch(e){console.warn("pend estoque sem responsavel",e);}
+  /* 0e. lista cortada ou perto do teto: só o Administrador vê (02/11) */
+  try{
+    if(ehAdministrador())listasNoLimite().filter(function(x){return !x.rede;}).forEach(function(x){
+      põe({chave:"limite:"+x.c,icone:"⚠️",
+        titulo:(x.cortada?"Lista cortada: ":"Lista perto do limite: ")+nomeDaLista(x.c),
+        texto:x.cortada
+          ?"Carregou só os "+milhar(x.lidos)+" mais recentes de "+milhar(x.total)+". Os mais antigos não aparecem nas telas."
+          :milhar(x.total)+" de no máximo "+milhar(x.teto)+". Passando disso, os mais antigos somem das telas.",
+        quando:hojeISO(),
+        ir:function(){toast("Peça ao suporte para subir o limite de "+nomeDaLista(x.c)+".");}});
+    });
+  }catch(e){console.warn("pend limite",e);}
   /* 0d. inventário esperando a aprovação do Administrador (v465) */
   try{
     if(podeAprovarInv())invDaLoja().filter(function(v){return v.status==="aprovacao";}).forEach(function(v){
@@ -49385,6 +49512,7 @@ function renderSino(){
   var bt=$("sinoBt");
   if(!bt)return;
   var L=[];
+  try{mostrarAvisoLimites();}catch(e){console.warn("faixa dos limites",e);}
   try{L=pendenciasMF();}catch(e){console.warn("sino",e);}
   _pendSino=L;
   var n=L.length,bn=$("sinoN");
@@ -49783,7 +49911,7 @@ function eventos(){
     var atrasou=(a.natureza==="atividade"&&a.status!=="finalizado"&&d&&d<agora);
     var feita=(a.status==="finalizado");
     out.push({id:a.id,data:a.data,hora:a.inicio||"",fim:a.fim||"",quem:a.colaborador||"",
-      cliente:a.cliente||"",cidade:cidadeDoEvento(a,a.clienteId),tipo:a.tipo||"",obs:a.resultado||a.obs||"",
+      cliente:a.cliente||"",cidade:cidadeDoEvento(a,a.clienteId),tipo:a.tipo||"",obs:soCompromisso(a)?"":(a.resultado||a.obs||""),
       meu:podeEditarAtiv(a),
       classe:(a.natureza==="atendimento"||feita)?"atend":(atrasou?"ativ atrasada":"ativ"),
       rot:(a.natureza==="atendimento"?"Atendimento":
@@ -49794,7 +49922,7 @@ function eventos(){
     var pr=String(p.instalacao).split(" ");
     /* id "ped:": o clique abre a janela da instalação */
     out.push({id:"ped:"+p.id,pedido:p.id,data:pr[0],hora:pr[1]||"",fim:"",quem:respInstalacao(p),
-      cliente:p.cliente,cidade:cidadeDoEvento(p,p.clienteId),tipo:"Instalação",obs:p.obsInstalacao||p.obs||"",classe:"inst",
+      cliente:p.cliente,cidade:cidadeDoEvento(p,p.clienteId),tipo:"Instalação",obs:soCompromissoPed(p)?"":(p.obsInstalacao||p.obs||""),classe:"inst",
       meu:podeInstalar(p),
       rot:(p.instaladoEm?"Instalação finalizada":"Instalação")+" · pedido "+p.numero});
   });
@@ -49926,7 +50054,7 @@ function renderCalendario(){
         return '<div class="hora"><div class="h">'+esc(dataCurta(a.data))+(a.inicio?"<br>"+esc(a.inicio):"")+'</div><div class="evs">'+
           '<div class="ev ativ atrasada clicavel" data-ev="'+esc(a.id)+'"><b>'+esc(a.cliente||"—")+"</b><span>"+
           esc(a.tipo||"Atividade")+" · "+esc(a.colaborador||"—")+" · atrasada há "+dd+(dd===1?" dia":" dias")+
-          (a.obs?" — "+esc(String(a.obs).slice(0,80)):"")+"</span></div>"+
+          (a.obs&&!soCompromisso(a)?" — "+esc(String(a.obs).slice(0,80)):"")+"</span></div>"+
           (htmlLixeira("atividade",a.id))+"</div></div>";
       }).join("")+"</div>";
       area.innerHTML=ha;
@@ -49996,7 +50124,7 @@ function ligarEventosCal(){
       ev.stopPropagation();
       if(id.indexOf("ped:")===0){
         var pp=pedPorId(id.slice(4));
-        if(pp)abrirInstalacao(pp);
+        if(pp){if(soCompromissoPed(pp))abrirCompromissoPed(pp);else abrirInstalacao(pp);}
         return;
       }
       var a=atendPorId(id);
