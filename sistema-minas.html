@@ -34677,10 +34677,26 @@ function eqPor(termo){
    cliente + o intervalo do produto. Comprou o refil de novo, o relógio
    reinicia na data da compra. Uma troca registrada depois da última venda
    também reinicia — senão o sistema cobraria uma visita que já foi feita. */
+/* OS PEDIDOS DE CADA CLIENTE, DE UMA VEZ (02/11, medido simulando celular): cada aparelho varria
+   todos os pedidos, várias vezes, e a Manutenção levava 6 s com 61 pedidos e 67 s com 781. O índice
+   vale só durante uma conta que não para no meio (mesma ideia do IDX_VISITAS) e mantém a ordem da
+   lista de pedidos: o resultado é o mesmo da varredura. */
+var IDX_PED=null;
+function montarIdxPedidos(){
+  var porCli=new Map(),porAtiv=new Map();
+  function junta(m,k,p){var l=m.get(k);if(l)l.push(p);else m.set(k,[p]);}
+  pedidos.forEach(function(p){junta(porCli,p.clienteId,p);if(p.origemAtiv)junta(porAtiv,p.origemAtiv,p);});
+  return {porCli:porCli,porAtiv:porAtiv};
+}
+function pedidosDoClienteConta(cid){
+  if(IDX_PED)return IDX_PED.porCli.get(cid)||[];
+  return pedidos.filter(function(p){return p.clienteId===cid;});
+}
 function vendaMaisRecenteDe(e){
   var achado=null;
-  for(var i=0;i<pedidos.length;i++){
-    var p=pedidos[i];
+  var lista=e.clienteId?pedidosDoClienteConta(e.clienteId):pedidos;
+  for(var i=0;i<lista.length;i++){
+    var p=lista[i];
     if(p.status==="Cancelada"||!pedidoAprovado(p))continue;
     if(e.clienteId&&p.clienteId!==e.clienteId)continue;
     for(var j=0;j<(p.itens||[]).length;j++){
@@ -34905,7 +34921,8 @@ function vendaDaVisita(a){
   var ids=[];
   if(a.vendaPedidoId)ids.push(a.vendaPedidoId);
   (a.acoes||[]).forEach(function(x){if(x.tipo==="pedido"&&x.id)ids.push(x.id);});
-  pedidos.forEach(function(p){if(p.origemAtiv&&p.origemAtiv===a.id)ids.push(p.id);});
+  if(IDX_PED)(IDX_PED.porAtiv.get(a.id)||[]).forEach(function(p){ids.push(p.id);});
+  else pedidos.forEach(function(p){if(p.origemAtiv&&p.origemAtiv===a.id)ids.push(p.id);});
   return ids.some(pedidoTemManut);
 }
 function statusManut(e){
@@ -34916,8 +34933,9 @@ function statusManut(e){
   if(pend)return {k:"agendado",n:"Agendado visita",cls:"p-acc",visita:pend,
     sub:"para "+dataCurta(pend.data)+(pend.inicio?" às "+pend.inicio:"")+(pend.colaborador?" · "+pend.colaborador:"")};
   /* pedido ligado ao aparelho ainda sem aprovação (a instalação é a atividade futura) também é visita agendada */
-  var pedPend=pedidos.filter(function(p){
-    return !ehTeste(p)&&p.status!=="Cancelada"&&!pedidoAprovado(p)&&p.clienteId===e.clienteId&&
+  var pedsCli=pedidosDoClienteConta(e.clienteId);
+  var pedPend=pedsCli.filter(function(p){
+    return !ehTeste(p)&&p.status!=="Cancelada"&&!pedidoAprovado(p)&&
       (p.itens||[]).some(function(it){return it.equipId===e.id;});})[0];
   if(pedPend){
     var ins=(pedPend.instalacao&&!pedPend.instaladoEm)?String(pedPend.instalacao).split(" "):null;
@@ -34930,8 +34948,8 @@ function statusManut(e){
   function dataV(a){return String(a.concluidaEm||a.data||"").slice(0,10);}
   /* visitas concluídas + pedidos aprovados ligados ao aparelho com produto de "Manutenção (dias)" (= visita com venda) */
   var feitas=vs.filter(function(a){return a.status==="finalizado";}).concat(
-    pedidos.filter(function(p){
-      return pedidoAprovado(p)&&p.clienteId===e.clienteId&&(p.itens||[]).some(function(it){
+    pedsCli.filter(function(p){
+      return pedidoAprovado(p)&&(p.itens||[]).some(function(it){
         if(it.equipId!==e.id)return false;var pr=prodPorId(it.pid);return !!(pr&&+pr.manut>0);});
     }).map(function(p){
       return {status:"finalizado",concluidaEm:dataInstalacaoPedido(p),data:dataInstalacaoPedido(p),
@@ -35586,6 +35604,7 @@ function montarPreManut(modoMes,jmes,tetoAtr,limiteAtr,perDatas){
   /* as visitas de cada aparelho, de uma vez (antes: um filtro sobre todos os atendimentos POR aparelho) */
   IDX_VISITAS={};
   atendimentos.forEach(function(a){if(a.equipId)(IDX_VISITAS[a.equipId]||(IDX_VISITAS[a.equipId]=[])).push(a);});
+  IDX_PED=montarIdxPedidos();
   try{
   C.idxZap=indiceContatoZap();   /* o último WhatsApp de cada cliente, uma vez por desenho (27/10) */
   /* endereço vem do cadastro do cliente, para os filtros encadearem (índice por id, v352) */
@@ -35683,7 +35702,7 @@ function montarPreManut(modoMes,jmes,tetoAtr,limiteAtr,perDatas){
     if(mm){if(mm.k==="no_periodo")K.noMes++;else if(!limiteAtr||mm.prox>=limiteAtr)K.atr++;}
   });
   C.K=K;C.ord={};
-  }finally{IDX_VISITAS=null;}
+  }finally{IDX_VISITAS=null;IDX_PED=null;}
   return C;
 }
 function renderManutFiltro(){
@@ -49406,6 +49425,8 @@ function trocasRefilDosMeus(){
   var ch=usuarioAtual+"|"+lojaAtual+"|"+equipamentos.length+"|"+pedidos.length;
   if(_trocasMeus.chave===ch&&Date.now()-_trocasMeus.em<600000)return _trocasMeus.lista;
   var hj=hojeISO(),de=somaDias(hj,-7),ate=somaDias(hj,7),out=[];
+  IDX_PED=montarIdxPedidos();
+  try{
   equipamentos.forEach(function(e){
     if(e.ativo===false||!e.clienteId||!e.manutDias)return;
     if(e.loja&&e.loja!==lojaAtual)return;
@@ -49415,6 +49436,7 @@ function trocasRefilDosMeus(){
     if(v!==usuarioAtual)return;
     out.push({e:e,c:c,px:px});
   });
+  }finally{IDX_PED=null;}
   out.sort(function(a,b){return a.px.localeCompare(b.px);});
   _trocasMeus={chave:ch,em:Date.now(),lista:out};
   return out;
