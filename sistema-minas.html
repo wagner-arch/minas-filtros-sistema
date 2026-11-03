@@ -6934,6 +6934,9 @@ img{max-width:100%}
     <div id="iv_etapas" class="iv-etapas"></div>
     <div id="iv_novo" hidden>
       <p class="help">O inventário guarda a foto do saldo agora e abre a <b>contagem cega</b>: quem conta não vê o que o sistema diz. A loja não precisa parar — venda e transferência durante a contagem entram na conta.</p>
+      <div class="fld"><label for="iv_estoque">Qual estoque contar</label><select id="iv_estoque">
+        <option value="almox">Almoxarifado</option><option value="loja">Estoque da Loja</option><option value="colab">Estoque de vendedores</option></select></div>
+      <div id="iv_colabs" hidden></div>
       <div class="fld"><label for="iv_grupo">O que contar</label><select id="iv_grupo"></select></div>
     </div>
     <div id="iv_contar" hidden>
@@ -20281,9 +20284,9 @@ async function decidirAutEstoque__corpo(pedidoId,itemIx,aceita,motivo,uso){
 var cgLocal="";
 function abrirContagem(loc){
   cgLocal=loc||locLoja(lojaAtual);
-  if(!podeAutorizarEstoque(cgLocal)){
-    toast("Só "+(donoDoEstoque(cgLocal)||"quem responde por este estoque")+", o almoxarifado ou a gestão lança a contagem.");
-    return;}
+  /* 03/11 (regra dele): só a função Almoxarifado ou Administrador lança contagem, em qualquer estoque */
+  if(!podeContarInv()){toast("Só quem é do Almoxarifado ou o Administrador lança a contagem.");return;}
+  if(invAbertoDe(cgLocal)){toast("Este estoque está em inventário (nº "+invAbertoDe(cgLocal).numero+"): a contagem é feita por lá.");return;}
   $("cg_sub").textContent=nomeLocal(cgLocal)+" · "+dataBR(hojeISO());
   var lista=produtos.filter(function(pr){return saldoEm(pr.id,cgLocal)!==0;})
     .sort(function(a,b){return (a.nome||"").localeCompare(b.nome||"","pt-BR");});
@@ -20328,8 +20331,12 @@ function contagemResumo(){
     (dif?". Cada diferença vira um movimento de ajuste de inventário.":". Nada a ajustar.")+"</div>"):"";
 }
 async function lancarContagem(){
-  if(!podeAutorizarEstoque(cgLocal)){
-    $("cg_alerta").innerHTML='<div class="note crit">Só quem responde por este estoque lança a contagem.</div>';
+  if(!podeContarInv()){
+    $("cg_alerta").innerHTML='<div class="note crit">Só quem é do Almoxarifado ou o Administrador lança a contagem.</div>';
+    return;}
+  await carregarInventarios();
+  if(invAbertoDe(cgLocal)){
+    $("cg_alerta").innerHTML='<div class="note crit">Este estoque está em inventário (nº '+invAbertoDe(cgLocal).numero+'): a contagem é feita por lá.</div>';
     return;}
   var difs=[];
   Array.prototype.forEach.call($("cg_body").querySelectorAll("[data-cgq]"),function(inp){
@@ -22178,11 +22185,14 @@ function saidasLiquidas(p){
     var i=k.indexOf("|");return {pid:k.slice(0,i),local:k.slice(i+1),qtd:m[k]};});
 }
 /* reservas das vendas ainda não aprovadas, no estoque de um local: {produtoId: qtd} */
-function reservasDe(local,excluirId){
+/* soEntregues (inventário, 03/11): só as vendas cujo produto já saiu de verdade — sem instalação
+   esperando para ser feita (balcão, ou instalação já feita) */
+function reservasDe(local,excluirId,soEntregues){
   var r={},aRec=reqVendaAReceber();
   pedidos.forEach(function(p){
     if(p.loja!==lojaAtual||!vendaPendente(p))return;
     if(excluirId&&p.id===excluirId)return;
+    if(soEntregues&&p.instalacao&&!p.instaladoEm)return;
     var saiu={},pede={};
     /* o que já saiu deste pedido NAQUELE estoque, e o que ele ainda pede dali */
     saidasLiquidas(p).forEach(function(s){if(s.local===local)saiu[s.pid]=(saiu[s.pid]||0)+s.qtd;});
@@ -22522,7 +22532,63 @@ async function carregarInventarios(forcar){
   })();
   return invLendo;
 }
-function podeContarInv(){return podeMoverEstoque()||podeAutorizarEstoque(LOC_EMPRESA);}
+/* 03/11 (regra dele): quem abre, conta e lança inventário — em QUALQUER estoque (Almoxarifado, Estoque
+   da Loja, vendedores e prestadores) — é só quem tem a FUNÇÃO Almoxarifado ou Administrador, pelo
+   cadastro vindo do banco. Ser marcado como responsável por um estoque não muda isso; vendedor,
+   prestador, Gerente e Financeiro não contam nem lançam. A trava vale também em salvarInv. */
+function podeContarInv(){
+  try{if(prestadorLogado())return false;}catch(e){}
+  var f=perfilDe(usuarioAtual);return f==="Almoxarifado"||f==="Administrador";
+}
+/* "Estoque de Fulano" para o estoque de pessoa; os outros pelo nome de sempre */
+function nomeEstoqueInv(l){return l&&String(l).indexOf("colab:")===0?"Estoque de "+String(l).slice(6):nomeLocal(l);}
+/* O SALDO QUE VALE no inventário (03/11): o do sistema, menos o que já saiu de verdade e o sistema
+   ainda não baixou — venda salva e já entregue (balcão ou instalação feita) esperando a aprovação, o
+   que foi separado para alguém e ainda não foi aceito, e a devolução ainda não recebida. O que está
+   chegando e ainda não foi aceito não está no saldo, e quem conta é avisado para não contar.
+   Esse número fica guardado em cada registro (sis) e a aprovação lança só a diferença: venda,
+   requisição ou devolução feita DEPOIS da contagem do produto não conta duas vezes. */
+function baseInv(local){
+  var b={vend:{},sai:{},chega:[],saindo:[]};
+  try{b.vend=reservasDe(local,null,true);}catch(e){}
+  requisicoes.forEach(function(r){
+    if(r.loja!==lojaAtual)return;
+    var sep=r.tipo==="requisicao"&&r.status==="separada",dev=r.tipo==="devolucao"&&r.status==="pendente";
+    if(!sep&&!dev)return;
+    var de=sep?LOC_EMPRESA:localDaReq(r),para=sep?localDaReq(r):LOC_EMPRESA;
+    (r.itens||[]).forEach(function(it){
+      if(it.recebido||!it.pid)return;
+      var q=+(it.atendida||it.qtd)||0;if(!q)return;
+      if(de===local){b.sai[it.pid]=(b.sai[it.pid]||0)+q;b.saindo.push({pid:it.pid,nome:it.nome||"",q:q,dev:dev,outro:para});}
+      if(para===local)b.chega.push({pid:it.pid,nome:it.nome||"",q:q,dev:dev,outro:de});
+    });
+  });
+  return b;
+}
+function sisInv(b,pid,local){return saldoEm(pid,local)-(b.vend[pid]||0)-(b.sai[pid]||0);}
+/* o registro guarda de onde veio o número, para o Administrador ver na aprovação */
+function entSisInv(b,pid,local){
+  var o={sis:sisInv(b,pid,local)},v=b.vend[pid]||0,f=b.sai[pid]||0;
+  if(v||f){o.saldo=saldoEm(pid,local);if(v)o.vendEnt=v;if(f)o.fora=f;}
+  return o;
+}
+function explicaSisInv(it,f){
+  var l=it[f]||[],e=l[l.length-1];
+  if(!e||(!e.vendEnt&&!e.fora))return "";
+  return '<div class="t-sub">'+(+e.saldo||0)+" no estoque"+(e.vendEnt?" − "+e.vendEnt+" vendido esperando aprovação":"")+
+    (e.fora?" − "+e.fora+" separado ou devolvido, ainda não aceito":"")+"</div>";
+}
+/* o quadro "NÃO conte" de quem conta: só o que está a caminho, nunca o saldo */
+function naoConteInvHtml(local){
+  var b=baseInv(local),L=[];
+  b.chega.forEach(function(x){L.push((+x.q)+"× "+esc(x.nome)+' <span class="t-sub">'+
+    (x.dev?"devolução de "+esc(nomeEstoqueInv(x.outro))+", ainda não recebida":"a caminho, separado e ainda não aceito")+"</span>");});
+  b.saindo.forEach(function(x){L.push((+x.q)+"× "+esc(x.nome)+' <span class="t-sub">'+
+    (x.dev?"devolvido ao almoxarifado, ainda não recebido":"separado para "+esc(nomeEstoqueInv(x.outro))+", ainda não aceito")+"</span>");});
+  if(!L.length)return "";
+  return '<div class="note warn iv-naoconte"><b>NÃO conte estes produtos</b> (estão a caminho e ainda não são deste estoque):<div class="t-sub">'+
+    L.join("<br>")+"</div></div>";
+}
 function podeAprovarInv(){return ehAdministrador();}
 function invDaLoja(){return inventarios.filter(function(v){return v.loja===lojaAtual;});}
 function invAbertoDe(local){return invDaLoja().filter(function(v){return v.local===local&&INV_ABERTOS.indexOf(v.status)>=0;})[0]||null;}
@@ -22545,6 +22611,10 @@ function difInv(it){
 function proximoNumeroInv(){return invDaLoja().reduce(function(m,v){return Math.max(m,+v.numero||0);},0)+1;}
 function quandoInv(){var d=new Date();return dataBR(hojeISO())+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");}
 async function salvarInv(inv,antes){
+  if(!podeContarInv()){
+    if(antes){Object.keys(inv).forEach(function(k){delete inv[k];});Object.assign(inv,antes);}
+    else{var ix0=inventarios.indexOf(inv);if(ix0>=0)inventarios.splice(ix0,1);}
+    $("iv_alerta").innerHTML='<div class="note crit">Só quem é do Almoxarifado ou o Administrador mexe no inventário.</div>';return false;}
   try{await gravaConf("inventarios",inv);return true;}
   catch(e){
     if(antes){Object.keys(inv).forEach(function(k){delete inv[k];});Object.assign(inv,antes);}
@@ -22720,7 +22790,7 @@ async function registrarSeriesInv(inv){
   var feitos=[];
   if(!lista.length)return {n:0,feitos:feitos};
   await carregarSeries();
-  var hoje=quandoInv(),texto="Inventário nº "+inv.numero+": em estoque em "+nomeLocal(inv.local);
+  var hoje=quandoInv(),texto="Inventário nº "+inv.numero+": em estoque "+(String(inv.local).indexOf("colab:")===0?"de "+String(inv.local).slice(6):"em "+nomeLocal(inv.local));
   try{
     for(var i=0;i<lista.length;i++){
       var x=lista[i],n=normSerie(x.s);
@@ -22755,7 +22825,7 @@ function resumoSeriesInv(inv){
       (s.length?'<div class="t-sub">'+s.map(esc).join(" · ")+"</div>":"")+
       (cli.length?'<div class="t-sub" style="color:var(--warn)">Já em aparelho de cliente: '+cli.map(esc).join(" · ")+"</div>":"")+"</div>";
   }).join("");
-  return '<details class="iv-falta"><summary>Números de série: '+tot+" lido(s)"+(inv.seriesRegistradas?" · "+inv.seriesRegistradas+" em estoque no "+esc(nomeLocal(inv.local)):"")+"</summary>"+h+"</details>";
+  return '<details class="iv-falta"><summary>Números de série: '+tot+" lido(s)"+(inv.seriesRegistradas?" · "+inv.seriesRegistradas+" em estoque · "+esc(nomeEstoqueInv(inv.local)):"")+"</summary>"+h+"</details>";
 }
 window.__ivsMF=function(){return IVS;};window.__ivsReceberMF=ivsReceber;window.__seriesCadMF=function(){return seriesCad;};
 window.__invPedeSerieMF=invPedeSerie;
@@ -22764,16 +22834,16 @@ function renderInventarios(h,b){
   h.innerHTML="<th>Nº</th><th>Estoque</th><th>Aberto</th><th>Situação</th><th class=\"num\">Produtos contados</th><th class=\"num\">Divergências</th>";
   if(!invLido){carregarInventarios().then(function(){if(eeAba==="inv")renderEstEmpresa();});}
   var lista=invDaLoja().slice().sort(function(a,b2){return (+b2.numero||0)-(+a.numero||0);});
-  var aberto=invAbertoDe(LOC_EMPRESA);
+  /* 03/11: um inventário aberto por estoque, e vários estoques ao mesmo tempo */
+  var abertos=lista.filter(function(v){return INV_ABERTOS.indexOf(v.status)>=0;});
   $("eeCount").textContent=lista.length+(lista.length===1?" inventário":" inventários");
   var topo='<tr class="iv-topo-l"><td colspan="6"><div class="iv-topo">'+
-    (aberto
-      ? "<b>Inventário nº "+aberto.numero+" em andamento</b> · "+esc(INV_SIT[aberto.status][0])+
-        ' <button class="btn sm" type="button" data-ivab="'+esc(aberto.id)+'">Continuar</button>'
-      : (podeContarInv()
-        ? "<b>Balanço do Almoxarifado.</b> Abra o inventário e conte pelo celular, lendo o código de barras ou digitando o código ou o nome. "+
-          '<button class="btn sm" type="button" id="iv_abrirNovo">Abrir inventário do Almoxarifado</button>'
-        : "Quem abre e conta o inventário é o almoxarifado."))+"</div></td></tr>";
+    abertos.map(function(a){return "<div><b>Inventário nº "+a.numero+"</b> · "+esc(nomeEstoqueInv(a.local))+" · "+esc((INV_SIT[a.status]||[a.status])[0])+
+      ' <button class="btn sm" type="button" data-ivab="'+esc(a.id)+'">Continuar</button></div>';}).join("")+
+    (podeContarInv()
+      ? "<div><b>Balanço dos estoques.</b> Abra o inventário do Almoxarifado, do Estoque da Loja ou dos vendedores e conte pelo celular, lendo o código de barras ou digitando o código ou o nome. "+
+        '<button class="btn sm" type="button" id="iv_abrirNovo">Abrir inventário</button></div>'
+      : (abertos.length?"":"Quem abre e conta o inventário é o Almoxarifado ou o Administrador."))+"</div></td></tr>";
   b.innerHTML=topo;
   if(!lista.length){b.innerHTML+='<tr><td colspan="6"><div class="empty"><div class="big">Nenhum inventário ainda</div>'+
     "O primeiro balanço começa no botão acima.</div></td></tr>";}
@@ -22783,7 +22853,7 @@ function renderInventarios(h,b){
     var div=v.status==="contagem"?"—":its.filter(function(it){return difInv(it)!==0;}).length;
     var st=INV_SIT[v.status]||[v.status,"p-mut"];
     var tr=document.createElement("tr");tr.className="clickable";tr.setAttribute("data-ivab",v.id);
-    tr.innerHTML="<td><b>"+v.numero+"</b></td><td>"+esc(nomeLocal(v.local))+(v.grupo?'<div class="t-sub">grupo '+esc(v.grupo)+"</div>":"")+"</td>"+
+    tr.innerHTML="<td><b>"+v.numero+"</b></td><td>"+esc(nomeEstoqueInv(v.local))+(v.grupo?'<div class="t-sub">grupo '+esc(v.grupo)+"</div>":"")+"</td>"+
       "<td>"+esc(v.abertoEm||"")+'<div class="t-sub">'+esc(v.abertoPor||"")+"</div></td>"+
       '<td><span class="pill '+st[1]+'">'+esc(st[0])+"</span>"+(v.status==="fechado"&&v.aprovadoPor?'<div class="t-sub">aprovado por '+esc(v.aprovadoPor)+"</div>":"")+"</td>"+
       '<td class="num">'+cont+'</td><td class="num">'+div+"</td>";
@@ -22814,10 +22884,11 @@ function desenharInv(){
   function bt(id,txt,cls){ac.insertAdjacentHTML("beforeend",'<button class="btn'+(cls?" "+cls:"")+'" type="button" id="'+id+'">'+txt+"</button>");}
   if(!inv){
     $("iv_titulo").textContent="Abrir inventário";
-    $("iv_sub").textContent=nomeLocal(LOC_EMPRESA)+" · "+nomeLoja();
+    $("iv_sub").textContent=nomeLoja();
     $("iv_etapas").innerHTML=etapasInvHtml("");
     var gs={};produtos.forEach(function(p){if(p.grupo)gs[p.grupo]=1;});
-    $("iv_grupo").innerHTML='<option value="">Todo o almoxarifado</option>'+Object.keys(gs).sort(ordAZ)
+    $("iv_estoque").onchange=desenharColabsInv;desenharColabsInv();
+    $("iv_grupo").innerHTML='<option value="">Todo o estoque</option>'+Object.keys(gs).sort(ordAZ)
       .map(function(g){return '<option value="'+esc(g)+'">Só o grupo '+esc(g)+"</option>";}).join("");
     $("iv_novo").hidden=false;
     bt("iv_criar","Abrir o inventário");bt("iv_fechar","Fechar","mut");
@@ -22825,7 +22896,7 @@ function desenharInv(){
   }else{
     var st=INV_SIT[inv.status]||[inv.status,"p-mut"];
     $("iv_titulo").textContent="Inventário nº "+inv.numero;
-    $("iv_sub").innerHTML=esc(nomeLocal(inv.local))+(inv.grupo?" · grupo "+esc(inv.grupo):"")+" · aberto em "+esc(inv.abertoEm||"")+
+    $("iv_sub").innerHTML=esc(nomeEstoqueInv(inv.local))+(inv.grupo?" · grupo "+esc(inv.grupo):"")+" · aberto em "+esc(inv.abertoEm||"")+
       " por "+esc(inv.abertoPor||"")+' · <span class="pill '+st[1]+'">'+esc(st[0])+"</span>";
     $("iv_etapas").innerHTML=inv.status==="cancelado"?"":etapasInvHtml(inv.status);
     if(inv.status==="contagem"||inv.status==="recontagem"){
@@ -22842,6 +22913,27 @@ function desenharInv(){
   Array.prototype.forEach.call(document.querySelectorAll("#iv_lista [data-ivse]"),function(x){
     x.onclick=async function(){if(!(await ivsSalvarSeSujo()))return;var c=x.getAttribute("data-ivse").split("|");ivsAbrirEntrada(c[0],c[1],+c[2]);try{$("iv_series").scrollIntoView();}catch(e){}};});
 }
+/* a lista de quem tem estoque na empresa (cadastro e movimentos vindos do banco), para marcar vários */
+function desenharColabsInv(){
+  var w=$("iv_colabs");if(!w)return;
+  var tipo=$("iv_estoque").value;
+  if(tipo!=="colab"){w.hidden=true;w.innerHTML="";
+    var ab=invAbertoDe(tipo==="loja"?locLoja(lojaAtual):LOC_EMPRESA);
+    if(ab){w.hidden=false;w.innerHTML='<div class="note warn">Este estoque já tem o inventário nº '+ab.numero+" em andamento.</div>";}
+    return;}
+  var pres={};try{prestAtivos().forEach(function(x){if(x.nome)pres[x.nome]=1;});}catch(e){}
+  var nomes=colabsComEstoque();
+  w.hidden=false;
+  if(!nomes.length){w.innerHTML='<div class="note">Ninguém com estoque nesta empresa.</div>';return;}
+  w.innerHTML='<div class="actions" style="margin:4px 0"><button class="btn ghost sm" type="button" id="iv_colTodos">Marcar todos</button></div>'+
+    '<div class="iv-colabs">'+nomes.map(function(n){
+      var l=locColab(n),ab=invAbertoDe(l);
+      var np=produtos.filter(function(p){return saldoEm(p.id,l)!==0;}).length;
+      return '<label class="chk" style="display:block;margin:4px 0"><input type="checkbox" data-ivcol="'+esc(n)+'"'+(ab?" disabled":"")+"> "+
+        esc(n)+(pres[n]?' <span class="t-sub">(prestador)</span>':"")+' <span class="t-sub">· '+
+        (ab?"já tem o inventário nº "+ab.numero+" aberto":np+" produto(s)")+"</span></label>";}).join("")+"</div>";
+  $("iv_colTodos").onclick=function(){[].forEach.call(w.querySelectorAll("[data-ivcol]:not(:disabled)"),function(c){c.checked=true;});};
+}
 function opcoesProdutosInv(inv){
   var ps=produtosDoInv(inv).slice().sort(function(a,b2){return ordAZ(a.nome||"",b2.nome||"");});
   if(inv.status==="recontagem")ps=ps.filter(function(p){var it=(inv.itens||{})[p.id];return it&&it.recontar;});
@@ -22857,9 +22949,10 @@ function desenharContagemInv(inv,bt){
   $("iv_contar").hidden=false;
   var its=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];});
   if(fase==="c1"){
-    var naoContados=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return saldoEm(p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
+    var bNC=baseInv(inv.local);
+    var naoContados=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return sisInv(bNC,p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
     $("iv_instr").innerHTML="<b>Contagem cega.</b> Leia o código de barras ou digite o código ou o nome, e escreva <b>quantas unidades você contou</b>. "+
-      "O mesmo produto em dois lugares: registre cada lugar, o sistema soma. Pode parar e continuar depois — fica tudo salvo.";
+      "O mesmo produto em dois lugares: registre cada lugar, o sistema soma. Pode parar e continuar depois — fica tudo salvo."+naoConteInvHtml(inv.local);
     var h='<p class="sect-t" style="margin-top:14px">Contados ('+its.filter(function(it){return (it.c1||[]).length;}).length+")</p>"+listaEntradasInv(inv,"c1");
     if(naoContados.length)h+='<details class="iv-falta"><summary>Ainda não contados: '+naoContados.length+" produto(s) que o sistema diz ter neste estoque</summary>"+
       '<div class="t-sub">'+naoContados.slice(0,400).map(function(p){return esc(p.nome)+(p.cod?" ("+esc(p.cod)+")":"");}).join(" · ")+
@@ -22871,7 +22964,7 @@ function desenharContagemInv(inv,bt){
     var rec=its.filter(function(it){return it.recontar;});
     var feitos=rec.filter(function(it){return (it.c2||[]).length;});
     $("iv_instr").innerHTML="<b>Contar de novo</b> os "+rec.length+" produto(s) que o Administrador marcou — de preferência por outra pessoa, também às cegas. "+
-      "A lista de produtos mostra só os que precisam ser recontados.";
+      "A lista de produtos mostra só os que precisam ser recontados."+naoConteInvHtml(inv.local);
     $("iv_lista").innerHTML='<p class="sect-t" style="margin-top:14px">Recontados: '+feitos.length+" de "+rec.length+"</p>"+listaEntradasInv(inv,"c2")+
       (rec.length>feitos.length?'<div class="note warn"><b>Falta recontar:</b> '+rec.filter(function(it){return !(it.c2||[]).length;})
         .map(function(it){return esc(it.nome);}).join(" · ")+"</div>":"");
@@ -22977,7 +23070,7 @@ async function registrarContagemInv(m){
   if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
   var antes=copiaInv(inv),it=itemInv(inv,pid);
   it[fase]=it[fase]||[];
-  var ent={qtd:+qs,sis:saldoEm(pid,inv.local),por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:$("iv_obs").value.trim()};
+  var ent=Object.assign(entSisInv(baseInv(inv.local),pid,inv.local),{qtd:+qs,por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:$("iv_obs").value.trim()});
   var pedeS=invPedeSerie(prodPorId(pid)),sr=(pedeS&&fase==="c1")?serieLimpa(IVS.linhas):[];
   if(sr.length)ent.series=sr;
   if(modo==="corrigir"){
@@ -23009,7 +23102,8 @@ async function ivsSalvarSeSujo(){
   ivsZerar();return true;
 }
 async function removerEntradaInv(chave){
-  var inv=invAtual;if(!inv)return;var p=chave.split("|"),it=(inv.itens||{})[p[0]];if(!it)return;
+  var inv=invAtual;if(!inv)return;
+  if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem conta é o Almoxarifado ou o Administrador.</div>';return;}var p=chave.split("|"),it=(inv.itens||{})[p[0]];if(!it)return;
   if(IVS.alvo)ivsZerar();
   var e=(it[p[1]]||[])[+p[2]];if(!e)return;
   if(!confirm("Tirar "+e.qtd+"× "+it.nome+" desta contagem?"))return;
@@ -23018,13 +23112,15 @@ async function removerEntradaInv(chave){
 }
 async function encerrarContagemInv(){
   var inv=invAtual;if(!inv)return;
+  if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem conta é o Almoxarifado ou o Administrador.</div>';return;}
   if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
-  var naoC=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return saldoEm(p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
+  var bE=baseInv(inv.local);
+  var naoC=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return sisInv(bE,p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
   if(!confirm("Encerrar a contagem?"+(naoC.length?" "+naoC.length+" produto(s) com saldo no sistema não foram contados e entram como ZERO.":"")+
     " Com diferença, o inventário vai para a aprovação do Administrador."))return;
   var antes=copiaInv(inv);
   naoC.forEach(function(p){var it=itemInv(inv,p.id);it.naoContado=true;
-    it.c1=[{qtd:0,sis:saldoEm(p.id,inv.local),por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:"não encontrado na 1ª contagem"}];});
+    it.c1=[Object.assign(entSisInv(bE,p.id,inv.local),{qtd:0,por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:"não encontrado na 1ª contagem"})];});
   var div=0;
   Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];
     if(!(it.c1||[]).length){it.recontar=false;return;}
@@ -23049,6 +23145,7 @@ async function encerrarContagemInv(){
 }
 async function encerrarRecontagemInv(){
   var inv=invAtual;if(!inv)return;
+  if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem conta é o Almoxarifado ou o Administrador.</div>';return;}
   if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
   var rec=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];}).filter(function(it){return it.recontar;});
   var falta=rec.filter(function(it){return !(it.c2||[]).length;});
@@ -23072,9 +23169,9 @@ function resumoDifInv(inv){
   var rows=lin.map(function(it){
     var d=difInv(it),p=prodPorId(it.pid),cu=p?custoTotalDe(p):0,v=d*cu;
     if(v>0)sobra+=v;else falta+=v;
-    var sis=(it.recontar&&(it.c2||[]).length)?sisFaseInv(it,"c2"):sisFaseInv(it,"c1");
+    var fS=(it.recontar&&(it.c2||[]).length)?"c2":"c1",sis=sisFaseInv(it,fS);
     return "<tr>"+(marca?'<td><input type="checkbox" data-ivcn="'+esc(it.pid)+'" aria-label="Contar de novo"></td>':"")+"<td>"+esc(it.nome)+(it.cod?'<div class="t-sub"><code>'+esc(it.cod)+"</code></div>":"")+"</td>"+
-      '<td class="num">'+sis+'</td><td class="num">'+totalFaseInv(it,"c1")+(it.naoContado?' <span class="t-sub">não achado</span>':"")+corrInvTxt(it,"c1")+"</td>"+
+      '<td class="num">'+sis+explicaSisInv(it,fS)+'</td><td class="num">'+totalFaseInv(it,"c1")+(it.naoContado?' <span class="t-sub">não achado</span>':"")+corrInvTxt(it,"c1")+"</td>"+
       '<td class="num">'+((it.c2||[]).length?totalFaseInv(it,"c2")+corrInvTxt(it,"c2"):"—")+"</td>"+
       '<td class="num" style="color:'+(d>0?"var(--ok)":d<0?"var(--crit)":"inherit")+'"><b>'+(d>0?"+":"")+d+"</b></td>"+
       (vc?'<td class="num">'+BRL(v)+"</td>":"")+"</tr>";
@@ -23089,7 +23186,7 @@ function desenharRevisaoInv(inv,bt){
   var w=$("iv_revisao");w.hidden=false;
   var cab="";
   if(inv.status==="aprovacao")cab=podeAprovarInv()
-    ? '<div class="note warn"><b>Confira as diferenças e aprove.</b> Aprovando, cada diferença vira um movimento de Ajuste de inventário no '+esc(nomeLocal(inv.local))+
+    ? '<div class="note warn"><b>Confira as diferenças e aprove.</b> Aprovando, cada diferença vira um movimento de Ajuste de inventário no '+esc(nomeEstoqueInv(inv.local))+
       " e o saldo do sistema passa a ser o que foi contado. Quer conferir algum produto? Marque <b>Contar de novo</b> só nele: só os marcados voltam para uma nova contagem, às cegas; o resto espera.</div>"
     : '<div class="note">Contagem encerrada. <b>Aguardando a aprovação do Administrador.</b></div>';
   else if(inv.status==="fechado")cab='<div class="note ok"><b>'+(inv.semDiferenca?"O estoque bateu — nenhum ajuste.":"Ajustes lançados")+"</b>"+
@@ -23109,7 +23206,7 @@ async function aprovarInv(){
   if(!podeAprovarInv()){$("iv_alerta").innerHTML='<div class="note crit">Só o Administrador aprova o inventário.</div>';return;}
   if(inv.status!=="aprovacao")return;
   var its=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];}).filter(function(it){return difInv(it)!==0;});
-  if(!confirm("Lançar "+its.length+" ajuste(s) de inventário no "+nomeLocal(inv.local)+"?"))return;
+  if(!confirm("Lançar "+its.length+" ajuste(s) de inventário no "+nomeEstoqueInv(inv.local)+"?"))return;
   var feitos=[],doc="Inventário nº "+inv.numero;
   try{
     for(var i=0;i<its.length;i++){
@@ -23164,19 +23261,33 @@ async function cancelarInv(){
 }
 /* toque duplo nunca grava duas vezes (30/10) */
 function criarInv(){return travaSalvar("criarInv",criarInv__corpo,this,arguments);}
+/* 03/11 (regra dele): escolhe-se o estoque — Almoxarifado, Estoque da Loja ou vendedores (vários de
+   uma vez, cada um com o seu inventário). Um inventário aberto por estoque de cada vez. */
 async function criarInv__corpo(){
-  if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem abre o inventário é o almoxarifado.</div>';return;}
+  if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem abre o inventário é o Almoxarifado ou o Administrador.</div>';return;}
   await carregarInventarios();
-  if(invAbertoDe(LOC_EMPRESA)){$("iv_alerta").innerHTML='<div class="note crit">Já existe um inventário em andamento neste estoque.</div>';return;}
-  var grupo=$("iv_grupo").value;
-  var inv={id:uid(),loja:lojaAtual,numero:proximoNumeroInv(),local:LOC_EMPRESA,grupo:grupo,status:"contagem",
-    abertoEm:quandoInv(),abertoPor:usuarioAtual,criadoEm:new Date().toISOString(),itens:{},foto:{},historico:[]};
-  produtosDoInv(inv).forEach(function(p){var s=saldoEm(p.id,inv.local);if(s!==0)inv.foto[p.id]=s;});
-  inv.historico.push({quando:inv.abertoEm,por:usuarioAtual,texto:"Inventário aberto"});
-  inventarios.push(inv);
-  if(!(await salvarInv(inv,null)))return;
-  toast("Inventário nº "+inv.numero+" aberto. Comece a contar.");
-  abrirInv(inv);
+  var tipo=$("iv_estoque")?$("iv_estoque").value:"almox",locais;
+  if(tipo==="loja")locais=[locLoja(lojaAtual)];
+  else if(tipo==="colab")locais=[].slice.call(document.querySelectorAll("#iv_colabs [data-ivcol]:checked")).map(function(c){return locColab(c.getAttribute("data-ivcol"));});
+  else locais=[LOC_EMPRESA];
+  if(!locais.length){$("iv_alerta").innerHTML='<div class="note crit">Marque pelo menos um vendedor.</div>';return;}
+  var ja=locais.filter(function(l){return invAbertoDe(l);});
+  if(ja.length){$("iv_alerta").innerHTML='<div class="note crit">Já existe um inventário em andamento neste estoque: '+
+    ja.map(function(l){return esc(nomeEstoqueInv(l))+" (nº "+invAbertoDe(l).numero+")";}).join(" · ")+"</div>";desenharColabsInv();return;}
+  var grupo=$("iv_grupo").value,feitos=[];
+  for(var i=0;i<locais.length;i++){
+    var inv={id:uid(),loja:lojaAtual,numero:proximoNumeroInv(),local:locais[i],grupo:grupo,status:"contagem",
+      abertoEm:quandoInv(),abertoPor:usuarioAtual,criadoEm:new Date().toISOString(),itens:{},foto:{},historico:[]};
+    produtosDoInv(inv).forEach(function(p){var s=saldoEm(p.id,inv.local);if(s!==0)inv.foto[p.id]=s;});
+    inv.historico.push({quando:inv.abertoEm,por:usuarioAtual,texto:"Inventário aberto · "+nomeEstoqueInv(inv.local)});
+    inventarios.push(inv);
+    if(!(await salvarInv(inv,null))){if(feitos.length)toast(feitos.length+" inventário(s) abertos antes da falha.");return;}
+    feitos.push(inv);
+  }
+  $("iv_alerta").innerHTML="";
+  if(feitos.length===1){toast("Inventário nº "+feitos[0].numero+" aberto. Comece a contar.");abrirInv(feitos[0]);return;}
+  toast(feitos.length+" inventários abertos: nº "+feitos.map(function(v){return v.numero;}).join(", ")+".");
+  $("invModal").hidden=true;invAtual=null;if(eeAba==="inv")renderEstEmpresa();
 }
 window.__inventariosMF=function(){return inventarios;};
 window.__abrirInvMF=function(v){return abrirInv(v);};
@@ -23678,7 +23789,7 @@ function ajustarTextosEC(){
   var bc=$("ecContagem");
   if(bc){
     var vq=$("ecQuem")?String($("ecQuem").value||""):"";
-    bc.hidden=ferr||!ehLocalLoja(vq)||!podeAutorizarEstoque(vq);
+    bc.hidden=ferr||!ehLocalLoja(vq)||!podeContarInv()||!!invAbertoDe(vq);
   }
   $("ecDevolver").hidden=ferr;      /* na ferramenta, o Devolver fica na linha de cada uma */
   $("ecBusca").placeholder=ferr?"Buscar ferramenta, marca, série ou acessório":"Buscar produto";
@@ -23742,7 +23853,7 @@ function renderEstColab(){
   var vSel=sq.value||"",ehLoja=ehLocalLoja(vSel);
   /* o botao da contagem segue o estoque escolhido (e nao so o tipo, como no ajustarTextosEC) */
   var btCg=$("ecContagem");
-  if(btCg)btCg.hidden=(ecTipo==="ferr")||!ehLoja||!podeAutorizarEstoque(vSel);
+  if(btCg)btCg.hidden=(ecTipo==="ferr")||!ehLoja||!podeContarInv()||!!invAbertoDe(vSel);
   var loc=ehLoja?vSel:locColab(vSel),quem=ehLoja?"":vSel;
   /* o número da aba Autorizações é o do estoque escolhido (28/10) */
   try{var bgA=$("ecAutBadge");if(bgA){
@@ -50691,7 +50802,7 @@ function pendenciasMF(){
   try{
     if(podeAprovarInv())invDaLoja().filter(function(v){return v.status==="aprovacao";}).forEach(function(v){
       põe({chave:"inv:"+v.id,icone:"📋",titulo:"Inventário nº "+v.numero+" para aprovar",
-        texto:nomeLocal(v.local)+" · contagem e recontagem encerradas"+(v.recontagemPor?" por "+v.recontagemPor:""),
+        texto:nomeEstoqueInv(v.local)+" · contagem encerrada"+(v.recontagemPor?" · contado de novo por "+v.recontagemPor:""),
         quando:String(v.criadoEm||"").slice(0,10),
         ir:function(){ir("estEmpresa");var t=$("eeAbas")&&$("eeAbas").querySelector('[data-t="inv"]');
           if(t)t.click();abrirInv(v);}});
