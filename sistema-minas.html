@@ -22870,7 +22870,7 @@ function desenharContagemInv(inv,bt){
   }else{
     var rec=its.filter(function(it){return it.recontar;});
     var feitos=rec.filter(function(it){return (it.c2||[]).length;});
-    $("iv_instr").innerHTML="<b>Recontagem obrigatória</b> dos "+rec.length+" produto(s) que divergiram — de preferência por outra pessoa, também às cegas. "+
+    $("iv_instr").innerHTML="<b>Contar de novo</b> os "+rec.length+" produto(s) que o Administrador marcou — de preferência por outra pessoa, também às cegas. "+
       "A lista de produtos mostra só os que precisam ser recontados.";
     $("iv_lista").innerHTML='<p class="sect-t" style="margin-top:14px">Recontados: '+feitos.length+" de "+rec.length+"</p>"+listaEntradasInv(inv,"c2")+
       (rec.length>feitos.length?'<div class="note warn"><b>Falta recontar:</b> '+rec.filter(function(it){return !(it.c2||[]).length;})
@@ -23020,14 +23020,17 @@ async function encerrarContagemInv(){
   var inv=invAtual;if(!inv)return;
   if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
   var naoC=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return saldoEm(p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
-  if(!confirm("Encerrar a 1ª contagem?"+(naoC.length?" "+naoC.length+" produto(s) com saldo no sistema não foram contados e entram como ZERO — eles vão para a recontagem.":"")))return;
+  if(!confirm("Encerrar a contagem?"+(naoC.length?" "+naoC.length+" produto(s) com saldo no sistema não foram contados e entram como ZERO.":"")+
+    " Com diferença, o inventário vai para a aprovação do Administrador."))return;
   var antes=copiaInv(inv);
   naoC.forEach(function(p){var it=itemInv(inv,p.id);it.naoContado=true;
     it.c1=[{qtd:0,sis:saldoEm(p.id,inv.local),por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:"não encontrado na 1ª contagem"}];});
   var div=0;
   Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];
     if(!(it.c1||[]).length){it.recontar=false;return;}
-    var d=totalFaseInv(it,"c1")-sisFaseInv(it,"c1");it.dif1=d;it.recontar=d!==0;if(it.recontar)div++;});
+    /* 03/11 (regra dele): a recontagem deixou de ser obrigatória — só o Administrador, na aprovação,
+       marca o que quer contar de novo */
+    var d=totalFaseInv(it,"c1")-sisFaseInv(it,"c1");it.dif1=d;it.recontar=false;if(d!==0)div++;});
   inv.contagem1Fim=quandoInv();inv.contagem1Por=usuarioAtual;
   /* bateu tudo: fecha sem passar pelo Administrador, e as séries são registradas aqui mesmo */
   var regS=null;
@@ -23037,11 +23040,11 @@ async function encerrarContagemInv(){
       avisarRecusaBanco("iv_alerta",eS,"O inventário continua na contagem.");desenharInv();return;}
     if(regS.n)inv.seriesRegistradas=regS.n;
   }
-  if(div){inv.status="recontagem";}
+  if(div){inv.status="aprovacao";}
   else{inv.status="fechado";inv.fechadoEm=quandoInv();inv.semDiferenca=true;}
-  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"1ª contagem encerrada · "+div+" divergência(s)"}]);
+  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"Contagem encerrada · "+div+" diferença(s)"+(div?" · aguardando o Administrador":"")}]);
   if(!(await salvarInv(inv,antes))){if(regS)await desfazerSeriesInv(regS.feitos);return;}
-  toast(div?div+" produto(s) divergiram e vão para a recontagem.":"Nenhuma diferença: o estoque bateu e o inventário foi fechado.");
+  toast(div?div+" produto(s) com diferença. O inventário foi para a aprovação do Administrador.":"Nenhuma diferença: o estoque bateu e o inventário foi fechado.");
   desenharInv();
 }
 async function encerrarRecontagemInv(){
@@ -23049,7 +23052,7 @@ async function encerrarRecontagemInv(){
   if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
   var rec=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];}).filter(function(it){return it.recontar;});
   var falta=rec.filter(function(it){return !(it.c2||[]).length;});
-  if(falta.length){$("iv_alerta").innerHTML='<div class="note crit"><b>A recontagem é obrigatória.</b> Falta recontar: '+
+  if(falta.length){$("iv_alerta").innerHTML='<div class="note crit"><b>Falta contar de novo</b> o que o Administrador marcou: '+
     falta.map(function(it){return esc(it.nome);}).join(" · ")+"</div>";return;}
   if(!confirm("Encerrar a recontagem e mandar para a aprovação do Administrador?"))return;
   var antes=copiaInv(inv);
@@ -23061,20 +23064,22 @@ async function encerrarRecontagemInv(){
 }
 function resumoDifInv(inv){
   var vc=podeVerCusto(),its=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];});
-  var lin=its.filter(function(it){return it.recontar||difInv(it)!==0;})
-    .sort(function(a,b2){return ordAZ(a.nome||"",b2.nome||"");});
+  /* 03/11: na aprovação aparece tudo o que foi contado, com diferença primeiro */
+  var lin=its.filter(function(it){return it.recontar||difInv(it)!==0||(it.c1||[]).length;})
+    .sort(function(a,b2){return ((difInv(b2)!==0)-(difInv(a)!==0))||ordAZ(a.nome||"",b2.nome||"");});
+  var marca=inv.status==="aprovacao"&&podeAprovarInv();
   var sobra=0,falta=0;
   var rows=lin.map(function(it){
     var d=difInv(it),p=prodPorId(it.pid),cu=p?custoTotalDe(p):0,v=d*cu;
     if(v>0)sobra+=v;else falta+=v;
     var sis=(it.recontar&&(it.c2||[]).length)?sisFaseInv(it,"c2"):sisFaseInv(it,"c1");
-    return "<tr><td>"+esc(it.nome)+(it.cod?'<div class="t-sub"><code>'+esc(it.cod)+"</code></div>":"")+"</td>"+
+    return "<tr>"+(marca?'<td><input type="checkbox" data-ivcn="'+esc(it.pid)+'" aria-label="Contar de novo"></td>':"")+"<td>"+esc(it.nome)+(it.cod?'<div class="t-sub"><code>'+esc(it.cod)+"</code></div>":"")+"</td>"+
       '<td class="num">'+sis+'</td><td class="num">'+totalFaseInv(it,"c1")+(it.naoContado?' <span class="t-sub">não achado</span>':"")+corrInvTxt(it,"c1")+"</td>"+
       '<td class="num">'+((it.c2||[]).length?totalFaseInv(it,"c2")+corrInvTxt(it,"c2"):"—")+"</td>"+
       '<td class="num" style="color:'+(d>0?"var(--ok)":d<0?"var(--crit)":"inherit")+'"><b>'+(d>0?"+":"")+d+"</b></td>"+
       (vc?'<td class="num">'+BRL(v)+"</td>":"")+"</tr>";
   }).join("");
-  return {html:'<div class="tw"><table class="iv-tab"><thead><tr><th>Produto</th><th class="num">No sistema</th><th class="num">1ª contagem</th><th class="num">Recontagem</th><th class="num">Diferença</th>'+
+  return {html:'<div class="tw"><table class="iv-tab"><thead><tr>'+(marca?"<th>Contar de novo</th>":"")+'<th>Produto</th><th class="num">No sistema</th><th class="num">Contado</th><th class="num">Contado de novo</th><th class="num">Diferença</th>'+
     (vc?'<th class="num">Valor</th>':"")+"</tr></thead><tbody>"+(rows||'<tr><td colspan="6">Nenhuma diferença.</td></tr>')+"</tbody></table></div>"+
     (vc?'<div class="iv-tot">Sobras <b>'+BRL(sobra)+"</b> · Faltas <b>"+BRL(falta)+"</b> · Resultado <b>"+BRL(sobra+falta)+"</b></div>":""),
     lin:lin,sobra:sobra,falta:falta};
@@ -23085,14 +23090,14 @@ function desenharRevisaoInv(inv,bt){
   var cab="";
   if(inv.status==="aprovacao")cab=podeAprovarInv()
     ? '<div class="note warn"><b>Confira as diferenças e aprove.</b> Aprovando, cada diferença vira um movimento de Ajuste de inventário no '+esc(nomeLocal(inv.local))+
-      " e o saldo do sistema passa a ser o que foi contado.</div>"
-    : '<div class="note">Contagem e recontagem encerradas. <b>Aguardando a aprovação do Administrador.</b></div>';
+      " e o saldo do sistema passa a ser o que foi contado. Quer conferir algum produto? Marque <b>Contar de novo</b> só nele: só os marcados voltam para uma nova contagem, às cegas; o resto espera.</div>"
+    : '<div class="note">Contagem encerrada. <b>Aguardando a aprovação do Administrador.</b></div>';
   else if(inv.status==="fechado")cab='<div class="note ok"><b>'+(inv.semDiferenca?"O estoque bateu — nenhum ajuste.":"Ajustes lançados")+"</b>"+
     (inv.aprovadoPor?" · aprovado por "+esc(inv.aprovadoPor)+" em "+esc(inv.fechadoEm||""):"")+(inv.ajustes?" · "+inv.ajustes.length+" movimento(s) de ajuste":"")+"</div>";
   else if(inv.status==="cancelado")cab='<div class="note">Cancelado por '+esc(inv.canceladoPor||"")+" em "+esc(inv.canceladoEm||"")+(inv.motivoCancel?" · "+esc(inv.motivoCancel):"")+". Nenhum ajuste foi lançado.</div>";
   w.innerHTML=cab+r.html+resumoSeriesInv(inv);
   if(inv.status==="aprovacao"&&podeAprovarInv()){
-    bt("iv_aprovar","Aprovar e lançar os ajustes");bt("iv_devolver","Pedir nova recontagem","ghost");
+    bt("iv_aprovar","Aprovar e lançar os ajustes");bt("iv_devolver","Contar de novo os marcados","ghost");
     $("iv_aprovar").onclick=aprovarInv;$("iv_devolver").onclick=devolverRecontagemInv;
   }
 }
@@ -23131,15 +23136,23 @@ async function aprovarInv(){
   toast("Inventário nº "+inv.numero+" fechado: "+feitos.length+" ajuste(s) lançado(s).");
   render();desenharInv();
 }
-async function devolverRecontagemInv(){
+/* 03/11 (regra dele): o Administrador marca na aprovação só o que quer contar de novo; só esses voltam
+   para uma nova contagem (cega, como antes). A contagem anterior de cada um fica guardada. */
+async function devolverRecontagemInv(marcados){
   var inv=invAtual;if(!inv||!podeAprovarInv())return;
-  if(!confirm("Pedir nova recontagem dos produtos que divergiram? A recontagem anterior fica guardada."))return;
+  var pids=Array.isArray(marcados)?marcados:[].slice.call(document.querySelectorAll("#iv_revisao [data-ivcn]:checked")).map(function(c){return c.getAttribute("data-ivcn");});
+  pids=pids.filter(function(pid){return (inv.itens||{})[pid];});
+  if(!pids.length){$("iv_alerta").innerHTML='<div class="note crit">Marque em <b>Contar de novo</b> os produtos que voltam para a contagem. Sem marcar nenhum, é só aprovar.</div>';return;}
+  if(!confirm("Contar de novo "+pids.length+" produto(s)? Só eles voltam para a contagem, às cegas; o resto espera. A contagem anterior fica guardada."))return;
   var antes=copiaInv(inv);
-  Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];if(it.recontar){it.c2Anterior=(it.c2Anterior||[]).concat(it.c2||[]);it.c2=[];}});
+  Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];
+    if(pids.indexOf(k)>=0){it.recontar=true;it.c2Anterior=(it.c2Anterior||[]).concat(it.c2||[]);it.c2=[];}
+    else if(it.recontar&&!(it.c2||[]).length)it.recontar=false;});
   inv.status="recontagem";
-  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"Administrador pediu nova recontagem"}]);
-  if(await salvarInv(inv,antes)){toast("Inventário devolvido para a recontagem.");desenharInv();}
+  inv.historico=(inv.historico||[]).concat([{quando:quandoInv(),por:usuarioAtual,texto:"Administrador pediu para contar de novo "+pids.length+" produto(s)"}]);
+  if(await salvarInv(inv,antes)){$("iv_alerta").innerHTML="";toast(pids.length+" produto(s) voltam para a contagem.");desenharInv();}
 }
+window.__contarDeNovoInvMF=function(l){return devolverRecontagemInv(l);};
 async function cancelarInv(){
   var inv=invAtual;if(!inv)return;
   var mot=prompt("Por que cancelar o inventário nº "+inv.numero+"? Nenhum ajuste será lançado.","");
