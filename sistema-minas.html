@@ -1605,6 +1605,9 @@
 .iv-sl{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:6px;align-items:center}
 .iv-sn{text-align:right;color:var(--mut,#667);font-variant-numeric:tabular-nums}
 .iv-sl input{font-size:16px;min-width:0}
+.iv-ja .actions{margin:8px 0 0;flex-wrap:wrap}
+.iv-ja-l{margin:2px 0 6px;color:var(--warn,#b45309);font-weight:600}
+.iv-busca{margin:6px 0 4px}
 .iv-ent-bts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .iv-ser-l{padding:6px 0;border-top:1px solid var(--line)}
 @media (max-width:620px){.iv-lanc{grid-template-columns:1fr!important}.iv-lanc .fld{grid-column:auto!important}}
@@ -6857,6 +6860,7 @@ img{max-width:100%}
         <div class="fld" style="grid-column:span 2"><label for="iv_prod">Produto <span class="req">*</span></label><select id="iv_prod"></select></div>
         <div class="fld"><label for="iv_qtd">Quantidade contada <span class="req">*</span></label><input id="iv_qtd" type="number" min="0" step="1" inputmode="numeric" placeholder="—"></div>
       </div>
+      <div id="iv_ja"></div>
       <div id="iv_series" hidden></div>
       <div class="fld"><label for="iv_obs">Onde contou / observação</label><input id="iv_obs" placeholder="Ex.: prateleira 3, depósito do fundo"></div>
       <div class="actions" style="margin-top:6px"><button class="btn" type="button" id="iv_add">Registrar a contagem</button></div>
@@ -22347,7 +22351,7 @@ function renderInventarios(h,b){
 
 function abrirInv(inv){
   invAtual=inv;
-  ivsZerar();
+  ivsZerar();ivJaPend=null;ivBusca="";
   $("iv_alerta").innerHTML="";
   $("invModal").hidden=false;
   desenharInv();
@@ -22430,19 +22434,78 @@ function desenharContagemInv(inv,bt){
     $("iv_encerrar2").onclick=encerrarRecontagemInv;
   }
   $("iv_add").onclick=registrarContagemInv;
+  if(!sel.__ivjaLigado){sel.__ivjaLigado=true;sel.addEventListener("change",function(){ivJaPend=null;ivJaDesenhar();});}
+  if(!$("iv_qtd").__ivjaLigado){$("iv_qtd").__ivjaLigado=true;$("iv_qtd").addEventListener("input",function(){if(ivJaPend){ivJaPend=null;ivJaDesenhar();}});}
+  ivJaDesenhar();
+  if($("iv_busca")){$("iv_busca").oninput=function(){ivBusca=this.value;ivBuscaAplicar();};ivBuscaAplicar();}
   if(!sel.__ivsLigado){sel.__ivsLigado=true;sel.addEventListener("change",function(){if(!IVS.alvo)ivsDesenhar();});}
   var qt=$("iv_qtd");
   if(!qt.__ivsLigado){qt.__ivsLigado=true;qt.addEventListener("input",function(){if(!IVS.alvo){IVS.soma=false;ivsDesenhar();ivsGuardaRascunho();}});}
   ivsDesenhar();
+}
+/* PRODUTO JÁ CONTADO (03/11, pedido dele): ao escolher o produto aparece quanto já foi contado NESTA
+   etapa (é a contagem de quem conta, nunca o saldo do sistema: a contagem continua cega); ao registrar
+   de novo, pergunta se SOMA (outro lugar) ou CORRIGE o total. Corrigir junta os registros num só e
+   guarda os antigos dentro dele (corr.antes). Corrige quem fez todos os registros ou o Administrador,
+   a mesma regra do "Tirar". */
+var ivJaPend=null,ivBusca="";
+function ivJaResumo(inv,pid,fase){
+  var it=(inv.itens||{})[pid],l=it?(it[fase]||[]):[];
+  return {n:l.length,tot:it?totalFaseInv(it,fase):0,l:l,
+    podeCorr:podeAprovarInv()||l.every(function(e){return e.por===usuarioAtual;})};
+}
+function ivJaDesenhar(){
+  var w=$("iv_ja");if(!w)return;
+  var inv=invAtual;
+  if(!inv||!(inv.status==="contagem"||inv.status==="recontagem")){w.innerHTML="";return;}
+  var fase=faseInvAtual(inv),pid=$("iv_prod").value;
+  if(ivJaPend&&ivJaPend.pid!==pid)ivJaPend=null;
+  var r=pid?ivJaResumo(inv,pid,fase):{n:0};
+  if(!r.n){w.innerHTML="";ivJaPend=null;return;}
+  var pal=fase==="c2"?"recontado":"contado";
+  if(!ivJaPend){w.innerHTML='<div class="iv-ja-l">Já '+pal+": "+r.tot+" unidade(s)"+(r.n>1?" em "+r.n+" registros":"")+".</div>";return;}
+  var q=ivJaPend.qtd;
+  w.innerHTML='<div class="note warn iv-ja"><b>Este produto já foi '+pal+":</b> "+r.tot+" unidade(s)"+
+    (r.n>1?" em "+r.n+" registros":"")+" ("+r.l.map(function(e){return (+e.qtd||0)+" por "+esc(e.por||"")+" em "+esc(e.quando||"");}).join("; ")+
+    "). Agora você digitou <b>"+q+"</b>. O que fazer?"+
+    '<div class="actions"><button class="btn sm" type="button" id="iv_jaSomar">Somar (outro lugar) — o total fica '+(r.tot+q)+"</button>"+
+    '<button class="btn sm" type="button" id="iv_jaCorr"'+(r.podeCorr?"":" disabled")+">Corrigir — o total passa a ser "+q+"</button>"+
+    '<button class="btn ghost sm" type="button" id="iv_jaCanc">Cancelar</button></div>'+
+    (r.podeCorr?"":'<div class="help">Só quem fez esses registros ou o Administrador corrige. Você pode somar, ou pedir a quem contou.</div>')+"</div>";
+  $("iv_jaSomar").onclick=function(){registrarContagemInv("somar");};
+  $("iv_jaCorr").onclick=function(){registrarContagemInv("corrigir");};
+  $("iv_jaCanc").onclick=function(){ivJaPend=null;ivJaDesenhar();};
+}
+function corrInvTxt(it,f){
+  return (it[f]||[]).some(function(e){return e.corr;})?' <span class="t-sub">corrigido</span>':"";
+}
+/* busca na lista do que já foi contado: filtra na hora, sem ir ao banco, e dá o total de cada produto */
+function ivBuscaAplicar(){
+  var tot=$("iv_buscaTot");if(!tot)return;
+  var ts=semAcento(ivBusca).split(/ +/).filter(Boolean),por={},ordem=[],vis=0;
+  [].forEach.call(document.querySelectorAll("#iv_lista .iv-ent"),function(el){
+    var b=el.getAttribute("data-b")||"",ok=ts.every(function(t){return b.indexOf(t)>=0;});
+    el.style.display=ok?"":"none";
+    if(ok&&ts.length){vis++;var pid=el.getAttribute("data-pid");
+      if(!por[pid]){por[pid]={n:0,q:0,nome:(el.querySelector("b")||{}).textContent||""};ordem.push(pid);}
+      por[pid].n++;por[pid].q+=+((el.querySelector(".iv-q")||{}).textContent)||0;}
+  });
+  if(!ts.length){tot.innerHTML="";return;}
+  if(!vis){tot.innerHTML='<div class="help">Nenhum produto já contado com esse nome ou código.</div>';return;}
+  tot.innerHTML='<div class="help">'+ordem.slice(0,12).map(function(k){var o=por[k];
+    return "<b>"+esc(o.nome)+"</b>: "+o.q+" unidade(s)"+(o.n>1?" em "+o.n+" registros":"");}).join("<br>")+
+    (ordem.length>12?"<br>e mais "+(ordem.length-12)+" produto(s)":"")+"</div>";
 }
 function listaEntradasInv(inv,fase){
   var linhas=[];
   Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];(it[fase]||[]).forEach(function(e,ix){linhas.push({it:it,e:e,ix:ix});});});
   if(!linhas.length)return '<div class="empty" style="padding:14px"><div class="big">Nada registrado ainda</div></div>';
   linhas.sort(function(a,b2){return String(b2.e.em||"").localeCompare(String(a.e.em||""));});
-  return '<div class="iv-ents">'+linhas.map(function(l){
-    return '<div class="iv-ent"><div><b>'+esc(l.it.nome)+"</b>"+(l.it.cod?" <code>"+esc(l.it.cod)+"</code>":"")+
-      '<div class="t-sub">'+esc(l.e.por||"")+" · "+esc(l.e.quando||"")+(l.e.obs?" · "+esc(l.e.obs):"")+"</div></div>"+
+  return '<div class="fld iv-busca"><input id="iv_busca" type="search" autocomplete="off" placeholder="Procurar nos já contados: nome ou código" value="'+esc(ivBusca)+'"></div>'+
+    '<div id="iv_buscaTot"></div><div class="iv-ents">'+linhas.map(function(l){
+    return '<div class="iv-ent" data-pid="'+esc(l.it.pid)+'" data-b="'+esc(semAcento((l.it.nome||"")+" "+(l.it.cod||"")))+'"><div><b>'+esc(l.it.nome)+"</b>"+(l.it.cod?" <code>"+esc(l.it.cod)+"</code>":"")+
+      '<div class="t-sub">'+esc(l.e.por||"")+" · "+esc(l.e.quando||"")+(l.e.obs?" · "+esc(l.e.obs):"")+
+      (l.e.corr?" · <b>corrigido de "+(+l.e.corr.de||0)+" para "+(+l.e.qtd||0)+"</b>":"")+"</div></div>"+
       '<div class="iv-q">'+(+l.e.qtd||0)+"</div>"+
       '<div class="iv-ent-bts">'+(invPedeSerie(prodPorId(l.it.pid))?'<button class="btn ghost sm" type="button" data-ivse="'+esc(l.it.pid)+"|"+fase+"|"+l.ix+'">Séries'+(serieLimpa(l.e.series).length?" ("+serieLimpa(l.e.series).length+")":"")+"</button>":"")+
       (l.e.por===usuarioAtual||podeAprovarInv()?'<button class="btn ghost sm" type="button" data-ivrm="'+esc(l.it.pid)+"|"+fase+"|"+l.ix+'">Tirar</button>':"")+"</div></div>";
@@ -22450,7 +22513,8 @@ function listaEntradasInv(inv,fase){
 }
 /* SEM a trava de toque duplo, de propósito (30/10): no inventário cada leitura do código de
    barras é uma contagem que SOMA, e quem conta lê um produto atrás do outro bem depressa */
-async function registrarContagemInv(){
+async function registrarContagemInv(m){
+  var modo=typeof m==="string"?m:"";
   var inv=invAtual;if(!inv)return;
   if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem conta é o almoxarifado.</div>';return;}
   var pid=$("iv_prod").value,qs=String($("iv_qtd").value).trim();
@@ -22458,21 +22522,38 @@ async function registrarContagemInv(){
   if(qs===""||!(+qs>=0)||Math.floor(+qs)!==+qs){$("iv_alerta").innerHTML='<div class="note crit"><b>Escreva a quantidade contada</b> (número inteiro; zero se não achou nenhuma).</div>';return;}
   var fase=inv.status==="recontagem"?"c2":"c1";
   if(fase==="c2"&&!((inv.itens||{})[pid]||{}).recontar){$("iv_alerta").innerHTML='<div class="note crit">Este produto não está na recontagem.</div>';return;}
+  var jaR=ivJaResumo(inv,pid,fase);
+  if(jaR.n&&modo!=="somar"&&!(modo==="corrigir"&&jaR.podeCorr)){
+    $("iv_alerta").innerHTML="";ivJaPend={pid:pid,qtd:+qs};ivJaDesenhar();
+    try{$("iv_ja").scrollIntoView({block:"center"});}catch(e){}
+    return;}
+  if(!jaR.n)modo="";
+  ivJaPend=null;
   if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
   var antes=copiaInv(inv),it=itemInv(inv,pid);
   it[fase]=it[fase]||[];
   var ent={qtd:+qs,sis:saldoEm(pid,inv.local),por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:$("iv_obs").value.trim()};
   var pedeS=invPedeSerie(prodPorId(pid)),sr=(pedeS&&fase==="c1")?serieLimpa(IVS.linhas):[];
   if(sr.length)ent.series=sr;
-  it[fase].push(ent);
+  if(modo==="corrigir"){
+    /* os registros anteriores ficam guardados DENTRO do novo (nada se perde) e as séries já lidas continuam */
+    var velhas=JSON.parse(JSON.stringify(it[fase])),sv=[],vistas={};
+    velhas.forEach(function(e){(e.series||[]).forEach(function(s){var n=normSerie(s);if(n&&!vistas[n]){vistas[n]=1;sv.push(s);}});});
+    sr.forEach(function(s){var n=normSerie(s);if(n&&!vistas[n]){vistas[n]=1;sv.push(s);}});
+    if(sv.length)ent.series=sv;
+    ent.corr={de:totalFaseInv(it,fase),por:usuarioAtual,quando:quandoInv(),antes:velhas};
+    it[fase]=[ent];
+  }else it[fase].push(ent);
   if(!(await salvarInv(inv,antes)))return;
   $("iv_alerta").innerHTML="";
-  toast((+qs)+"× "+it.nome+" registrado"+(sr.length?" com "+sr.length+" série(s)":"")+".");
+  toast(modo==="corrigir"?"Corrigido: "+it.nome+" agora tem "+(+qs)+".":modo==="somar"?"Somado: "+it.nome+" agora tem "+totalFaseInv(it,fase)+".":
+    (+qs)+"× "+it.nome+" registrado"+(sr.length?" com "+sr.length+" série(s)":"")+".");
   if(pedeS&&fase==="c1"){ivsTiraRascunho();ivsZerar();}
   $("iv_prod").value="";$("iv_qtd").value="";
   try{limparInclusao("iv_prod","iv_qtd",[]);}catch(e){}
   $("iv_obs").value="";
   if(pedeS&&fase==="c2")IVS.alvo={pid:pid,fase:fase,ix:it[fase].length-1};
+  ivJaPend=null;
   desenharInv();
   if(pedeS&&fase==="c2")ivsAbrirEntrada(pid,fase,it[fase].length-1);
 }
@@ -22543,8 +22624,8 @@ function resumoDifInv(inv){
     if(v>0)sobra+=v;else falta+=v;
     var sis=(it.recontar&&(it.c2||[]).length)?sisFaseInv(it,"c2"):sisFaseInv(it,"c1");
     return "<tr><td>"+esc(it.nome)+(it.cod?'<div class="t-sub"><code>'+esc(it.cod)+"</code></div>":"")+"</td>"+
-      '<td class="num">'+sis+'</td><td class="num">'+totalFaseInv(it,"c1")+(it.naoContado?' <span class="t-sub">não achado</span>':"")+"</td>"+
-      '<td class="num">'+((it.c2||[]).length?totalFaseInv(it,"c2"):"—")+"</td>"+
+      '<td class="num">'+sis+'</td><td class="num">'+totalFaseInv(it,"c1")+(it.naoContado?' <span class="t-sub">não achado</span>':"")+corrInvTxt(it,"c1")+"</td>"+
+      '<td class="num">'+((it.c2||[]).length?totalFaseInv(it,"c2")+corrInvTxt(it,"c2"):"—")+"</td>"+
       '<td class="num" style="color:'+(d>0?"var(--ok)":d<0?"var(--crit)":"inherit")+'"><b>'+(d>0?"+":"")+d+"</b></td>"+
       (vc?'<td class="num">'+BRL(v)+"</td>":"")+"</tr>";
   }).join("");
