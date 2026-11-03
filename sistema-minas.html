@@ -3577,6 +3577,10 @@ img{max-width:100%}
             <button class="btn zap" type="button" id="osOrcZap" hidden>Enviar o orçamento ao cliente via WhatsApp</button>
             <!-- a resposta do cliente, registrada pelo atendente (decisão dele, 09/10: a OS não
                  tem link de assinatura — isso fica para depois) -->
+            <!-- 03/11: aprovar, editar e recusar no mesmo lugar (regra dele) -->
+            <button class="btn" type="button" id="osAprovou" hidden>Cliente aprovou o orçamento</button>
+            <button class="btn" type="button" id="osAgendarTec" hidden>Agendar técnico</button>
+            <button class="btn ghost" type="button" id="osEditarOrc" hidden>Editar orçamento</button>
             <button class="btn ghost" type="button" id="osRecusou" hidden>Cliente recusou o orçamento</button>
             <button class="btn ghost" type="button" id="osDevolvido" hidden>Aparelho devolvido ao cliente</button>
           </div>
@@ -6407,6 +6411,25 @@ img{max-width:100%}
     <div class="actions">
       <button class="btn" type="button" id="ps_ok">Enviar</button>
       <button class="btn mut" type="button" id="ps_fechar">Cancelar</button>
+    </div>
+  </div>
+</div>
+<!-- 03/11: Editar orçamento (etapa 4 da OS interna) — peças e serviços que o cliente quer a mais ou a menos -->
+<div class="modal" id="ooModal" hidden>
+  <div class="box" style="width:min(720px,100%)">
+    <h3>Editar orçamento</h3>
+    <div class="sub" id="oo_sub"></div>
+    <div id="oo_lista"></div>
+    <div class="grid g3" style="margin-top:12px">
+      <div class="fld" style="grid-column:span 2"><label for="oo_prod">Incluir peça ou serviço</label><select id="oo_prod"></select></div>
+      <div class="fld"><label for="oo_qtd">Quantidade</label><input id="oo_qtd" type="number" min="1" step="1" inputmode="numeric" value="1"></div>
+    </div>
+    <div class="actions" style="justify-content:flex-start;margin-top:6px"><button class="btn ghost" type="button" id="oo_incluir">Incluir no orçamento</button></div>
+    <div class="help">Ao salvar, o orçamento é gerado de novo, a versão anterior fica no histórico da OS e, se o cliente já tinha aprovado, ele precisa aprovar o novo.</div>
+    <div id="oo_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="oo_salvar">Salvar e gerar o orçamento novo</button>
+      <button class="btn mut" type="button" id="oo_fechar">Cancelar</button>
     </div>
   </div>
 </div>
@@ -34379,8 +34402,8 @@ function notaRetornoOS(o){
   if(!o||o.status!=="retorno")return "";
   return '<div class="note warn"><b>Aguardando retorno do cliente</b> desde '+esc(dataCurta(o.aguardandoRetornoEm||""))+
     (o.aguardandoRetornoPor?" · "+esc(o.aguardandoRetornoPor):"")+(o.retornoObs?" — "+esc(o.retornoObs):"")+
-    ". Quando o cliente decidir ou passar na loja, use <b>Finalizar OS · pagamento e entrega</b>; se ele ligar autorizando o serviço, "+
-    "<b>Cliente autorizou · agendar técnico para o serviço</b>.</div>";
+    ". Quando o cliente decidir ou passar na loja, use <b>Finalizar OS · pagamento e entrega</b>; se ele ligar aprovando o serviço, "+
+    "<b>Cliente aprovou o orçamento</b>, na etapa Orçamento e resposta do cliente.</div>";
 }
 /* cliente autorizou: a atendente agenda o técnico para executar o serviço e o fluxo segue (regra do Wagner, 14/09) */
 function notaServicoOS(o){
@@ -34706,7 +34729,7 @@ function resumoProcessoOS(o,fase){
   if(formasTexto(fs))l.push((ped?"Pagamento do pedido "+ped.numero+": ":"Pagamento previsto: ")+formasTexto(fs));
   l.push(fase==="retirada"||o.servicoRealizadoEm
     ? "→ Fazer contato com o cliente: avisar que o serviço está pronto e combinar a retirada na loja. Quando ele buscar o produto, receba o valor negociado e finalize o pedido em Finalizar OS · pagamento e entrega."
-    : "→ Fazer contato com o cliente: apresentar o diagnóstico e o orçamento. Se ele aprovar, use Cliente autorizou · agendar técnico para o serviço na OS.");
+    : "→ Fazer contato com o cliente: apresentar o diagnóstico e o orçamento. Se ele aprovar, use Cliente aprovou o orçamento, na etapa Orçamento e resposta do cliente da OS.");
   return l.join("\n");
 }
 /* o que o técnico achou, para o atendente ler antes de ligar para o cliente (regra do Wagner, 21/09) */
@@ -35187,7 +35210,7 @@ function renderPedOS(){
      técnico e avisar o atendimento — passou a ser feito lá, com os campos preenchidos. */
   if(!ped&&ac&&podeAtd&&!fechada&&!servicoPend){
     bt+='<button class="btn" type="button" id="osFinalizarPed">Finalizar OS · pagamento e entrega</button>';
-    if(!o.autorizadoEm)bt+='<button class="btn ghost" type="button" id="osAutorizar">Cliente autorizou · agendar técnico para o serviço</button>';
+    /* 03/11: "Cliente autorizou" saiu daqui: a aprovação mora na etapa 4 ("Cliente aprovou o orçamento") */
   }
   }
   if(instPend&&!fechada)bt+='<button class="btn ghost" type="button" id="osAbrirInst">Abrir a instalação</button>';
@@ -35204,7 +35227,6 @@ function renderPedOS(){
   if(dentro("osOrcFin"))dentro("osOrcFin").onclick=function(){ir("fin");};
   if(dentro("osPecasPed"))dentro("osPecasPed").onclick=function(){abrirPedidoDaOS(o,"tecnico");};
   if(dentro("osAtivRealizada"))dentro("osAtivRealizada").onclick=atividadeRealizadaOS;
-  if(dentro("osAutorizar"))dentro("osAutorizar").onclick=function(){abrirAtivServicoOS(o);};
   if(dentro("osServAtend"))dentro("osServAtend").onclick=function(){abrirPedidoDaOS(o,"tecnico",null,{servAtend:true});};
   if(dentro("osFinalizarPed"))dentro("osFinalizarPed").onclick=function(){abrirPedidoDaOS(o,"atendente",ac&&ac.status!=="finalizado"?ac:null);};
   if(dentro("osAbrirInst"))dentro("osAbrirInst").onclick=function(){abrirInstalacao(ped);};
@@ -38856,6 +38878,12 @@ function abrirOS(o,ctx){
   if($("osExecConcluir"))$("osExecConcluir").onclick=concluirExecucaoOS;
   if($("osExecNovoOrc"))$("osExecNovoOrc").onclick=pedirNovoOrcamentoOS;
   if($("osRecusou"))$("osRecusou").onclick=recusarOrcamentoOS;
+  if($("osAprovou"))$("osAprovou").onclick=clienteAprovouOrcOS;
+  if($("osAgendarTec"))$("osAgendarTec").onclick=clienteAprovouOrcOS;
+  if($("osEditarOrc"))$("osEditarOrc").onclick=abrirEditarOrcamentoOS;
+  if($("oo_incluir"))$("oo_incluir").onclick=incluirItemEditarOrcOS;
+  if($("oo_salvar"))$("oo_salvar").onclick=salvarEditarOrcamentoOS;
+  if($("oo_fechar"))$("oo_fechar").onclick=function(){$("ooModal").hidden=true;edOrc=null;};
   if($("osDevolvido"))$("osDevolvido").onclick=devolverAparelhoOS;
   /* o atendente manda o orçamento da OS ao cliente pelo WhatsApp, para ele aprovar (07/10) */
   if($("osOrcZap"))$("osOrcZap").onclick=function(){
@@ -40013,7 +40041,7 @@ function acoesDaEtapaOS(k,ext,simples){
     ? {campo:[],fechar:["osPecasPed","osServAtend","osAbrirInst"]}
     /* a execução passou a ter cartão próprio (09/10): os botões dela moram no os_secExec, não
        mais no bloco que o renderPedOS desenha */
-    : {pecas:["osPecasPed"],orcamento:["osAutorizar"],execucao:[],
+    : {pecas:["osPecasPed"],orcamento:[],execucao:[],
        pagamento:["osFinalizarPed","osAbrirInst"]};
   return m[k]||[];
 }
@@ -40398,6 +40426,11 @@ function renderOrcamentoOS(o,ext){
   $("osOrcZap").hidden=!o.orcamentoEm||["recDevol","encRecusada"].indexOf(sitO)>=0;
   /* a resposta do cliente é registrada pelo atendente (decisão dele, 09/10) */
   if($("osRecusou"))$("osRecusou").hidden=!(["orcDisp","agAssin","novoOrc"].indexOf(sitO)>=0);
+  /* 03/11: aprovar e editar ficam ao lado do recusar, enquanto o técnico não foi agendado */
+  var esp=esperaRespostaOS(o);
+  if($("osAprovou"))$("osAprovou").hidden=!(esp&&!o.clienteAprovouEm);
+  if($("osAgendarTec"))$("osAgendarTec").hidden=!(esp&&!!o.clienteAprovouEm);
+  if($("osEditarOrc"))$("osEditarOrc").hidden=!esp;
   if($("osDevolvido"))$("osDevolvido").hidden=(sitO!=="recDevol");
   /* as peças mudaram DEPOIS de o orçamento ir ao cliente: o atendente precisa saber antes de
      cobrar o valor antigo (19/10) */
@@ -40407,7 +40440,12 @@ function renderOrcamentoOS(o,ext){
     ": de "+BRL(o.orcamentoDesatualizado.de||0)+" para "+BRL(o.orcamentoDesatualizado.para||total)+
     ". Gere o orçamento de novo e mande ao cliente antes de combinar o valor. "+
     "O que mudou está no histórico da OS.</div>":"";
-  nota.innerHTML=desat+(sitO==="recDevol"
+  var aprov=(esp&&o.clienteAprovouEm)?'<div class="note ok"><b>Cliente aprovou em '+esc(dataBR(String(o.clienteAprovouEm).slice(0,10)))+
+    (String(o.clienteAprovouEm).slice(11)?" às "+esc(String(o.clienteAprovouEm).slice(11)):"")+"</b>"+(o.clienteAprovouPor?" (por "+esc(o.clienteAprovouPor)+")":"")+
+    " · falta agendar o técnico. Toque em <b>Agendar técnico</b>.</div>":"";
+  var edit=(esp&&o.orcamentoEditadoEm&&o.orcamentoVersao>1&&!o.clienteAprovouEm)?'<div class="note warn"><b>Orçamento '+o.orcamentoVersao+" refeito em "+
+    esc(o.orcamentoEditadoEm)+".</b> Reenvie ao cliente pelo WhatsApp e espere a resposta. O orçamento anterior está no histórico da OS.</div>":"";
+  nota.innerHTML=desat+aprov+edit+(sitO==="recDevol"
     ? '<div class="note crit"><b>Cliente recusou o orçamento</b> em '+esc(dataBR(o.recusadoEm||""))+
       (o.recusaMotivo?" · "+esc(o.recusaMotivo):"")+". Devolva o aparelho e toque em "+
       "<b>Aparelho devolvido ao cliente</b> para encerrar a OS.</div>"
@@ -40432,6 +40470,146 @@ function renderOrcamentoOS(o,ext){
           ".</b> "+(souAtd?"Gere o orçamento e mande ao cliente pelo WhatsApp."
                          :"Quem gera e manda o orçamento é "+esc(o.atendente||"quem abriu a OS")+".")+"</div>");
 }
+/* ===== ETAPA 4 · A RESPOSTA DO CLIENTE NO MESMO LUGAR (03/11, regras dele) =====
+   "Cliente aprovou o orçamento", "Editar orçamento" e "Cliente recusou" ficam juntos na etapa 4 da
+   OS interna, enquanto o orçamento espera a resposta e o técnico ainda não foi agendado. Aprovar
+   registra quem e quando e abre o agendamento do técnico (o mesmo caminho de antes); fechar sem
+   agendar deixa "falta agendar o técnico". Editar refaz o orçamento com uma versão nova, guarda a
+   anterior, volta a aprovação para "esperando resposta" e avisa o técnico quando entra peça. */
+var OS_SIT_RESPOSTA=["orcDisp","agAssin","novoOrc"];
+function esperaRespostaOS(o){
+  return !!o&&o.local!=="externo"&&!!o.orcamentoEm&&!o.autorizadoEm&&!o.pedidoId&&
+    OS_SIT_RESPOSTA.indexOf(sitDaOS(o))>=0;
+}
+function clienteAprovouOrcOS(){return travaSalvar("clienteAprovouOrcOS",clienteAprovouOrcOS__corpo,this,arguments);}
+async function clienteAprovouOrcOS__corpo(){
+  var o=editandoOS;if(!o)return false;
+  /* a trava vale por dentro: é a mesma do "Cliente recusou" (atendente da OS e gestão) */
+  if(recusaEtapaOS(o,"orcamento"))return false;
+  if(!esperaRespostaOS(o)){toast("A OS "+o.numero+" não está esperando a resposta do cliente ao orçamento.");return false;}
+  if(!o.clienteAprovouEm){
+    var antes={em:o.clienteAprovouEm,por:o.clienteAprovouPor,n:(o.historico||[]).length};
+    o.clienteAprovouEm=hojeISO()+" "+agoraHM();o.clienteAprovouPor=usuarioAtual;
+    o.historico=o.historico||[];
+    o.historico.push({quando:hojeISO(),hora:agoraHM(),por:usuarioAtual,
+      texto:"Cliente aprovou o orçamento"+(o.orcamentoValor?" de "+BRL(o.orcamentoValor):"")+" · falta agendar o técnico"});
+    try{await gravaConf("ordens",o);}
+    catch(e){o.clienteAprovouEm=antes.em||"";o.clienteAprovouPor=antes.por||"";
+      if(o.historico.length>antes.n)o.historico.length=antes.n;
+      avisarRecusaBanco("os_alerta",e,"A aprovação NÃO foi registrada — tente de novo.");return false;}
+    try{renderOS();orcamentoOS();}catch(eR){}
+  }
+  abrirAtivServicoOS(o);
+  return true;
+}
+/* ---- Editar orçamento: a lista de peças e serviços numa janela, com uma cópia de trabalho ---- */
+var edOrc=null;
+function abrirEditarOrcamentoOS(){
+  var o=editandoOS;if(!o)return;
+  if(recusaEtapaOS(o,"orcamento"))return;
+  if(!esperaRespostaOS(o)){toast("Depois de agendar o técnico, a mudança segue pelo Novo orçamento.");return;}
+  edOrc={osId:o.id,itens:JSON.parse(JSON.stringify(o.itensOS||[]))};
+  opcoes("oo_prod",produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&!ehPlano(p);}),
+    function(p){return p.id;},function(p){return p.nome;},"— escolha a peça ou o serviço —");
+  $("oo_prod").value="";$("oo_qtd").value="1";$("oo_alerta").innerHTML="";
+  $("oo_sub").textContent="OS "+o.numero+" · orçamento "+(o.orcamentoVersao||1)+" de "+BRL(o.orcamentoValor||totalOS(o));
+  desenharEditarOrcOS();
+  $("ooModal").hidden=false;
+}
+function totalLista(l){return (l||[]).reduce(function(a,i){return a+(+i.valor||0)*qtdItemOS(i);},0);}
+function desenharEditarOrcOS(){
+  var o=editandoOS;if(!edOrc||!o)return;
+  var l=edOrc.itens;
+  $("oo_lista").innerHTML='<div class="tw"><table><thead><tr><th>Peça ou serviço</th><th class="num">Qtd</th><th class="num">Unitário</th><th class="num">Total</th><th></th></tr></thead><tbody>'+
+    (l.length?l.map(function(i,ix){
+      var fixo=!!i.orcamentoOS;
+      return "<tr><td>"+esc(i.nome)+(fixo?' <span class="pill p-ok">cobrado na abertura</span>':"")+(i.planoCobre?' <span class="pill p-acc">pelo plano</span>':"")+"</td>"+
+        '<td class="num">'+(fixo?(i.qtd||1):'<input type="number" min="1" step="1" inputmode="numeric" style="max-width:70px" data-ooq="'+ix+'" value="'+(i.qtd||1)+'">')+"</td>"+
+        '<td class="num">'+BRL(+i.valor||0)+'</td><td class="num">'+BRL((+i.valor||0)*qtdItemOS(i))+"</td>"+
+        '<td class="num">'+(fixo?"":'<button class="btn mut sm" type="button" data-oorm="'+ix+'">Tirar</button>')+"</td></tr>";}).join("")
+      :'<tr><td colspan="5">Nenhum item.</td></tr>')+"</tbody></table></div>"+
+    '<div class="note" style="margin-top:8px">Orçamento atual <b>'+BRL(o.orcamentoValor||totalOS(o))+"</b> → novo <b>"+BRL(totalLista(l))+"</b></div>";
+  Array.prototype.forEach.call($("oo_lista").querySelectorAll("[data-ooq]"),function(inp){
+    inp.onchange=function(){var q=parseInt(inp.value,10)||0;if(q<1){q=1;inp.value="1";}edOrc.itens[+inp.getAttribute("data-ooq")].qtd=q;desenharEditarOrcOS();};});
+  Array.prototype.forEach.call($("oo_lista").querySelectorAll("[data-oorm]"),function(b){
+    b.onclick=function(){edOrc.itens.splice(+b.getAttribute("data-oorm"),1);desenharEditarOrcOS();};});
+}
+function incluirItemEditarOrcOS(){
+  if(!edOrc)return;
+  var p=prodPorId($("oo_prod").value),q=parseInt($("oo_qtd").value,10)||0;
+  if(!p){$("oo_alerta").innerHTML='<div class="note crit">Escolha a peça ou o serviço.</div>';return;}
+  if(q<1){$("oo_alerta").innerHTML='<div class="note crit">Informe a quantidade.</div>';return;}
+  var ja=edOrc.itens.filter(function(i){return i.pid===p.id&&!i.planoCobre&&!i.orcamentoOS;})[0];
+  if(ja)ja.qtd=(+ja.qtd||1)+q;
+  else edOrc.itens.push({id:uid(),pid:p.id,cod:p.cod||"",nome:p.nome,qtd:q,valor:+p.cheia||0,garantia:"Bronze",serie:"",pontos:+p.pontos||0});
+  $("oo_prod").value="";$("oo_qtd").value="1";$("oo_alerta").innerHTML="";
+  try{$("oo_prod").dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}
+  desenharEditarOrcOS();
+}
+/* o que mudou entre duas listas, por item: tirou, entrou, quantidade */
+function difItensOS(antes,depois){
+  var a={},d={},r={tirou:[],entrou:[],qtd:[],acrescentou:false};
+  antes.forEach(function(i){a[i.id||i.pid]=i;});depois.forEach(function(i){d[i.id||i.pid]=i;});
+  Object.keys(a).forEach(function(k){if(!d[k])r.tirou.push((a[k].qtd||1)+"× "+a[k].nome);});
+  Object.keys(d).forEach(function(k){
+    if(!a[k]){r.entrou.push((d[k].qtd||1)+"× "+d[k].nome);r.acrescentou=true;}
+    else if((+a[k].qtd||1)!==(+d[k].qtd||1)){r.qtd.push(d[k].nome+" "+(a[k].qtd||1)+"→"+(d[k].qtd||1));if((+d[k].qtd||1)>(+a[k].qtd||1))r.acrescentou=true;}
+  });
+  return r;
+}
+function salvarEditarOrcamentoOS(){return travaSalvar("salvarEditarOrcamentoOS",salvarEditarOrcamentoOS__corpo,this,arguments);}
+async function salvarEditarOrcamentoOS__corpo(){
+  var o=editandoOS;if(!o||!edOrc||edOrc.osId!==o.id)return false;
+  if(recusaEtapaOS(o,"orcamento"))return false;
+  if(!esperaRespostaOS(o)){$("oo_alerta").innerHTML='<div class="note crit">O técnico já foi agendado: a mudança segue pelo Novo orçamento.</div>';return false;}
+  var novos=edOrc.itens;
+  if(!novos.length){$("oo_alerta").innerHTML='<div class="note crit">O orçamento precisa de pelo menos uma peça ou serviço. Se o cliente não quer o conserto, use Cliente recusou.</div>';return false;}
+  var dif=difItensOS(o.itensOS||[],novos);
+  if(!dif.tirou.length&&!dif.entrou.length&&!dif.qtd.length){$("oo_alerta").innerHTML='<div class="note">Nada mudou no orçamento.</div>';return false;}
+  var antes=JSON.parse(JSON.stringify(o));
+  var v0=o.orcamentoVersao||1,val0=o.orcamentoValor||totalOS(o);
+  /* nada se perde: a versão anterior fica guardada na OS */
+  o.orcamentosAnteriores=(o.orcamentosAnteriores||[]).concat([{versao:v0,valor:val0,em:o.orcamentoEm,por:o.orcamentoPor,
+    itens:JSON.parse(JSON.stringify(o.itensOS||[]))}]);
+  o.itensOS=JSON.parse(JSON.stringify(novos));o.total=totalOS(o);
+  var mud=[].concat(dif.tirou.map(function(x){return "tirou "+x;}),dif.entrou.map(function(x){return "incluiu "+x;}),dif.qtd.map(function(x){return "quantidade "+x;})).join("; ");
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),hora:agoraHM(),por:usuarioAtual,
+    texto:"Orçamento "+v0+": "+BRL(val0)+" → Orçamento "+(v0+1)+": "+BRL(totalOS(o))+" · "+mud});
+  /* o orçamento é gerado de novo; o aviso de "as peças mudaram" deixa de valer, como no Gerar orçamento */
+  delete o.orcamentoDesatualizado;
+  o.orcamentoVersao=v0+1;o.orcamentoEm=hojeISO();o.orcamentoPor=usuarioAtual;o.orcamentoValor=totalOS(o);
+  o.orcamentoEditadoEm=hojeISO()+" "+agoraHM();
+  /* o cliente precisa aprovar o orçamento novo */
+  if(o.clienteAprovouEm){
+    o.historico.push({quando:hojeISO(),hora:agoraHM(),por:usuarioAtual,
+      texto:"A aprovação de "+o.clienteAprovouEm+" deixou de valer: o orçamento mudou e espera a resposta do cliente"});
+    o.clienteAprovouEm="";o.clienteAprovouPor="";
+  }
+  if(sitDaOS(o)!=="orcDisp")aplicarSitOS(o,"orcDisp","orçamento "+(v0+1)+" de "+BRL(totalOS(o)));
+  /* entrou peça ou serviço: o técnico da OS é avisado no sino */
+  if(dif.acrescentou&&o.tecnico)o.avisoTecOrc={quando:hojeISO()+" "+agoraHM(),por:usuarioAtual,visto:false,
+    texto:[].concat(dif.entrou.map(function(x){return "incluiu "+x;}),dif.qtd.map(function(x){return "quantidade "+x;})).join("; ")};
+  try{await gravaConf("ordens",o);}
+  catch(e){Object.keys(o).forEach(function(k){delete o[k];});Object.assign(o,antes);
+    $("oo_alerta").innerHTML='<div class="note crit"><b>Não foi salvo.</b> '+esc((e&&e.message)||String(e))+"</div>";return false;}
+  $("ooModal").hidden=true;edOrc=null;
+  try{renderOS();renderItensDiagOS();calcOS();ajustarEtapasOS();orcamentoOS();}catch(eR){console.warn(eR);}
+  toast("Orçamento "+(v0+1)+" de "+BRL(totalOS(o))+" gerado. Reenvie ao cliente pelo WhatsApp e espere a aprovação.");
+  return true;
+}
+async function verAvisoTecOrcOS(o){
+  try{ir("os");abrirOS(o);}catch(e){}
+  if(o.avisoTecOrc&&o.tecnico===usuarioAtual&&o.avisoTecOrc.visto===false){
+    o.avisoTecOrc.visto=true;o.avisoTecOrc.vistoEm=hojeISO()+" "+agoraHM();
+    try{await gravaConf("ordens",o);}catch(e){}
+  }
+}
+window.__aprovarOrcOSMF=function(){return clienteAprovouOrcOS();};
+window.__editarOrcOSMF=function(){return abrirEditarOrcamentoOS();};
+window.__salvarEdOrcOSMF=function(){return salvarEditarOrcamentoOS();};
+window.__edOrcMF=function(){return edOrc;};
+window.__esperaRespostaOSMF=function(o){return esperaRespostaOS(o);};
 async function gerarOrcamentoOS(){
   var o=editandoOS;if(!o)return;
   /* orçamento não existe no atendimento externo */
@@ -50435,6 +50613,16 @@ async function limparRastroAntigo(){
 function pendenciasMF(){
   var L=[];
   function põe(o){L.push(o);}
+  /* 03/11: o orçamento da OS ganhou peça ou serviço depois de pronto — o técnico é avisado */
+  try{
+    ordens.forEach(function(o){
+      if(o.loja&&o.loja!==lojaAtual)return;
+      if(!o.avisoTecOrc||o.avisoTecOrc.visto!==false||o.tecnico!==usuarioAtual)return;
+      põe({chave:"osorc:"+o.id+":"+o.avisoTecOrc.quando,icone:"🔧",titulo:"OS "+o.numero+": o orçamento mudou",
+        texto:o.avisoTecOrc.texto+" · por "+o.avisoTecOrc.por,quando:String(o.avisoTecOrc.quando||""),
+        ir:function(){verAvisoTecOrcOS(o);}});
+    });
+  }catch(eOo){console.warn("pend orçamento OS",eOo);}
   /* 03/11: solicitações de ajuste do ponto (Administrador) e a resposta para o colaborador */
   try{
     if(podeAjustarPonto())solicitacoesPonto("pendente").forEach(function(x){
@@ -57042,7 +57230,7 @@ function erro(msg){
      lista fica com o escolhido e dispara o "change" que já preenche valor, série e
      garantia. A lista continua ali, mostrando o produto escolhido. */
   /* 03/11: entram o "Produto que vem junto" do cadastro, o produto dos Planos e o aparelho fora do cadastro no plano avulso */
-  var CAMPOS_PRODUTO=["v_prod","or_prod","os_prod","os_peca","os_dprod","pd_prod","mp_prod","nf_prod","es_prod","mn_peca","ins_prod","sc_peca","iv_prod","p_compProd","pl_prod","v_paProd"];
+  var CAMPOS_PRODUTO=["v_prod","or_prod","os_prod","os_peca","os_dprod","pd_prod","mp_prod","nf_prod","es_prod","mn_peca","ins_prod","sc_peca","iv_prod","p_compProd","pl_prod","v_paProd","oo_prod"];
   function ligarBuscaProduto(){
     CAMPOS_PRODUTO.forEach(function(id){
       var sel=document.getElementById(id);
