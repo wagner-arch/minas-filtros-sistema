@@ -1253,6 +1253,23 @@
       return n;
     };
 
+    /* TROCAR UM PRODUTO POR OUTRO E APAGAR O ANTIGO (03/11): tudo no banco, numa transação,
+       nas duas empresas e nos registros que o aparelho não carregou (supabase/trocar-produto.sql).
+       soContar = true só devolve quantos documentos citam o produto, sem mudar nada. */
+    adapter.trocarProduto = async function (antigo, novo, soContar) {
+      if (!ehTexto(antigo) || !ehTexto(novo)) {
+        throw anotar(ErroBanco("trocarProduto(antigo, novo): os dois são obrigatórios.", "trocar o produto", null));
+      }
+      var r = conferir(
+        await comSessao(function () {
+          return sb.rpc("trocar_produto", { p_antigo: antigo, p_novo: novo, p_so_contar: !!soContar });
+        }),
+        soContar ? "contar onde o produto aparece" : "trocar o produto",
+        !soContar
+      );
+      return (r && r.data) || {};
+    };
+
     /* -------------------- link de assinatura do cliente -------------------
        A venda fechada por telefone vira um link que o cliente abre, lê e
        assina (assinar.html). A tabela e as duas funções públicas estão em

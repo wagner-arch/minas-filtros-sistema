@@ -6806,6 +6806,22 @@ img{max-width:100%}
     </div>
   </div>
 </div>
+<!-- EXCLUIR PRODUTO JÁ USADO, TROCANDO POR OUTRO (regra dele, 03/11) -->
+<div class="modal" id="tpModal" hidden>
+  <div class="box" style="width:min(720px,100%)">
+    <h3>Excluir produto já usado</h3>
+    <div class="sub" id="tp_prod"></div>
+    <div id="tp_usos" style="margin-top:10px"></div>
+    <div class="fld" style="margin-top:12px"><label for="tp_busca">Qual produto entra no lugar? <span class="req">*</span></label>
+      <input id="tp_busca" placeholder="Buscar por nome ou código"></div>
+    <div class="fld"><select id="tp_novo" size="8" style="height:auto"></select></div>
+    <div id="tp_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="tp_ok">Trocar e excluir</button>
+      <button class="btn mut" type="button" id="tp_pular">Não excluir este</button>
+    </div>
+  </div>
+</div>
 <!-- CATÁLOGO NAS 3 LOJAS (pedido dele, 04/10: "copiar todos os produtos da Minas Filtros para as outras
      lojas WF e Divinopolis Filtros, e o que tiver passando de diferentes dessas lojas em relação a da
      Minas Filtros favor apagar"). O catálogo já é UM só; esta janela mostra isso com números e solta
@@ -8495,7 +8511,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=477"></script>
+<script src="supabase/adapter.js?v=488"></script>
 <script>
 (function(){
 "use strict";
@@ -12912,17 +12928,169 @@ function exportarProdutos(){
   });
   baixarPlanilhaMF("Produtos_"+nomeLoja()+"_"+hojeISO(),linhas);
 }
+/* ===== EXCLUIR PRODUTO JÁ USADO, TROCANDO POR OUTRO (regra dele, 03/11) =====
+   "se o mesmo tiver em algum lançamento de venda pedir para informar qual produto
+   entrará no lugar daquele que está sendo excluído" — e o antigo é APAGADO, não
+   desativado (decisão dele). A troca é feita no banco (public.trocar_produto), numa
+   transação só, nas duas empresas e nos registros que o aparelho não carregou, com cópia
+   em backup.troca_produto. Aqui a memória recebe a MESMA troca, para a tela não esperar
+   a próxima entrada. Item de venda: pid, nome e código do novo, o antigo em "trocadoDe";
+   valor, desconto e quantidade não mudam. Movimentos trocados levam o saldo junto. */
+var LISTAS_TROCA_PROD=function(){return [produtos,pedidos,orcamentos,rascunhos,requisicoes,ordens,equipamentos,movEst,inventarios];};
+function trocaProdEm(o,a,n,marca){
+  var qa='"'+a.id+'"',s=JSON.stringify(o);
+  if(s.indexOf(qa)<0)return null;
+  /* inventário que já tem os dois: a chave repetida apagaria uma contagem (fica como está) */
+  if(o.itens&&!Array.isArray(o.itens)&&typeof o.itens==="object"&&o.itens[a.id]&&o.itens[n.id])return null;
+  var x=JSON.parse(s);
+  ["itens","itensOS","pecas"].forEach(function(k){
+    if(!Array.isArray(x[k]))return;
+    x[k]=x[k].map(function(e){
+      if(!e||typeof e!=="object"||e.pid!==a.id)return e;
+      var t=Object.assign({},e,{pid:n.id});
+      if("nome" in e)t.nome=n.nome||e.nome;
+      if("cod" in e)t.cod=n.cod||e.cod;
+      t.trocadoDe={pid:"@@TROCA_ANTIGO@@",nome:e.nome==null?null:e.nome,cod:e.cod==null?null:e.cod};
+      return t;});
+  });
+  if(x.produtoId===a.id){
+    x.produtoId=n.id;
+    if(typeof x.produto==="string")x.produto=n.nome||x.produto;
+    if(typeof x.equipamento==="string"&&x.equipamento===(a.nome||""))x.equipamento=n.nome||x.equipamento;
+  }
+  x=JSON.parse(JSON.stringify(x).split(qa).join('"'+n.id+'"').split('"@@TROCA_ANTIGO@@"').join(qa));
+  x.trocasProduto=(Array.isArray(x.trocasProduto)?x.trocasProduto:[]).concat([marca]);
+  return x;
+}
+/* a mesma troca na memória do aparelho; devolve {coleção: quantos} */
+function trocarProdutoNaMemoria(a,n,marca){
+  var nomes=["produtos","pedidos","orcamentos","rascunhos","requisicoes","ordens","equipamentos","movest","inventarios"];
+  var conta={};
+  LISTAS_TROCA_PROD().forEach(function(L,i){
+    (L||[]).forEach(function(o){
+      if(!o||o===a)return;
+      var x=trocaProdEm(o,a,n,marca);if(!x)return;
+      Object.keys(o).forEach(function(k){delete o[k];});Object.assign(o,x);
+      conta[nomes[i]]=(conta[nomes[i]]||0)+1;
+    });
+  });
+  var ix=produtos.indexOf(a);if(ix>=0)produtos.splice(ix,1);
+  delete prodMarcados[a.id];
+  try{esquecerIndices();}catch(e){}
+  return conta;
+}
+/* quantos registros DESTE aparelho citam o produto (a janela mostra antes) */
+function usosLocaisProduto(a){
+  var nomes=["produtos","pedidos","orcamentos","rascunhos","requisicoes","ordens","equipamentos","movest","inventarios"];
+  var qa='"'+a.id+'"',conta={};
+  LISTAS_TROCA_PROD().forEach(function(L,i){
+    (L||[]).forEach(function(o){if(o&&o!==a&&JSON.stringify(o).indexOf(qa)>=0)conta[nomes[i]]=(conta[nomes[i]]||0)+1;});
+  });
+  return conta;
+}
+var NOMES_USO_PROD={pedidos:"pedido(s)",orcamentos:"orçamento(s)",rascunhos:"rascunho(s)",requisicoes:"requisição(ões) e reposição(ões)",
+  ordens:"OS",equipamentos:"aparelho(s) de cliente",movest:"movimento(s) de estoque",inventarios:"inventário(s)",
+  produtos:"kit(s) de outro produto",series:"número(s) de série"};
+function textoUsosProd(c){
+  var k=Object.keys(c||{}).filter(function(x){return +c[x]>0;});
+  if(!k.length)return "nenhum registro";
+  return k.map(function(x){return "<b>"+c[x]+"</b> "+esc(NOMES_USO_PROD[x]||x);}).join(" · ");
+}
+function msgErroTroca(e){
+  return String((e&&e.message)||e||"").replace(/^Falha no banco \([^)]*\):\s*/,"");
+}
+/* a janela de UM produto; resolve com true (trocado), false (não excluir) */
+function janelaTrocaProduto(a){
+  return new Promise(function(fim){
+    var m=$("tpModal");
+    $("tp_prod").innerHTML="<b>"+esc((a.cod?a.cod+" · ":"")+a.nome)+"</b> já foi usado. Para excluir, escolha o produto que "+
+      "entra no lugar dele em todos os registros. Valor, desconto e comissão das vendas não mudam; o saldo de estoque passa para o novo. "+
+      "Depois da troca este produto é <b>apagado</b>.";
+    var comVend=0;try{comVend=colabsComEstoque().reduce(function(s,n){return s+saldoEm(a.id,locColab(n));},0);}catch(e){}
+    var est=0;try{est=estEmpresaDe(a);}catch(e){}
+    $("tp_usos").innerHTML='<div class="note">Neste aparelho: '+textoUsosProd(usosLocaisProduto(a))+
+      "<br>Estoque: <b>"+est+"</b> no almoxarifado · <b>"+comVend+"</b> com vendedores</div>"+
+      (db?'<div class="note" id="tp_banco">Conferindo no banco (as duas empresas)…</div>':"");
+    $("tp_alerta").innerHTML="";$("tp_busca").value="";
+    var cand=produtos.filter(function(p){return p!==a&&(p.status||"ativo")==="ativo";})
+      .sort(function(x,y){
+        var gx=x.grupo===a.grupo?0:1,gy=y.grupo===a.grupo?0:1;
+        return gx-gy||(x.nome||"").localeCompare(y.nome||"","pt-BR");});
+    function lista(){
+      var q=semAcento($("tp_busca").value||"").trim(),s=$("tp_novo"),v=s.value;
+      s.innerHTML="";
+      cand.filter(function(p){return !q||semAcento(p.nome||"").indexOf(q)>=0||semAcento(p.cod||"").indexOf(q)>=0;})
+        .slice(0,200).forEach(function(p){
+          var o=document.createElement("option");o.value=p.id;
+          o.textContent=(p.cod?p.cod+" · ":"")+p.nome+(p.grupo?" ("+p.grupo+")":"");
+          s.appendChild(o);});
+      if(v)s.value=v;
+    }
+    lista();
+    $("tp_busca").oninput=lista;
+    var ok=$("tp_ok"),pular=$("tp_pular");ok.disabled=false;pular.disabled=false;
+    function fechar(r){m.hidden=true;$("tp_busca").oninput=null;ok.onclick=null;pular.onclick=null;fim(r);}
+    pular.onclick=function(){fechar(false);};
+    m.hidden=false;
+    /* a contagem do banco pede um "novo" qualquer: usa o primeiro da lista (nada muda) */
+    if(db&&cand[0]){
+      db.trocarProduto(a.id,cand[0].id,true).then(function(r){
+        if($("tp_banco"))$("tp_banco").innerHTML="No banco, nas duas empresas: "+textoUsosProd(r&&r.contas);
+      }).catch(function(e){
+        var b=$("tp_banco");if(!b)return;
+        b.className="note warn";b.innerHTML="Aviso do banco: "+esc(msgErroTroca(e));
+      });
+    }
+    ok.onclick=async function(){
+      var n=produtos.filter(function(p){return p.id===$("tp_novo").value;})[0];
+      if(!n){$("tp_alerta").innerHTML='<div class="note crit">Escolha na lista o produto que entra no lugar.</div>';return;}
+      if(!confirm("Trocar\n\n"+(a.cod?a.cod+" ":"")+a.nome+"\n\npor\n\n"+(n.cod?n.cod+" ":"")+n.nome+
+        "\n\nem todas as vendas, orçamentos, OS, aparelhos e estoque, e APAGAR o primeiro?\n\nIsto não tem volta pela tela (fica uma cópia de segurança no banco)."))return;
+      ok.disabled=true;pular.disabled=true;
+      $("tp_alerta").innerHTML='<div class="note">Trocando… não feche esta janela.</div>';
+      var marca={quando:hojeISO()+" "+agoraHM(),por:usuarioAtual,
+        de:{id:a.id,cod:a.cod||"",nome:a.nome||""},para:{id:n.id,cod:n.cod||"",nome:n.nome||""}};
+      var noBanco=null;
+      if(db){
+        try{var r=await db.trocarProduto(a.id,n.id,false);noBanco=r&&r.contas;if(r&&r.marca)marca=r.marca;}
+        catch(e){
+          $("tp_alerta").innerHTML='<div class="note crit"><b>Nada foi trocado.</b> '+esc(msgErroTroca(e))+"</div>";
+          ok.disabled=false;pular.disabled=false;return;
+        }
+      }
+      var local=trocarProdutoNaMemoria(a,n,marca);
+      toast("Excluído: "+(a.cod?a.cod+" ":"")+a.nome+". No lugar: "+(n.cod?n.cod+" ":"")+n.nome+" · "+
+        textoUsosProd(noBanco||local).replace(/<[^>]+>/g,"")+".");
+      fechar(true);
+    };
+  });
+}
 async function excluirProdutosMarcados(){
   if(!podeExcluirProd()){toast("Só o Administrador exclui produto.");return;}
   var L=marcadosProd();
   if(!L.length){toast("Marque ao menos um produto na lista.");return;}
-  if(!confirm(textoExclusaoProd(L).txt))return;
+  var sep=textoExclusaoProd(L);
+  var sist=sep.presos.filter(function(p){return produtoDeSistema(p);});
+  var usados=sep.presos.filter(function(p){return !produtoDeSistema(p);});
+  var txt=(sep.podem.length?"Apagar "+sep.podem.length+" produto(s) que nunca foram usados.\n":"")+
+    (usados.length?usados.length+" já foram usados: para cada um, o sistema vai perguntar qual produto entra no lugar.\n":"")+
+    (sist.length?sist.length+" são do próprio sistema (troca, OS, serviços, planos) e só serão desativados.\n":"")+
+    "\n"+L.slice(0,10).map(function(p){return "• "+(p.cod?p.cod+" ":"")+p.nome;}).join("\n")+(L.length>10?"\n… e mais "+(L.length-10):"")+
+    "\n\nContinuar?";
+  if(!confirm(txt))return;
   var bt=$("prodExcluir");bt.disabled=true;
-  var r=await excluirProdutos(L,"excluído da lista de produtos");
-  bt.disabled=false;
+  var r={apagados:0,desativados:0,erros:0};
+  try{
+    if(sep.podem.length||sist.length)r=await excluirProdutos(sep.podem.concat(sist),"excluído da lista de produtos");
+    var trocados=0,mantidos=0;
+    for(var i=0;i<usados.length;i++){
+      if(await janelaTrocaProduto(usados[i]))trocados++;else{mantidos++;delete prodMarcados[usados[i].id];}
+    }
+  }finally{bt.disabled=false;}
   opcoesProduto();renderProdutos();
   try{ajustarApagarBusca();}catch(e){}
-  toast(r.apagados+" produto(s) apagado(s)"+(r.desativados?" · "+r.desativados+" desativado(s) por já terem movimento":"")+
+  toast(r.apagados+" produto(s) apagado(s)"+(trocados?" · "+trocados+" trocado(s) por outro e apagado(s)":"")+
+    (mantidos?" · "+mantidos+" não excluído(s)":"")+(r.desativados?" · "+r.desativados+" do sistema desativado(s)":"")+
     (r.erros?" · "+r.erros+" não gravaram — confira a internet":"")+".");
 }
 function ligarExcluirProd(){
