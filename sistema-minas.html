@@ -32976,6 +32976,26 @@ function metaDe(n){
   var o={};META_LINHAS.forEach(function(l){o[l.k]=(hab&&metaLigada(n,l.k))?(+m[l.k]||0):0;});
   return o;
 }
+function anivPctDe(n){
+  var m=metas[n]||{};
+  return (metasHabilitadas(n)&&metaLigada(n,"aniversario")&&+m.anivPct>0)?+m.anivPct:0;
+}
+/* quantos clientes da empresa fazem aniversário entre de e até (datas do calendário, ano a ano) */
+var MEMO_ANIV={};
+function anivNoPeriodo(de,ate){
+  if(!de||!ate)return 0;
+  var k=lojaAtual+"|"+de+"|"+ate+"|"+clientes.length;
+  if(k in MEMO_ANIV)return MEMO_ANIV[k];
+  var y0=+de.slice(0,4),y1=+ate.slice(0,4),n=0;
+  clientes.forEach(function(c){
+    if(c.loja!==lojaAtual||!c.nasc)return;
+    for(var y=y0;y<=y1;y++){var a=aniversarioNoAno(c.nasc,y);if(a&&a.data>=de&&a.data<=ate){n++;break;}}
+  });
+  if(Object.keys(MEMO_ANIV).length>200)MEMO_ANIV={};
+  return (MEMO_ANIV[k]=n);
+}
+window.__anivNoPeriodoMF=anivNoPeriodo;
+window.__metaProporcionalMF=function(q,de,ate){return metaProporcional(q,de,ate);};
 function metaSemanaDe(n){
   var m=metas[n]||{},s=m.semana||{},hab=metasHabilitadas(n);
   var o={};META_LINHAS.forEach(function(l){o[l.k]=(hab&&metaLigada(n,l.k))?(+s[l.k]||0):0;});
@@ -33054,7 +33074,17 @@ function metaProporcional(quem,de,ate){
   } else {
     META_LINHAS.forEach(function(l){o[l.k]=m[l.k];});
   }
-  return {alvo:o,cheia:cheia,mensal:m,semanal:sem,porSemana:porSemana};
+  /* META DE ANIVERSARIANTE EM % (03/11, regra dele: "fazer contato de x % dos aniversariantes no
+     dia, semana ou mês", para dividir a tarefa entre os vendedores). A meta é a porcentagem dos
+     clientes da empresa que fazem aniversário NO PERÍODO da tela — os mesmos da tela de
+     Aniversariantes —, arredondada para BAIXO (decisão dele). O mês é o do início do período. */
+  var pA=anivPctDe(quem);
+  if(pA>0){
+    o.aniversario=Math.floor(anivNoPeriodo(de,ate)*pA/100);
+    m.aniversario=Math.floor(anivNoPeriodo(ini,fim)*pA/100);
+    delete porSemana.aniversario;
+  }
+  return {alvo:o,cheia:cheia,mensal:m,semanal:sem,porSemana:porSemana,anivPct:pA};
 }
 function barraMeta(nome,feito,alvo,moeda){
   var pct=alvo>0?Math.round(feito/alvo*100):0;
@@ -33325,6 +33355,7 @@ function renderCfgMetas(){
   META_LINHAS.forEach(function(l){
     $("cm_"+l.k).value=m[l.k]||"";$("cm_"+l.k+"_sem").value=s[l.k]||"";
     $("cm_"+l.k+"_on").checked=!(m.off&&m.off[l.k]);});
+  if($("cm_anivModo")){$("cm_anivModo").value=(+m.anivPct>0)?"pct":"qtd";$("cm_anivPct").value=(+m.anivPct>0)?m.anivPct:"";}
   function chips(id,chave){
     var w=$(id);w.innerHTML="";
     if(!tipos.length){w.innerHTML='<span class="help">Cadastre tipos em Configurações › Tipos de Atendimento.</span>';return;}
@@ -33353,11 +33384,17 @@ function montarLinhasMetas(){
         (l.k==="faturamento"?"<br><small>valor depreciado pela forma de pagamento, dividido pela posição</small>":"")+"</span></label>"+
       '<div class="fld"><label for="cm_'+l.k+'_sem">Meta da semana'+rs+'</label><input id="cm_'+l.k+'_sem" '+st+"></div>"+
       '<div class="fld"><label for="cm_'+l.k+'">Meta do mês'+rs+'</label><input id="cm_'+l.k+'" '+st+"></div>"+
-      '<div class="cm-d" id="cm_'+l.k+'_dia"></div></div>';
+      '<div class="cm-d" id="cm_'+l.k+'_dia"></div></div>'+
+      (l.k==="aniversario"?'<div class="cm-pct" id="cm_anivModoWrap" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;padding:0 12px 6px">'+
+        '<div class="fld" style="margin:0;min-width:220px"><label for="cm_anivModo">Meta de aniversariante por</label>'+
+          '<select id="cm_anivModo"><option value="qtd">Quantidade (semana e mês)</option><option value="pct">% dos aniversariantes do período</option></select></div>'+
+        '<div class="fld" style="margin:0;max-width:160px" id="cm_anivPctWrap"><label for="cm_anivPct">% dos aniversariantes</label>'+
+          '<input id="cm_anivPct" type="number" min="0" max="100" step="1" inputmode="numeric"></div></div>':"");
   }).join("");
   META_LINHAS.forEach(function(l){
     $("cm_"+l.k+"_on").onchange=espelhoMetas;$("cm_"+l.k).oninput=espelhoMetas;$("cm_"+l.k+"_sem").oninput=espelhoMetas;});
   $("cm_hab").onchange=espelhoMetas;
+  if($("cm_anivModo")){$("cm_anivModo").onchange=espelhoMetas;$("cm_anivPct").oninput=espelhoMetas;}
 }
 function lerFormMetas(){
   var f={hab:$("cm_hab").checked,mes:{},sem:{},off:{}};
@@ -33365,11 +33402,13 @@ function lerFormMetas(){
     function num(id){var v=$(id).value;return (l.moeda?parseFloat(v):parseInt(v,10))||0;}
     f.mes[l.k]=num("cm_"+l.k);f.sem[l.k]=num("cm_"+l.k+"_sem");
     if(!$("cm_"+l.k+"_on").checked)f.off[l.k]=true;});
+  f.anivPct=($("cm_anivModo")&&$("cm_anivModo").value==="pct")?Math.max(0,Math.min(100,parseFloat($("cm_anivPct").value)||0)):0;
   return f;
 }
 function metaDoForm(f){
   var o=JSON.parse(JSON.stringify(f.mes));
   o.semana=JSON.parse(JSON.stringify(f.sem));o.off=JSON.parse(JSON.stringify(f.off));o.desabilitado=!f.hab;
+  if(f.anivPct>0)o.anivPct=f.anivPct;
   return o;
 }
 function espelhoMetas(){
@@ -33381,9 +33420,20 @@ function espelhoMetas(){
   META_LINHAS.forEach(function(l){
     var on=f.hab&&!f.off[l.k],s=f.sem[l.k],m=f.mes[l.k],t;
     function fmt(v){return l.moeda?BRL(v):String(Math.round(v*10)/10).replace(".",",");}
+    var pct=(l.k==="aniversario"&&$("cm_anivModo")&&$("cm_anivModo").value==="pct");
     $("cm_l_"+l.k).classList.toggle("off",!on);
-    $("cm_"+l.k).disabled=!on;$("cm_"+l.k+"_sem").disabled=!on;$("cm_"+l.k+"_on").disabled=!f.hab;
+    $("cm_"+l.k).disabled=!on||pct;$("cm_"+l.k+"_sem").disabled=!on||pct;$("cm_"+l.k+"_on").disabled=!f.hab;
+    if(l.k==="aniversario"&&$("cm_anivPctWrap")){$("cm_anivPctWrap").hidden=!pct;$("cm_anivModo").disabled=!on;$("cm_anivPct").disabled=!on;}
     if(!on)t="Desabilitada — não entra no cumprimento.";
+    else if(pct){
+      var p=f.anivPct||0,hj=hojeISO(),dh=new Date(hj+"T00:00:00");
+      var sem0=new Date(dh);sem0.setDate(dh.getDate()-dh.getDay());var sem1=new Date(sem0);sem1.setDate(sem0.getDate()+6);
+      var na=anivNoPeriodo(hj,hj),ns=anivNoPeriodo(iso(sem0),iso(sem1)),
+          nm=anivNoPeriodo(iso(new Date(dh.getFullYear(),dh.getMonth(),1)),iso(new Date(dh.getFullYear(),dh.getMonth()+1,0)));
+      t=p?("<b>"+fmt(p)+"%</b> dos aniversariantes do período, arredondado para baixo.<br>Hoje: "+na+" → meta <b>"+Math.floor(na*p/100)+
+          "</b> · semana: "+ns+" → <b>"+Math.floor(ns*p/100)+"</b> · mês: "+nm+" → <b>"+Math.floor(nm*p/100)+"</b>")
+        :"Informe a porcentagem — sem ela, não entra no cumprimento.";
+    }
     else if(!s&&!m)t="Sem meta — não entra no cumprimento.";
     else{
       t="Por dia útil: <b>"+fmt(s?s/5:m/du)+"</b>"+(s?" (semana ÷ 5)":" (mês ÷ "+du+" dias úteis)");
@@ -33394,11 +33444,12 @@ function espelhoMetas(){
     }
     $("cm_"+l.k+"_dia").innerHTML=t;
   });
-  var at=META_LINHAS.filter(function(l){return !f.off[l.k]&&(f.mes[l.k]||f.sem[l.k]);});
+  var at=META_LINHAS.filter(function(l){return !f.off[l.k]&&((l.k==="aniversario"&&f.anivPct>0)||f.mes[l.k]||f.sem[l.k]);});
   $("cm_prev").innerHTML=!f.hab
     ? '<div class="note warn"><b>Metas desabilitadas para '+esc(n)+".</b> Ao salvar, "+esc(n)+" fica sem metas e sem prêmio de desempenho.</div>"
     : at.length
       ? '<div class="note ok"><b>Metas de '+esc(n)+":</b> "+at.map(function(l){
+          if(l.k==="aniversario"&&f.anivPct>0)return l.n.toLowerCase()+" — "+String(f.anivPct).replace(".",",")+"% dos aniversariantes do período";
           return l.n.toLowerCase()+" — "+[f.sem[l.k]?"semana "+fmtMeta(l,f.sem[l.k]):"",f.mes[l.k]?"mês "+fmtMeta(l,f.mes[l.k]):""].filter(Boolean).join(", ");}).join(" · ")+
         ".<br>O prêmio de desempenho paga a porcentagem média cumprida destas metas no mês (cada uma até 100%).</div>"
       : '<div class="note warn"><b>'+esc(n)+" ainda não tem meta habilitada com valor.</b> A tela de Metas mostra 'sem meta' nas linhas dele.</div>";
