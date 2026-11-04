@@ -631,6 +631,8 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default}
   .ev.ativ{background:#3E7BC4}.ev.atend{background:#3FA36B}.ev.inst{background:#C4763E}
   .ev.atrasada{background:#C4463E}
+  /* 04/11: o motivo define como fica — não realizada (cinza), reagendada (cinza azulado), cancelada (riscada) */
+  .ev.naofeita{background:#8A94A3}.ev.reag{background:#8C9FB8}.ev.cancelada{background:#A7AFBA;text-decoration:line-through}
   /* horário ocupado na agenda de outra pessoa (Etapa 2): sem cliente e sem clique */
   .ev .ev-cid{display:block;font-size:10.5px;opacity:.85}
   .ev.clicavel{cursor:pointer}
@@ -4546,13 +4548,14 @@ img{max-width:100%}
       <div class="card flush">
         <div class="toolbar">
           <input id="motNovo" placeholder="Ex.: Vendido, Sem interesse, Preço alto, Vai pensar…" style="max-width:340px">
+          <select id="motGrupo" style="max-width:230px" aria-label="Grupo do motivo"><option value="">Grupo do motivo…</option><option value="realizada">Realizada (verde)</option><option value="nao">Não realizada (cinza)</option><option value="reagendou">Reagendou (muda a data)</option></select>
           <button class="btn" type="button" id="motAdd">Adicionar</button>
           <select id="motFiltro" style="max-width:170px"><option value="">Todos</option><option value="ativas">Só ativos</option><option value="inativas">Só inativos</option></select>
           <span class="sp"></span>
           <span class="count" id="motCount"></span>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Motivo</th><th class="num">Usado em</th><th>Situação</th><th></th></tr></thead>
+          <thead><tr><th>Motivo</th><th>Grupo</th><th class="num">Usado em</th><th>Situação</th><th></th></tr></thead>
           <tbody id="motBody"></tbody>
         </table></div>
       </div>
@@ -8356,11 +8359,15 @@ img{max-width:100%}
       <p class="sect-t">O que aconteceu? <span class="req">*</span></p>
       <div class="chips" id="fm_motivos"></div>
     </div>
+    <div class="grid g2" id="fm_reagBox" hidden style="margin-top:12px">
+      <div class="fld"><label for="fm_reData">Nova data <span class="req">*</span></label><input id="fm_reData" type="date"></div>
+      <div class="fld"><label for="fm_reHora">Novo horário <span class="req">*</span></label><input id="fm_reHora" type="time"></div>
+    </div>
 
     <div class="fld"><label for="fm_texto">Conte como foi <span class="req">*</span></label>
       <textarea id="fm_texto" rows="4" placeholder="O que o cliente falou, o que ficou combinado, o que você fez…"></textarea></div>
 
-    <div class="sect" style="margin-top:18px">
+    <div class="sect" style="margin-top:18px" id="fm_retornoSect">
       <p class="sect-t">Precisa de um retorno?</p>
       <div class="chips" id="fm_retorno">
         <button type="button" data-r="nao" aria-pressed="false">Não, está resolvido</button>
@@ -8499,12 +8506,43 @@ img{max-width:100%}
 <div class="modal" id="bloqAg" hidden>
   <div class="box">
     <div class="relogio" id="bq_relogio">Em aberto</div>
-    <h3>Finalize a atividade anterior primeiro</h3>
-    <div class="sub">A próxima atividade só abre depois que esta for finalizada ou reagendada. As seguintes ficam visíveis na agenda, mas não abrem.</div>
+    <h3>Você tem uma atividade atrasada</h3>
+    <div class="sub">Resolva esta antes de abrir as outras: finalize, justifique por que não foi feita ou reagende. Atividade de hoje no horário e de dias futuros não travam nada.</div>
     <div class="note crit" id="bq_det"></div>
     <div class="actions">
-      <button class="btn" type="button" id="bq_abrir">Abrir a atividade pendente</button>
+      <button class="btn" type="button" id="bq_abrir">Finalizar</button>
+      <button class="btn ghost" type="button" id="bq_just">Justificar</button>
+      <button class="btn ghost" type="button" id="bq_reag">Reagendar</button>
       <button class="btn mut" type="button" id="bq_fechar">Voltar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Justificar (não realizada) e Cancelar atividade (04/11, regra dele): motivo obrigatório, nada se apaga -->
+<div class="modal" id="justModal" hidden>
+  <div class="box">
+    <h3 id="ju_titulo">Justificar</h3>
+    <div class="sub" id="ju_sub"></div>
+    <div class="fld" style="margin-top:12px"><label for="ju_texto" id="ju_label">Motivo <span class="req">*</span></label>
+      <textarea id="ju_texto" rows="3"></textarea></div>
+    <div id="ju_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="ju_ok">Confirmar</button>
+      <button class="btn mut" type="button" id="ju_fechar">Voltar</button>
+    </div>
+  </div>
+</div>
+
+<!-- concluir atividade de dia futuro (04/11, regra dele) -->
+<div class="modal" id="hojeModal" hidden>
+  <div class="box">
+    <h3>Esta atividade é de outro dia</h3>
+    <div class="note warn" id="hj_txt"></div>
+    <p class="big-q">Ela aconteceu hoje?</p>
+    <div class="actions">
+      <button class="btn" type="button" id="hj_sim">Sim, aconteceu hoje</button>
+      <button class="btn ghost" type="button" id="hj_nao">Não — reagendar</button>
+      <button class="btn mut" type="button" id="hj_fechar">Voltar</button>
     </div>
   </div>
 </div>
@@ -9791,7 +9829,7 @@ async function carregar(){
     var cn=await jaPedido("cfg:canais_tipo",function(){return db.doc("config/canais_tipo").get();});
     if(cn.exists&&cn.data()&&cn.data().mapa)canalTipo=cn.data().mapa;
     var ms=await jaPedido("cfg:motivos_finalizacao",function(){return db.doc("config/motivos_finalizacao").get();});
-    if(ms.exists&&ms.data()&&ms.data().lista&&ms.data().lista.length){motivos=ms.data().lista;}
+    if(ms.exists&&ms.data()&&ms.data().lista&&ms.data().lista.length){motivos=ms.data().lista;MOTIVO_GRUPO=ms.data().grupos||{};}
     else{await gravarMotivos();}
     /* tipo e motivos do contato de aniversariante entram nas listas já gravadas */
     var gAn=garantirAniversarioCfg();
@@ -9805,6 +9843,8 @@ async function carregar(){
       /* LANÇADO EM DOBRO (30/10): a cópia fica no banco, com o motivo, mas não entra em tela,
          Dashboard, metas nem contagem nenhuma */
       .filter(function(a){return !a.lancadoEmDobro;});
+    /* follow-up enviado antes de 04/11 ficou com status "concluida": na tela vale como encerrado */
+    atendimentos.forEach(function(a){if(a.natureza==="atividade"&&a.status==="concluida")a.status="finalizado";});
     var vs=await jaPedido("col:pedidos",function(){return col("pedidos").limit(tetoBoot("pedidos")).get();});
     pedidos=vs.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     /* pedidos pela metade, guardados pelo vendedor (03/10): ficam FORA de pedidos[], então não
@@ -11016,7 +11056,7 @@ async function apagarAcaoAtiv(ativId,ix){
   if(!confirm("Apagar esta linha do histórico?\n\n"+dataCurta(l.quando)+" · "+(l.por||"")+"\n"+
     (l.texto||"")+"\n\nO pedido, a OS ou o orçamento citados continuam no sistema."))return;
   a.acoes.splice(ix,1);
-  {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",a);
   toast("Linha apagada.");
   abrirDetalhes(a);
 }
@@ -19057,6 +19097,15 @@ async function salvarPedidoAgora(){
       delete pedOrigemAtiv.fechoPendente;
     }
     await registrarAcaoAtiv(pedOrigemAtiv,"pedido",ped.id,ped.numero,"Pedido "+ped.numero+" criado · "+BRL(ped.total));
+    /* VENDA LANÇADA POR QUEM NÃO EXECUTA (04/11, regra dele): atividade de hoje ou futura, ainda
+       antes do horário, continua ABERTA para quem executa, ligada ao pedido, com o aviso. Já
+       passou (a visita aconteceu e a venda veio depois) ou quem vende é quem executa: conclui. */
+    var oaV=pedOrigemAtiv,qV=quando(oaV);
+    if(oaV.natureza==="atividade"&&(oaV.colaborador||"")!==usuarioAtual&&qV&&qV>new Date()){
+      oaV.vendaLancada={id:ped.id,numero:ped.numero,por:usuarioAtual,quando:hojeISO()};
+      await grava("atendimentos",oaV);
+      fechouAtiv=false;
+    } else
     fechouAtiv=await concluirAtivPorAcao(pedOrigemAtiv,"Concluída pelo pedido "+ped.numero+fechoTxt);
     pedOrigemAtiv=null;
   }
@@ -33980,10 +34029,9 @@ function abrirDetalhes(a){
   try{limparAcoesRepetidas(a);}catch(e){console.warn(e);}
   var c=cliPorId(a.clienteId)||{};
   var ativ=(a.natureza==="atividade"),d=quando(a),agora=new Date();
-  var atrasou=(ativ&&a.status!=="finalizado"&&d&&d<agora);
+  var atrasou=(ativ&&!ativFechada(a)&&d&&d<agora);
   $("dt_titulo").textContent=(ativ?"Detalhes da atividade":"Detalhes do atendimento")+" · "+(a.cliente||"—");
   var sit=situacaoDe(a);
-  if(ativ&&atrasou&&a.status!=="finalizado")sit={n:"Atrasada",cls:"p-crit"};
   $("dt_sit").textContent=sit.n;
   $("dt_sit").className="pill "+sit.cls;
   $("dt_sub").textContent=(a.assunto?"Assunto: "+a.assunto+" · ":"")+(a.tipo||"sem tipo")+" · responsável: "+(a.colaborador||"—");
@@ -34066,10 +34114,11 @@ function abrirDetalhes(a){
      sem Mais + e sem abrir o registro para editar — a trava é a mesma por dentro. */
   if(!podeEditarAtiv(a)){
     ac="";
-  } else if(ativ&&a.status!=="finalizado"&&osAberta){
+  } else if(ativ&&!ativFechada(a)&&osAberta){
     ac='<button class="btn ghost" type="button" id="dt_reagendar">Reagendar</button>'+btEditarDet(a);
-  } else if(ativ&&a.status!=="finalizado"){
-    ac='<button class="btn" type="button" id="dt_concluir">Finalizar atividade como concluída</button>'+
+  } else if(ativ&&!ativFechada(a)){
+    /* quem agendou não conclui (04/11): Reagendar e, em Mais +, Cancelar */
+    ac=(podeConcluirAtiv(a)?'<button class="btn" type="button" id="dt_concluir">Finalizar atividade</button>':"")+
        '<button class="btn ghost" type="button" id="dt_acoes2">Mais +</button>'+
        '<button class="btn ghost" type="button" id="dt_reagendar">Reagendar</button>'+btEditarDet(a);
   } else if(!ativ){
@@ -34091,16 +34140,22 @@ function abrirDetalhes(a){
       ?'<button class="btn zap" type="button" data-zapativ="'+esc(a.id)+'">💬 WhatsApp</button>':"")+
     '<button class="btn mut" type="button" id="dt_fechar">Fechar</button>';
   $("dt_alerta").innerHTML="";
-  var trava=bloqueada(a);
-  if(trava)$("dt_alerta").innerHTML='<div class="note crit"><b>Você tem atividade mais antiga em atraso.</b> '+
-    "Finalize a de <b>"+esc(trava.cliente||"—")+"</b> ("+esc(dataBR(trava.data))+") antes de abrir esta.</div>";
-  else if(!podeEditarAtiv(a))$("dt_alerta").innerHTML='<div class="note warn"><b>Só leitura.</b> '+
+  var trava=null;   /* a atividade travada nem abre: abrirDetalhes já parou lá em cima */
+  if(!podeEditarAtiv(a))$("dt_alerta").innerHTML='<div class="note warn"><b>Só leitura.</b> '+
     "Este compromisso é de <b>"+esc(a.colaborador||"outro colaborador")+"</b>"+
     (agendadorDe(a)&&agendadorDe(a)!==a.colaborador?" e foi agendado por <b>"+esc(agendadorDe(a))+"</b>":"")+
     ". Quem finaliza ou altera é quem agendou, quem vai executar ou a gestão.</div>";
   else if(osAberta&&ativ&&a.status!=="finalizado")
     $("dt_alerta").innerHTML='<div class="note"><b>Esta atividade pertence à OS '+esc(osAberta.numero)+'.</b> '+
       "Ela se encerra sozinha pelo andamento da OS — por isso aqui só dá para abrir a OS, reagendar ou fechar.</div>";
+  else if(ativ&&!ativFechada(a)&&!podeConcluirAtiv(a))
+    $("dt_alerta").innerHTML='<div class="note"><b>Quem conclui é quem executa ('+esc(a.colaborador||"—")+') ou a gestão.</b> '+
+      "Você pode reagendar ou, em Mais +, cancelar com o motivo.</div>";
+  /* venda lançada por outra pessoa numa atividade de hoje ou futura: ela continua aberta (04/11) */
+  if(ativ&&!ativFechada(a)&&a.vendaLancada)
+    $("dt_alerta").innerHTML+='<div class="note ok"><b>Venda já lançada no pedido '+esc(a.vendaLancada.numero)+"</b>"+
+      (a.vendaLancada.por?" por "+esc(a.vendaLancada.por):"")+". A atividade continua aberta para "+esc(a.colaborador||"quem executa")+
+      " — conclua quando fizer a visita ou a instalação.</div>";
 
   function on(id,fn){var e=$(id);if(e)e.onclick=fn;}
   /* clicar na linha de "O que nasceu desta atividade" abre o pedido, a OS ou o orçamento
@@ -34136,11 +34191,17 @@ function abrirDetalhes(a){
     $("detModal").hidden=true;ir("atend");abrirAtend(a);
     toast("Registre o atendimento. Ao salvar, você escolhe o que fazer com o cliente.");});
   on("dt_concluir",function(){
-    if(trava){avisarBloqueio(trava);return;}
-    if(!podeEditarAtiv(a)){toast("Esta atividade não é sua.");return;}
+    if(!podeConcluirAtiv(a)){toast("Quem conclui é quem executa ou a gestão.");return;}
     $("detModal").hidden=true;abrirFinalizar(a);});
-  on("dt_reagendar",function(){
-    $("detModal").hidden=true;
+  on("dt_reagendar",function(){$("detModal").hidden=true;abrirReagendar(a);});
+  $("detModal").hidden=false;
+}
+/* a janela de reagendar (a mesma do aviso dos 15 minutos), por qualquer caminho */
+function abrirReagendar(a){
+  if(!a)return;
+  if(!podeEditarAtiv(a)){toast("Só quem agendou, quem executa ou a gestão reagenda.");return;}
+  if(ativFechada(a)){toast("Esta atividade já foi encerrada.");return;}
+  {
     agPend=a;
     $("ag_faltam").textContent="Reagendar";
     $("ag_sub").textContent="Combine o novo horário com o cliente.";
@@ -34153,8 +34214,7 @@ function abrirDetalhes(a){
     else{$("ag_zap").style.display="none";$("ag_tel").style.display="none";}
     $("ag_botoes").hidden=true;$("ag_negociar").hidden=false;$("ag_alerta").innerHTML="";
     $("ag_novaData").value=a.data||"";$("ag_novaHora").value=a.inicio||"";$("ag_motivo").value="";
-    $("alertaAg").hidden=false;});
-  $("detModal").hidden=false;
+    $("alertaAg").hidden=false;}
 }
 /* situações possíveis de uma atividade */
 var SITUACOES=[
@@ -34162,17 +34222,59 @@ var SITUACOES=[
   {k:"andamento",n:"Em andamento",cls:"p-warn"},
   {k:"concluida",n:"Concluída",cls:"p-ok"},
   {k:"reagendada",n:"Reagendada",cls:"p-acc"},
-  {k:"cancelada",n:"Cancelada",cls:"p-mut"}
+  {k:"cancelada",n:"Cancelada",cls:"p-mut"},
+  {k:"naoRealizada",n:"Não realizada",cls:"p-mut"},
+  {k:"realizado",n:"Concluída",cls:"p-ok"}
 ];
+function sitPorK(k){return SITUACOES.filter(function(s){return s.k===k;})[0]||SITUACOES[0];}
+/* atividade encerrada, de qualquer jeito (o follow-up enviado gravava "concluida") */
+function ativFechada(a){return !!a&&(a.status==="finalizado"||a.status==="cancelada"||a.status==="concluida"||a.finalizado===true);}
+/* COMO O REGISTRO APARECE (04/11): aberta, realizada, nao, reagendada ou cancelada — pelo que foi
+   feito nele e pelo grupo do motivo escolhido. Só a forma de mostrar: o registro não muda. */
+function comoFicou(a){
+  if(!a)return "aberta";
+  if(a.situacao==="cancelada"||a.status==="cancelada")return "cancelada";
+  if(a.situacao==="naoRealizada")return "nao";
+  if(a.situacao==="reagendada")return "reagendada";
+  if(a.natureza==="atividade"&&!ativFechada(a))return "aberta";
+  var g=grupoDosMotivos(a.motivos);
+  if(g==="reagendou")return "reagendada";
+  if(g==="nao")return "nao";
+  return "realizada";
+}
+window.__comoFicouMF=function(a){return comoFicou(a);};
 function situacaoDe(a){
-  if(a.situacao)return SITUACOES.filter(function(s){return s.k===a.situacao;})[0]||SITUACOES[0];
-  /* registros antigos: deduz pela informação que existe */
-  if(a.natureza==="atendimento")return SITUACOES[2];
-  if(a.status==="finalizado")return SITUACOES[2];
+  var cf=comoFicou(a);
+  if(cf==="cancelada")return sitPorK("cancelada");
+  if(cf==="nao")return sitPorK("naoRealizada");
+  if(cf==="reagendada")return sitPorK("reagendada");
+  if(cf==="realizada")return SITUACOES[2];
+  /* aberta: atrasada vale antes do "pendente" gravado (antes mostrava "a realizar") */
   var d=quando(a);
   if(d&&d<new Date())return {k:"pendente",n:"Atrasada",cls:"p-crit"};
+  if(a.situacao)return sitPorK(a.situacao);
   return SITUACOES[0];
 }
+/* QUEM CONCLUI (04/11, regra dele): quem EXECUTA e a gestão. Quem agendou reagenda ou cancela. */
+function podeConcluirAtiv(a){
+  if(!a)return false;
+  if(ehGestor())return true;
+  return (a.colaborador||"")===usuarioAtual;
+}
+window.__podeConcluirAtivMF=function(a){return podeConcluirAtiv(a);};
+/* atividade de dia futuro concluída hoje: a data passa a ser hoje, a original fica no histórico */
+function moverParaHoje(a,obs){
+  var hj=hojeISO(),h=agoraHM();
+  if(!a||String(a.data||"").slice(0,10)<=hj)return false;
+  a.historico=a.historico||[];
+  a.historico.push({de:a.data+(a.inicio?" "+a.inicio:""),para:hj+" "+h,quando:iso(new Date()),por:usuarioAtual,
+    obs:obs||"aconteceu antes do dia marcado"});
+  if(!a.dataOriginal)a.dataOriginal=a.data+(a.inicio?" "+a.inicio:"");
+  a.data=hj;a.inicio=h;
+  return true;
+}
+function copiaReg(a){return JSON.parse(JSON.stringify(a));}
+function voltarReg(a,c){Object.keys(a).forEach(function(k){delete a[k];});Object.assign(a,c);}
 /* "Vendido" só vale com o pedido lançado — sem pedido não há parcela, baixa de
    estoque, manutenção futura, e o lead nunca vira cliente */
 function ehVendido(lista){return (lista||[]).some(function(m){return /^vend/i.test(m);});}
@@ -34382,20 +34484,40 @@ function fmAjustarVendido(){
   var pi=fmReg?pedidoDaInstalacaoAtiv(fmReg):null;
   var precisa=!!(fmReg&&ehVendido(fmMotivos)&&!pedidoDoRegistro(fmReg)&&!pi);
   var inst=!!(pi&&!pi.instaladoEm&&fmMotivos.indexOf("Instalação concluída")>=0);
-  $("fm_ok").textContent=precisa?"Lançar o pedido":(inst?"Concluir e finalizar a instalação":"Concluir atividade");
+  var grF=grupoDosMotivos(fmMotivos);
+  if($("fm_reagBox"))$("fm_reagBox").hidden=(grF!=="reagendou");
+  if($("fm_retornoSect"))$("fm_retornoSect").hidden=(grF==="reagendou");
+  if(grF==="reagendou"){$("fm_ok").textContent="Reagendar";$("fm_alerta").innerHTML='<div class="note">A atividade muda para a nova data e continua aberta. O que você escreveu fica no histórico.</div>';return;}
+  $("fm_ok").textContent=precisa?"Lançar o pedido":(inst?"Concluir e finalizar a instalação":(grF==="nao"?"Encerrar como não realizada":"Concluir atividade"));
   $("fm_alerta").innerHTML=precisa
     ? '<div class="note warn"><b>Vendido pede o pedido lançado.</b> Tocando em Lançar o pedido, a venda abre com o cliente já escolhido. A atividade conclui sozinha quando o pedido for salvo.</div>'
     : (inst?'<div class="note"><b>Instalação do pedido '+esc(pi.numero)+'.</b> Ao concluir, abre a janela da instalação para incluir os produtos usados (cobrados na venda), conferir o pagamento e finalizar — a venda segue para a Aprovação Financeira.</div>':"");
 }
 /* finalizar a atividade sempre pergunta o que aconteceu — sem isso o histórico morre */
-var fmReg=null,fmMotivos=[],fmRetorno="";
-function abrirFinalizar(a){
+var fmReg=null,fmMotivos=[],fmRetorno="",fmMoverHoje=false;
+/* "Esta atividade está marcada para [data]. Ela aconteceu hoje?" (04/11, regra dele) */
+var hjCtx=null;
+function perguntarSeFoiHoje(a,seSim){
+  hjCtx={a:a,sim:seSim};
+  $("hj_txt").innerHTML="Esta atividade está marcada para <b>"+esc(dataBR(String(a.data||"").slice(0,10)))+
+    (a.inicio?" às "+esc(a.inicio):"")+"</b> · "+esc(a.cliente||"—")+" · "+esc(a.tipo||"—")+".";
+  $("hojeModal").hidden=false;
+}
+function abrirFinalizar(a,moverHoje){
   if(soCompromisso(a)){abrirCompromisso(a);return;}
   var tvF=bloqueada(a);
   if(tvF){avisarBloqueio(tvF);return;}
-  fmReg=a;fmMotivos=[];fmRetorno="";fmFalou="";
+  if(a&&a.natureza==="atividade"){
+    if(!podeConcluirAtiv(a)){toast("Quem conclui é quem executa ("+(a.colaborador||"—")+") ou a gestão. Você pode reagendar ou cancelar.");return;}
+    if(ativFechada(a)){toast("Esta atividade já foi encerrada.");return;}
+    if(String(a.data||"").slice(0,10)>hojeISO()&&!moverHoje){
+      perguntarSeFoiHoje(a,function(){abrirFinalizar(a,true);});return;}
+  }
+  fmReg=a;fmMotivos=[];fmRetorno="";fmFalou="";fmMoverHoje=!!moverHoje;
+  $("fm_reData").value="";$("fm_reHora").value="";
   Array.prototype.forEach.call($("fm_falou").querySelectorAll("button"),function(b){b.setAttribute("aria-pressed","false");});
-  $("fm_sub").textContent=(a.cliente||"—")+" · "+dataCurta(a.data||"")+(a.inicio?" às "+a.inicio:"");
+  $("fm_sub").textContent=(a.cliente||"—")+" · "+dataCurta(a.data||"")+(a.inicio?" às "+a.inicio:"")+
+    (fmMoverHoje?" · vai ficar registrada hoje, "+dataCurta(hojeISO()):"");
   $("fm_obs").innerHTML=a.obs
     ? "<b>O que estava combinado:</b><br>"+esc(a.obs)
     : "<b>Esta atividade não tinha observação.</b> O que você escrever agora é o que vai aparecer no histórico do cliente.";
@@ -34424,6 +34546,14 @@ function confirmarFinalizar(){return travaSalvar("confirmarFinalizar",confirmarF
 async function confirmarFinalizar__corpo(){
   var a=fmReg;if(!a)return;
   var txt=$("fm_texto").value.trim();
+  /* a regra vale por dentro, não só no botão (04/11) */
+  if(a.natureza==="atividade"){
+    if(!podeConcluirAtiv(a)){$("fm_alerta").innerHTML='<div class="note crit"><b>Quem conclui é quem executa ou a gestão.</b></div>';return;}
+    if(ativFechada(a)){$("fm_alerta").innerHTML='<div class="note crit"><b>Esta atividade já foi encerrada.</b></div>';return;}
+    var tvC=bloqueada(a);
+    if(tvC){$("fimModal").hidden=true;avisarBloqueio(tvC);return;}
+  }
+  var grupoF=grupoDosMotivos(fmMotivos);
   if(!fmFalou){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Responda se conseguiu falar com o cliente.</b> É isso que entra na conversão do Dashboard.</div>';return;}
   if(fmFalou==="nao"&&ehVendido(fmMotivos)){
@@ -34432,8 +34562,13 @@ async function confirmarFinalizar__corpo(){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Marque o que aconteceu.</b> É esse motivo que alimenta o Dashboard e as metas.</div>';return;}
   if(!txt){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Escreva como foi.</b> Sem isso, quem pegar este cliente amanhã não sabe o que já foi conversado.</div>';return;}
+  /* Reagendou: muda de dia e continua aberta (04/11) */
+  if(grupoF==="reagendou")return await reagendarPeloFinalizar(a,txt);
+  if(a.natureza==="atividade"&&String(a.data||"").slice(0,10)>hojeISO()&&!fmMoverHoje){
+    $("fm_alerta").innerHTML='<div class="note crit"><b>Esta atividade é de outro dia.</b> Ela só se conclui se aconteceu hoje — confirme na pergunta, ou reagende.</div>';return;}
   if(!fmRetorno){
     $("fm_alerta").innerHTML='<div class="note crit"><b>Falta responder:</b> precisa de um retorno? Toque em "Não, está resolvido" ou em "Sim, agendar novo contato".</div>';return;}
+  var antesF=copiaReg(a);
   if(ehVendido(fmMotivos)){
     /* contato de OS interna sem pedido: a venda é o pedido da OS (itens do técnico, pagamento e entrega) */
     var osV=a.osId?ordens.filter(function(x){return x.id===a.osId;})[0]:null;
@@ -34456,7 +34591,8 @@ async function confirmarFinalizar__corpo(){
       texto:"Venda confirmada pelo pedido "+pedV.numero});
   }
   delete a.fechoPendente;
-  a.status="finalizado";a.situacao="concluida";
+  if(fmMoverHoje)moverParaHoje(a);
+  a.status="finalizado";a.situacao=(grupoF==="nao"?"naoRealizada":"concluida");
   a.concluidaSemAtendimento=true;a.concluidaPor=usuarioAtual;a.concluidaEm=hojeISO();
   a.motivos=fmMotivos.slice();
   a.falouCliente=(fmFalou==="sim");
@@ -34464,11 +34600,13 @@ async function confirmarFinalizar__corpo(){
   a.obs=(a.obs?a.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): "+txt;
   a.acoes=a.acoes||[];
   a.acoes.push({tipo:"fecho",id:"",numero:"",quando:hojeISO(),por:usuarioAtual,
-    texto:"Concluída · "+(fmMotivos.join(", ")||"sem motivo")+" — "+txt});
-  {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
+    texto:(grupoF==="nao"?"Não realizada · ":"Concluída · ")+(fmMotivos.join(", ")||"sem motivo")+" — "+txt});
+  /* o banco recusou: nada fica pela metade e a janela continua aberta (04/11) */
+  try{await gravaConf("atendimentos",a);}
+  catch(eG){voltarReg(a,antesF);avisarRecusaBanco("fm_alerta",eG,"A atividade continua aberta.");return;}
   $("fimModal").hidden=true;
   var pedirRetorno=(fmRetorno==="sim");
-  toast("Atividade de "+(a.cliente||"")+" concluída.");
+  toast("Atividade de "+(a.cliente||"")+(grupoF==="nao"?" encerrada como não realizada.":" concluída."));
   /* OS interna: o cliente ficou de pensar ou de passar na loja → OS aguardando retorno do cliente (regra do Wagner, 14/09) */
   var osRet=null;
   if(a.osId&&temMotivoRetorno(a)){
@@ -34498,13 +34636,78 @@ async function confirmarFinalizar__corpo(){
       var ctxOS=(a.osId&&a.osEtapa==="contato")?ordens.filter(function(x){return x.id===a.osId;})[0]:null;
       abrirNovaAtividade({clienteId:a.clienteId||"",cliente:a.cliente,tel:a.tel||c.tel,
         doc:a.doc||c.doc,cidade:a.cidade||c.cidade,origem:c.origem,
-        colaborador:a.colaborador||usuarioAtual,dias:3,origemAtiv:a.id,
+        colaborador:a.colaborador||usuarioAtual,dias:3,origemAtiv:a.id,deConclusao:true,
         obs:ctxOS?"Retorno do cliente · OS "+ctxOS.numero+" — "+txt:"",
         tipos:ctxOS&&tipos.indexOf(TIPO_CONTATO_OS)>=0?[TIPO_CONTATO_OS]:undefined,
         osContatoId:ctxOS?ctxOS.id:"",
         nota:"<b>Retorno da atividade concluída.</b> "+esc(txt)+(ctxOS?"<br>A nova atividade fica ligada à OS "+ctxOS.numero+".":"")});},350);
   }
   fmReg=null;
+}
+/* motivo do grupo Reagendou (04/11): a atividade vai para a nova data e continua aberta */
+async function reagendarPeloFinalizar(a,txt){
+  var d=$("fm_reData").value,h=$("fm_reHora").value;
+  if(!d||!h){$("fm_alerta").innerHTML='<div class="note crit"><b>Informe a nova data e o novo horário.</b></div>';return;}
+  if(d<hojeISO()||(d===hojeISO()&&h<agoraHM())){$("fm_alerta").innerHTML='<div class="note crit"><b>Esse dia e horário já passaram.</b> Escolha de agora em diante.</div>';return;}
+  if(d===String(a.data||"").slice(0,10)&&h===(a.inicio||"")){$("fm_alerta").innerHTML='<div class="note crit"><b>É o mesmo dia e horário de agora.</b> Escolha o novo.</div>';return;}
+  var antes=copiaReg(a);
+  a.historico=a.historico||[];
+  a.historico.push({de:a.data+(a.inicio?" "+a.inicio:""),para:d+" "+h,quando:iso(new Date()),por:usuarioAtual,obs:txt,motivos:fmMotivos.slice()});
+  a.data=d;a.inicio=h;a.situacao="pendente";
+  a.obs=(a.obs?a.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): Reagendou para "+dataBR(d)+" às "+h+" — "+txt;
+  a.acoes=a.acoes||[];
+  a.acoes.push({tipo:"reagenda",id:"",numero:"",quando:hojeISO(),por:usuarioAtual,texto:"Reagendada para "+dataBR(d)+" às "+h+" · "+fmMotivos.join(", ")+" — "+txt});
+  try{await gravaConf("atendimentos",a);}
+  catch(eR){voltarReg(a,antes);avisarRecusaBanco("fm_alerta",eR,"A atividade continua como estava.");return;}
+  delete alertados[a.id];
+  $("fimModal").hidden=true;fmReg=null;
+  toast("Atividade de "+(a.cliente||"")+" reagendada para "+dataBR(d)+" às "+h+".");
+  render();
+}
+/* JUSTIFICAR (não realizada) e CANCELAR (04/11, regra dele): motivo obrigatório; nada se apaga.
+   Justifica quem executa ou a gestão; cancela quem agendou, quem executa ou a gestão. */
+var juCtx=null;
+function abrirJustificar(a,modo){
+  if(!a)return;
+  var pode=(modo==="cancelar")?podeEditarAtiv(a):podeConcluirAtiv(a);
+  if(!pode){toast(modo==="cancelar"?"Só quem agendou, quem executa ou a gestão cancela.":"Quem justifica é quem executa ou a gestão.");return;}
+  if(ativFechada(a)){toast("Esta atividade já foi encerrada.");return;}
+  juCtx={a:a,modo:modo};
+  $("ju_titulo").textContent=modo==="cancelar"?"Cancelar a atividade":"Justificar: a atividade não foi realizada";
+  $("ju_sub").textContent=(a.cliente||"—")+" · "+dataCurta(String(a.data||"").slice(0,10))+(a.inicio?" às "+a.inicio:"")+" · "+(a.tipo||"—")+" · "+(a.colaborador||"—");
+  $("ju_label").innerHTML=(modo==="cancelar"?"Por que está sendo cancelada?":"Por que não foi realizada?")+' <span class="req">*</span>';
+  $("ju_ok").textContent=modo==="cancelar"?"Cancelar a atividade":"Encerrar como não realizada";
+  $("ju_texto").value="";$("ju_alerta").innerHTML="";
+  $("justModal").hidden=false;
+  setTimeout(function(){try{$("ju_texto").focus();}catch(e){}},80);
+}
+window.__abrirJustificarMF=function(a,m){return abrirJustificar(a,m);};
+function confirmarJustificar(){return travaSalvar("confirmarJustificar",confirmarJustificar__corpo,this,arguments);}
+async function confirmarJustificar__corpo(){
+  var c=juCtx;if(!c)return;
+  var a=c.a,canc=(c.modo==="cancelar"),txt=$("ju_texto").value.trim();
+  if(!txt){$("ju_alerta").innerHTML='<div class="note crit"><b>Escreva o motivo.</b></div>';return;}
+  if(canc?!podeEditarAtiv(a):!podeConcluirAtiv(a)){$("ju_alerta").innerHTML='<div class="note crit"><b>Você não pode '+(canc?"cancelar":"justificar")+" esta atividade.</b></div>";return;}
+  if(ativFechada(a)){$("ju_alerta").innerHTML='<div class="note crit"><b>Esta atividade já foi encerrada.</b></div>';return;}
+  var antes=copiaReg(a);
+  a.status="finalizado";
+  if(canc){a.situacao="cancelada";a.canceladaPor=usuarioAtual;a.canceladaEm=hojeISO();a.motivoCancel=txt;}
+  else{a.situacao="naoRealizada";a.justificadaPor=usuarioAtual;a.justificadaEm=hojeISO();a.justificativa=txt;
+    a.concluidaPor=usuarioAtual;a.concluidaEm=hojeISO();}
+  a.obs=(a.obs?a.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): "+(canc?"Cancelada — ":"Não realizada — ")+txt;
+  a.acoes=a.acoes||[];
+  a.acoes.push({tipo:"fecho",id:"",numero:"",quando:hojeISO(),por:usuarioAtual,texto:(canc?"Cancelada — ":"Não realizada — ")+txt});
+  try{await gravaConf("atendimentos",a);}
+  catch(eJ){voltarReg(a,antes);avisarRecusaBanco("ju_alerta",eJ,"A atividade continua aberta.");return;}
+  $("justModal").hidden=true;juCtx=null;
+  toast("Atividade de "+(a.cliente||"")+(canc?" cancelada.":" encerrada como não realizada."));
+  render();
+  if(!canc&&confirm("Quer agendar um novo contato com este cliente?")){
+    var cl=cliPorId(a.clienteId)||{};
+    abrirNovaAtividade({clienteId:a.clienteId||"",cliente:a.cliente,tel:a.tel||cl.tel,doc:a.doc||cl.doc,
+      cidade:a.cidade||cl.cidade,origem:cl.origem,colaborador:a.colaborador||usuarioAtual,dias:3,
+      origemAtiv:a.id,deConclusao:true,obs:"",nota:"<b>Novo contato depois da atividade não realizada.</b> "+esc(txt)});
+  }
 }
 /* toda ação nascida de uma atividade fica registrada nela */
 /* tira as linhas repetidas de "O que nasceu desta atividade" já gravadas (regra dele, 20/09:
@@ -34534,18 +34737,20 @@ async function registrarAcaoAtiv(a,tipo,id,numero,texto){
   if(ja)return;
   a.acoes.push({tipo:tipo,id:id,numero:numero,texto:texto,quando:hojeISO(),por:usuarioAtual});
   if(!a.situacao||a.situacao==="pendente")a.situacao="andamento";
-  {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",a);
 }
 /* a ação concluída encerra a atividade que a gerou — vale para OS, pedido,
    orçamento e nova atividade, para nada ficar pendurado na agenda */
 async function concluirAtivPorAcao(a,texto,situacao){
   if(!a)return false;
   if(a.status==="finalizado")return false;
+  /* concluída hoje uma atividade de dia futuro: aparece no dia em que aconteceu (04/11) */
+  if(a.natureza==="atividade"&&situacao!=="reagendada")moverParaHoje(a,"concluída antes do dia marcado · "+texto);
   a.status="finalizado";a.situacao=situacao||"concluida";
   a.concluidaPor=usuarioAtual;a.concluidaEm=hojeISO();
   a.acoes=a.acoes||[];
   a.acoes.push({tipo:"fecho",id:"",numero:"",texto:texto,quando:hojeISO(),por:usuarioAtual});
-  {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",a);
   return true;
 }
 /* as ações que o vendedor pode tomar a partir da atividade ou do atendimento */
@@ -34565,7 +34770,10 @@ function abrirAcoes(a){
     {k:"venda",n:"Abrir pedido para o cliente",d:"Venda com o cliente e o vendedor já escolhidos"},
     {k:"orcam",n:"Fazer orçamento para o cliente",d:"Proposta com os dados do cadastro"},
     {k:"retorno",n:"Criar nova atividade",d:"Novo agendamento para o mesmo cliente"},
-    {k:"atender",n:"Registrar atendimento",d:"Anotar o contato que acabou de acontecer",so:ativ},
+    {k:"atender",n:"Registrar atendimento",d:"Anotar o contato que acabou de acontecer",so:ativ&&podeConcluirAtiv(a)},
+    {k:"justificar",n:"Não foi realizada (justificar)",d:"Encerra como não realizada, com o motivo",
+      so:ativ&&!ativFechada(a)&&podeConcluirAtiv(a)&&!!quando(a)&&quando(a)<new Date()},
+    {k:"cancelar",n:"Cancelar a atividade",d:"Com o motivo; fica riscada na agenda",so:ativ&&!ativFechada(a)&&podeEditarAtiv(a)},
     {k:"cadastro",n:"Completar o cadastro",d:"Documento, endereço e o que falta para vender",so:!!c.id}
   ];
   $("ac_grid").innerHTML=itens.filter(function(x){return x.so===undefined||x.so;}).map(function(x){
@@ -34601,6 +34809,8 @@ function abrirAcoes(a){
           cidade:a.cidade||c.cidade,origem:c.origem,colaborador:a.colaborador||usuarioAtual,dias:3,
           obs:"",origemAtiv:a.id,
           nota:"<b>Nova atividade para o mesmo cliente.</b> Ela fica ligada a esta, no histórico."});
+      } else if(k==="justificar"||k==="cancelar"){
+        abrirJustificar(a,k);
       } else if(k==="atender"){
         ir("atend");abrirAtend(a);
       } else if(k==="cadastro"){
@@ -35469,7 +35679,9 @@ async function campoLevei(){
   toast("OS "+o.numero+": equipamento no seu estoque e contato criado para o atendimento.");
 }
 /* 3) não resolveu: o atendimento assume o caso */
-async function campoPendente(){
+/* trava contra toque duplo (04/11) */
+function campoPendente(){return travaSalvar("campoPendente",campoPendente__corpo,this,arguments);}
+async function campoPendente__corpo(){
   var o=editandoOS;if(!o)return;
   if(!await salvarCampoOS(o))return;
   aplicarSitOS(o,"avaliacao","o técnico não resolveu na hora — o atendimento assume");
@@ -35484,9 +35696,9 @@ async function campoPendente(){
 async function concluirAtivTecOS(o){
   var at=ativTecDaOS(o);
   if(!at||at.status==="finalizado")return;
-  at.status="finalizado";at.situacao="realizado";at.concluidaEm=hojeISO();
+  at.status="finalizado";at.situacao="realizado";at.concluidaEm=hojeISO();at.concluidaPor=at.concluidaPor||usuarioAtual;
   at.resultado="Diagnóstico em campo: "+(o.laudo||"");
-  {try{dividirPelaAtividade(at);}catch(eDv){}if(db){try{await col("atendimentos").doc(at.id).set(at);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",at);
 }
 /* OS fechada: o equipamento do cliente sai do estoque do técnico */
 async function baixarEquipClienteOS(o){
@@ -35518,12 +35730,14 @@ async function criarContatoAtendenteOS(o,fase,opc){
   if(op.conferido){
     try{await gravaConf("atendimentos",ac);}
     catch(e){atendimentos=atendimentos.filter(function(x){return x!==ac;});throw e;}
-  }else {try{dividirPelaAtividade(ac);}catch(eDv){}if(db){try{await col("atendimentos").doc(ac.id).set(ac);}catch(e){console.warn(e);}}}
+  }else await grava("atendimentos",ac);
   o.atividadeContatoId=ac.id;
   return ac;
 }
 /* serviço executado pelo técnico depois da autorização: abre o contato para o cliente buscar o produto */
-async function atividadeRealizadaOS(){
+/* trava contra toque duplo (04/11) */
+function atividadeRealizadaOS(){return travaSalvar("atividadeRealizadaOS",atividadeRealizadaOS__corpo,this,arguments);}
+async function atividadeRealizadaOS__corpo(){
   var o=editandoOS;if(!o)return;
   if(recusaEtapaOS(o,etapaExecOS(o)))return;
   if(!podeTecnicoOS(o)){toast("Só o técnico responsável ("+(o.tecnico||"—")+") marca a atividade como realizada.");return;}
@@ -40067,7 +40281,7 @@ async function criarAtividadeTecnicoOS__corpo(){
     colaborador:resp,vendedor:"",tipos:tt,tipo:tt.join(" · "),data:data,inicio:hora,fim:"",obs:obs,
     origemOrc:"",origemAtiv:"",equipId:"",osId:o.id,osEtapa:"",situacao:"pendente",status:"aberto",criadoEm:hojeISO(),criadoPor:usuarioAtual};
   atendimentos.push(a);
-  {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",a);
   o.tecnico=resp;o.atividadeTecId=a.id;o.historico=o.historico||[];
   o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Atividade criada para o técnico "+resp+" em "+dataCurta(data)+(hora?" às "+hora:"")});
   await grava("ordens",o);
@@ -41853,7 +42067,7 @@ async function salvarOrc__corpo(){
   /* funil de vendas: cartão vai para Orçamento enviado, com o valor */
   try{await atualizarFunilCliente(o.clienteId,"orçamento",o.vendedor||usuarioAtual);}catch(eF){console.warn("funil",eF);}
   /* lembrete do vencimento: nasce com o orçamento, na data da validade (regra dele, 02/10) */
-  try{o.__ativVenc=await agendarRetornoOrcamento(o);}catch(eV){console.warn("retorno do orçamento",eV);}
+  try{await agendarRetornoOrcamento(o);}catch(eV){console.warn("retorno do orçamento",eV);}
   /* salvo: o botão de excluir já vale para este orçamento (25/09) */
   try{renderExcluirOrc();}catch(eX){}
   return o;
@@ -42232,6 +42446,14 @@ async function criarAtividadeRetorno__corpo(){
   }
   if(!$("na_data").value){$("na_alerta").innerHTML='<div class="note crit"><b>Informe a data da atividade.</b></div>';return;}
   if(!naTipos.length){$("na_alerta").innerHTML='<div class="note warn"><b>Marque ao menos um tipo</b> de contato.</div>';return;}
+  /* data passada não (04/11): nasceria atrasada e travaria a agenda */
+  var dNA=$("na_data").value,hNA=$("na_hora").value||"";
+  if(dNA<hojeISO()||(dNA===hojeISO()&&hNA&&hNA<agoraHM())){
+    $("na_alerta").innerHTML='<div class="note crit"><b>Esse dia e horário já passaram.</b> Escolha de agora em diante.</div>';return;}
+  /* a próxima de uma atividade que está sendo encerrada não pode cair no mesmo dia dela (04/11, regra dele) */
+  var origNA=(naCtx.deConclusao&&naCtx.origemAtiv)?atendPorId(naCtx.origemAtiv):null;
+  if(origNA&&String(origNA.data||"").slice(0,10)===dNA){
+    $("na_alerta").innerHTML='<div class="note crit"><b>É o mesmo dia da atividade que está sendo encerrada.</b> Escolha outro dia para o próximo contato.</div>';return;}
 
   /* sem cadastro não há atividade: quem for atender precisa saber para onde ir
      e para qual número ligar */
@@ -42252,6 +42474,15 @@ async function criarAtividadeRetorno__corpo(){
     try{$("na_equip").focus();}catch(e){}
     return;
   }
+  /* a mesma atividade já está aberta? não nasce outra e não pergunta: abre a que existe (30/10).
+     Conferido ANTES de gravar a OS nova (04/11): antes a OS era gravada e ficava sem a atividade. */
+  var igualN=atividadeIgualAberta(naCtx.clienteId,$("na_resp").value,$("na_data").value,naTipos.join(" · "),naCtx.origemAtiv||"");
+  if(igualN&&!naCtx.osNova){
+    $("ativModal").hidden=true;naCtx=null;
+    toast("Esta atividade já está marcada — abrindo a que existe.");
+    try{ir("ativ");abrirDetalhes(igualN);}catch(eI){}
+    return igualN;
+  }
   /* OS nova: só é gravada agora, junto com a atividade do técnico (regra do Wagner, 14/09) */
   var osNovaAberta=null;
   if(naCtx.osNova){
@@ -42261,14 +42492,6 @@ async function criarAtividadeRetorno__corpo(){
       return;}
     naCtx.osId=osNovaAberta.id;
     $("na_obs").value=$("na_obs").value.replace(/^OS nova/,"OS "+osNovaAberta.numero);
-  }
-  /* a mesma atividade já está aberta? não nasce outra e não pergunta: abre a que existe (30/10) */
-  var igualN=atividadeIgualAberta(naCtx.clienteId,$("na_resp").value,$("na_data").value,naTipos.join(" · "),naCtx.origemAtiv||"");
-  if(igualN){
-    $("ativModal").hidden=true;naCtx=null;
-    toast("Esta atividade já está marcada — abrindo a que existe.");
-    try{ir("ativ");abrirDetalhes(igualN);}catch(eI){}
-    return igualN;
   }
   /* já tem compromisso nesse horário? avisa e mostra os horários livres (24/10) */
   var cfN=conflitoDeAgenda($("na_resp").value,$("na_data").value,$("na_hora").value,"",null);
@@ -42294,7 +42517,7 @@ async function criarAtividadeRetorno__corpo(){
     osId:naCtx.osId||naCtx.osContatoId||"",osEtapa:naCtx.osContatoId?"contato":(naCtx.osServico?"servico":""),
     situacao:"pendente",status:"aberto"};
   atendimentos.push(a);
-  {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",a);
   /* atividade do técnico de uma OS: o responsável vira o técnico da OS e volta para a OS */
   if(naCtx.osId){
     var osT=ordens.filter(function(x){return x.id===naCtx.osId;})[0];
@@ -42381,9 +42604,12 @@ async function agendarRetornoOrcamento(o){
   var a=atividadeVencOrc(o);
   if(a){
     if(a.status==="finalizado")return a;          /* já foi tratado: não reabre */
-    if(a.data===quando&&a.obs===obs)return a;     /* nada mudou */
-    a.data=quando;a.obs=obs;a.colaborador=o.vendedor||a.colaborador;
-    {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
+    /* reagendado à mão: a data combinada fica (04/11 — antes salvar o orçamento desfazia) */
+    var reagendadoMao=(a.historico||[]).length>0;
+    if((reagendadoMao||a.data===quando)&&a.obs===obs)return a;     /* nada mudou */
+    if(!reagendadoMao)a.data=quando;
+    a.obs=obs;a.colaborador=o.vendedor||a.colaborador;
+    await grava("atendimentos",a);
     return a;
   }
   var vinc=clientes.filter(function(c){return c.id===o.clienteId;})[0]||{};
@@ -42400,7 +42626,7 @@ async function agendarRetornoOrcamento(o){
     criadoPor:o.criadoPor||o.vendedor||usuarioAtual,criadoEm:agoraCarimbo(),
     situacao:"pendente",status:"aberto"};
   atendimentos.push(a);
-  {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",a);
   return a;
 }
 /* orçamento que virou venda ou foi excluído não precisa mais do lembrete */
@@ -45660,7 +45886,9 @@ function ajustarProgZap(){
     }catch(e){}
   }
 }
-async function programarMensagemZap(){
+/* trava contra toque duplo (04/11) */
+function programarMensagemZap(){return travaSalvar("programarMensagemZap",programarMensagemZap__corpo,this,arguments);}
+async function programarMensagemZap__corpo(){
   var ctx=zapCtx||{},c=ctx.cliente||{};
   var msg=($("zp_msg").value||"").trim();
   var d=$("zp_progData").value,h=$("zp_progHora").value||"09:00",quem=$("zp_progQuem").value||usuarioAtual;
@@ -45701,7 +45929,7 @@ function abrirFollowup(a){
 }
 async function marcarFollowupEnviado(id){
   var a=atendPorId(id);if(!a)return;
-  a.zapEnviadoEm=agoraCarimbo();a.zapEnviadoPor=usuarioAtual;a.finalizado=true;a.status="concluida";
+  a.zapEnviadoEm=agoraCarimbo();a.zapEnviadoPor=usuarioAtual;a.finalizado=true;a.status="finalizado";a.situacao="concluida";
   (a.historico=a.historico||[]).push({quando:a.zapEnviadoEm,por:usuarioAtual,texto:"Mensagem programada enviada pelo WhatsApp"});
   try{await grava("atendimentos",a);}catch(e){console.warn("follow-up",e);}
   try{render();}catch(e){}
@@ -46965,7 +47193,31 @@ var MOTIVOS_NOVOS_MF=["Sem crédito / não aprovado","Fechou com concorrente","T
 var MOTIVOS_RENOMEADOS_MF=[["Não atendeu","Não atendeu o telefone"],["Cliente não estava","Não estava no endereço (visita)"]];
 var MOTIVOS_RETIRADOS_MF=["Orçamento enviado"];
 var motivos=[];
-async function gravarMotivos(){if(!db)return;try{await db.doc("config/motivos_finalizacao").set({lista:motivos});}catch(e){console.warn(e);}}
+async function gravarMotivos(){if(!db)return;try{await db.doc("config/motivos_finalizacao").set({lista:motivos,grupos:MOTIVO_GRUPO});}catch(e){console.warn(e);}}
+/* O MOTIVO DEFINE COMO A ATIVIDADE FICA (04/11, regra dele). Cada motivo de finalização tem um grupo,
+   guardado junto da lista (config/motivos_finalizacao.grupos, por empresa):
+     realizada  — o contato ou a visita aconteceu: verde;
+     nao        — o contato não aconteceu: cinza, não conta como concluída;
+     reagendou  — muda a data para o novo dia, sem ficar verde no dia antigo.
+   Cancelada é só pelo Cancelar, com motivo. Mais de um motivo de grupos diferentes:
+   Reagendou > Realizada > Não realizada. Vale para trás: o registro não muda, só a forma de mostrar. */
+var MOTIVO_GRUPO={};
+var GRUPOS_MOTIVO=[{k:"realizada",n:"Realizada (verde)"},{k:"nao",n:"Não realizada (cinza)"},{k:"reagendou",n:"Reagendou (muda a data)"}];
+function grupoMotivo(m){
+  if(MOTIVO_GRUPO[m])return MOTIVO_GRUPO[m];
+  /* sem grupo gravado (nome antigo ou base de demonstração): pelo sentido */
+  if(/^reagend/i.test(m))return "reagendou";
+  if((typeof MOTIVOS_SEM_CONTATO!=="undefined"&&MOTIVOS_SEM_CONTATO.indexOf(m)>=0)||/^cliente n[ãa]o estava/i.test(m))return "nao";
+  return "realizada";
+}
+function grupoDosMotivos(lista){
+  var g=(lista||[]).map(grupoMotivo);
+  if(g.indexOf("reagendou")>=0)return "reagendou";
+  if(g.indexOf("realizada")>=0)return "realizada";
+  if(g.indexOf("nao")>=0)return "nao";
+  return "";
+}
+window.__grupoMotivoMF=function(m,g){if(g)MOTIVO_GRUPO[m]=g;return grupoMotivo(m);};
 /* Aplica na lista JÁ GRAVADA do banco o acerto combinado com ele em 03/10: renomeia os dois que se
    confundiam (levando os registros junto, como o botão Renomear faz), acrescenta os cinco que
    faltavam e tira o "Orçamento enviado". Roda UMA vez (marcador em config/importacoes) e só para o
@@ -47198,7 +47450,7 @@ function renderMotivos(){
   var ativos=motivos.filter(motivoAtivo).length;
   $("motCount").textContent=motivos.length+(motivos.length===1?" motivo":" motivos")+" · "+ativos+" ativo"+(ativos===1?"":"s");
   var b=$("motBody");b.innerHTML="";
-  if(!motivos.length){b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum motivo cadastrado</div>Escreva acima e clique em Adicionar.</div></td></tr>';return;}
+  if(!motivos.length){b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum motivo cadastrado</div>Escreva acima, escolha o grupo e clique em Adicionar.</div></td></tr>';return;}
   motivos.map(function(v,i){return {v:v,i:i};})
     .filter(function(x){return !f||(f==="ativas"?motivoAtivo(x.v):!motivoAtivo(x.v));})
     .sort(function(a,b2){return ordAZ(a.v,b2.v);}).forEach(function(x){
@@ -47210,13 +47462,24 @@ function renderMotivos(){
       : '<button class="btn ghost sm" type="button" data-mrn="'+i+'">Renomear</button>'+
         ' <button class="btn ghost sm" type="button" data-mst="'+i+'">'+(at?"Inativar":"Ativar")+"</button>"+
         (uso?' <span class="pill p-mut">em uso</span>':' <button class="btn mut sm" type="button" data-rmm="'+i+'">Remover</button>');
+    var grG=MOTIVO_GRUPO[m]||"";
+    var selG='<select data-mgr="'+i+'" aria-label="Grupo de '+esc(m)+'" style="max-width:210px">'+
+      (grG?"":'<option value="">— escolha —</option>')+
+      GRUPOS_MOTIVO.map(function(g){return '<option value="'+g.k+'"'+(g.k===grG?" selected":"")+">"+esc(g.n)+"</option>";}).join("")+"</select>"+
+      (grG?"":' <span class="pill p-warn">sem grupo</span>');
     b.innerHTML+='<tr'+(at?"":' style="opacity:.6"')+'><td><div class="t-main">'+esc(m)+"</div>"+
-      (sis?'<div class="sub">'+esc(sis)+"</div>":"")+'</td><td class="num">'+uso+
+      (sis?'<div class="sub">'+esc(sis)+"</div>":"")+"</td><td>"+selG+'</td><td class="num">'+uso+
       " atendimento"+(uso===1?"":"s")+"</td>"+
       "<td>"+(at?'<span class="pill p-ok">Ativo</span>':'<span class="pill p-mut">Inativo</span>')+"</td>"+
       '<td class="num">'+acoes+"</td></tr>";
   });
-  if(!b.innerHTML)b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum motivo nesta visão</div>Troque o filtro acima.</div></td></tr>';
+  if(!b.innerHTML)b.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum motivo nesta visão</div>Troque o filtro acima.</div></td></tr>';
+  Array.prototype.forEach.call(b.querySelectorAll("[data-mgr]"),function(sl){
+    sl.onchange=async function(){
+      var mv=motivos[+sl.getAttribute("data-mgr")];if(!mv||!sl.value)return;
+      MOTIVO_GRUPO[mv]=sl.value;await gravarMotivos();
+      toast(mv+": "+(GRUPOS_MOTIVO.filter(function(g){return g.k===sl.value;})[0]||{}).n+".");
+      renderMotivos();try{render();}catch(e){}};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-mst]"),function(bt){
     bt.onclick=async function(){
       var mv=motivos[+bt.getAttribute("data-mst")];
@@ -47234,6 +47497,7 @@ function renderMotivos(){
       var alvo=atendimentos.filter(function(a){return (a.motivos||[]).indexOf(velho)>=0;});
       if(alvo.length&&!confirm(alvo.length+" registro(s) usam "+velho+" e vão passar para "+novo+".\n\nConfirma?"))return;
       motivos[i]=novo;
+      if(MOTIVO_GRUPO[velho]){MOTIVO_GRUPO[novo]=MOTIVO_GRUPO[velho];delete MOTIVO_GRUPO[velho];}
       MOTIVOS_OFF=MOTIVOS_OFF.map(function(m){return ordAZ(m,velho)===0?novo:m;});
       for(var j=0;j<alvo.length;j++){
         var a=alvo[j];
@@ -47247,7 +47511,7 @@ function renderMotivos(){
     bt.onclick=async function(){
       var m=motivos[+bt.getAttribute("data-rmm")];
       if(recusaMotivoSistema(m))return;
-      motivos.splice(+bt.getAttribute("data-rmm"),1);
+      motivos.splice(+bt.getAttribute("data-rmm"),1);delete MOTIVO_GRUPO[m];
       MOTIVOS_OFF=MOTIVOS_OFF.filter(function(x){return ordAZ(x,m)!==0;});
       await gravarMotivos();await gravarMotivosOff();renderMotivos();};});
 }
@@ -47922,12 +48186,14 @@ function atendimentoAbertoIgual(cid,quem,data){
 }
 /* ATIVIDADE IGUAL (30/10): mesmo cliente, mesma pessoa, mesma data e mesmo tipo, ainda aberta
    — não nasce outra; quem pediu é levado à que existe */
+/* "A · B" e "B · A" são a mesma atividade (04/11) */
+function chaveTipos(t){return String(t||"").split("·").map(function(s){return s.trim().toLowerCase();}).filter(Boolean).sort().join("|");}
 function atividadeIgualAberta(cid,quem,data,tipo,excetoId){
   if(!cid||!data)return null;
   return atendimentos.filter(function(x){
     return x.loja===lojaAtual&&x.natureza==="atividade"&&x.id!==excetoId&&!x.lancadoEmDobro&&
       x.clienteId===cid&&(x.colaborador||"")===(quem||"")&&String(x.data||"").slice(0,10)===String(data).slice(0,10)&&
-      (x.tipo||"")===(tipo||"")&&x.status!=="finalizado"&&x.status!=="cancelada"&&!x.finalizado&&x.situacao!=="reagendada";
+      chaveTipos(x.tipo)===chaveTipos(tipo)&&x.status!=="finalizado"&&x.status!=="cancelada"&&x.status!=="concluida"&&!x.finalizado&&x.situacao!=="reagendada";
   })[0]||null;
 }
 window.__atividadeIgualMF=function(c,q,d,t,e){return atividadeIgualAberta(c,q,d,t,e);};
@@ -47941,7 +48207,7 @@ async function agendarFuturaDoAtend(at){
     origemAtend:at.id,
     equipId:(($("af_equipWrap")&&!$("af_equipWrap").hidden&&$("af_equip").value)||at.manutEquipId||at.equipId||""),status:"aberto"};
   atendimentos.push(f);
-  {try{dividirPelaAtividade(f);}catch(eDv){}if(db){try{await col("atendimentos").doc(f.id).set(f);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",f);
   try{await atualizarFunilCliente(f.clienteId,"atendimento",f.colaborador||usuarioAtual);}catch(eF){console.warn("funil",eF);}
   return f;
 }
@@ -47981,7 +48247,7 @@ async function fecharAtend__corpo(comFutura){
   atendPend.completo=completoSel;atendPend.motivos=motivosSel.slice();atendPend.status="finalizado";
   atendPend.falouCliente=(falouSel==="sim");
   delete atendPend.fechoPendente;
-  {try{dividirPelaAtividade(atendPend);}catch(eDv){}if(db){try{await col("atendimentos").doc(atendPend.id).set(atendPend);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",atendPend);
   if(comFutura){
     var f=await agendarFuturaDoAtend(atendPend);
     toast("Atendimento finalizado e atividade agendada para "+dataCurta(f.data)+"."+
@@ -51842,7 +52108,7 @@ function atrasadas(){
    jeito e só dois botões recusavam. Agora a atividade bloqueada não abre. */
 var TRAVA_SEQ_DESDE="2026-10-28";
 function ativNaFila(a){
-  return !!a&&a.natureza==="atividade"&&a.status!=="finalizado"&&a.status!=="cancelada"&&
+  return !!a&&a.natureza==="atividade"&&a.status!=="finalizado"&&a.status!=="cancelada"&&a.status!=="concluida"&&
     !a.finalizado&&a.situacao!=="reagendada"&&!!a.data&&String(a.data).slice(0,10)>=TRAVA_SEQ_DESDE;
 }
 function filaDeAtividades(quem){
@@ -51850,16 +52116,23 @@ function filaDeAtividades(quem){
     return a.loja===lojaAtual&&ativNaFila(a)&&(a.colaborador||"")===quem;})
     .sort(function(x,y){return (quando(x)-quando(y))||String(x.id).localeCompare(String(y.id));});
 }
+/* TRAVA SÓ PARA ATRASADA (04/11, regra dele, substitui a fila de 27/10): trava quando há atividade
+   de quem executa com dia e hora JÁ PASSADOS, não finalizada, não justificada, não reagendada e
+   não cancelada. Atividade de hoje ainda no horário ou de dia futuro nunca trava nada. As
+   atrasadas abrem (para resolver); as outras não, até a mais antiga ser resolvida. */
+function atrasadasQueTravam(quem){
+  var ag=new Date();
+  return filaDeAtividades(quem).filter(function(x){var d=quando(x);return d&&d<ag;});
+}
 function bloqueada(a){
   if(!a||a.natureza!=="atividade")return null;
   if(ehGestor())return null;
   if((a.colaborador||"")!==usuarioAtual)return null;
   if(!ativNaFila(a))return null;
-  var fila=filaDeAtividades(usuarioAtual);
-  if(!fila.length||fila[0].id===a.id)return null;
-  /* duas marcadas no MESMO horário não se trancam uma à outra */
-  if(!(quando(fila[0])<quando(a)))return null;
-  return fila[0];
+  var atr=atrasadasQueTravam(usuarioAtual);
+  if(!atr.length)return null;
+  if(atr.some(function(x){return x.id===a.id;}))return null;
+  return atr[0];
 }
 window.__bloqueadaMF=function(a){return bloqueada(a);};
 window.__filaAtivMF=function(q){return filaDeAtividades(q||usuarioAtual);};
@@ -51870,6 +52143,7 @@ function avisarBloqueio(trava){
   var mins=Math.floor((ag-d)/60000);
   var txt=mins<60?(mins+" min"):(Math.floor(mins/60)+"h"+String(mins%60).padStart(2,"0"));
   $("bq_relogio").textContent=mins>0?txt+" de atraso":"Em aberto";
+  if($("bq_abrir"))$("bq_abrir").hidden=!podeConcluirAtiv(trava);
   $("bq_det").innerHTML="<b>"+esc(trava.cliente||"—")+"</b> · "+esc(dataBR(trava.data))+
     (trava.inicio?" às "+esc(trava.inicio):"")+" · "+esc(trava.tipo||"—")+
     (trava.obs?"<br>"+esc(trava.obs):"");
@@ -51877,12 +52151,12 @@ function avisarBloqueio(trava){
 }
 function htmlAvisoFila(){
   if(ehGestor())return "";
-  var fila=filaDeAtividades(usuarioAtual);
-  if(fila.length<2)return "";
-  var p=fila[0],atr=quando(p)<new Date();
-  return '<div class="note '+(atr?"crit":"warn")+'"><b>Sua próxima atividade é a de '+esc(p.cliente||"—")+"</b> ("+
-    esc(dataBR(p.data))+(p.inicio?" às "+esc(p.inicio):"")+(atr?", atrasada":"")+"). "+
-    "As outras "+(fila.length-1)+" aparecem, mas só abrem depois que esta for finalizada ou reagendada.</div>";
+  var atr=atrasadasQueTravam(usuarioAtual);
+  if(!atr.length)return "";
+  var p=atr[0];
+  return '<div class="note crit"><b>Você tem '+(atr.length===1?"uma atividade atrasada":atr.length+" atividades atrasadas")+
+    ".</b> A mais antiga: <b>"+esc(p.cliente||"—")+"</b> ("+esc(dataBR(p.data))+(p.inicio?" às "+esc(p.inicio):"")+
+    "). Finalize, justifique ou reagende antes de abrir as outras.</div>";
 }
 function marcarTravadas(){
   /* pinta na lista e na agenda o que está travado */
@@ -51918,16 +52192,23 @@ function abrirAlerta(a,min){
   $("ag_novaData").value=a.data||"";$("ag_novaHora").value=a.inicio||"";$("ag_motivo").value="";
   $("alertaAg").hidden=false;
 }
-async function remarcar(){
+/* toque duplo nunca grava duas vezes; a regra vale por dentro (04/11) */
+function remarcar(){return travaSalvar("remarcar",remarcar__corpo,this,arguments);}
+async function remarcar__corpo(){
   if(!agPend)return;
   var d=$("ag_novaData").value,h=$("ag_novaHora").value;
   if(!d||!h){$("ag_alerta").innerHTML='<div class="note crit"><b>Informe a nova data e o novo horário.</b></div>';return;}
+  if(!podeEditarAtiv(agPend)){$("ag_alerta").innerHTML='<div class="note crit"><b>Só quem agendou, quem executa ou a gestão reagenda.</b></div>';return;}
+  if(ativFechada(agPend)){$("ag_alerta").innerHTML='<div class="note crit"><b>Esta atividade já foi encerrada.</b></div>';return;}
+  if(d<hojeISO()||(d===hojeISO()&&h<agoraHM())){$("ag_alerta").innerHTML='<div class="note crit"><b>Esse dia e horário já passaram.</b> Escolha de agora em diante.</div>';return;}
+  var copiaAg=copiaReg(agPend);
   var antes=agPend.data+(agPend.inicio?" "+agPend.inicio:"");
   agPend.historico=(agPend.historico||[]);
   agPend.historico.push({de:antes,para:d+" "+h,quando:iso(new Date()),por:usuarioAtual,obs:$("ag_motivo").value.trim()});
   agPend.data=d;agPend.inicio=h;
   if($("ag_motivo").value.trim())agPend.obs=(agPend.obs?agPend.obs+" · ":"")+"Remarcado: "+$("ag_motivo").value.trim();
-  {try{dividirPelaAtividade(agPend);}catch(eDv){}if(db){try{await col("atendimentos").doc(agPend.id).set(agPend);}catch(e){console.warn(e);}}}
+  try{await gravaConf("atendimentos",agPend);}
+  catch(eRm){voltarReg(agPend,copiaAg);avisarRecusaBanco("ag_alerta",eRm,"A atividade continua no horário de antes.");return;}
   delete alertados[agPend.id];
   $("alertaAg").hidden=true;agPend=null;
   toast("Atividade remarcada para "+d+" às "+h+".");render();
@@ -51969,16 +52250,21 @@ function eventos(){
   var selP=$("agendaPessoa");
   montarPessoaAgenda(selP);
   var pessoa=selP?selP.value:"",out=[],agora=new Date();
+  /* a trava (só atrasada) é calculada uma vez por desenho */
+  var trv=ehGestor()?null:(atrasadasQueTravam(usuarioAtual)[0]||null);
+  var CLS={realizada:"atend",nao:"naofeita",reagendada:"reag",cancelada:"cancelada"};
   atendimentos.filter(function(a){return a.loja===lojaAtual;}).forEach(function(a){
-    var d=quando(a);
-    var atrasou=(a.natureza==="atividade"&&a.status!=="finalizado"&&d&&d<agora);
-    var feita=(a.status==="finalizado");
-    out.push({id:a.id,data:a.data,hora:a.inicio||"",fim:a.fim||"",quem:a.colaborador||"",
+    var d=quando(a),cf=comoFicou(a),ativ=(a.natureza==="atividade");
+    var atrasou=(ativ&&cf==="aberta"&&d&&d<agora);
+    var travada=!!(trv&&ativ&&cf==="aberta"&&!atrasou&&(a.colaborador||"")===usuarioAtual&&ativNaFila(a));
+    var rotA=cf==="aberta"?(atrasou?"Atividade atrasada":"Atividade"):
+      ({realizada:ativ?"Atividade concluída":"Atendimento",nao:ativ?"Atividade não realizada":"Atendimento sem contato",
+        reagendada:ativ?"Atividade reagendada":"Atendimento · reagendou",cancelada:"Atividade cancelada"})[cf];
+    out.push({id:a.id,data:String(a.data||"").slice(0,10),hora:a.inicio||"",fim:a.fim||"",quem:a.colaborador||"",
       cliente:a.cliente||"",cidade:cidadeDoEvento(a,a.clienteId),tipo:a.tipo||"",obs:soCompromisso(a)?"":(a.resultado||a.obs||""),
-      meu:podeEditarAtiv(a),
-      classe:(a.natureza==="atendimento"||feita)?"atend":(atrasou?"ativ atrasada":"ativ"),
-      rot:(a.natureza==="atendimento"?"Atendimento":
-        feita?"Atividade concluída":(atrasou?"Atividade atrasada":"Atividade"))});
+      meu:podeEditarAtiv(a),trava:travada,
+      classe:cf==="aberta"?(atrasou?"ativ atrasada":"ativ"):CLS[cf],
+      rot:rotA+(ativ&&cf==="aberta"&&a.vendaLancada?" · venda lançada (pedido "+a.vendaLancada.numero+")":"")});
   });
   /* pedido CANCELADO nao deixa instalacao na agenda (21/10) */
   pedidos.filter(function(p){return p.loja===lojaAtual&&p.instalacao&&p.status!=="Cancelada";}).forEach(function(p){
@@ -52137,7 +52423,7 @@ function renderCalendario(){
       var doDia=evs.filter(function(e){return e.data===k;}).sort(function(a,b){return (a.hora||"").localeCompare(b.hora||"");});
       h+='<div class="dia'+(fora?" fora":"")+(hj?" hoje":"")+'"><div class="num" data-dia="'+k+'" title="Ver o dia">'+d.getDate()+"</div>";
       doDia.slice(0,3).forEach(function(e){
-        h+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(tituloEv(e))+'">'+(e.hora?esc(e.hora)+" ":"")+esc(rotuloEv(e))+"</div>";});
+        h+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(tituloEv(e))+'">'+(e.trava?"🔒 ":"")+(e.hora?esc(e.hora)+" ":"")+esc(rotuloEv(e))+"</div>";});
       if(doDia.length>3)h+='<div class="ev-mais" data-dia="'+k+'" title="Ver todas as '+doDia.length+' do dia">+'+(doDia.length-3)+" · ver todas</div>";
       h+="</div>";
     }
@@ -52155,7 +52441,7 @@ function renderCalendario(){
       hs+='<div class="col'+(hj2?" hoje":"")+'"><div class="ch"><div class="d">'+WD[dd.getDay()]+'</div><div class="n">'+dd.getDate()+"</div></div>";
       if(!lst.length)hs+='<div style="font-size:12.5px;color:var(--ink-3);text-align:center;padding:8px 0">—</div>';
       lst.forEach(function(e){
-        hs+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(tituloEv(e))+'"><b>'+(e.hora?esc(e.hora):"")+"</b>"+esc(rotuloEv(e))+(e.cidade?'<span class="ev-cid">'+esc(e.cidade)+"</span>":"")+"</div>";});
+        hs+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(tituloEv(e))+'"><b>'+(e.trava?"🔒 ":"")+(e.hora?esc(e.hora):"")+"</b>"+esc(rotuloEv(e))+(e.cidade?'<span class="ev-cid">'+esc(e.cidade)+"</span>":"")+"</div>";});
       hs+="</div>";
     }
     area.innerHTML=hs+"</div>";ligarEventosCal();
@@ -52172,7 +52458,7 @@ function renderCalendario(){
           (e.cidade?' <span class="pill p-mut">'+esc(e.cidade)+"</span>":"")+"</b><span>"+
           esc(e.rot)+(e.tipo?" · "+esc(e.tipo):"")+(e.quem?" · "+esc(e.quem):"")+
           (e.meu?"":' · <i>só leitura</i>')+
-          (e.id&&e.id.indexOf("ped:")!==0&&bloqueada(atendPorId(e.id))?' · 🔒 <b>abre depois da anterior</b>':"")+"</span></div>"+
+          (e.trava?' · 🔒 <b>resolva a atrasada antes</b>':"")+"</span></div>"+
         /* lixeira do agendamento, só para o Administrador (regra dele, 20/09) */
         (e.id&&e.id.indexOf("ped:")!==0?htmlLixeira("atividade",e.id):"")+"</div></div>";
     });
@@ -52388,7 +52674,7 @@ async function responderContatoAniv(sim){
   a.completo=sim?"sim":"nao";a.motivos=[sim?MOT_ANIV_OK:MOT_ANIV_NAO];a.status="finalizado";a.falouCliente=!!sim;
   if(ci)a.aniversario={ano:ci.ano,data:ci.data,contatado:sim,origem:daPagina?"aniversariantes":""};
   delete a.fechoPendente;
-  {try{dividirPelaAtividade(a);}catch(eDv){}if(db){try{await col("atendimentos").doc(a.id).set(a);}catch(e){console.warn(e);}}}
+  await grava("atendimentos",a);
   atendPend=null;$("atendFecha").hidden=true;$("atendLista").hidden=false;
   var prox=(c&&c.nasc&&ci)?aniversarioNoAno(c.nasc,ci.ano+1):null;
   if(sim)toast("Aniversariante contatado com sucesso. "+(a.cliente||"")+" fica como Contactado"+(ci?" em "+ci.ano:"")+
@@ -55990,7 +56276,10 @@ function ligar(){
     var v=$("motNovo").value.trim();
     if(!v){toast("Escreva o motivo.");return;}
     if(motivos.indexOf(v)>=0){toast("Esse motivo já existe.");return;}
-    motivos.push(v);await gravarMotivos();$("motNovo").value="";renderMotivos();toast("Motivo adicionado.");};
+    /* motivo novo só nasce com o grupo (04/11): nenhum fica sem configurar */
+    var gNovo=$("motGrupo").value;
+    if(!gNovo){toast("Escolha o grupo do motivo: Realizada, Não realizada ou Reagendou.");try{$("motGrupo").focus();}catch(e){}return;}
+    motivos.push(v);MOTIVO_GRUPO[v]=gNovo;await gravarMotivos();$("motNovo").value="";$("motGrupo").value="";renderMotivos();toast("Motivo adicionado.");};
   $("motNovo").onkeydown=function(e){if(e.key==="Enter")$("motAdd").click();};
 
   $("atendNovo").onclick=function(){abrirAtend(null);};
@@ -56048,7 +56337,17 @@ function ligar(){
   $("bq_fechar").onclick=function(){$("bloqAg").hidden=true;bloqPend=null;};
   $("bq_abrir").onclick=function(){
     var a=bloqPend;$("bloqAg").hidden=true;bloqPend=null;
-    if(a)abrirDetalhes(a);};
+    if(!a)return;
+    /* atividade de OS aberta não se finaliza por fora: abre os Detalhes (Reagendar, Abrir a OS) */
+    var osA=a.osId?ordens.filter(function(z){return z.id===a.osId&&["concluida","entregue","cancelada","reprovada"].indexOf(z.status)<0;})[0]:null;
+    if(osA)abrirDetalhes(a);else abrirFinalizar(a);};
+  $("bq_just").onclick=function(){var a=bloqPend;$("bloqAg").hidden=true;bloqPend=null;if(a)abrirJustificar(a,"justificar");};
+  $("bq_reag").onclick=function(){var a=bloqPend;$("bloqAg").hidden=true;bloqPend=null;if(a)abrirReagendar(a);};
+  $("ju_ok").onclick=confirmarJustificar;
+  $("ju_fechar").onclick=function(){$("justModal").hidden=true;juCtx=null;};
+  $("hj_sim").onclick=function(){var c=hjCtx;$("hojeModal").hidden=true;hjCtx=null;if(c&&c.sim)c.sim();};
+  $("hj_nao").onclick=function(){var c=hjCtx;$("hojeModal").hidden=true;hjCtx=null;if(c&&c.a)abrirReagendar(c.a);};
+  $("hj_fechar").onclick=function(){$("hojeModal").hidden=true;hjCtx=null;};
   $("usuario").onchange=function(){
     usuarioAtual=this.value;alertados={};aplicarPerfil();render();
     toast("Operando como "+usuarioAtual+" · "+perfilDe(usuarioAtual)+".");};
