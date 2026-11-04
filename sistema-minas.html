@@ -18645,8 +18645,10 @@ async function travaSalvar(nome,fn,ctx,args){
   SALVANDO_MF[chave]=true;
   var bt=botaoQueSalva(),antes=null;
   if(bt){antes=bt.innerHTML;bt.setAttribute("data-salvando","1");bt.disabled=true;bt.textContent="Salvando…";}
+  SALV.emFuncao++;
   try{return await fn.apply(ctx,args);}
   finally{
+    SALV.emFuncao--;
     delete SALVANDO_MF[chave];
     if(bt&&bt.getAttribute("data-salvando")){
       bt.removeAttribute("data-salvando");bt.disabled=false;
@@ -23451,6 +23453,7 @@ async function aprovarInv__corpo(){
         inventarioId:inv.id,centroId:"",data:hojeISO(),por:usuarioAtual,em:new Date().toISOString()};
       await gravaConf("movest",m);movEst.push(m);feitos.push(m);
       $("iv_alerta").innerHTML='<div class="note warn">⏳ Gravando '+(i+1)+" de "+its.length+"… aguarde. Não feche nem toque em nada.</div>";
+      andamentoSalvando(i+1,its.length);
     }
     $("iv_alerta").innerHTML="";
   }catch(e){
@@ -24445,7 +24448,7 @@ async function garantirCaixaFinanceiro(){
 var ultimaFalhaGrava=null,ultimoAvisoGrava=0;
 async function grava(colecao,obj){
   if(colecao==="atendimentos"){try{dividirPelaAtividade(obj);}catch(eDv){console.warn("dividir cliente",eDv);}}
-  if(!db)return;
+  if(!db)return comAvisoGravando(function(){});
   try{await col(colecao).doc(obj.id).set(obj);}
   catch(e){
     console.warn(colecao,e);
@@ -24472,7 +24475,7 @@ async function gravaConf(colecao,obj){
   /* chave só dos testes: liga a recusa do banco para conferir que a tela avisa e nada se
      perde. Em uso normal ela nunca existe, e a função cai direto no banco de verdade. */
   if(window.__falhaBancoMF)throw new Error("o banco recusou (teste)");
-  if(!db){if(colecao==="atendimentos"){try{dividirPelaAtividade(obj);}catch(eDv){}}return;}
+  if(!db){if(colecao==="atendimentos"){try{dividirPelaAtividade(obj);}catch(eDv){}}return comAvisoGravando(function(){});}
   await col(colecao).doc(obj.id).set(obj);
   if(colecao==="atendimentos"){try{dividirPelaAtividade(obj);}catch(eDv){console.warn("dividir cliente",eDv);}}
 }
@@ -48439,7 +48442,8 @@ function protegerDbConfig(d){
         var f=ref[k];
         ref[k]=function(){
           if(escritaCfgBloqueada(colecao))return Promise.reject(erro());
-          return f.apply(ref,arguments);
+          var a=arguments;
+          return comAvisoGravando(function(){return f.apply(ref,a);});
         };
       });
       return ref;
@@ -48460,13 +48464,122 @@ function protegerDbConfig(d){
       var gv=d.gravarVarios;
       d.gravarVarios=function(colecao){
         if(escritaCfgBloqueada(colecao))return Promise.reject(erro());
-        return gv.apply(d,arguments);
+        var a=arguments;
+        return comAvisoGravando(function(){return gv.apply(d,a);});
       };
     }
     d.__protegidoCfg=true;
   }catch(e){console.warn("proteger configurações",e);}
   return d;
 }
+/* AVISO "SALVANDO… AGUARDE" NA TELA INTEIRA (regra dele, 04/11). UM PONTO SÓ: toda escrita no
+   banco passa pelo protegerDbConfig, que chama comAvisoGravando. A escrita que nasce de um toque
+   da pessoa (até alguns segundos depois do toque, ou dentro de uma função com travaSalvar) cobre a
+   tela inteira até a última gravação terminar; nenhum toque passa enquanto isso. Escrita que o
+   sistema faz sozinho (entrada, rotinas, relógios) não mostra nada. Lote com total conhecido
+   avisa o andamento por andamentoSalvando(feitos,total). A trava por dentro (travaSalvar)
+   continua por baixo. Sem banco (modo demonstração) grava/gravaConf/apaga chamam o mesmo aviso. */
+var SALV={pend:0,ativo:false,toque:0,feitos:0,lote:0,total:0,emFuncao:0,tFecha:null,t30:null};
+var SALV_TOQUE_MS=2500,SALV_FECHA_MS=500,SALV_LENTO_MS=30000;
+function salvPodeAvisar(){return SALV.ativo||SALV.emFuncao>0||(Date.now()-SALV.toque<SALV_TOQUE_MS);}
+function salvEl(){
+  var el=document.getElementById("salvandoMF");if(el)return el;
+  var st=document.createElement("style");
+  st.textContent="#salvandoMF{position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.55);display:flex;"+
+    "align-items:center;justify-content:center;padding:16px;touch-action:none;cursor:progress}"+
+    "#salvandoMF[hidden]{display:none}"+
+    "#salvandoMF .sv-caixa{background:#fff;color:#0f172a;border-radius:14px;padding:22px 20px;max-width:320px;width:100%;"+
+    "text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.35);font-size:17px;line-height:1.45}"+
+    "#salvandoMF .sv-ic{font-size:38px;line-height:1;margin-bottom:8px}"+
+    "#salvandoMF .sv-and{margin-top:12px;font-size:15px;font-weight:600;color:#1d4ed8;min-height:1em}"+
+    "#salvandoMF .sv-barra{margin-top:8px;height:8px;border-radius:4px;background:#e2e8f0;overflow:hidden}"+
+    "#salvandoMF .sv-barra i{display:block;height:100%;width:0;background:#2563eb;transition:width .2s}"+
+    "#salvandoMF .sv-lento{margin-top:12px;font-size:14px;color:#b45309;font-weight:600}";
+  document.head.appendChild(st);
+  el=document.createElement("div");el.id="salvandoMF";el.hidden=true;
+  el.setAttribute("role","alertdialog");el.setAttribute("aria-live","assertive");el.setAttribute("aria-label","Salvando");
+  el.innerHTML='<div class="sv-caixa"><div class="sv-ic">⏳</div><b>Salvando… aguarde.</b><div>Não feche nem toque em nada.</div>'+
+    '<div class="sv-and" id="salvandoAnd"></div><div class="sv-barra" id="salvandoBarraW" hidden><i id="salvandoBarra"></i></div>'+
+    '<div class="sv-lento" id="salvandoLento" hidden>Ainda gravando, a internet está lenta. Não feche o sistema.</div></div>';
+  document.body.appendChild(el);
+  return el;
+}
+function salvAbrir(){
+  clearTimeout(SALV.tFecha);SALV.tFecha=null;
+  if(SALV.ativo)return;
+  SALV.ativo=true;SALV.feitos=0;SALV.lote=0;SALV.total=0;
+  var el=salvEl();
+  $("salvandoAnd").textContent="";$("salvandoBarraW").hidden=true;$("salvandoLento").hidden=true;
+  el.hidden=false;
+  clearTimeout(SALV.t30);
+  SALV.t30=setTimeout(function(){if(SALV.ativo)$("salvandoLento").hidden=false;},SALV_LENTO_MS);
+}
+function salvFechar(){
+  if(SALV.pend>0)return;
+  clearTimeout(SALV.tFecha);
+  SALV.tFecha=setTimeout(function(){
+    if(SALV.pend>0)return;
+    SALV.ativo=false;clearTimeout(SALV.t30);
+    var el=document.getElementById("salvandoMF");if(el)el.hidden=true;
+  },SALV_FECHA_MS);
+}
+function salvAndamento(){
+  var a=document.getElementById("salvandoAnd");if(!a)return;
+  if(SALV.total>1){
+    a.textContent="Gravando "+Math.min(SALV.lote,SALV.total)+" de "+SALV.total+"…";
+    $("salvandoBarraW").hidden=false;$("salvandoBarra").style.width=Math.round(100*SALV.lote/SALV.total)+"%";
+  } else if(SALV.feitos>=3)a.textContent=SALV.feitos+" registros gravados…";
+}
+/* para as gravações em lote que sabem o total ("Gravando 120 de 226…") */
+function andamentoSalvando(feitos,total){
+  if(!SALV.ativo)return;
+  SALV.lote=feitos;SALV.total=total;salvAndamento();
+}
+function comAvisoGravando(fn){
+  if(!salvPodeAvisar())return fn();
+  salvAbrir();SALV.pend++;
+  var p;try{p=Promise.resolve(fn());}catch(e){p=Promise.reject(e);}
+  return p.then(function(r){SALV.pend--;SALV.feitos++;salvAndamento();salvFechar();return r;},
+                function(e){SALV.pend--;salvFechar();throw e;});
+}
+/* o toque: botão, link, caixinha, lista — campo de digitar não conta (o rascunho que grava
+   enquanto a pessoa escreve não cobre a tela) */
+function salvEhDigitar(el){
+  if(!el||!el.closest)return false;
+  if(el.closest("textarea,[contenteditable=true],[contenteditable='']"))return true;
+  var i=el.closest("input");
+  return !!(i&&!/^(button|submit|checkbox|radio|reset|file|image|color|range)$/i.test(i.type||""));
+}
+(function(){
+  function bloqueia(ev){
+    /* só o toque de verdade da pessoa: o clique que o próprio sistema dispara continua */
+    if(!SALV.ativo||ev.isTrusted===false)return false;
+    ev.preventDefault();ev.stopPropagation();if(ev.stopImmediatePropagation)ev.stopImmediatePropagation();
+    return true;
+  }
+  ["pointerdown","mousedown","touchstart","mouseup","pointerup","touchend","dblclick","contextmenu","submit","wheel"].forEach(function(tp){
+    window.addEventListener(tp,bloqueia,{capture:true,passive:false});
+  });
+  window.addEventListener("click",function(ev){
+    if(bloqueia(ev))return;
+    if(!salvEhDigitar(ev.target))SALV.toque=Date.now();
+  },true);
+  window.addEventListener("change",function(ev){if(!SALV.ativo&&ev.isTrusted!==false)SALV.toque=Date.now();},true);
+  window.addEventListener("keydown",function(ev){
+    if(bloqueia(ev))return;
+    if((ev.key==="Enter"||ev.key===" ")&&!(ev.key===" "&&salvEhDigitar(ev.target)))SALV.toque=Date.now();
+  },true);
+  /* confirmar e perguntar param o relógio: o "OK" também é toque */
+  ["confirm","prompt","alert"].forEach(function(k){
+    var o=window[k];if(typeof o!=="function")return;
+    window[k]=function(){var r=o.apply(window,arguments);SALV.toque=Date.now();return r;};
+  });
+})();
+window.__salvMF=function(){return {ativo:SALV.ativo,pend:SALV.pend,feitos:SALV.feitos,lote:SALV.lote,total:SALV.total,
+  texto:(function(){var e=document.getElementById("salvandoMF");if(!e)return "";
+    return [].slice.call(e.querySelectorAll(".sv-caixa > *")).filter(function(x){return !x.hidden;}).map(function(x){return x.textContent;}).join(" ");})()};};
+window.__protegerDbMF=function(d){return protegerDbConfig(d);};
+window.__salvTempoMF=function(lento,fecha){if(lento)SALV_LENTO_MS=lento;if(fecha)SALV_FECHA_MS=fecha;};
 var CFG_LIVRE=/^(fechar|voltar|cancelar|ver |ver$|abrir|buscar|filtrar|limpar|imprimir|sair|anterior|pr[óo]xim|primeira|[úu]ltima|mostrar|esconder|atualizar|‹|›|«|»|\+$|−$|-$)/i;
 function ligarGuardaConfig(){
   if(document.__guardaCfg)return;
