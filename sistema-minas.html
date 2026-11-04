@@ -45797,11 +45797,15 @@ async function registrarAtendZap(ctx,msg,modo){
     tel:ctx.telUsado||c.tel||"",doc:c.doc||"",cidade:c.cidade||"",uf:c.uf||"",origem:c.origem||"",
     colaborador:usuarioAtual,tipos:tiposZ,tipo:tiposZ.join(" · "),data:hojeISO(),inicio:agoraHM(),fim:agoraHM(),
     obs:"Mensagem enviada pelo WhatsApp:\n"+(msg||"(sem texto)"),
-    assunto:assunto,status:"finalizado",completo:"",motivos:[MOT_RETORNO_OS],falouCliente:false,iniciativa:"ativo",
+    assunto:assunto,status:"finalizado",completo:"",motivos:[ctx.aniv?MOT_ANIV_OK:MOT_RETORNO_OS],falouCliente:false,iniciativa:"ativo",
     zapAuto:true,zapEm:carimbo,zapModo:modo||"",zapOrigem:ctx.origem||"",
     criadoEm:iso(new Date()),criadoPor:usuarioAtual,historico:[{quando:agoraCarimbo(),por:usuarioAtual,texto:linha}]};
   if(eq)a.manutEquipId=eq.id;
-  if(ctx.aniv)a.aniversario={ano:ctx.aniv.ano,data:ctx.aniv.data,origem:"aniversariantes",parabens:true};
+  /* PARABÉNS PELO WHATSAPP = CONTATO FEITO (03/11, regra dele, que substitui a de 27/10): a mensagem
+     de aniversário enviada pela aba de Aniversariantes lança o atendimento "Contato Aniversariante"
+     finalizado como "Aniversariante Contatado com sucesso" — o cliente fica Contactado no ano, e o
+     WhatsApp daquele aniversário não abre de novo. */
+  if(ctx.aniv)a.aniversario={ano:ctx.aniv.ano,data:ctx.aniv.data,origem:"aniversariantes",parabens:true,contatado:true};
   if(marcaTeste(c))a.teste=true;
   atendimentos.push(a);
   try{await gravaConf("atendimentos",a);}
@@ -45813,7 +45817,9 @@ async function registrarAtendZap(ctx,msg,modo){
   try{render();}catch(e){}
   try{if(editandoCli&&editandoCli.id===c.id)renderHistoricoCli(c);}catch(e){}
   try{if(typeof editandoEq!=="undefined"&&editandoEq&&eq&&editandoEq.id===eq.id)renderHistEq();}catch(e){}
-  toast("Atendimento registrado: "+assunto+" · "+(c.nome||"")+" · aguardando retorno do cliente.");
+  toast(ctx.aniv?"Atendimento registrado: "+TIPO_ANIV+" · "+(c.nome||"")+" · "+MOT_ANIV_OK+".":
+    "Atendimento registrado: "+assunto+" · "+(c.nome||"")+" · aguardando retorno do cliente.");
+  try{if(ctx.aniv)renderAniversariantes();}catch(e){}
   return a;
 }
 /* ETIQUETA DE CONTATO (27/10): o último WhatsApp mandado ao cliente, enquanto nada mais
@@ -45902,6 +45908,9 @@ function ligarWhatsApp(){
     var mqa=alvo.closest("#mqaModal");if(mqa)mqa.hidden=true;
     if(alvo.hasAttribute("data-zapaniv")){
       var pz=String(alvo.getAttribute("data-zapaniv")).split("|"),ca=cliPorId(pz[0]);if(!ca)return;
+      var okA=anivContatoFeito(ca,+pz[1]);
+      if(okA){toast((ca.nome||"Este cliente")+" já foi contactado no aniversário de "+dataCurta(pz[2])+
+        " ("+dataCurta(okA.data)+(okA.colaborador?" por "+okA.colaborador:"")+"). O WhatsApp de aniversário não abre de novo.");return;}
       abrirWhatsApp({cliente:ca,mensagem:msgParabens(ca),mensagem2:msgParabens(ca,2),aniv:{ano:+pz[1],data:pz[2]},origem:"aniversariantes"});return;}
     if(alvo.hasAttribute("data-zapcli")){abrirWhatsApp({cliente:alvo.getAttribute("data-zapcli"),origem:"ficha do cliente"});return;}
     if(alvo.hasAttribute("data-zaptit")){
@@ -52175,6 +52184,11 @@ function cicloAnivAtend(a,c){
   return {ano:Y,data:an.data};
 }
 function sucessoAniv(a){return (a.motivos||[]).indexOf(MOT_ANIV_OK)>=0;}
+/* o contato com sucesso daquele aniversário (ano), ou null */
+function anivContatoFeito(c,ano){
+  if(!c||!ano)return null;
+  try{return contatosAnivCiclo(c,ano).filter(sucessoAniv)[0]||null;}catch(e){return null;}
+}
 function parabensAniv(a){return !!(a.aniversario&&a.aniversario.parabens);}
 function contatosAnivCiclo(c,ano){
   return atendsDe(c.id).filter(function(a){
@@ -52332,7 +52346,9 @@ function renderAniversariantes(){
       "<td>"+situacao(x)+"</td>"+
       '<td class="num" style="white-space:nowrap">'+
         /* o parabéns pelo WhatsApp vira atendimento ligado a ESTE aniversário (27/10) */
-        (tw?'<button class="btn zap sm" type="button" data-zapaniv="'+esc(c.id+"|"+x.ano+"|"+x.an.data)+'">WhatsApp</button> ':"")+
+        (tw?(anivContatoFeito(c,x.ano)
+          ?'<button class="btn mut sm" type="button" title="Cliente já contactado neste aniversário" data-zapaniv="'+esc(c.id+"|"+x.ano+"|"+x.an.data)+'">Já contactado</button> '
+          :'<button class="btn zap sm" type="button" data-zapaniv="'+esc(c.id+"|"+x.ano+"|"+x.an.data)+'">WhatsApp</button> '):"")+
         (!x.s.ok0?'<button class="btn sm" type="button" data-anat="'+esc(c.id)+'">Atendimento</button> ':"")+
         '<button class="btn ghost sm" type="button" data-anfi="'+esc(c.id)+'">Ficha</button></td>'+
     "</tr>";
