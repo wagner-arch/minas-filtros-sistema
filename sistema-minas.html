@@ -12151,7 +12151,9 @@ function produtoDeSistema(p){
 var MARCAS_CENTRAL=/filtrali|nyc|fusati/;
 var MANUT_REGRAS=[
   {k:"central",dias:365,nome:"Centrais de filtragem (Filtrali, NYC, Fusati)",
-   casa:function(t){return MARCAS_CENTRAL.test(t)||(/central/.test(t)&&/filtr/.test(t));}},
+   /* a marca sozinha não basta (03/11): conexão, registro e mangueira da NYC ganhavam 365 dias */
+   casa:function(t){return (MARCAS_CENTRAL.test(t)&&!/\b(registro|conex|mangueira|valvula|uniao|adaptador|bico|torneira|engate|cotovelo)/.test(t))||
+     (/central/.test(t)&&/filtr/.test(t));}},
   {k:"waterflex",dias:365,nome:"Water Flex",
    casa:function(t){return /water\s*flex/.test(t);}},
   {k:"toplife",dias:360,nome:"Top Life",
@@ -12204,6 +12206,30 @@ function pedeManutProduto(p){
   });
   return achou;
 }
+/* O QUE NUNCA ENTRA NA MANUTENÇÃO PERIÓDICA (03/11, print dele: conexão, registro, mangueira,
+   união e válvula com "Em dia · 365 dias"). Eles ganharam 365 dias pela regra da marca NYC
+   (centrais de filtragem), que pegou todo produto da marca. Peça e acessório não se trocam por
+   prazo: saem da lista pelo GRUPO (conexões, válvulas e registros, torneiras e bicas, insumos,
+   serviços e planos) e, fora dos quatro grupos da manutenção, também pelo NOME de acessório
+   (o registro antigo ficou em "A classificar"). Os aparelhos não mudam: só não aparecem na lista.
+   Bebedouros, filtros e purificador seminovo continuam (decisão dele, opção 1). */
+var GRUPOS_SEM_MANUT={"conexoes":1,"conexao":1,"valvulas registros":1,"valvula registro":1,"valvulas":1,
+  "registros":1,"torneiras bicas":1,"torneira bica":1,"insumos":1,"insumo":1,"servicos":1,"servico":1,"planos":1,"plano":1};
+/* pela PRIMEIRA palavra do nome, que diz o que o produto é: "BEBEDOURO ... C/2 TORNEIRAS" e
+   "FILTRO ... (VALVULA MANUAL)" continuam na manutenção */
+var ACESSORIO_SEM_TROCA=/^\s*(registro|conex|mangueira|valvula|uniao\b|adaptador|bico\b|torneira|engate|cotovelo)/;
+function chaveGrupoManut(g){
+  try{return chaveRegraGrupo(g||"");}catch(e){return semAcento(String(g||"")).toLowerCase().trim();}
+}
+function produtoForaDaManut(p){
+  if(!p)return false;
+  var k=chaveGrupoManut(p.grupo);
+  if(k&&(GRUPOS_SEM_MANUT[k]||Object.keys(GRUPOS_SEM_MANUT).some(function(n){return chaveGrupoManut(n)===k;})))return true;
+  if(pedeManutProduto(p))return false;
+  return ACESSORIO_SEM_TROCA.test(semAcento(String(p.nome||"")).toLowerCase());
+}
+function aparelhoForaDaManut(e){return !!e&&produtoForaDaManut(prodPorId(e.produtoId));}
+window.__aparelhoForaDaManutMF=aparelhoForaDaManut;
 window.__pedeManutMF=pedeManutProduto;
 window.__gruposManutMF=function(){return GRUPOS_PEDEM_MANUT;};
 window.__followupMF=function(){return followupsPendentes();};
@@ -37165,7 +37191,7 @@ function montarPreManut(modoMes,jmes,tetoAtr,limiteAtr,perDatas){
   var C={};
   /* aparelho de outra marca, criado por uma OS, só entra nesta lista depois que alguém clicar em
      "Acompanhar este aparelho" na ficha dele (decisão dele, 05/10) */
-  var base=equipamentos.filter(function(e){return e.loja===lojaAtual&&aparelhoAcompanhado(e);});
+  var base=equipamentos.filter(function(e){return e.loja===lojaAtual&&aparelhoAcompanhado(e)&&!aparelhoForaDaManut(e);});
   /* as visitas de cada aparelho, de uma vez (antes: um filtro sobre todos os atendimentos POR aparelho) */
   IDX_VISITAS={};
   atendimentos.forEach(function(a){if(a.equipId)(IDX_VISITAS[a.equipId]||(IDX_VISITAS[a.equipId]=[])).push(a);});
