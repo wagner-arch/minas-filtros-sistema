@@ -2170,6 +2170,8 @@ img{max-width:100%}
           <button class="btn ghost" type="button" id="cliCidades" hidden>Cidades a conferir</button>
           <button class="btn ghost" type="button" id="cliCepGeo" hidden>CEP e localização</button>
           <button class="btn ghost" type="button" id="cliImportar">Importar clientes</button>
+          <!-- só o Administrador (04/11): preenche o que está vazio nos clientes que já existem -->
+          <button class="btn ghost" type="button" id="cliAtuPlanilha" hidden>Atualizar clientes que já existem</button>
           <!-- a ÚNICA exceção à regra de não apagar nada: lixo de treinamento (21/10) -->
           <button class="btn ghost" type="button" id="cliLimparTeste" hidden>Apagar os registros de teste</button>
         </div>
@@ -6551,6 +6553,28 @@ img{max-width:100%}
       <button class="btn mut" type="button" id="ic_apagar" hidden>Apagar os importados</button>
     </div>
     <p class="help">Colunas: <b>nome; tipo; cpf/cnpj; telefone; telefone 2; telefone 3; telefone 4; email; cep; rua; numero; complemento; bairro; cidade; uf; obs; produto; data da compra; próxima manutenção</b> (datas em dd/mm/aaaa). Também aceita código, RG/IE, nascimento, sexo, origem e referência. Cada cliente é criado <b>uma vez</b> (mesmo CPF/CNPJ, ou mesmo nome e telefone) e já nasce <b>cliente</b>; cada linha com produto vira um aparelho na <b>Manutenção Periódica</b>. O endereço e o estado entram <b>exatamente como estão na planilha</b>. Importar o mesmo arquivo de novo não duplica.</p>
+  </div>
+</div>
+
+<!-- ATUALIZAR CLIENTES QUE JÁ EXISTEM (04/11, regra dele): preenche só o que está vazio; troca só
+     os campos da coluna "Substituir"; nunca apaga; prévia antes de gravar -->
+<div class="modal" id="atcModal" hidden>
+  <div class="box" style="width:min(780px,100%)">
+    <h3>Atualizar clientes que já existem</h3>
+    <div class="sub">Planilha do Excel (.xlsx) ou .csv, uma linha por cliente, com <b>Código no sistema</b> e <b>Nome no sistema</b> para achar e conferir o cliente. <b>Preenche só o que está vazio</b>; troca o que já existe só nos campos listados na coluna <b>Substituir</b> (separados por ;). Célula vazia não apaga nada. Vale só para a empresa em que você entrou.</div>
+    <div class="actions" style="justify-content:flex-start;margin:14px 0 10px">
+      <button class="btn ghost" type="button" id="atc_arqBt">Escolher o arquivo…</button>
+      <input type="file" id="atc_arq" accept=".xlsx,.xls,.csv,.txt" class="os-foto-in">
+      <span class="count" id="atc_arqNome"></span>
+    </div>
+    <div id="atc_previa"></div>
+    <div id="atc_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="atc_ok" disabled>Gravar as atualizações</button>
+      <button class="btn ghost" type="button" id="atc_baixar" hidden>Baixar a lista dos pulados</button>
+      <button class="btn mut" type="button" id="atc_fechar">Fechar</button>
+    </div>
+    <p class="help">Colunas: Código no sistema; Nome no sistema; Tipo; CPF/CNPJ; RG; Nascimento (dd/mm/aaaa ou aaaa-mm-dd); Telefone; Telefone 2; Telefone 3; Telefone 4; Email; CEP; Rua; Numero; Bairro; Cidade; UF; Fantasia; Substituir. Telefone novo vai para o primeiro espaço vazio e não repete o que o cliente já tem. CPF/CNPJ só entra se for válido e não for de outro cliente. Importar o mesmo arquivo de novo não muda nada — se a internet cair, é só importar de novo que continua de onde parou.</p>
   </div>
 </div>
 
@@ -13782,6 +13806,217 @@ function abrirImportClientes(){
   atualizarBotaoApagarCli();
   $("impcModal").hidden=false;
 }
+/* ===== ATUALIZAR CLIENTES QUE JÁ EXISTEM (04/11, regra dele) =====
+   Acha pelo "Código no sistema" (codigo, ou o id quando não há código), só na empresa aberta, e
+   confere o "Nome no sistema". Preenche SÓ o que está vazio; troca o que existe SÓ nos campos da
+   coluna "Substituir"; célula vazia não apaga. Telefone novo vai para o primeiro espaço vazio e não
+   repete. CPF/CNPJ só válido e que não seja de outro cliente da empresa. Prévia antes de gravar;
+   gravação em bloco conferida; importar de novo não muda o que já foi gravado (continua de onde
+   parou). Cada cliente guarda o antes e o depois de cada campo (alteracoes) e uma nota. */
+var COLS_ATU=[
+  ["codigo",/^(codigonosistema|codigo|cod|codigocliente)$/],
+  ["nomeSis",/^(nomenosistema|nomeatual)$/],
+  ["tipo",/^(tipo|pessoa|tipopessoa|tipodepessoa)$/],
+  ["doc",/^(cpfcnpj|cpf|cnpj|doc|documento|cpfoucnpj)$/],
+  ["rg",/^(rg|rgie|identidade|ie|inscricaoestadual)$/],
+  ["nasc",/^(nascimento|nasc|datanascimento|datadenascimento|aniversario)$/],
+  ["tel",/^(telefone|telefone1|tel|tel1|fone|fone1)$/],
+  ["tel2",/^(telefone2|tel2|fone2)$/],
+  ["tel3",/^(telefone3|tel3|fone3)$/],
+  ["tel4",/^(telefone4|tel4|fone4)$/],
+  ["email",/^(email|mail)$/],
+  ["cep",/^(cep)$/],
+  ["rua",/^(rua|endereco|logradouro)$/],
+  ["num",/^(numero|num|nro)$/],
+  ["bairro",/^(bairro)$/],
+  ["cidade",/^(cidade|municipio)$/],
+  ["uf",/^(uf|estado)$/],
+  ["apelido",/^(fantasia|nomefantasia|apelido)$/],
+  ["substituir",/^(substituir|trocar|substitui)$/]
+];
+var ROT_ATU={tipo:"Tipo",doc:"CPF/CNPJ",rg:"RG",nasc:"Nascimento",tel:"Telefone",tel2:"Telefone 2",tel3:"Telefone 3",tel4:"Telefone 4",
+  email:"Email",cep:"CEP",rua:"Rua",num:"Número",bairro:"Bairro",cidade:"Cidade",uf:"UF",apelido:"Fantasia"};
+var CAMPOS_ATU=["tipo","doc","rg","nasc","email","cep","rua","num","bairro","cidade","uf","apelido"],TELS_ATU=["tel","tel2","tel3","tel4"];
+function chaveCampoAtu(txt){
+  var k=chaveCol(txt);if(!k)return "";
+  for(var i=0;i<COLS_ATU.length;i++)if(COLS_ATU[i][1].test(k))return COLS_ATU[i][0];
+  return "";
+}
+function linhasAtuCli(linhas){
+  var mapa=null,ix=0,out=[];
+  for(;ix<linhas.length;ix++){
+    var cab=(linhas[ix]||[]).map(function(x){return String(x==null?"":x);});
+    if(!cab.some(function(x){return x.trim();}))continue;
+    mapa={};cab.forEach(function(x,i){var k=chaveCampoAtu(x);if(k&&mapa[k]==null)mapa[k]=i;});
+    ix++;break;
+  }
+  if(!mapa||mapa.codigo==null)return {semCabecalho:true,itens:[]};
+  for(;ix<linhas.length;ix++){
+    var b=(linhas[ix]||[]).map(function(x){return String(x==null?"":x);});
+    if(!b.some(function(x){return x.trim();}))continue;
+    var it={linha:ix+1};
+    Object.keys(mapa).forEach(function(k){it[k]=String(b[mapa[k]]==null?"":b[mapa[k]]).replace(/\s+/g," ").trim();});
+    out.push(it);
+  }
+  return {itens:out};
+}
+function planoAtuCli(lidos){
+  var r={mudar:[],pulados:[],porCampo:{},linhas:(lidos.itens||[]).length};
+  var idx={},porDoc={};
+  clientes.forEach(function(c){
+    if(c.loja&&c.loja!==lojaAtual)return;
+    if(c.codigo!=null&&String(c.codigo).trim()&&!idx["c:"+String(c.codigo).trim()])idx["c:"+String(c.codigo).trim()]=c;
+    idx["i:"+c.id]=c;
+    var d=soDig(c.doc);if((d.length===11||d.length===14)&&!porDoc[d])porDoc[d]=c;
+  });
+  function conta(k,tipo){r.porCampo[k]=r.porCampo[k]||{preenche:0,troca:0};r.porCampo[k][tipo]++;}
+  function pula(it,motivo,c){r.pulados.push({linha:it.linha,codigo:it.codigo||"",nome:it.nomeSis||(c&&c.nome)||"",motivo:motivo});}
+  var vistos={};
+  (lidos.itens||[]).forEach(function(it){
+    var cod=String(it.codigo||"").trim();
+    if(!cod){pula(it,"sem o código no sistema");return;}
+    if(vistos[cod]){pula(it,"código repetido no arquivo (linha "+vistos[cod]+")");return;}
+    vistos[cod]=it.linha;
+    var c=idx["c:"+cod]||idx["i:"+cod];
+    if(!c){pula(it,"código não existe nesta empresa");return;}
+    if(!it.nomeSis){pula(it,"sem o nome no sistema para conferir",c);return;}
+    if(normNomeImp(it.nomeSis)!==normNomeImp(c.nome)){pula(it,"nome não bate — no sistema está "+(c.nome||"(vazio)"),c);return;}
+    var subs={};
+    String(it.substituir||"").split(/[;,|]/).forEach(function(s){var k=chaveCampoAtu(s);if(k)subs[k]=true;});
+    var novos={},campos=[];
+    function poe(k,v,troca){novos[k]=v;campos.push({k:k,de:String(c[k]||""),para:v,troca:troca});conta(k,troca?"troca":"preenche");}
+    /* tipo antes do documento: o CNPJ é conferido como de empresa */
+    CAMPOS_ATU.forEach(function(k){
+      var v=String(it[k]||"").trim();if(!v)return;
+      if(k==="tipo"){var tt=semAcento(v).toLowerCase();
+        v=/juri|^pj$|empresa|cnpj/.test(tt)?"Pessoa Jurídica":(/fisic|^pf$|cpf/.test(tt)?"Pessoa Física":"");
+        if(!v){pula(it,"Tipo não reconhecido: "+it.tipo,c);return;}}
+      if(k==="nasc"){var dn=dataImport(v);if(!dn){pula(it,"Nascimento que não deu para ler: "+it.nasc,c);return;}v=dn;}
+      if(k==="email")v=v.toLowerCase();
+      if(k==="uf")v=v.toUpperCase();
+      var atual=String(c[k]||"").trim(),igual=(k==="doc"||k==="cep")?soDig(atual)===soDig(v):atual===v;
+      if(atual&&(igual||!subs[k]))return;
+      if(k==="doc"){
+        var pj=((novos.tipo||c.tipo)==="Pessoa Jurídica")||soDig(v).length===14;
+        if(!docValido(v,pj)){pula(it,"CPF/CNPJ inválido: "+v,c);return;}
+        var dono=porDoc[soDig(v)];
+        if(dono&&dono.id!==c.id){pula(it,"CPF/CNPJ "+v+" já é de outro cliente ("+(dono.codigo||dono.id)+" · "+(dono.nome||"")+")",c);return;}
+      }
+      poe(k,v,!!atual);
+    });
+    /* telefones: o da coluna marcada em Substituir troca aquele espaço; os outros vão para o
+       primeiro espaço vazio, sem repetir o que o cliente já tem */
+    var cur=TELS_ATU.map(function(k){return String(c[k]||"").trim();});
+    function tem(d){return cur.some(function(x){return tel8Imp(x)===d;});}
+    TELS_ATU.forEach(function(k,i){
+      var v=String(it[k]||"").trim();if(!v||!subs[k])return;
+      v=telImport(v);var d=tel8Imp(v);if(!d)return;
+      if(tel8Imp(cur[i])===d)return;
+      if(tem(d)){pula(it,ROT_ATU[k]+" "+v+" já está em outro espaço do cliente",c);return;}
+      var era=cur[i];cur[i]=v;poe(k,v,!!era);
+    });
+    TELS_ATU.forEach(function(k){
+      var v=String(it[k]||"").trim();if(!v||subs[k])return;
+      v=telImport(v);var d=tel8Imp(v);if(!d||tem(d))return;
+      var livre=cur.findIndex(function(x){return !x;});
+      if(livre<0){pula(it,"sem espaço para o telefone "+v+" (os 4 já estão preenchidos)",c);return;}
+      cur[livre]=v;poe(TELS_ATU[livre],v,false);
+    });
+    if(campos.length)r.mudar.push({c:c,novos:novos,campos:campos,linha:it.linha});
+  });
+  return r;
+}
+window.__planoAtuCliMF=function(linhas){return planoAtuCli(linhasAtuCli(linhas));};
+var atcPlano=null,atcFonte=null;
+function abrirAtualizarClientes(){
+  if(!ehAdministrador()){toast("Só o Administrador atualiza clientes pela planilha.");return;}
+  atcPlano=null;atcFonte=null;
+  $("atc_arqNome").textContent="";$("atc_previa").innerHTML="";$("atc_alerta").innerHTML="";
+  $("atc_ok").disabled=true;$("atc_ok").hidden=false;$("atc_baixar").hidden=true;
+  $("atcModal").hidden=false;
+}
+window.__abrirAtuCliMF=function(){return abrirAtualizarClientes();};
+function previaAtuCli(linhas){
+  atcFonte=linhas;
+  var lidos=linhasAtuCli(linhas||[]);
+  if(lidos.semCabecalho){atcPlano=null;$("atc_ok").disabled=true;
+    $("atc_previa").innerHTML='<div class="note crit"><b>Não achei o cabeçalho.</b> A primeira linha precisa ter pelo menos a coluna <b>Código no sistema</b>.</div>';return;}
+  var r=planoAtuCli(lidos);atcPlano=r;
+  var nCampos=0;Object.keys(r.porCampo).forEach(function(k){nCampos+=r.porCampo[k].preenche+r.porCampo[k].troca;});
+  var motivos={};r.pulados.forEach(function(p){var m=p.motivo.replace(/:.*$/,"").replace(/ —.*$/,"").replace(/\(.*$/,"").trim();motivos[m]=(motivos[m]||0)+1;});
+  var linhasCampo=Object.keys(ROT_ATU).filter(function(k){return r.porCampo[k];}).map(function(k){var x=r.porCampo[k];
+    return "<tr><td>"+esc(ROT_ATU[k])+'</td><td class="num">'+x.preenche+'</td><td class="num">'+x.troca+"</td></tr>";}).join("");
+  var amostra=r.mudar.slice(0,10).map(function(m){
+    return "<tr><td>"+esc(m.c.codigo||m.c.id)+"</td><td>"+esc(m.c.nome||"")+"</td><td>"+
+      m.campos.map(function(x){return "<b>"+esc(ROT_ATU[x.k])+"</b>: "+(x.de?esc(x.de)+" → ":"")+esc(x.para)+(x.troca?" <small>(troca)</small>":"");}).join("<br>")+"</td></tr>";}).join("");
+  $("atc_previa").innerHTML=
+    '<div class="note"><b>Empresa '+esc(nomeLoja())+'</b> — só os clientes desta empresa. Nada é gravado antes de você tocar em Gravar.</div>'+
+    '<div class="note'+(r.mudar.length?" ok":" warn")+'"><b>'+r.linhas+"</b> linha(s) lida(s) · <b>"+r.mudar.length+"</b> cliente(s) vão mudar · <b>"+nCampos+"</b> campo(s)"+
+      (r.pulados.length?" · <b>"+r.pulados.length+"</b> pulado(s)":"")+
+      (!r.mudar.length&&r.linhas?"<br>Nada a mudar: os dados deste arquivo já estão no sistema.":"")+"</div>"+
+    (linhasCampo?'<div class="tw"><table><thead><tr><th>Campo</th><th class="num">Preencher (estava vazio)</th><th class="num">Trocar (Substituir)</th></tr></thead><tbody>'+linhasCampo+"</tbody></table></div>":"")+
+    (r.pulados.length?'<div class="note warn"><b>Pulados:</b> '+Object.keys(motivos).map(function(m){return esc(m)+" ("+motivos[m]+")";}).join(" · ")+
+      ". A lista completa sai no botão <b>Baixar a lista dos pulados</b>.</div>":"")+
+    (amostra?'<p class="sect-t" style="margin-top:12px">Amostra (antes → depois)</p><div class="tw"><table><thead><tr><th>Código</th><th>Cliente</th><th>O que muda</th></tr></thead><tbody>'+amostra+"</tbody></table></div>":"");
+  $("atc_ok").disabled=!r.mudar.length;
+  $("atc_baixar").hidden=!r.pulados.length;
+}
+window.__previaAtuCliMF=function(l){return previaAtuCli(l);};
+function baixarPuladosAtuCli(){
+  var r=atcPlano;if(!r||!r.pulados.length)return;
+  var txt="\ufefflinha;codigo no sistema;nome;motivo\n"+r.pulados.map(function(p){
+    return [p.linha,p.codigo,p.nome,p.motivo].map(function(x){return '"'+String(x==null?"":x).replace(/"/g,'""')+'"';}).join(";");}).join("\n");
+  baixarArquivo(new File([txt],"clientes-pulados-"+lojaAtual+"-"+hojeISO()+".csv",{type:"text/csv;charset=utf-8"}));
+}
+function gravarAtuCli(){return travaSalvar("gravarAtuCli",gravarAtuCli__corpo,this,arguments);}
+async function gravarAtuCli__corpo(){
+  if(!ehAdministrador()){$("atc_alerta").innerHTML='<div class="note crit"><b>Só o Administrador atualiza clientes pela planilha.</b></div>';return;}
+  if(!atcFonte){return;}
+  /* refaz a conta na hora de gravar: o que já foi gravado (outra vez, ou antes da internet cair) não entra de novo */
+  previaAtuCli(atcFonte);
+  var r=atcPlano;if(!r||!r.mudar.length){$("atc_alerta").innerHTML='<div class="note"><b>Nada a gravar.</b> Os dados deste arquivo já estão no sistema.</div>';return;}
+  if(!confirm("Atualizar "+r.mudar.length+" cliente(s) da empresa "+nomeLoja()+"?\n\nAntes, o sistema baixa no seu computador a cópia de como eles estão hoje."))return;
+  var agora=iso(new Date()),quando=agora.slice(0,16).replace("T"," "),diaBR=dataBR(hojeISO());
+  /* cópia de segurança: a ficha de hoje de cada cliente que vai mudar */
+  try{baixarArquivo(new File([JSON.stringify(r.mudar.map(function(m){return m.c;}))],
+    "copia-clientes-"+lojaAtual+"-antes-da-atualizacao-"+hojeISO()+".json",{type:"application/json"}));}catch(eC){console.warn("cópia",eC);}
+  var lotes=r.mudar.map(function(m){
+    var c2=JSON.parse(JSON.stringify(m.c));
+    Object.keys(m.novos).forEach(function(k){c2[k]=m.novos[k];});
+    c2.alteracoes=c2.alteracoes||[];
+    m.campos.forEach(function(x){c2.alteracoes.push({quando:agora,por:usuarioAtual,campo:ROT_ATU[x.k],de:x.de,para:x.para,via:"importação"});});
+    c2.notas=c2.notas||[];
+    c2.notas.push({quando:quando,por:usuarioAtual,texto:"Atualizado pela importação de "+diaBR+", por "+usuarioAtual+": "+
+      m.campos.map(function(x){return ROT_ATU[x.k]+(x.troca?" (trocado)":"");}).join(", ")});
+    c2.atualizadoImportEm=agora;
+    return {m:m,c2:c2};
+  });
+  var total=lotes.length,feitos=0,BL=200;
+  $("atc_ok").disabled=true;
+  try{
+    for(var i=0;i<total;i+=BL){
+      var parte=lotes.slice(i,i+BL);
+      if(db&&typeof db.gravarVarios==="function")await db.gravarVarios("clientes",parte.map(function(x){return x.c2;}),{bloco:BL});
+      else if(db){for(var j=0;j<parte.length;j++)await gravaConf("clientes",parte[j].c2);}
+      /* o banco aceitou: a tela passa a ter o novo */
+      parte.forEach(function(x){voltarReg(x.m.c,x.c2);});
+      feitos+=parte.length;
+      andamentoSalvando(feitos,total);
+      $("atc_alerta").innerHTML='<div class="note">⏳ Gravando '+feitos.toLocaleString("pt-BR")+" de "+total.toLocaleString("pt-BR")+"… não feche.</div>";
+      await new Promise(function(ok){setTimeout(ok,0);});
+    }
+  }catch(e){
+    avisarRecusaBanco("atc_alerta",e,feitos.toLocaleString("pt-BR")+" de "+total.toLocaleString("pt-BR")+" cliente(s) foram gravados. Importe o MESMO arquivo de novo: continua de onde parou, sem gravar em dobro.");
+    $("atc_ok").disabled=false;try{renderClientes();}catch(eR){}return;
+  }
+  var nCampos=lotes.reduce(function(s,x){return s+x.m.campos.length;},0);
+  $("atc_alerta").innerHTML='<div class="note ok"><b>Pronto: '+feitos.toLocaleString("pt-BR")+" cliente(s) atualizados, "+nCampos.toLocaleString("pt-BR")+" campo(s).</b>"+
+    (r.pulados.length?" "+r.pulados.length+" linha(s) ou campo(s) pulados — baixe a lista.":"")+"</div>";
+  $("atc_previa").innerHTML="";$("atc_ok").hidden=true;$("atc_baixar").hidden=!r.pulados.length;
+  toast(feitos+" cliente(s) atualizados pela planilha.");
+  try{renderClientes();}catch(eR){}
+}
+window.__gravarAtuCliMF=function(){return gravarAtuCli();};
 function clienteDaPlanilha(n,codigo,agora){
   var c={id:uid(),loja:lojaAtual,codigo:codigo,
     criadoEm:agora,criadoPor:usuarioAtual,criadoVia:"importacao",importado:true,importadoVia:"planilha",
@@ -14211,6 +14446,30 @@ function ligarImportClientes(){
   if($("cliLimparTeste"))$("cliLimparTeste").onclick=apagarRegistrosTeste;
   /* a caixa do cliente de teste redesenha a ajuda quando é marcada */
   if($("c_teste"))$("c_teste").onchange=function(){try{ajudaCaixaTeste(editandoCli);}catch(e){}};
+  if($("cliAtuPlanilha")){
+    $("cliAtuPlanilha").onclick=abrirAtualizarClientes;
+    $("atc_fechar").onclick=function(){$("atcModal").hidden=true;};
+    $("atc_ok").onclick=gravarAtuCli;
+    $("atc_baixar").onclick=baixarPuladosAtuCli;
+    $("atc_arqBt").onclick=function(){$("atc_arq").click();};
+    $("atc_arq").onchange=function(){
+      var fl=this.files&&this.files[0];if(!fl)return;
+      $("atc_arqNome").textContent=fl.name;$("atc_alerta").innerHTML="";
+      var rd=new FileReader();
+      if(/[.]xlsx?$/i.test(fl.name)){
+        $("atc_previa").innerHTML='<div class="note"><b>Lendo a planilha do Excel…</b></div>';
+        rd.onload=async function(){
+          try{previaAtuCli(await linhasDoXlsx(rd.result));}
+          catch(e){$("atc_previa").innerHTML='<div class="note crit"><b>Não consegui ler a planilha:</b> '+esc((e&&e.message)||e)+"</div>";}
+        };
+        rd.readAsArrayBuffer(fl);
+      }else{
+        rd.onload=function(){previaAtuCli(linhasDeTextoImport(String(rd.result||"")));};
+        rd.readAsText(fl,"utf-8");
+      }
+      this.value="";
+    };
+  }
   var bt=$("cliImportar");if(!bt)return;
   bt.onclick=abrirImportClientes;
   $("ic_fechar").onclick=function(){$("impcModal").hidden=true;};
@@ -48959,6 +49218,7 @@ function aplicarPerfil(){
   var g=ehGestor(),p=perfilDe(usuarioAtual);
   var pill=$("perfilPill");
   pill.textContent=p;pill.className="pill "+(g?"p-ok":"p-mut");
+  if($("cliAtuPlanilha"))$("cliAtuPlanilha").hidden=!ehAdministrador();
   var precisaSair=false;
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){
     if(!b.dataset.s)return;
