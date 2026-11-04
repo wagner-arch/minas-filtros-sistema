@@ -24389,7 +24389,12 @@ function abrirReposicaoItem(rid,idx){
   $("rp_perg").textContent=ehTroca
     ? "Você recebeu do cliente "+(totTroca>1?"os "+totTroca+" purificadores":"o purificador")+" da troca? Eles entram no seu estoque como Purificador Sucata."
     : "Você recebeu "+(alvo.length>1?"estes produtos":"este produto")+" do almoxarifado? Pode adicionar no seu estoque?";
-  $("rp_det").innerHTML=alvo.map(function(i){var it=r.itens[i];return "<b>"+(it.atendida||it.qtd)+"× "+esc(it.nome)+"</b>";}).join("<br>")+
+  var marcar=(alvo.length>1&&!ehTroca);
+  $("rp_det").innerHTML=(marcar?'<div class="t-sub" style="margin-bottom:6px">Marque só o que você recebeu. O que ficar sem marca continua esperando no A fazer.</div>':"")+
+    alvo.map(function(i){var it=r.itens[i],tx=(it.atendida||it.qtd)+"× "+esc(codNomeItem(it));
+      return marcar
+        ?'<label class="rp-it" style="display:flex;gap:10px;align-items:center;padding:6px 0;cursor:pointer"><input type="checkbox" class="rp-marca" data-i="'+i+'" checked style="width:22px;height:22px"><b>'+tx+"</b></label>"
+        :"<b>"+tx+"</b>";}).join(marcar?"":"<br>")+
     (cli?"<br>Cliente: <b>"+esc(cli)+"</b>"+(ped?" · pedido "+esc(ped.numero):""):"")+
     (ehTroca?'<br><span class="t-sub">Entra como <b>Purificador Sucata</b> — a avaliação é feita depois, no almoxarifado. Fica sob sua responsabilidade: no dia seguinte, transfira para o almoxarifado (Meu Estoque › Devolver).</span>':"")+
     "";
@@ -24404,6 +24409,12 @@ async function confirmarReposicaoItens__corpo(){
   /* regra do Wagner (16/09): o usado pego na troca volta ao almoxarifado no dia seguinte — com usado de ontem ou
      antes em poder do colaborador, a reposição fica travada até ele devolver */
   var ehTrocaR=r.origem==="troca";
+  var marcas=document.querySelectorAll("#rp_det .rp-marca");
+  if(marcas.length){
+    var esc0=[].filter.call(marcas,function(c){return c.checked;}).map(function(c){return +c.getAttribute("data-i");});
+    if(!esc0.length){toast("Marque pelo menos um produto que você recebeu.");return;}
+    x.idx=x.idx.filter(function(i){return esc0.indexOf(i)>=0;});
+  }
   if(!podeAceitarReq(r)){$("repModal").hidden=true;repPend=null;
     toast("Só quem responde por "+nomeLocal(localDaReq(r))+" aceita esta requisição.");return;}
   if(r.status!=="pendente"&&r.status!=="separada"){$("repModal").hidden=true;repPend=null;toast("Esta requisição já foi respondida.");return;}
@@ -24420,7 +24431,7 @@ async function confirmarReposicaoItens__corpo(){
     await lancarMov(it.pid,it.atendida||it.qtd,ehTrocaR?"troca":LOC_EMPRESA,localDaReq(r),
       ehTrocaR?"Pego na troca":"Requisição",r.obs,hojeISO(),"");
     it.recebido=true;it.recebidoEm=hojeISO();it.recebidoPor=usuarioAtual;
-    nomes.push((it.atendida||it.qtd)+"× "+it.nome);
+    nomes.push((it.atendida||it.qtd)+"× "+codNomeItem(it));
   }
   if(r.itens.every(function(it){return it.recebido;})){
     r.status="concluida";r.recebidaPor=usuarioAtual;r.recebidaEm=hojeISO();
@@ -24494,7 +24505,11 @@ function textoReq(r){
   if(r.origem==="troca")return "Purificador pego na troca"+(num?" · pedido nº "+num:"")+(cli?" · "+cli:"");
   return "Requisição de "+(r.pedidaPor||r.criadoPor||r.colaborador||"—")+" · "+dataCurta(r.data||r.criadoEm||"");
 }
-function itensTxt(r){return (r.itens||[]).filter(function(i){return !i.recebido;}).map(function(i){return (i.atendida||i.qtd)+"× "+(i.nome||((prodPorId(i.pid)||{}).nome)||i.cod||"produto");}).join(", ");}
+function codNomeItem(i){
+  var p=prodPorId(i.pid)||{},cod=i.cod||p.cod||"",nome=i.nome||p.nome||"produto";
+  return (cod?cod+" · ":"")+nome;
+}
+function itensTxt(r){return (r.itens||[]).filter(function(i){return !i.recebido;}).map(function(i){return (i.atendida||i.qtd)+"× "+codNomeItem(i);}).join(", ");}
 function blocoAf(titulo,n,html,vazio){
   return '<div class="af-bloco"><h2>'+esc(titulo)+(n?' <span class="n">'+n+"</span>":"")+"</h2>"+(html||'<div class="af-vazio">'+esc(vazio||"Nada por aqui.")+"</div>")+"</div>";
 }
@@ -24502,7 +24517,7 @@ function htmlAutLeve(L){
   return L.map(function(x){
     var p=x.ped,it=x.item,a=x.aut,ix=itensDeEstoque(p).indexOf(it),q=+(it.qtd||1);
     var tem=saldoEm(it.pid,a.local),nova=autUsaRegraNova(p,a);
-    return '<div class="af-item"><div class="t">'+esc(a.pedidaPor||p.vendedor||"Alguém")+" quer "+q+"× "+esc(it.nome||"")+"</div>"+
+    return '<div class="af-item"><div class="t">'+esc(a.pedidaPor||p.vendedor||"Alguém")+" quer "+q+"× "+esc(codNomeItem(it))+"</div>"+
       '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+" · "+esc(nomeLocal(a.local))+" tem "+tem+"</div>"+
       '<div class="actions">'+(nova
         ?'<button class="btn" type="button" data-afusar="'+esc(p.id)+"|"+ix+'">Usar do meu</button>'+
@@ -24571,7 +24586,7 @@ function renderEstAfazer(){
     h+=blocoAf("Autorizar",autA.length+autL.length,autA.map(function(x){
       var p=x.ped,it=x.item,a=x.aut,q=+(it.qtd||1);
       var fica=saldoEm(it.pid,LOC_EMPRESA)-((reservasDe(LOC_EMPRESA,p.id)[it.pid])||0)-q;
-      return '<div class="af-item"><div class="t">'+esc(a.pedidaPor||p.vendedor||"Alguém")+" quer "+q+"× "+esc(it.nome||"")+" do almoxarifado</div>"+
+      return '<div class="af-item"><div class="t">'+esc(a.pedidaPor||p.vendedor||"Alguém")+" quer "+q+"× "+esc(codNomeItem(it))+" do almoxarifado</div>"+
         '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+' · o almoxarifado fica com <b class="'+(fica<0?"q-neg":(fica?"q-tem":"q-zero"))+'">'+fica+"</b></div>"+
         (podeA?'<div class="actions"><button class="btn" type="button" data-afaut="'+esc(p.id)+"|"+esc(a.id)+'">Autorizar</button>'+
           '<button class="btn mut" type="button" data-afrec="'+esc(p.id)+"|"+esc(a.id)+'">Recusar</button></div>':"")+"</div>";}).join("")+htmlAutLeve(autL),
