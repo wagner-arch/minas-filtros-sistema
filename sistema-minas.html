@@ -5827,8 +5827,11 @@ img{max-width:100%}
         <div class="sect">
           <p class="sect-t">Contato — vai no rodapé</p>
           <div class="grid g3">
-            <div class="fld"><label for="em_endereco">Endereço completo</label><input id="em_endereco" placeholder="Rua, nº, bairro, cidade/UF, CEP"></div>
+            <div class="fld"><label for="em_endereco">Endereço completo</label><input id="em_endereco" placeholder="Rua, nº, bairro, cidade/UF"></div>
+            <div class="fld"><label for="em_cep">CEP</label><input id="em_cep" inputmode="numeric" placeholder="00000-000" maxlength="9"></div>
             <div class="fld"><label for="em_fone">Telefone / WhatsApp</label><input id="em_fone"></div>
+          </div>
+          <div class="grid g3">
             <div class="fld"><label for="em_site">Site</label><input id="em_site" placeholder="www.minasfiltrosonline.com.br"></div>
           </div>
           <div id="em_avisoDoc"></div>
@@ -20267,7 +20270,7 @@ try{EMPRESA.gmapsChave=localStorage.getItem("mf_gmaps_chave")||"";}catch(e){}
 function sincChaveGoogle(){try{if(EMPRESA.gmapsChave)localStorage.setItem("mf_gmaps_chave",EMPRESA.gmapsChave);else localStorage.removeItem("mf_gmaps_chave");}catch(e){}}
 async function gravarEmpresa(){if(!db)return;try{await db.doc("config/empresa").set(EMPRESA);}catch(e){console.warn(e);}}
 function renderEmpresa(){
-  ["razao","cnpj","cidade","endereco","geo","fone","site","instagram","youtube","gmapsChave","contEscritorio","contNome","contEmail","contFone"].forEach(function(k){
+  ["razao","cnpj","cidade","endereco","cep","geo","fone","site","instagram","youtube","gmapsChave","contEscritorio","contNome","contEmail","contFone"].forEach(function(k){
     var el=$("em_"+k);if(el)el.value=EMPRESA[k]||"";});
   /* configuração do módulo de OS (05/10) */
   try{
@@ -20281,19 +20284,7 @@ function renderEmpresa(){
   }catch(eo){console.warn("config da OS",eo);}
   /* o cabeçalho do pedido e da OS mostra endereço, CEP e telefones: dizer aqui o que falta,
      senão o documento sai com meia linha e ninguém sabe por quê (pedido dele, 03/10) */
-  var av=$("em_avisoDoc");
-  if(av){
-    var padrao=empresaNoPadrao(),falta=[];
-    if(!/\d{5}-?\d{3}/.test(enderecoEmpresa()))falta.push("o CEP, dentro do endereço");
-    if(!EMPRESA.instagram)falta.push("o link do Instagram (sem ele o QR Code não sai)");
-    if(!EMPRESA.youtube)falta.push("o link do YouTube (sem ele o QR Code não sai)");
-    av.innerHTML=
-      (padrao.length?'<div class="note" style="margin-top:14px">O cabeçalho do pedido, da OS e do comprovante está usando '+
-        padrao.join(" · ")+" da loja: <b>"+esc(enderecoEmpresa())+"</b> · CNPJ "+esc(cnpjEmpresa())+
-        " · "+esc(foneEmpresa())+". Preencha aqui e salve para valer o que você digitar.</div>":"")+
-      (falta.length?'<div class="note crit" style="margin-top:14px">Falta ainda: '+falta.join(" · ")+".</div>":"")+
-      ((!padrao.length&&!falta.length)?'<div class="note" style="margin-top:14px">O cabeçalho dos documentos sai com endereço, CEP, CNPJ, telefones e os dois QR Codes.</div>':"");
-  }
+  desenharAvisoDocEmpresa();ligarAvisoDocEmpresa();
   var pv=$("em_preview");pv.innerHTML="";
   [["Instagram",EMPRESA.instagram],["YouTube",EMPRESA.youtube]].forEach(function(x){
     if(!x[1])return;
@@ -41833,12 +41824,50 @@ var FONES_MF="(37) 3232-9595 · (37) 99915-6514";
 var ENDERECO_MF="Rua do Rosário, 41 · Centro · Pará de Minas/MG · CEP 35660-032";
 var CNPJ_MF="10.408.272/0001-89";
 function foneEmpresa(){return (EMPRESA.fone||"").trim()||FONES_MF;}
+/* CEP EM CAMPO PRÓPRIO (03/11, print dele: "está faltando campo do CEP no cadastro da empresa").
+   Ele entra no fim do endereço dos documentos; o endereço que já traz um CEP digitado dentro
+   continua como está (cadastro antigo), sem repetir. */
+function cepEmpresa(){
+  var d=String(EMPRESA.cep||"").replace(/[^0-9]/g,"");
+  return d.length===8?d.slice(0,5)+"-"+d.slice(5):"";
+}
 function enderecoEmpresa(){
   var e=(EMPRESA.endereco||"").trim();
-  return (e&&/\d/.test(e))?e:ENDERECO_MF;      /* endereço sem número nenhum é só a cidade */
+  if(!(e&&/\d/.test(e)))return ENDERECO_MF;      /* endereço sem número nenhum é só a cidade */
+  var c=cepEmpresa();
+  return (c&&!/\d{5}-?\d{3}/.test(e))?e+" · CEP "+c:e;
 }
 function cnpjEmpresa(){return (EMPRESA.cnpj||"").trim()||CNPJ_MF;}
 /* o cabeçalho está usando o padrão da loja em vez do cadastro? */
+/* O AVISO DO QUE FALTA ACOMPANHA O QUE ESTÁ DIGITADO (03/11, print dele: o CEP já estava no fim
+   do endereço e o aviso continuava, porque só era refeito depois de Salvar). A conta usa o que está
+   nos campos agora, sem gravar nada. */
+var CAMPOS_AVISO_EMP=["endereco","cep","fone","cnpj","instagram","youtube"];
+function desenharAvisoDocEmpresa(){
+  var guard={};
+  CAMPOS_AVISO_EMP.forEach(function(k){var el=$("em_"+k);if(el){guard[k]=EMPRESA[k];EMPRESA[k]=el.value.trim();}});
+  try{
+    var av=$("em_avisoDoc");
+    if(!av)return;
+    {
+      var padrao=empresaNoPadrao(),falta=[];
+      if(!/\d{5}-?\d{3}/.test(enderecoEmpresa()))falta.push("o CEP");
+      if(!EMPRESA.instagram)falta.push("o link do Instagram (sem ele o QR Code não sai)");
+      if(!EMPRESA.youtube)falta.push("o link do YouTube (sem ele o QR Code não sai)");
+      av.innerHTML=
+        (padrao.length?'<div class="note" style="margin-top:14px">O cabeçalho do pedido, da OS e do comprovante está usando '+
+          padrao.join(" · ")+" da loja: <b>"+esc(enderecoEmpresa())+"</b> · CNPJ "+esc(cnpjEmpresa())+
+          " · "+esc(foneEmpresa())+". Preencha aqui e salve para valer o que você digitar.</div>":"")+
+        (falta.length?'<div class="note crit" style="margin-top:14px">Falta ainda: '+falta.join(" · ")+".</div>":"")+
+        ((!padrao.length&&!falta.length)?'<div class="note" style="margin-top:14px">O cabeçalho dos documentos sai com endereço, CEP, CNPJ, telefones e os dois QR Codes.</div>':"");
+    }
+  
+  }finally{Object.keys(guard).forEach(function(k){EMPRESA[k]=guard[k];});}
+}
+function ligarAvisoDocEmpresa(){
+  CAMPOS_AVISO_EMP.forEach(function(k){var el=$("em_"+k);
+    if(el&&!el.__lAviso){el.__lAviso=1;el.addEventListener("input",desenharAvisoDocEmpresa);}});
+}
 function empresaNoPadrao(){
   var f=[];
   if(enderecoEmpresa()===ENDERECO_MF&&(EMPRESA.endereco||"").trim()!==ENDERECO_MF)f.push("o endereço com o CEP");
@@ -55505,7 +55534,7 @@ function ligar(){
     if(p){ir("pedidos");abrirPedido(p);}};
 
   $("emSalvar").onclick=async function(){
-    ["razao","cnpj","cidade","endereco","geo","fone","site","instagram","youtube","gmapsChave","contEscritorio","contNome","contEmail","contFone"].forEach(function(k){
+    ["razao","cnpj","cidade","endereco","cep","geo","fone","site","instagram","youtube","gmapsChave","contEscritorio","contNome","contEmail","contFone"].forEach(function(k){
       var el=$("em_"+k);if(el)EMPRESA[k]=el.value.trim();});
     if(EMPRESA.contEmail&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(EMPRESA.contEmail))toast("Confira o e-mail da contabilidade: "+EMPRESA.contEmail);
     /* configuração do módulo de OS (05/10): horário útil, garantia mínima, taxa e abandono */
