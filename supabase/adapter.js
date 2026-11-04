@@ -101,7 +101,11 @@
   /* mensagens_zap: os textos do WhatsApp valem nas duas empresas (27/10).
      grupos_produtos, serie e preco: o CATÁLOGO É UM SÓ para as duas empresas (decisão dele,
      28/10 e 29/10) — os grupos, o número de série por grupo e o % do preço mínimo vão junto. */
-  var CONFIG_GLOBAL = ["usuarios", "mensagens_zap", "grupos_produtos", "serie", "preco", "importacoes_catalogo"];
+  /* tipos de atendimento e de atividade (a mesma lista), motivos de finalização com os grupos,
+     tipos e motivos desativados e o canal de cada tipo: IGUAIS nas duas empresas (04/11, pedido dele).
+     Acrescentou numa, aparece na outra. */
+  var CONFIG_GLOBAL = ["usuarios", "mensagens_zap", "grupos_produtos", "serie", "preco", "importacoes_catalogo",
+    "tipos_atendimento", "motivos_finalizacao", "tipos_off", "motivos_off", "canais_tipo"];
   function configGlobal(colecao, id) {
     return colecao === "config" && CONFIG_GLOBAL.indexOf(String(id || "")) >= 0;
   }
