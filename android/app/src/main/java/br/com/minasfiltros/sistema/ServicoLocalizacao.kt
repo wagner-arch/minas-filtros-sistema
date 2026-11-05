@@ -325,7 +325,7 @@ class ServicoLocalizacao : Service() {
        COMECA A SE MOVIMENTAR num dia util sem ter batido a entrada. E mudo (canal
        IMPORTANCE_LOW), some sozinho quando o ponto e batido e, se ela ignorar, nao
        volta naquele dia — nao pode atrapalhar quem esta trabalhando. */
-    if (!parado) lembrarPontoSePrecisar()
+    /* o lembrete mudo de 21/10 saiu (05/11): o lembrete de ponto agora vem do servidor, com som */
 
     /* RITMO: parado, 1 a cada 5 minutos. Andando, 1 a cada 15 segundos OU a cada 30
        metros andados, o que vier primeiro — e a regra que ele pediu, conferida aqui e

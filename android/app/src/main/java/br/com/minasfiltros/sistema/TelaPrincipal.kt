@@ -103,8 +103,15 @@ class TelaPrincipal : AppCompatActivity() {
       }
     }
 
-    web.loadUrl(ENDERECO)
-    pedirPermissoes()
+    /* tocar no lembrete de ponto abre direto o Cartao de Ponto */
+    web.loadUrl(if (intent?.getStringExtra("abrir") == "ponto") ENDERECO + "#ponto" else ENDERECO)
+    /* o endereco do Firebase deste celular: o sistema grava no banco quando abrir */
+    try {
+      com.google.firebase.messaging.FirebaseMessaging.getInstance().token
+        .addOnSuccessListener { t -> if (!t.isNullOrEmpty()) Guardado.salvarTokenAviso(this, t) }
+    } catch (e: Exception) { }
+    /* primeiro a autorizacao dos lembretes (com a explicacao), depois a localizacao */
+    if (!pedirAvisos(false)) pedirPermissoes()
     /* O RASTREIO NAO ESPERA MAIS A PAGINA (22/10): ate a 1.6 quem ligava o servico era
        a propria pagina, depois do login (MFApp.sessao). Sem internet, ou com a pagina
        demorando, o aplicativo ficava aberto e NADA era registrado. O vigia decide pelo
@@ -156,6 +163,59 @@ class TelaPrincipal : AppCompatActivity() {
     }
   }
 
+  /* tocar no lembrete com o aplicativo ja aberto */
+  override fun onNewIntent(i: Intent) {
+    super.onNewIntent(i)
+    if (i.getStringExtra("abrir") == "ponto") {
+      try { web.evaluateJavascript("window.__abrirPontoMF&&window.__abrirPontoMF();", null) } catch (e: Exception) { }
+    }
+  }
+
+  /* A AUTORIZACAO DOS LEMBRETES DE PONTO (05/11). Antes de o Android perguntar, a explicacao
+     em portugues — inclusive que no silencioso ou em "Nao perturbe" o aviso nao toca.
+     pedido = veio do botao "Ligar lembretes": se o Android ja nao pergunta mais (recusado
+     de vez), abre a tela de notificacoes do aplicativo. Devolve true se abriu a explicacao. */
+  fun pedirAvisos(pedido: Boolean): Boolean {
+    try {
+      if (isFinishing || isDestroyed) return false
+      if (Permissao.estado(this) == "autorizado") return false
+      if (!pedido && Guardado.perguntouAvisos(this)) return false
+      val podePerguntar = Build.VERSION.SDK_INT >= 33 &&
+        (!Guardado.perguntouAvisos(this) || shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS))
+      AlertDialog.Builder(this)
+        .setTitle("Lembretes de ponto")
+        .setMessage("O aplicativo vai avisar, com som e vibração, 3 minutos antes de cada horário do " +
+          "seu ponto (entrada, saída e volta do almoço e saída) e, se passar do horário sem bater, " +
+          "de novo a cada 2 minutos até você bater.\n\n" +
+          "Atenção: com o celular no silencioso ou em \"Não perturbe\", o aviso não toca.\n\n" +
+          (if (podePerguntar) "Na próxima tela, escolha PERMITIR."
+           else "Na tela que vai abrir, ligue as notificações do Minas Filtros."))
+        .setPositiveButton(if (podePerguntar) "Continuar" else "Abrir a tela") { _, _ ->
+          Guardado.marcarPerguntouAvisos(this)
+          if (podePerguntar) ActivityCompat.requestPermissions(this,
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS), 13)
+          else { abrirAjustesDeAvisos(); if (!pedido) pedirPermissoes() }
+        }
+        .setNegativeButton("Agora não") { _, _ ->
+          Guardado.marcarPerguntouAvisos(this)
+          if (!pedido) pedirPermissoes()
+        }
+        .setCancelable(false)
+        .show()
+      return true
+    } catch (e: Exception) { return false }
+  }
+
+  private fun abrirAjustesDeAvisos() {
+    try {
+      startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
+    } catch (e: Exception) {
+      try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+        .setData(Uri.parse("package:$packageName"))) } catch (e2: Exception) { }
+    }
+  }
+
   /* Android pede a localizacao em duas etapas: primeiro durante o uso, depois
      "sempre" (segundo plano). Pedir as duas de uma vez o sistema recusa. */
   private fun pedirPermissoes() {
@@ -164,11 +224,6 @@ class TelaPrincipal : AppCompatActivity() {
         != PackageManager.PERMISSION_GRANTED) {
       faltam += Manifest.permission.ACCESS_FINE_LOCATION
       faltam += Manifest.permission.ACCESS_COARSE_LOCATION
-    }
-    if (Build.VERSION.SDK_INT >= 33 &&
-        ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-        != PackageManager.PERMISSION_GRANTED) {
-      faltam += Manifest.permission.POST_NOTIFICATIONS
     }
     if (faltam.isNotEmpty()) ActivityCompat.requestPermissions(this, faltam.toTypedArray(), 10)
     else pedirSempre()
@@ -198,6 +253,11 @@ class TelaPrincipal : AppCompatActivity() {
             Toast.LENGTH_LONG).show()
         }
       }
+      return
+    }
+    if (c == 13) {
+      /* respondeu a autorizacao dos lembretes: segue para a localizacao */
+      pedirPermissoes()
       return
     }
     if (c == 10) pedirSempre()

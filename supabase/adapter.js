@@ -1476,6 +1476,24 @@
       return r.data || null;
     };
 
+    /* LEMBRETE DE PONTO (05/11): o celular de cada pessoa (supabase/lembrete-ponto.sql).
+       Cada um grava só o próprio (RLS); o nome vem do perfil, no banco. O Administrador lê a lista. */
+    adapter.registrarCelularPonto = async function (o) {
+      var s = await adapter.auth.sessao();
+      var uid = s && s.user && s.user.id;
+      if (!uid) throw new Error("sem sessão para registrar o celular");
+      var linha = Object.assign({}, o, { user_id: uid });
+      conferir(await comSessao(function () {
+        return sb.from("dispositivos_ponto").upsert(linha, { onConflict: "user_id,aparelho" });
+      }), "registrar o celular do lembrete de ponto", true);
+      return true;
+    };
+    adapter.celularesPonto = async function () {
+      var r = conferir(await sb.from("dispositivos_ponto")
+        .select("nome,tipo,permissao,ativo,atualizado_em,modelo").limit(500), "celulares do lembrete de ponto", false);
+      return r.data || [];
+    };
+
     /* carimba perfis.ultimo_acesso sem abrir update de perfis para o cliente
        (que deixaria qualquer um trocar a própria função) */
     adapter.registrarAcesso = async function () {

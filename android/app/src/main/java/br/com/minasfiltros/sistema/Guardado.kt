@@ -22,6 +22,18 @@ object Guardado {
       .apply()
   }
 
+  /* LEMBRETE DE PONTO (05/11): o endereco do Firebase deste celular, o codigo do aparelho
+     (gerado uma vez, nao e o numero do celular) e se a autorizacao ja foi perguntada */
+  fun salvarTokenAviso(ctx: Context, t: String) { p(ctx).edit().putString("tokenAviso", t).apply() }
+  fun tokenAviso(ctx: Context): String = p(ctx).getString("tokenAviso", "") ?: ""
+  fun aparelho(ctx: Context): String {
+    var a = p(ctx).getString("aparelho", "") ?: ""
+    if (a.isEmpty()) { a = "AND-" + java.util.UUID.randomUUID().toString(); p(ctx).edit().putString("aparelho", a).apply() }
+    return a
+  }
+  fun perguntouAvisos(ctx: Context): Boolean = p(ctx).getBoolean("perguntouAvisos", false)
+  fun marcarPerguntouAvisos(ctx: Context) { p(ctx).edit().putBoolean("perguntouAvisos", true).apply() }
+
   fun limparSessao(ctx: Context) {
     p(ctx).edit().remove("token").remove("refresh").remove("nome").apply()
   }

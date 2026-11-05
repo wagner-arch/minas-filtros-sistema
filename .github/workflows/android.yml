@@ -17,6 +17,11 @@ name: Aplicativo Android
 
 on:
   workflow_dispatch:          # roda quando o Wagner clicar em "Run workflow"
+    inputs:
+      so_conferir:
+        description: "Só conferir se compila (não assina, não publica, ninguém recebe atualização)"
+        type: boolean
+        default: false
   push:
     # so no main: empurrar uma ETIQUETA dispara o push ignorando o filtro de pastas,
     # e o fluxo rodava (e falhava) a cada publicacao do sistema
@@ -51,6 +56,20 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-34" "build-tools;34.0.0" "platform-tools" || true
 
+      # O FIREBASE (05/11, lembrete de ponto): a configuracao do aplicativo no Firebase
+      # (google-services.json) NAO fica no repositorio publico. Vem do segredo
+      # GOOGLE_SERVICES_JSON e e escrita so na maquina que compila.
+      - name: Pegar a configuracao do Firebase no cofre
+        env:
+          GSJ: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GSJ" ]; then
+            echo "::error::O segredo GOOGLE_SERVICES_JSON nao esta no cofre. Ele e o arquivo google-services.json do Firebase (lembrete de ponto)."
+            exit 1
+          fi
+          printf '%s' "$GSJ" > android/app/google-services.json
+          grep -q '"project_id"' android/app/google-services.json || { echo "::error::GOOGLE_SERVICES_JSON nao parece o arquivo do Firebase."; exit 1; }
+
       - name: Preparar o Gradle
         working-directory: android
         run: gradle wrapper --gradle-version 8.7 --no-daemon
@@ -66,6 +85,7 @@ jobs:
       # A chave e escrita FORA da pasta do projeto (RUNNER_TEMP), para nao haver
       # a menor chance de ela entrar num commit. O servidor e apagado no fim.
       - name: Pegar a chave de assinatura no cofre
+        if: ${{ !inputs.so_conferir }}
         env:
           CHAVE: ${{ secrets.MF_CHAVE_BASE64 }}
         run: |
@@ -84,6 +104,7 @@ jobs:
       # sem a chave e a senha ele nao serve para nada, e e por isso que da para mostra-lo no
       # log — e com ele a vista que se descobre um problema destes em um minuto.
       - name: Descobrir o apelido de dentro da chave
+        if: ${{ !inputs.so_conferir }}
         env:
           MF_CHAVE_SENHA: ${{ secrets.MF_CHAVE_SENHA }}
         run: |
@@ -104,6 +125,7 @@ jobs:
           echo "MF_CHAVE_ALIAS=$APELIDO" >> $GITHUB_ENV
 
       - name: Montar o aplicativo assinado
+        if: ${{ !inputs.so_conferir }}
         working-directory: android
         env:
           MF_CHAVE_ARQ: ${{ runner.temp }}/chave.p12
@@ -112,6 +134,7 @@ jobs:
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Conferir que o arquivo saiu assinado com a NOSSA chave
+        if: ${{ !inputs.so_conferir }}
         run: |
           APK=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
           FERR=$(ls -d "$ANDROID_HOME"/build-tools/* | sort | tail -1)
@@ -123,9 +146,10 @@ jobs:
 
       - name: Apagar a chave do servidor
         if: always()
-        run: rm -f "$RUNNER_TEMP/chave.p12"
+        run: rm -f "$RUNNER_TEMP/chave.p12" android/app/google-services.json
 
       - name: Guardar o arquivo de instalacao
+        if: ${{ !inputs.so_conferir }}
         uses: actions/upload-artifact@v4
         with:
           name: minas-filtros-apk
@@ -135,6 +159,7 @@ jobs:
       # Releases: endereco fixo e publico, que nunca expira. O aplicativo baixa
       # sempre de .../releases/latest/download/minas-filtros.apk
       - name: Publicar a versao no Releases
+        if: ${{ !inputs.so_conferir }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -154,6 +179,7 @@ jobs:
           fi
 
       - name: Avisar o site que ha versao nova
+        if: ${{ !inputs.so_conferir }}
         run: |
           mkdir -p app
           cat > app/versao-app.json <<JSON

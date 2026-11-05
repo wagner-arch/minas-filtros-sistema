@@ -57,6 +57,24 @@ class Ponte(private val ctx: Context) {
   @JavascriptInterface
   fun rastreando(): Boolean = ServicoLocalizacao.ligado
 
+  /* ---------- LEMBRETE DE PONTO (05/11) ---------- */
+  /* "autorizado", "recusado" ou "perguntar" — o sistema mostra no Cartao de Ponto e grava no banco */
+  @JavascriptInterface
+  fun lembretePermissao(): String = Permissao.estado(ctx)
+  @JavascriptInterface
+  fun lembreteToken(): String = Guardado.tokenAviso(ctx)
+  @JavascriptInterface
+  fun lembreteAparelho(): String = Guardado.aparelho(ctx)
+  /* o botao "Ligar lembretes" do Cartao de Ponto */
+  @JavascriptInterface
+  fun pedirLembretes() {
+    val t = TelaPrincipal.tela ?: return
+    t.runOnUiThread { t.pedirAvisos(true) }
+  }
+  /* o ponto foi batido: o aviso some na hora */
+  @JavascriptInterface
+  fun tirarLembretePonto() { Avisos.tirarLembretePonto(ctx) }
+
   /* a versao deste aplicativo, lida do proprio pacote (nao e escrita a mao) */
   @JavascriptInterface
   fun versaoApp(): String = Atualizador.nomeInstalado(ctx)
