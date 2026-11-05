@@ -150,6 +150,8 @@
     custodia: "loja",
     /* INVENTÁRIO (v465): o balanço é de cada empresa, como o estoque */
     inventarios: "loja",
+    /* ENTRADA DE MERCADORIA (05/11): fornecedor, nota e custo; de cada empresa, como o estoque */
+    entradas: "loja",
     /* NÚMERO DE SÉRIE (02/11): onde cada aparelho está, separado por empresa */
     series: "loja",
     /* FERRAMENTAS: eram globais desde a v388; em 23/10 passaram a ser de cada EMPRESA,
@@ -170,7 +172,7 @@
     "clientes", "produtos", "pedidos", "orcamentos", "atendimentos",
     "fechamentos", "ajustes", "pontos", "caixas", "centros",
     "fornecedores", "titulos", "movs", "movest", "requisicoes",
-    "equipamentos", "ordens", "notas"
+    "equipamentos", "ordens", "notas", "entradas"
   ];
 
   /* documentos de config que o backup NUNCA leva (dado pessoal):
@@ -216,6 +218,7 @@
     equipamentos: "criadoEm",
     ordens: "abertura",
     notas: "emissao",
+    entradas: "data",
     config: null,
     ponto_fotos: "data"
   };

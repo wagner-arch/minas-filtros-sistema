@@ -2105,6 +2105,7 @@ img{max-width:100%}
     <button data-s="minhasferr">Minhas ferramentas</button>
     <button data-s="estHist"><span class="rot-est" data-leve="Meu histórico" data-completa="Histórico">Meu histórico</span></button>
     <button data-s="estInv">Inventário</button>
+    <button data-s="estEntrada">Entrada de mercadoria</button>
     <button data-s="estRecup">Recuperações</button>
     <button data-s="estConsumo">Uso e consumo</button>
     <button data-s="ferramentas">Ferramentas</button>
@@ -4501,6 +4502,42 @@ img{max-width:100%}
 
     <!-- ESTOQUE DO COLABORADOR -->
     <!-- ESTOQUES · A FAZER (04/11): só o que depende da pessoa, em blocos -->
+    <section class="screen" id="s-estEntrada" hidden>
+      <div class="page-head"><h1>Entrada de mercadoria</h1><p>A mercadoria que chega do fornecedor entra no Almoxarifado com a nota fiscal e o custo. Não gera conta a pagar.</p></div>
+      <div id="enLista">
+        <div class="toolbar" style="flex-wrap:wrap;gap:8px">
+          <label>De <input type="date" id="enDe"></label>
+          <label>Até <input type="date" id="enAte"></label>
+          <select id="enFornF" aria-label="Fornecedor"></select>
+          <input id="enNotaF" type="search" placeholder="Número da nota" style="max-width:180px">
+          <span class="sp"></span>
+          <button class="btn" type="button" id="enNova">+ Nova entrada</button>
+        </div>
+        <div class="t-sub" id="enCount" style="margin:6px 0"></div>
+        <div id="enItens"></div>
+      </div>
+      <div class="card" id="enForm" hidden>
+        <div class="actions" style="margin:0 0 10px"><button class="btn mut sm" type="button" id="mx_voltar">Voltar</button></div>
+        <h2>Nova entrada de mercadoria</h2>
+        <div class="grid g3">
+          <div class="fld"><label for="mx_fornBusca">Fornecedor <span class="req">*</span></label>
+            <input id="mx_fornBusca" type="search" autocomplete="off" placeholder="Buscar fornecedor">
+            <select id="mx_forn" style="margin-top:6px"></select></div>
+          <div class="fld"><label for="mx_nota">Número da nota fiscal <span class="req">*</span></label><input id="mx_nota" autocomplete="off"></div>
+          <div class="fld"><label for="mx_data">Data de entrada <span class="req">*</span></label><input id="mx_data" type="date"></div>
+        </div>
+        <div id="mx_dup"></div>
+        <div class="fld" style="margin-top:10px"><label for="mx_prodBusca">Adicionar produto (nome ou código)</label>
+          <input id="mx_prodBusca" type="search" autocomplete="off" placeholder="Digite o nome ou o código"></div>
+        <div id="mx_prodRes"></div>
+        <div id="mx_linhas" style="margin-top:10px"></div>
+        <div id="mx_total" style="margin:8px 0;font-weight:600"></div>
+        <div class="fld"><label for="mx_obs">Observação</label><input id="mx_obs" placeholder="Opcional"></div>
+        <div id="mx_alerta"></div>
+        <div class="actions"><button class="btn" type="button" id="mx_ok">Confirmar entrada</button></div>
+      </div>
+      <div class="card" id="enDet" hidden></div>
+    </section>
     <section class="screen" id="s-estAfazer" hidden>
       <div class="page-head"><h1>Demandas do Estoque</h1><p id="afSub">O que depende de você nos estoques.</p></div>
       <div class="toolbar af-topo">
@@ -8681,7 +8718,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=503"></script>
+<script src="supabase/adapter.js?v=507"></script>
 <script>
 (function(){
 "use strict";
@@ -20745,6 +20782,7 @@ function nomeLocal(l){
   if(l===LOC_RECUP)return "Recuperado (virou seminovo)";
   if(l===LOC_DESM)return "Desmanche (baixa definitiva)";
   if(l==="fornecedor")return "Fornecedor";
+  if(l==="entrada")return "Entrada de mercadoria";
   if(l==="ajuste")return "Ajuste";
   return l||"—";
 }
@@ -23538,6 +23576,299 @@ async function salvarInv(inv,antes){
     avisarRecusaBanco("iv_alerta",e,"O inventário continua como estava.");return false;}
 }
 function copiaInv(inv){return JSON.parse(JSON.stringify(inv));}
+/* ===== ENTRADA DE MERCADORIA (05/11, regra dele) =====
+   A mercadoria que chega do fornecedor entra no ALMOXARIFADO com fornecedor, nota e custo — antes
+   entrava por inventário ou editando o produto, como "ajuste". Um movimento por produto (origem
+   "entrada", destino "empresa"), séries "em estoque" no Almoxarifado, custo do produto atualizado com
+   histórico, e a entrada fica na coleção "entradas" (de cada empresa). NÃO gera conta a pagar.
+   Só o Administrador cancela: movimento contrário (estornoDe), e só se nada ficar negativo e
+   nenhuma série já tiver saído. */
+var entradas=[],entLidas=false,entLendo=null,enLinhas=[],enAberta=null;
+async function carregarEntradas(forcar){
+  if(entLidas&&!forcar)return;
+  if(entLendo)return entLendo;
+  if(!db){entLidas=true;return;}
+  entLendo=(async function(){
+    try{var r=await col("entradas").limit(5000).get();
+      entradas=r.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});entLidas=true;}
+    catch(e){console.warn("entradas",e);}
+    entLendo=null;})();
+  return entLendo;
+}
+function entradasDaLoja(){return entradas.filter(function(e){return e.loja===lojaAtual;});}
+function podeLancarEntrada(){return veTela("estEntrada");}
+function fornecDaLoja(){return fornecedores.filter(function(f){return f.status!=="inativo"&&(!f.loja||f.loja===lojaAtual);})
+  .sort(function(a,b){return ordAZ(a.nome||"",b.nome||"");});}
+function normNota(n){return String(n||"").replace(/\s+/g,"").replace(/^0+/,"").toUpperCase();}
+function docEntrada(e){return "Entrada · Nota "+e.nota+" · "+(e.fornecedor||"");}
+/* a mesma nota do mesmo fornecedor já lançada (aqui ou na tela antiga de notas) */
+function notaJaLancada(fid,nota,excetoId){
+  var n=normNota(nota);if(!fid||!n)return null;
+  var e=entradasDaLoja().filter(function(x){return x.id!==excetoId&&x.status!=="cancelada"&&x.fornecedorId===fid&&normNota(x.nota)===n;})[0];
+  if(e)return "Esta nota já foi lançada em "+dataBR(e.data)+" por "+(e.criadoPor||"")+" (Entrada de mercadoria).";
+  var nt=(typeof notas!=="undefined"?notas:[]).filter(function(x){return x.loja===lojaAtual&&x.fornecedorId===fid&&normNota(x.numero)===n;})[0];
+  if(nt)return "Esta nota já foi lançada na tela Entrada de Notas Fiscais.";
+  return null;
+}
+function resetarEntradas(){
+  var de=$("enDe"),ate=$("enAte");if(!de)return;
+  ate.value=hojeISO();de.value=somaDias(hojeISO(),-90);$("enNotaF").value="";$("enFornF").value="";
+  $("enForm").hidden=true;$("enDet").hidden=true;$("enLista").hidden=false;
+}
+function renderEntradas(){
+  var w=$("enItens");if(!w)return;
+  if(!entLidas){carregarEntradas().then(function(){if(!$("s-estEntrada").hidden)renderEntradas();});}
+  if(!$("enDe").value)resetarEntradas();
+  var fs=fornecDaLoja(),fsel=$("enFornF"),fv=fsel.value;
+  fsel.innerHTML='<option value="">Todos os fornecedores</option>'+fs.map(function(f){return '<option value="'+esc(f.id)+'">'+esc(f.nome||"")+"</option>";}).join("");
+  fsel.value=fv;
+  $("enNova").hidden=!podeLancarEntrada();
+  var de=$("enDe").value,ate=$("enAte").value,nq=normNota($("enNotaF").value);
+  var L=entradasDaLoja().filter(function(e){
+    if(de&&String(e.data)<de)return false;if(ate&&String(e.data)>ate)return false;
+    if(fsel.value&&e.fornecedorId!==fsel.value)return false;
+    if(nq&&normNota(e.nota).indexOf(nq)<0)return false;return true;})
+    .sort(function(a,b){return (String(b.data)+String(b.criadoEm||"")).localeCompare(String(a.data)+String(a.criadoEm||""));});
+  $("enCount").textContent=L.length+(L.length===1?" entrada":" entradas");
+  w.innerHTML=L.length?'<div class="tw"><table><thead><tr><th>Data</th><th>Nota</th><th>Fornecedor</th><th class="num">Produtos</th><th class="num">Peças</th><th class="num">Total</th><th>Situação</th></tr></thead><tbody>'+
+    L.map(function(e){return '<tr class="clickable" data-enab="'+esc(e.id)+'"><td>'+esc(dataBR(e.data))+"</td><td><b>"+esc(e.nota)+"</b></td><td>"+esc(e.fornecedor||"")+
+      '</td><td class="num">'+(e.itens||[]).length+'</td><td class="num">'+(+e.pecas||0)+'</td><td class="num">'+BRL(+e.total||0)+"</td><td>"+
+      (e.status==="cancelada"?'<span class="pill p-mut">Cancelada</span>':'<span class="pill p-ok">Lançada</span>')+"</td></tr>";}).join("")+"</tbody></table></div>"
+    :'<div class="empty"><div class="big">Nenhuma entrada</div>'+(entradasDaLoja().length?"Nada com esses filtros.":"A primeira entrada começa no botão + Nova entrada.")+"</div>";
+  [].forEach.call(w.querySelectorAll("[data-enab]"),function(tr){tr.onclick=function(){
+    var e=entradas.filter(function(x){return x.id===tr.getAttribute("data-enab");})[0];if(e)abrirEntrada(e);};});
+}
+/* ---------- formulário ---------- */
+async function novaEntrada(){
+  if(!podeLancarEntrada()){toast("Você não tem acesso à Entrada de mercadoria.");return false;}
+  await carregarEntradas();
+  enLinhas=[];
+  $("mx_fornBusca").value="";$("mx_nota").value="";$("mx_data").value=hojeISO();$("mx_obs").value="";
+  $("mx_prodBusca").value="";$("mx_prodRes").innerHTML="";$("mx_alerta").innerHTML="";$("mx_dup").innerHTML="";
+  opcoesFornEntrada();
+  $("enLista").hidden=true;$("enDet").hidden=true;$("enForm").hidden=false;
+  desenharLinhasEntrada();window.scrollTo(0,0);
+  try{carregarSeries().catch(function(){});}catch(e){}
+  return true;
+}
+function opcoesFornEntrada(){
+  var q=semAcento($("mx_fornBusca").value||"").trim(),sel=$("mx_forn"),ant=sel.value;
+  var fs=fornecDaLoja().filter(function(f){return !q||semAcento((f.nome||"")+" "+(f.doc||"")+" "+(f.codigo||"")).indexOf(q)>=0;});
+  sel.innerHTML='<option value="">— escolha o fornecedor —</option>'+fs.map(function(f){return '<option value="'+esc(f.id)+'">'+esc(f.nome||"")+(f.doc?" · "+esc(f.doc):"")+"</option>";}).join("");
+  if(ant&&fs.some(function(f){return f.id===ant;}))sel.value=ant;else if(q&&fs.length===1)sel.value=fs[0].id;
+  avisoDupEntrada();
+}
+function avisoDupEntrada(){
+  var m=notaJaLancada($("mx_forn").value,$("mx_nota").value);
+  $("mx_dup").innerHTML=m?'<div class="note warn"><b>Atenção:</b> '+esc(m)+" Confira para não lançar a mesma mercadoria duas vezes.</div>":"";
+}
+function buscarProdEntrada(){
+  var q=semAcento($("mx_prodBusca").value||"").trim();
+  var res=q.length<2?[]:produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&!ehProdSistemaInv(p)&&semAcento((p.cod||"")+" "+(p.nome||"")).indexOf(q)>=0;}).slice(0,20);
+  $("mx_prodRes").innerHTML=q.length<2?"":(res.length?res.map(function(p){return '<button class="btn ghost sm" type="button" data-enp="'+esc(p.id)+'" style="margin:2px">+ '+
+    esc((p.cod?p.cod+" · ":"")+(p.nome||""))+"</button>";}).join(""):'<div class="help">Nenhum produto ativo encontrado.</div>');
+  [].forEach.call($("mx_prodRes").querySelectorAll("[data-enp]"),function(b){b.onclick=function(){addProdEntrada(b.getAttribute("data-enp"));};});
+}
+function addProdEntrada(pid){
+  var p=prodPorId(pid);if(!p)return false;
+  if(enLinhas.some(function(l){return l.pid===pid;})){toast("Este produto já está na entrada: mude a quantidade na linha dele.");return false;}
+  enLinhas.push({pid:pid,cod:p.cod||"",nome:p.nome||"",qtd:1,custo:(+p.custo>0?Math.round(+p.custo*100)/100:""),series:[],pedeSerie:invPedeSerie(p)});
+  $("mx_prodBusca").value="";$("mx_prodRes").innerHTML="";
+  desenharLinhasEntrada();return true;
+}
+function totaisEntrada(){
+  var t=0,pc=0;enLinhas.forEach(function(l){var q=+l.qtd||0,c=+l.custo||0;t+=q*c;pc+=q;});
+  return {total:Math.round(t*100)/100,pecas:pc};
+}
+/* séries: repetida na entrada, já registrada no sistema ou num aparelho de cliente */
+function problemasSerieEntrada(){
+  var P=[],vistas={};
+  enLinhas.forEach(function(l){(l.series||[]).forEach(function(sr){var n=normSerie(sr);if(!n)return;
+    if(vistas[n])P.push("A série "+sr+" está repetida nesta entrada.");vistas[n]=1;
+    var ja=seriesCad.filter(function(d){return d.serieNorm===n&&d.situacao!=="cancelada";})[0];
+    if(ja)P.push("A série "+sr+" já existe no sistema ("+(ja.produto||"produto")+").");
+    var eq=ivsAparelhoDaSerie(n);if(eq)P.push("A série "+sr+" já está num aparelho de cliente: "+(eq.cliente||"sem nome")+".");});});
+  return P;
+}
+function desenharLinhasEntrada(){
+  var w=$("mx_linhas");if(!w)return;
+  w.innerHTML=enLinhas.length?enLinhas.map(function(l,ix){
+    var q=Math.max(0,parseInt(l.qtd,10)||0),tot=(+l.qtd||0)*(+l.custo||0);
+    var ser="";
+    if(l.pedeSerie){
+      l.series=(l.series||[]).slice(0,q);while(l.series.length<q)l.series.push("");
+      ser='<div class="t-sub" style="margin-top:6px">Número de série, um por unidade:</div>'+l.series.map(function(sr,k){
+        return '<div style="display:flex;gap:6px;margin:3px 0"><input data-ens="'+ix+"|"+k+'" value="'+esc(sr)+'" placeholder="Série '+(k+1)+'" autocomplete="off" style="flex:1">'+
+          '<button class="btn ghost sm" type="button" data-enler="'+ix+"|"+k+'">Ler</button></div>';}).join("");
+    }
+    return '<div class="note" style="margin:6px 0"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">'+
+      "<div><b>"+esc((l.cod?l.cod+" · ":"")+l.nome)+"</b></div>"+
+      '<button class="btn mut sm" type="button" data-enrm="'+ix+'">Tirar</button></div>'+
+      '<div class="grid g3" style="margin-top:6px"><div class="fld"><label>Quantidade</label><input data-enq="'+ix+'" type="number" min="1" step="1" inputmode="numeric" value="'+esc(l.qtd)+'"></div>'+
+      '<div class="fld"><label>Custo unitário (R$)</label><input data-enc="'+ix+'" inputmode="decimal" value="'+esc(l.custo===""?"":String(l.custo).replace(".",","))+'"></div>'+
+      '<div class="fld"><label>Total</label><div style="padding:8px 0"><b data-ent="'+ix+'">'+BRL(tot)+"</b></div></div></div>"+ser+"</div>";
+  }).join(""):'<div class="help">Nenhum produto ainda. Busque acima pelo nome ou pelo código.</div>';
+  [].forEach.call(w.querySelectorAll("[data-enq]"),function(i){i.onchange=function(){enLinhas[+i.getAttribute("data-enq")].qtd=i.value;desenharLinhasEntrada();};});
+  [].forEach.call(w.querySelectorAll("[data-enc]"),function(i){i.oninput=function(){var l=enLinhas[+i.getAttribute("data-enc")];l.custo=numMF(i.value);
+    var t=w.querySelector('[data-ent="'+i.getAttribute("data-enc")+'"]');if(t)t.textContent=BRL((+l.qtd||0)*(+l.custo||0));pintarTotalEntrada();};});
+  [].forEach.call(w.querySelectorAll("[data-ens]"),function(i){i.oninput=function(){var c=i.getAttribute("data-ens").split("|");enLinhas[+c[0]].series[+c[1]]=i.value;pintarTotalEntrada();};});
+  [].forEach.call(w.querySelectorAll("[data-enler]"),function(b){b.onclick=function(){var c=w.querySelector('[data-ens="'+b.getAttribute("data-enler")+'"]');
+    if(c&&window.__lerCodigoMF)window.__lerCodigoMF(c);else if(c)c.focus();};});
+  [].forEach.call(w.querySelectorAll("[data-enrm]"),function(b){b.onclick=function(){enLinhas.splice(+b.getAttribute("data-enrm"),1);desenharLinhasEntrada();};});
+  pintarTotalEntrada();
+}
+function pintarTotalEntrada(){
+  var t=totaisEntrada();
+  $("mx_total").textContent=enLinhas.length?"Total da entrada: "+BRL(t.total)+" · "+t.pecas+" peça(s) em "+enLinhas.length+" produto(s)":"";
+  var P=problemasSerieEntrada();
+  $("mx_alerta").innerHTML=P.length?'<div class="note warn">'+P.map(esc).join("<br>")+"</div>":"";
+}
+/* o que falta para poder confirmar; vazio = pode */
+function faltaEntrada(){
+  if(!$("mx_forn").value)return "Escolha o fornecedor.";
+  if(!String($("mx_nota").value||"").trim())return "Digite o número da nota fiscal.";
+  if(!$("mx_data").value)return "Informe a data de entrada.";
+  if(!enLinhas.length)return "Adicione pelo menos um produto.";
+  for(var i=0;i<enLinhas.length;i++){var l=enLinhas[i],q=+l.qtd;
+    if(!(q>0)||Math.floor(q)!==q)return "Quantidade inválida em "+l.nome+" (número inteiro maior que zero).";
+    if(l.custo===""||l.custo==null||!(+l.custo>=0)||isNaN(+l.custo))return "Digite o custo unitário de "+l.nome+".";
+    if(l.pedeSerie){var f=serieLimpa(l.series);
+      if(f.length<q)return "Faltam números de série em "+l.nome+": "+f.length+" de "+q+".";}}
+  var P=problemasSerieEntrada();if(P.length)return P[0];
+  return "";
+}
+function lancarEntrada(){return travaSalvar("lancarEntrada",lancarEntrada__corpo,this,arguments);}
+async function lancarEntrada__corpo(){
+  if(!podeLancarEntrada()){$("mx_alerta").innerHTML='<div class="note crit">Você não tem acesso à Entrada de mercadoria.</div>';return false;}
+  try{await carregarSeries();}catch(eS){$("mx_alerta").innerHTML='<div class="note crit">A lista de números de série não carregou. Confira a internet e tente de novo.</div>';return false;}
+  await carregarEntradas();
+  var f=faltaEntrada();
+  if(f){$("mx_alerta").innerHTML='<div class="note crit">'+esc(f)+"</div>";return false;}
+  var forn=fornPorEntrada($("mx_forn").value),nota=String($("mx_nota").value).trim(),data=$("mx_data").value,t=totaisEntrada();
+  var dup=notaJaLancada(forn.id,nota);
+  if(!confirm((dup?"ATENÇÃO: "+dup+"\n\n":"")+"Confirmar a entrada no Almoxarifado?\n\n"+
+    "Fornecedor: "+(forn.nome||"")+"\nNota: "+nota+" · "+dataBR(data)+"\n\n"+
+    enLinhas.map(function(l){return "• "+l.qtd+"× "+(l.cod?l.cod+" · ":"")+l.nome+" · "+BRL(+l.custo)+" = "+BRL((+l.qtd)*(+l.custo));}).join("\n")+
+    "\n\nTotal: "+BRL(t.total)+" · "+t.pecas+" peça(s)\nO custo de cada produto passa a ser o desta nota. Não gera conta a pagar.")){return false;}
+  var e={id:uid(),loja:lojaAtual,fornecedorId:forn.id,fornecedor:forn.nome||"",nota:nota,data:data,
+    itens:enLinhas.map(function(l){return {pid:l.pid,cod:l.cod,nome:l.nome,qtd:+l.qtd,custo:Math.round((+l.custo)*100)/100,
+      total:Math.round((+l.qtd)*(+l.custo)*100)/100,series:l.pedeSerie?serieLimpa(l.series):[]};}),
+    total:t.total,pecas:t.pecas,obs:String($("mx_obs").value||"").trim(),status:"lancada",
+    criadoPor:usuarioAtual,criadoEm:new Date().toISOString(),quando:quandoInv(),historico:[]};
+  e.historico.push({quando:e.quando,por:usuarioAtual,texto:"Entrada lançada · "+e.itens.length+" produto(s), "+e.pecas+" peça(s)"});
+  var movsF=[],serF=[],nPassos=e.itens.length+e.itens.reduce(function(a,i){return a+i.series.length;},0)+1,k=0;
+  try{
+    for(var i=0;i<e.itens.length;i++){var it=e.itens[i];
+      var m={id:uid(),loja:lojaAtual,produtoId:it.pid,qtd:it.qtd,origem:"entrada",destino:LOC_EMPRESA,doc:docEntrada(e),obs:e.obs,
+        entradaId:e.id,custoUnit:it.custo,centroId:"",data:e.data,por:usuarioAtual,em:new Date().toISOString()};
+      await gravaConf("movest",m);movEst.push(m);movsF.push(m);andamentoSalvando(++k,nPassos);}
+    for(var j=0;j<e.itens.length;j++){var it2=e.itens[j];
+      for(var z=0;z<it2.series.length;z++){var sr=it2.series[z],n=normSerie(sr);
+        var ja=seriesCad.filter(function(d){return d.produtoId===it2.pid&&d.serieNorm===n;})[0];
+        var antes=ja?JSON.parse(JSON.stringify(ja)):null;
+        var d=ja||{id:uid(),loja:lojaAtual,serie:sr,serieNorm:n,produtoId:it2.pid,produto:it2.nome,criadoEm:new Date().toISOString(),historico:[]};
+        d.situacao="estoque";d.local=LOC_EMPRESA;d.entradaId=e.id;d.entradaNota=e.nota;d.em=new Date().toISOString();d.por=usuarioAtual;
+        d.historico=(d.historico||[]).concat([{quando:e.quando,por:usuarioAtual,texto:docEntrada(e)+": em estoque no Almoxarifado"}]);
+        await gravaConf("series",d);if(!ja)seriesCad.push(d);serF.push({d:d,antes:antes});andamentoSalvando(++k,nPassos);}}
+    e.movs=movsF.map(function(m){return m.id;});
+    await gravaConf("entradas",e);entradas.push(e);andamentoSalvando(++k,nPassos);
+  }catch(err){
+    await desfazerMovsInv(movsF);await desfazerSeriesInv(serF);
+    var ixE=entradas.indexOf(e);if(ixE>=0)entradas.splice(ixE,1);
+    avisarRecusaBanco("mx_alerta",err,"Nada foi lançado: o estoque continua como estava.");return false;}
+  /* o custo do produto passa a ser o desta nota, com o histórico de preço */
+  var semCusto=[];
+  for(var c=0;c<e.itens.length;c++){var it3=e.itens[c],p=prodPorId(it3.pid);if(!p)continue;
+    var foto=fotoPrecoProd(p),antesC=custoTotalDe(p),hc=(p.historicoCusto||[]).slice();
+    p.custo=it3.custo;
+    registrarHistPreco(p,foto,"Entrada nota "+e.nota);
+    p.custoNF=e.nota;p.custoEm=e.data;p.custoForn=e.fornecedor;
+    p.historicoCusto=(p.historicoCusto||[]).concat([{nota:e.nota,data:e.data,fornecedor:e.fornecedor,qtd:it3.qtd,custo:p.custo,
+      total:custoTotalDe(p),antes:antesC,por:usuarioAtual,entradaId:e.id}]).slice(-30);
+    try{await gravaConf("produtos",p);}catch(eP){desfazerHistPreco(p,foto);p.historicoCusto=hc;semCusto.push(p.nome||"");}}
+  enLinhas=[];
+  toast("Entrada da nota "+e.nota+" lançada: "+e.pecas+" peça(s) no Almoxarifado."+(semCusto.length?" ATENÇÃO: o custo não foi atualizado em "+semCusto.join(", ")+".":""));
+  try{render();agendarEstNovas();}catch(eR){}
+  abrirEntrada(e);return true;
+}
+function fornPorEntrada(id){return fornecedores.filter(function(f){return f.id===id;})[0]||{id:id,nome:""};}
+/* ---------- detalhe e cancelamento ---------- */
+function abrirEntrada(e){
+  enAberta=e;
+  var w=$("enDet"),vc=podeVerCusto()||podeLancarEntrada();
+  $("enLista").hidden=true;$("enForm").hidden=true;w.hidden=false;
+  var podeC=ehAdministrador()&&e.status!=="cancelada";
+  w.innerHTML='<div class="actions" style="margin:0 0 10px"><button class="btn mut sm" type="button" id="mx_detVoltar">Voltar</button></div>'+
+    "<h2>Nota "+esc(e.nota)+" · "+esc(e.fornecedor||"")+"</h2>"+
+    '<div class="t-sub">Entrada em '+esc(dataBR(e.data))+" · lançada por "+esc(e.criadoPor||"")+" em "+esc(e.quando||"")+
+    (e.status==="cancelada"?' · <span class="pill p-mut">Cancelada</span> por '+esc(e.canceladaPor||"")+" em "+esc(e.canceladaEm||""):' · <span class="pill p-ok">Lançada</span>')+"</div>"+
+    (e.obs?'<div class="note" style="margin-top:8px">'+esc(e.obs)+"</div>":"")+
+    '<div class="tw" style="margin-top:10px"><table><thead><tr><th>Produto</th><th class="num">Qtd</th>'+(vc?'<th class="num">Custo</th><th class="num">Total</th>':"")+"</tr></thead><tbody>"+
+    (e.itens||[]).map(function(i){return "<tr><td>"+esc((i.cod?i.cod+" · ":"")+i.nome)+((i.series||[]).length?'<div class="t-sub">Séries: '+i.series.map(esc).join(", ")+"</div>":"")+
+      '</td><td class="num">'+i.qtd+"</td>"+(vc?'<td class="num">'+BRL(i.custo)+'</td><td class="num">'+BRL(i.total)+"</td>":"")+"</tr>";}).join("")+
+    "</tbody></table></div>"+(vc?'<div style="margin:8px 0;font-weight:600">Total: '+BRL(+e.total||0)+" · "+(+e.pecas||0)+" peça(s)</div>":"")+
+    '<div id="mx_detAlerta"></div>'+
+    (podeC?'<div class="actions"><button class="btn ghost" type="button" id="mx_cancelarEnt">Cancelar entrada</button></div>':"")+
+    ((e.historico||[]).length?'<details style="margin-top:10px"><summary>Histórico</summary>'+e.historico.map(function(h){return '<div class="t-sub">'+esc(h.quando)+" · "+esc(h.por)+" · "+esc(h.texto)+"</div>";}).join("")+"</details>":"");
+  $("mx_detVoltar").onclick=function(){enAberta=null;w.hidden=true;$("enLista").hidden=false;renderEntradas();};
+  if($("mx_cancelarEnt"))$("mx_cancelarEnt").onclick=cancelarEntrada;
+}
+/* o que impede cancelar; {msg, lista} ou null */
+function travaCancelEntrada(e){
+  if(e.status==="cancelada")return {msg:"Esta entrada já foi cancelada."};
+  var movs=movEst.filter(function(m){return m.entradaId===e.id&&!m.estornoDe;});
+  if(movEst.some(function(x){return x.estornoDe&&movs.some(function(m){return m.id===x.estornoDe;});}))return {msg:"Esta entrada já foi cancelada."};
+  var sai=seriesCad.filter(function(d){return d.entradaId===e.id&&(d.situacao!=="estoque"||d.local!==LOC_EMPRESA);});
+  if(sai.length)return {msg:"Números de série desta entrada já saíram do Almoxarifado: "+sai.map(function(d){return d.serie;}).join(", ")+". Não é possível cancelar."};
+  var porP={};(e.itens||[]).forEach(function(i){porP[i.pid]=(porP[i.pid]||0)+(+i.qtd||0);});
+  var neg=Object.keys(porP).map(function(pid){var p=prodPorId(pid)||{},fica=saldoEm(pid,LOC_EMPRESA)-porP[pid];
+    return fica<0?((p.cod?p.cod+" · ":"")+(p.nome||"")+": ficaria "+fica):null;}).filter(Boolean);
+  if(neg.length)return {msg:"Parte desta mercadoria já saiu do Almoxarifado. Para corrigir, use o inventário de alguns produtos.",lista:neg};
+  return null;
+}
+function cancelarEntrada(){return travaSalvar("cancelarEntrada",cancelarEntrada__corpo,this,arguments);}
+async function cancelarEntrada__corpo(){
+  var e=enAberta;if(!e)return false;
+  var al=$("mx_detAlerta");
+  if(!ehAdministrador()){al.innerHTML='<div class="note crit">Só o Administrador cancela uma entrada.</div>';return false;}
+  try{await carregarSeries();}catch(eS){al.innerHTML='<div class="note crit">A lista de números de série não carregou. Confira a internet e tente de novo.</div>';return false;}
+  var tv=travaCancelEntrada(e);
+  if(tv){al.innerHTML='<div class="note crit"><b>'+esc(tv.msg)+"</b>"+(tv.lista?"<br>"+tv.lista.map(esc).join("<br>"):"")+"</div>";return false;}
+  var movs=movEst.filter(function(m){return m.entradaId===e.id&&!m.estornoDe;});
+  if(!movs.length){al.innerHTML='<div class="note crit">Os movimentos desta entrada não estão carregados neste aparelho. Atualize a página e tente de novo.</div>';return false;}
+  if(!confirm("Cancelar a entrada da nota "+e.nota+" · "+(e.fornecedor||"")+"?\n\n"+
+    (e.itens||[]).map(function(i){return "• "+i.qtd+"× "+(i.cod?i.cod+" · ":"")+i.nome+" sai do Almoxarifado";}).join("\n")+
+    "\n\nCada produto ganha um movimento contrário e a entrada fica Cancelada. Isso não se repete."))return false;
+  var feitos=[],serF=[],agora=quandoInv();
+  try{
+    for(var i=0;i<movs.length;i++){var a=movs[i];
+      var m={id:uid(),loja:a.loja||lojaAtual,produtoId:a.produtoId,qtd:+a.qtd||0,origem:a.destino,destino:a.origem,
+        doc:"Cancelamento · "+docEntrada(e),obs:"Entrada cancelada por "+usuarioAtual,estornoDe:a.id,entradaId:e.id,
+        centroId:"",data:hojeISO(),por:usuarioAtual,em:new Date().toISOString()};
+      await gravaConf("movest",m);movEst.push(m);feitos.push(m);andamentoSalvando(i+1,movs.length);}
+    var sds=seriesCad.filter(function(d){return d.entradaId===e.id&&d.situacao==="estoque";});
+    for(var j=0;j<sds.length;j++){var d=sds[j],antes=JSON.parse(JSON.stringify(d));
+      d.situacao="cancelada";d.historico=(d.historico||[]).concat([{quando:agora,por:usuarioAtual,texto:"Entrada da nota "+e.nota+" cancelada"}]);
+      await gravaConf("series",d);serF.push({d:d,antes:antes});}
+    var antesE=JSON.parse(JSON.stringify(e));
+    e.status="cancelada";e.canceladaPor=usuarioAtual;e.canceladaEm=agora;e.estornos=feitos.map(function(m){return m.id;});
+    e.historico=(e.historico||[]).concat([{quando:agora,por:usuarioAtual,texto:"Entrada cancelada · "+feitos.length+" movimento(s) contrário(s)"}]);
+    try{await gravaConf("entradas",e);}
+    catch(eE){Object.keys(e).forEach(function(k){delete e[k];});Object.assign(e,antesE);throw eE;}
+  }catch(err){
+    await desfazerMovsInv(feitos);await desfazerSeriesInv(serF);
+    avisarRecusaBanco("mx_detAlerta",err,"Nada foi cancelado: a entrada continua lançada.");return false;}
+  toast("Entrada da nota "+e.nota+" cancelada.");
+  try{render();agendarEstNovas();}catch(eR){}
+  abrirEntrada(e);return true;
+}
+window.__entradasMF=function(){return entradas;};
+window.__novaEntradaMF=function(){return novaEntrada();};
+window.__addProdEntradaMF=function(pid){return addProdEntrada(pid);};
+window.__linhasEntradaMF=function(){return enLinhas;};
+window.__abrirEntradaMF=function(e){return abrirEntrada(e);};
+window.__fornecedoresMF=function(){return fornecedores;};
+window.__cancelarEntradaMF=function(){return cancelarEntrada();};
 /* ===== NÚMERO DE SÉRIE NO INVENTÁRIO (02/11, etapa 1 do controle por série). Só para os grupos da
    lista da configuração (GRUPOS_SERIE; hoje, Purificadores), respeitando o produto marcado "nunca".
    Opcional: nada aqui trava a contagem. Na 1ª contagem as séries vão junto com a quantidade; na
@@ -25005,7 +25336,7 @@ function renderEstSaldo(){
 window.__renderEstSaldoMF=function(){return renderEstSaldo();};
 /* ---------- Histórico, por dia ---------- */
 var TIPOS_HIST_EST=[["","Todos os tipos"],["entrou","Entrou"],["saiu","Saiu"],["reservou","Reservou"],["aprovou","Aprovou (venda)"],
-  ["descarte","Descarte"],["garantia","Garantia"],["inventario","Inventário"],["recusou","Recusou"],["naorepor","Não quis repor"]];
+  ["descarte","Descarte"],["garantia","Garantia"],["inventario","Inventário"],["entrada","Entrada"],["recusou","Recusou"],["naorepor","Não quis repor"]];
 function resetarEstHist(){
   var de=$("hsDe"),ate=$("hsAte");if(!de)return;
   ate.value=hojeISO();de.value=somaDias(hojeISO(),-30);$("hsProd").value="";$("hsTipo").value="";
@@ -25021,6 +25352,7 @@ function eventosEstoque(locs,de,ate){
     var tp,loc=d?m.destino:m.origem;
     if(o&&d)return;
     if(m.inventarioId||m.estornoInventarioId)tp="inventario";
+    else if(m.entradaId||m.origem==="entrada"||m.destino==="entrada")tp="entrada";
     else if(m.destino==="descarte"||m.origem==="descarte")tp="descarte";
     else if(m.destino==="garantia"||m.origem==="garantia")tp="garantia";
     else if(m.zeroPedido||(o&&m.destino==="venda"))tp="aprovou";
@@ -49365,7 +49697,7 @@ var GRUPOS_TELA=[
   /* 04/11: a chave de cada tela continua a mesma (nenhuma permissão gravada muda); só o nome */
   {g:"Estoques",telas:[["estColab","Estoques · visão leve (Demandas do Estoque, Meu estoque, Minhas ferramentas, Meu histórico)"],
     ["estEmpresa","Estoques · visão completa (Demandas do Estoque, Saldo, Histórico, Inventário, Recuperações)"],
-    ["estConsumo","Uso e consumo"],["ferramentas","Ferramentas"]]},
+    ["estConsumo","Uso e consumo"],["estEntrada","Entrada de mercadoria"],["ferramentas","Ferramentas"]]},
   {g:"Gestão Administrativa",telas:[["fin","Aprovação Financeira"],["fornec","Cadastro Fornecedores"],
     ["caixas","Caixas"],["concil","Conciliação"],["pagar","Contas a Pagar"],["receber","Contas a Receber"],
     ["notas","Entrada de Notas Fiscais"],["faturamento","Faturamento"],["fluxo","Fluxo de Caixa"],
@@ -49436,7 +49768,7 @@ var SEED_FUNCOES=[
     telas:["dash","agenda","ponto","metasop","ativ","atend","pedidos","leads","clientes",
       "produtos","manut","estColab","os","fatur","veiculos"],acoes:[]},
   {nome:"Almoxarifado",desc:"Confere nota, move estoque e cuida de todo o almoxarifado",
-    telas:["dash","agenda","ponto","leads","clientes","produtos","grupos","estEmpresa","estColab","estConsumo","notas","fornec","relat"],
+    telas:["dash","agenda","ponto","leads","clientes","produtos","grupos","estEmpresa","estColab","estConsumo","estEntrada","notas","fornec","relat"],
     acoes:["entradaNF","moverEstoque","almoxarifado","editarProdutos"]}
 ];
 async function gravarFuncoes(){if(!db)return;try{await db.doc("config/funcoes").set({lista:funcoes});}catch(e){console.warn(e);}}
@@ -49456,6 +49788,15 @@ async function migrarAcoesNovas(){
 }
 async function migrarTelasNovas(){
   if(!funcoes.length)return;
+  /* ENTRADA DE MERCADORIA (05/11, regra dele): nasce só para Administrador, Financeiro e Almoxarifado.
+     Marcada aqui, uma vez, antes da regra geral — senão quem "vê tudo" (o Gerente) a receberia junto.
+     Depois disso é marcação comum, que se tira ou se dá em Permissões. */
+  if(!funcoes.some(function(f){return (f.telas||[]).indexOf("estEntrada")>=0;})){
+    var marcouEn=false;
+    funcoes.forEach(function(f){
+      if(f.nome==="Administrador"||f.nome==="Financeiro"||ehPerfilAlmox(f.nome)){f.telas=(f.telas||[]).concat(["estEntrada"]);marcouEn=true;}});
+    if(marcouEn)await gravarFuncoes();
+  }
   var conhecidas={};
   funcoes.forEach(function(f){(f.telas||[]).forEach(function(t){conhecidas[t]=1;});});
   var novas=TODAS_TELAS.filter(function(t){return !conhecidas[t];});
@@ -53985,7 +54326,7 @@ function render(){
     desenhaTela("rastreio",renderRastreio);
     desenhaTela("estEmpresa",renderEstEmpresa);desenhaTela("estColab",renderEstColab);
     desenhaTela("estAfazer",renderEstAfazer);desenhaTela("estSaldo",renderEstSaldo);desenhaTela("estHist",renderEstHist);
-    desenhaTela("estConsumo",renderEstConsumo);
+    desenhaTela("estConsumo",renderEstConsumo);desenhaTela("estEntrada",renderEntradas);
     opcoesFinanceiro();checarAgenda();
   }catch(e){console.warn("render",e);}
   try{notaCreditoPlano();}catch(e){}
@@ -55467,6 +55808,7 @@ function ir(s,doMenu){
       afq.value=euA;}renderEstAfazer();}catch(e){console.warn(e);}
   if(s==="estSaldo")try{if(mudou||doMenu)resetarEstSaldo();renderEstSaldo();}catch(e){console.warn(e);}
   if(s==="estHist")try{if(mudou||doMenu)resetarEstHist();renderEstHist();}catch(e){console.warn(e);}
+  if(s==="estEntrada")try{if(mudou||doMenu)resetarEntradas();renderEntradas();}catch(e){console.warn(e);}
   if(aliasEst)try{renderEstEmpresa();}catch(e){console.warn(e);}
   /* regra do Wagner (14/09): saiu de Produtos e voltou → a página começa do zero, sem o produto que estava aberto */
   if((mudou||doMenu)&&s==="produtos")resetarProdutos();
@@ -57455,6 +57797,11 @@ function ligar(){
   $("bq_reag").onclick=function(){var a=bloqPend;$("bloqAg").hidden=true;bloqPend=null;if(a)abrirReagendar(a);};
   $("ju_ok").onclick=confirmarJustificar;
   $("ju_fechar").onclick=function(){$("justModal").hidden=true;juCtx=null;};
+  $("enNova").onclick=novaEntrada;$("mx_ok").onclick=lancarEntrada;
+  $("mx_voltar").onclick=function(){$("enForm").hidden=true;$("enLista").hidden=false;renderEntradas();};
+  $("mx_fornBusca").oninput=opcoesFornEntrada;$("mx_forn").onchange=avisoDupEntrada;$("mx_nota").oninput=avisoDupEntrada;
+  $("mx_prodBusca").oninput=buscarProdEntrada;
+  ["enDe","enAte","enFornF"].forEach(function(id){$(id).onchange=renderEntradas;});$("enNotaF").oninput=renderEntradas;
   $("ti_novo").onclick=function(){escolherTrocaInstalador("novo");};
   $("ti_loja").onclick=function(){escolherTrocaInstalador("loja");};
   $("ti_cancelar").onclick=function(){cancelarTrocaInstalador();};
