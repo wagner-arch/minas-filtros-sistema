@@ -1632,6 +1632,8 @@
 .iv-ents{display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto}
 .iv-ent{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
 .iv-q{font-size:20px;font-weight:700;min-width:44px;text-align:right}
+body.trava-ponto .rail,body.trava-ponto .hamb,body.trava-ponto #sinoBt,body.trava-ponto #sinoPainel{display:none!important}
+.trava-ponto-aviso{background:var(--crit,#b42318);color:#fff;font-size:15px;padding:12px 16px;text-align:center}
 .iv-falta{margin-top:12px}.iv-falta summary{cursor:pointer;font-weight:600}
 .iv-tot{margin-top:10px;text-align:right}
 #iv_qtd{font-size:18px}
@@ -2048,6 +2050,7 @@ img{max-width:100%}
 <div class="banner" id="banner" hidden></div>
 <div class="aviso-versao" id="avisoApp" hidden></div>
 <div class="aviso-versao" id="avisoVersao" hidden role="alert"></div>
+<div class="banner trava-ponto-aviso" id="travaPontoAviso" hidden role="alert"></div>
 
 <header class="top">
   <div class="brand">Sistema de Gestão</div>
@@ -6049,6 +6052,14 @@ img{max-width:100%}
         </div>
         <div id="dt_log"></div>
       </div>
+      <div class="card" id="em_travaCard" hidden>
+        <div class="sect">
+          <p class="sect-t">Cartão de Ponto</p>
+          <label class="chk"><input type="checkbox" id="em_travaPonto"><span>Exigir ponto para usar o sistema</span></label>
+          <p class="help">Ligado: de segunda a sexta, a partir do horário de entrada da jornada, quem ainda não bateu a entrada (ou está no almoço) só vê o Cartão de Ponto. Vale só para esta empresa. Se o ponto ou a internet der problema, desligue: todo mundo volta a usar na hora.</p>
+          <div id="em_travaInfo"></div>
+        </div>
+      </div>
     </section>
 
     <!-- TIPOS DE ATENDIMENTO -->
@@ -8718,7 +8729,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=507"></script>
+<script src="supabase/adapter.js?v=508"></script>
 <script>
 (function(){
 "use strict";
@@ -9966,6 +9977,9 @@ async function carregar(){
     if(gmz.exists&&gmz.data()&&gmz.data().textos)MSG_ZAP={textos:gmz.data().textos||{},textos2:gmz.data().textos2||{},quem:gmz.data().quem||{}};
     try{var gfe=await jaPedido("cfg:feriados",function(){return db.doc("config/feriados").get();});
       if(gfe.exists&&gfe.data()&&Array.isArray(gfe.data().lista))CFG_FERIADOS={lista:gfe.data().lista};}catch(eFe){}
+    try{var gtp=await jaPedido("cfg:trava_ponto",function(){return db.doc("config/trava_ponto").get();});
+      if(gtp.exists&&gtp.data())CFG_TRAVA_PONTO={ligado:gtp.data().ligado!==false,historico:gtp.data().historico||[]};}catch(eTp){}
+    acertarHoraServidor().then(function(){try{if(usuarioAtual)checarTravaPonto();}catch(eHs){}});
     try{var gen=await jaPedido("cfg:estoque_negativo",function(){return db.doc("config/estoque_negativo").get();});
       if(gen.exists&&gen.data())CFG_ESTNEG={permitir:gen.data().permitir!==false,por:gen.data().por||"",em:gen.data().em||""};}catch(eEn){}
     var gpc=await jaPedido("cfg:preco",function(){return db.doc("config/preco").get();});
@@ -32804,6 +32818,111 @@ function feriadoEm(data){
   return (CFG_FERIADOS.lista||[]).filter(function(f){return f.data===d&&f.ativo!==false;})[0]||null;
 }
 function podeAjustarPonto(quem){return podeAcao("ajustarPonto",quem);}
+/* ===== SÓ USA O SISTEMA DEPOIS DE BATER O PONTO (05/11, regra dele; vale a partir de 06/11/2026) =====
+   De segunda a sexta (como a falta), a partir do horário de ENTRADA da jornada, quem ainda não bateu a
+   entrada do dia só vê o Cartão de Ponto e o Sair; depois da saída para o almoço, até bater a volta,
+   também. Não trava: antes da entrada, depois da saída do dia, Administrador, quem não é cobrado
+   (sem jornada ou "Bate ponto: não"), folga, férias, falta justificada e feriado da empresa.
+   A hora é a do SERVIDOR (hora_servidor(), em Brasília), não a do aparelho. Liga/desliga por empresa
+   em Dados da Empresa (config/trava_ponto), só o Administrador, com quem e quando. */
+var TRAVA_PONTO_INICIO="2026-11-06";
+var CFG_TRAVA_PONTO={ligado:null,historico:[]};
+var desvioServidor=null,travaPontoAtual=null,travaPontoRelido=0,travaPontoBatidaRelida=0;
+/* sem documento gravado vale LIGADO no sistema de verdade; nos testes automáticos nasce desligada */
+function travaPontoLigada(){return CFG_TRAVA_PONTO.ligado==null?modoBanco():!!CFG_TRAVA_PONTO.ligado;}
+async function acertarHoraServidor(){
+  if(!db||typeof db.horaServidor!=="function")return;
+  try{var t0=Date.now(),h=await db.horaServidor(),t1=Date.now(),ms=Date.parse(h);
+    if(!isNaN(ms))desvioServidor=ms-Math.round((t0+t1)/2);}catch(e){console.warn("hora do servidor",e);}
+}
+var DIAS_SEM_TP={Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6};
+/* agora em Brasília: data, hora e dia da semana, pela hora do servidor */
+function agoraBrasilia(){
+  var ms=Date.now()+(desvioServidor||0);
+  if(window.MODO_DEMO_MF&&window.__agoraTesteMF)ms=window.__agoraTesteMF;
+  var o={};
+  new Intl.DateTimeFormat("en-US",{timeZone:"America/Sao_Paulo",year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",hour12:false,weekday:"short"}).formatToParts(new Date(ms)).forEach(function(x){o[x.type]=x.value;});
+  var hh=String((+o.hour||0)%24).padStart(2,"0");
+  return {data:o.year+"-"+o.month+"-"+o.day,hm:hh+":"+o.minute,dia:DIAS_SEM_TP[o.weekday]};
+}
+/* por que esta pessoa está travada agora; null = liberada */
+function motivoTravaPonto(quem){
+  quem=quem||usuarioAtual;
+  if(!quem||!travaPontoLigada())return null;
+  if(perfilDe(quem)==="Administrador")return null;
+  try{if(prestadorLogado(quem))return null;}catch(e){}
+  var j=jornadaDe(quem);if(!j.cobra)return null;
+  var a=agoraBrasilia();
+  if(a.data<TRAVA_PONTO_INICIO)return null;
+  if(!(a.dia>=1&&a.dia<=5))return null;
+  if(feriadoEm(a.data))return null;
+  var p=pontoDe(quem,a.data);
+  if(p&&(p.tipo==="folga"||p.tipo==="ferias"||p.tipo==="justificada"))return null;
+  if(p&&p.checkout)return null;
+  if(p&&p.almocoIni&&!p.almocoFim)return {tipo:"almoco",texto:"Você está no horário de almoço. Bata a volta do almoço para usar o sistema."};
+  if(!(p&&p.checkin)&&minutos(a.hm)>=minutos(j.entrada))
+    return {tipo:"entrada",texto:"Já passou do seu horário de entrada ("+j.entrada+"). Bata o seu ponto para usar o sistema."};
+  return null;
+}
+/* liga ou desliga a aparência travada (menu escondido e o aviso) e devolve o motivo */
+function aplicarTravaPonto(){
+  var m=null;try{m=motivoTravaPonto();}catch(e){console.warn("trava do ponto",e);m=null;}
+  travaPontoAtual=m;
+  try{document.body.classList.toggle("trava-ponto",!!m);
+    var av=$("travaPontoAviso");if(av){av.hidden=!m;av.textContent=m?m.texto:"";}
+    if(m){var g=document.querySelector(".rail");if(g)g.classList.remove("aberta");}}catch(e2){}
+  return m;
+}
+/* confere de tempos em tempos (e depois de cada batida): trava na hora e libera na hora */
+function checarTravaPonto(){
+  var m=aplicarTravaPonto();
+  if(m&&telaAtual&&telaAtual!=="ponto")ir("ponto");
+  /* travado: relê do banco a batida de hoje a cada 30 s — quem bateu pelo celular libera o computador
+     aberto sem recarregar */
+  if(m&&db&&Date.now()-travaPontoBatidaRelida>30000){travaPontoBatidaRelida=Date.now();
+    var hj=agoraBrasilia().data;
+    col("pontos").get({de:hj,ate:hj}).then(function(r){
+      (r&&r.docs||[]).forEach(function(d){var o=d.data()||{};o.id=d.id;
+        var ix=-1;for(var k=0;k<pontos.length;k++){if(pontos[k].id===o.id){ix=k;break;}}
+        if(ix>=0)pontos[ix]=o;else pontos.push(o);});
+      if(!aplicarTravaPonto()&&telaAtual==="ponto")try{renderPonto();}catch(eR){}
+    }).catch(function(){});}
+  /* travado: relê o liga/desliga a cada minuto, para o Administrador poder soltar todo mundo */
+  if(m&&db&&Date.now()-travaPontoRelido>60000){travaPontoRelido=Date.now();
+    db.doc("config/trava_ponto").get().then(function(g){
+      if(g&&g.exists&&g.data()){CFG_TRAVA_PONTO={ligado:g.data().ligado!==false,historico:g.data().historico||[]};aplicarTravaPonto();}
+    }).catch(function(){});}
+  return m;
+}
+setInterval(function(){try{if(usuarioAtual)checarTravaPonto();}catch(e){}},20000);
+setInterval(function(){acertarHoraServidor();},600000);
+function renderTravaPontoCfg(){
+  var c=$("em_travaCard");if(!c)return;
+  var adm=ehAdministrador();c.hidden=!adm;if(!adm)return;
+  $("em_travaPonto").checked=travaPontoLigada();
+  var h=(CFG_TRAVA_PONTO.historico||[]).slice(-5).reverse();
+  $("em_travaInfo").innerHTML='<div class="t-sub">Vale a partir de '+dataBR(TRAVA_PONTO_INICIO)+", de segunda a sexta.</div>"+
+    (h.length?h.map(function(x){return '<div class="t-sub">'+(x.ligado?"Ligado":"Desligado")+" por "+esc(x.por||"")+" em "+esc(x.quando||"")+"</div>";}).join("")
+      :'<div class="t-sub">'+(travaPontoLigada()?"Ligado":"Desligado")+" (ninguém mudou ainda).</div>");
+}
+async function mudarTravaPonto(ligar){
+  if(!ehAdministrador()){toast("Só o Administrador liga e desliga.");renderTravaPontoCfg();return false;}
+  if(!confirm((ligar?"Ligar":"Desligar")+" \"Exigir ponto para usar o sistema\" em "+nomeLoja()+"?"+
+    (ligar?"":"\n\nTodo mundo volta a usar o sistema sem bater o ponto.")))
+    {renderTravaPontoCfg();return false;}
+  var antes=JSON.parse(JSON.stringify(CFG_TRAVA_PONTO));
+  var hist=(CFG_TRAVA_PONTO.historico||[]).concat([{ligado:!!ligar,por:usuarioAtual,quando:agoraCarimbo()}]);
+  CFG_TRAVA_PONTO={ligado:!!ligar,historico:hist};
+  try{if(db)await db.doc("config/trava_ponto").set({ligado:!!ligar,historico:hist,por:usuarioAtual,em:hojeISO()});}
+  catch(e){CFG_TRAVA_PONTO=antes;renderTravaPontoCfg();toast("Não foi salvo. Confira a internet e tente de novo.");return false;}
+  renderTravaPontoCfg();aplicarTravaPonto();
+  toast("Exigir ponto para usar o sistema: "+(ligar?"ligado":"desligado")+" em "+nomeLoja()+".");
+  return true;
+}
+window.__travaPontoMF={motivo:function(q){return motivoTravaPonto(q);},checar:function(){return checarTravaPonto();},
+  agora:function(){return agoraBrasilia();},mudar:function(l){return mudarTravaPonto(l);},cfg:function(){return CFG_TRAVA_PONTO;},
+  desvio:function(){return desvioServidor;}};
 /* a volta do almoço prevista para este dia: a saída batida + a duração do almoço da jornada */
 function duracaoAlmoco(j){var d=minutos(j.almocoFim)-minutos(j.almocoIni);return d>0?d:0;}
 function voltaPrevista(j,p){
@@ -34173,6 +34292,7 @@ function gravarBatida(u,k,m,j,p,hoje,quem,foto,sig,extra){
           : '<div class="note warn"><b>Sem foto de referência.</b> Cadastre a sua em <b>Minha foto de referência</b>, aqui no Cartão de Ponto — a batida guardou a imagem, mas não houve comparação.</div>'));
     toast(m.n+" registrado às "+hora+".");
     renderPonto();
+    try{checarTravaPonto();}catch(eTv){}
   });
 }
 function renderPonto(){
@@ -54322,7 +54442,7 @@ function render(){
     desenhaTela("relat",renderDRE);desenhaTela("veiculos",renderVeiculos);
     desenhaTela("faturamento",renderFaturamento);desenhaTela("notas",renderNotas);
     desenhaTela("os",renderOS);desenhaTela("manut",renderManut);
-    desenhaTela("prest",renderPrest);desenhaTela("empresa",function(){renderGeoLojas();renderRespLojas();});
+    desenhaTela("prest",renderPrest);desenhaTela("empresa",function(){renderGeoLojas();renderRespLojas();renderTravaPontoCfg();});
     desenhaTela("rastreio",renderRastreio);
     desenhaTela("estEmpresa",renderEstEmpresa);desenhaTela("estColab",renderEstColab);
     desenhaTela("estAfazer",renderEstAfazer);desenhaTela("estSaldo",renderEstSaldo);desenhaTela("estHist",renderEstHist);
@@ -55777,9 +55897,13 @@ function ir(s,doMenu){
     var h1E=seE.querySelector(".page-head h1");if(h1E){if(!h1E.__orig)h1E.__orig=h1E.textContent;
       h1E.textContent=aliasEst==="estInv"?"Inventário":(aliasEst==="estRecup"?"Recuperações":h1E.__orig);}}}catch(eAl){}
   try{var scE=$("s-estColab");if(scE&&s!=="minhasferr")scE.classList.remove("so-ferr");}catch(eAl2){}
+  /* 05/11 (regra dele): passou do horário de entrada sem bater (ou está no almoço) → só o Cartão de Ponto,
+     por qualquer caminho que chame uma tela */
+  var tvP=aplicarTravaPonto();
+  if(tvP&&s!=="ponto"){if(telaAtual==="ponto"){toast(tvP.texto);return false;}s="ponto";aliasEst="";}
   /* 27/10 (decisão dele): atalho para tela que a pessoa não tem recusa com aviso — antes ele
      abria a tela mesmo assim, e desmarcar só tirava o item do menu */
-  if(TODAS_TELAS.indexOf(s)>=0&&!veTela(s)){
+  if(TODAS_TELAS.indexOf(s)>=0&&!veTela(s)&&!(tvP&&s==="ponto")){
     toast("Você não tem acesso à tela "+nomeDaTela(s)+".");
     return false;
   }
@@ -57797,6 +57921,7 @@ function ligar(){
   $("bq_reag").onclick=function(){var a=bloqPend;$("bloqAg").hidden=true;bloqPend=null;if(a)abrirReagendar(a);};
   $("ju_ok").onclick=confirmarJustificar;
   $("ju_fechar").onclick=function(){$("justModal").hidden=true;juCtx=null;};
+  $("em_travaPonto").onchange=function(){mudarTravaPonto(this.checked);};
   $("enNova").onclick=novaEntrada;$("mx_ok").onclick=lancarEntrada;
   $("mx_voltar").onclick=function(){$("enForm").hidden=true;$("enLista").hidden=false;renderEntradas();};
   $("mx_fornBusca").oninput=opcoesFornEntrada;$("mx_forn").onchange=avisoDupEntrada;$("mx_nota").oninput=avisoDupEntrada;

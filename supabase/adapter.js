@@ -1469,6 +1469,13 @@
       return true;
     };
 
+    /* HORA DO SERVIDOR (05/11): a trava do ponto usa a hora do banco, não a do aparelho
+       (supabase/hora-servidor.sql). Devolve o texto do timestamptz. */
+    adapter.horaServidor = async function () {
+      var r = conferir(await sb.rpc("hora_servidor"), "hora do servidor", true);
+      return r.data || null;
+    };
+
     /* carimba perfis.ultimo_acesso sem abrir update de perfis para o cliente
        (que deixaria qualquer um trocar a própria função) */
     adapter.registrarAcesso = async function () {
