@@ -8750,7 +8750,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=511"></script>
+<script src="supabase/adapter.js?v=512"></script>
 <script>
 (function(){
 "use strict";
@@ -33435,16 +33435,32 @@ async function enviarSolicitacaoPonto__corpo(){
       return erro("Os horários ficaram fora de ordem: "+nomeMarcHist(a.k)+" "+res[a.k]+" e "+nomeMarcHist(b.k)+" "+res[b.k]+
         ". A ordem é entrada, saída do almoço, volta do almoço e saída.");
   }
-  var p=p0,novo=!p;
-  if(novo)p={id:uid(),loja:lojaAtual,colaborador:usuarioAtual,data:data,tipo:"normal",criadoEm:hojeISO()};
-  var antes=JSON.parse(JSON.stringify(p)),grupo=uid(),emIso=new Date().toISOString(),qd=hojeISO()+" "+agoraHM();
-  p.solicitacoes=(p.solicitacoes||[]).concat(itens.map(function(x){
+  var p=p0,novo=!p,grupo=uid(),emIso=new Date().toISOString(),qd=hojeISO()+" "+agoraHM();
+  var novas=itens.map(function(x){
     return {id:uid(),grupo:grupo,marc:x.k,hora:x.hora,de:x.de,motivo:x.motivo,por:usuarioAtual,
-      em:emIso,quando:qd,status:"pendente"};}));
-  if(novo)pontos.push(p);
-  try{await gravaConf("pontos",p);}
-  catch(e){if(novo)pontos.splice(pontos.indexOf(p),1);else{Object.keys(p).forEach(function(x){delete p[x];});Object.assign(p,antes);}
-    $("ps_alerta").innerHTML='<div class="note crit">Não foi salvo: '+esc((e&&e.message)||String(e))+"</div>";return false;}
+      em:emIso,quando:qd,status:"pendente"};});
+  /* 05/11 (defeito da v511): no banco, o pedido vai pela função pedir_ajuste_ponto — ela só
+     acrescenta o pedido no ponto do próprio colaborador, de hoje ou de dia anterior, sem tocar
+     em batida nenhuma. Gravar o documento inteiro esbarrava (com razão) na regra do banco que
+     só deixa o colaborador mexer no ponto de HOJE. */
+  var api=apiPedidoPonto();
+  if(api){
+    var doc;
+    try{doc=await api.pedirAjustePonto(lojaAtual,data,novo?uid():p.id,novas);}
+    catch(e){$("ps_alerta").innerHTML='<div class="note crit">Não foi salvo: '+esc((e&&e.message)||String(e))+"</div>";return false;}
+    if(doc&&doc.id){
+      if(novo){p=doc;pontos.push(p);}
+      else{p.solicitacoes=doc.solicitacoes||p.solicitacoes;}
+    }
+  }else{
+    if(novo)p={id:uid(),loja:lojaAtual,colaborador:usuarioAtual,data:data,tipo:"normal",criadoEm:hojeISO()};
+    var antes=JSON.parse(JSON.stringify(p));
+    p.solicitacoes=(p.solicitacoes||[]).concat(novas);
+    if(novo)pontos.push(p);
+    try{await gravaConf("pontos",p);}
+    catch(e){if(novo)pontos.splice(pontos.indexOf(p),1);else{Object.keys(p).forEach(function(x){delete p[x];});Object.assign(p,antes);}
+      $("ps_alerta").innerHTML='<div class="note crit">Não foi salvo: '+esc((e&&e.message)||String(e))+"</div>";return false;}
+  }
   $("psModal").hidden=true;
   toast("Pedido enviado ao Administrador: "+itens.map(function(x){return nomeMarcHist(x.k)+" às "+x.hora;}).join(", ")+" de "+dataCurta(data)+".");
   try{renderPonto();renderSino();}catch(e2){}
@@ -33494,6 +33510,12 @@ async function aprovarGrupoPonto__corpo(pid,gid){
 }
 window.__aprovarGrupoPontoMF=function(pid,gid){return aprovarGrupoPonto(pid,gid);};
 /* o colaborador viu a resposta: some do sino dele */
+/* no banco, o pedido de ajuste e a "resposta vista" passam pelas funções do banco
+   (supabase/pedido-ajuste-ponto.sql); nos testes, pelo gancho de teste */
+function apiPedidoPonto(){
+  if(window.MODO_DEMO_MF&&window.__rpcPontoTesteMF)return window.__rpcPontoTesteMF;
+  return (modoBanco()&&db&&db.pedirAjustePonto)?db:null;
+}
 async function marcarRespostasVistas(){
   var mud=[];
   pontos.forEach(function(p){
@@ -33501,6 +33523,10 @@ async function marcarRespostasVistas(){
     var t=false;(p.solicitacoes||[]).forEach(function(s){if(s.status!=="pendente"&&s.visto===false){s.visto=true;t=true;}});
     if(t)mud.push(p);
   });
+  if(!mud.length)return;
+  /* 05/11: a resposta de dia anterior também some do sino (antes o banco recusava calado) */
+  var api=apiPedidoPonto();
+  if(api&&api.marcarVistasPonto){try{await api.marcarVistasPonto(lojaAtual);}catch(e){console.warn("respostas vistas",e);}return;}
   for(var i=0;i<mud.length;i++){try{await grava("pontos",mud[i]);}catch(e){}}
 }
 /* ---- visão Equipe (só quem ajusta o ponto) ---- */

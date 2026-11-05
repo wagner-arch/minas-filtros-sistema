@@ -1488,6 +1488,22 @@
       }), "registrar o celular do lembrete de ponto", true);
       return true;
     };
+    /* PEDIDO DE AJUSTE DO PONTO (05/11, defeito da v511): pelas funções do banco, que só
+       acrescentam o pedido no ponto do próprio colaborador (supabase/pedido-ajuste-ponto.sql) */
+    adapter.pedirAjustePonto = async function (loja, dia, id, solicitacoes) {
+      var r = await comSessao(function () {
+        return sb.rpc("pedir_ajuste_ponto", { p_loja: loja, p_data: dia, p_id: id || null, p_solicitacoes: solicitacoes });
+      });
+      /* a recusa da regra (dia futuro, pedido repetido...) já vem em português: mostra como está */
+      if (r && r.error && r.error.code === "P0001") throw new Error(r.error.message);
+      conferir(r, "pedir ajuste do ponto", true);
+      return r.data;
+    };
+    adapter.marcarVistasPonto = async function (loja) {
+      var r = await comSessao(function () { return sb.rpc("marcar_respostas_vistas_ponto", { p_loja: loja }); });
+      conferir(r, "marcar respostas do ponto como vistas", true);
+      return r.data || 0;
+    };
     adapter.celularesPonto = async function () {
       var r = conferir(await sb.from("dispositivos_ponto")
         .select("nome,tipo,permissao,ativo,atualizado_em,modelo").limit(500), "celulares do lembrete de ponto", false);
