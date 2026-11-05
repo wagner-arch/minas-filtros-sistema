@@ -7071,6 +7071,12 @@ img{max-width:100%}
         <option value="almox">Almoxarifado</option><option value="loja">Estoque da Loja</option><option value="colab">Estoque de vendedores</option></select></div>
       <div id="iv_colabs" hidden></div>
       <div class="fld"><label for="iv_grupo">O que contar</label><select id="iv_grupo"></select></div>
+      <div id="iv_alguns" hidden>
+        <div class="fld"><label for="iv_algBusca">Buscar o produto (nome ou código)</label><input id="iv_algBusca" type="search" autocomplete="off" placeholder="Digite o nome ou o código"></div>
+        <div id="iv_algRes"></div>
+        <p class="sect-t" style="margin-top:10px">Produtos escolhidos: <span id="iv_algN">0</span></p>
+        <div id="iv_algSel"></div>
+      </div>
     </div>
     <div id="iv_contar" hidden>
       <div class="note" id="iv_instr"></div>
@@ -23338,7 +23344,96 @@ function exportarRecuperacoes(){
 var inventarios=[],invLido=false,invLendo=null,invAtual=null;
 var INV_ABERTOS=["contagem","recontagem","aprovacao"];
 var INV_SIT={contagem:["1ª contagem","p-acc"],recontagem:["Recontagem","p-warn"],aprovacao:["Aguardando o Administrador","p-warn"],
-  fechado:["Fechado","p-ok"],cancelado:["Cancelado","p-mut"]};
+  fechado:["Fechado","p-ok"],cancelado:["Cancelado","p-mut"],desfeito:["Desfeito","p-mut"]};
+/* ===== INVENTÁRIO DE ALGUNS PRODUTOS, ENCERRAR SÓ COM TUDO CONTADO E DESFAZER (05/11, regra dele) =====
+   Um inventário do estoque inteiro foi aberto para conferir um produto só; os outros, não contados,
+   entraram como zero e foram zerados na aprovação. Agora: dá para abrir só com alguns produtos (só
+   eles podem ser ajustados), o estoque inteiro só encerra com todos contados (nunca vira zero sozinho)
+   e o Administrador pode desfazer um inventário aprovado — só se ele ainda não teve nenhum estorno. */
+var ivAlg=[],ivExtra=[],ivFaltaId="";
+function tipoInvTxt(inv){
+  if(inv&&Array.isArray(inv.pids))return "Alguns produtos ("+inv.pids.length+" "+(inv.pids.length===1?"item":"itens")+")";
+  if(inv&&inv.grupo)return "Só o grupo "+inv.grupo;
+  return "Estoque inteiro";
+}
+/* os produtos que precisam ter quantidade digitada para encerrar a 1ª contagem */
+function faltamContarInv(inv){
+  var b=baseInv(inv.local),alguns=Array.isArray(inv.pids);
+  return produtosDoInv(inv).filter(function(p){
+    var it=(inv.itens||{})[p.id];if(it&&(it.c1||[]).length)return false;
+    return alguns||sisInv(b,p.id,inv.local)!==0;});
+}
+function desenharAlgunsInv(){
+  var w=$("iv_alguns");if(!w)return;
+  w.hidden=($("iv_grupo").value!=="__alguns");
+  if(w.hidden)return;
+  var q=semAcento($("iv_algBusca").value||"").trim();
+  var res=q.length<2?[]:produtos.filter(function(p){
+    if(ehProdSistemaInv(p)||ivAlg.indexOf(p.id)>=0)return false;
+    return semAcento((p.cod||"")+" "+(p.nome||"")).indexOf(q)>=0;}).slice(0,20);
+  $("iv_algRes").innerHTML=q.length<2?'<div class="help">Digite pelo menos 2 letras ou números.</div>':
+    (res.length?res.map(function(p){return '<button class="btn ghost sm" type="button" data-ivalg="'+esc(p.id)+'" style="margin:2px">+ '+
+      esc((p.cod?p.cod+" · ":"")+(p.nome||""))+((p.status||"ativo")!=="ativo"?" (inativo)":"")+"</button>";}).join(""):'<div class="help">Nenhum produto encontrado.</div>');
+  $("iv_algN").textContent=ivAlg.length;
+  $("iv_algSel").innerHTML=ivAlg.map(function(pid){var p=prodPorId(pid)||{};
+    return '<span class="pill p-acc" style="margin:2px;display:inline-block">'+esc((p.cod?p.cod+" · ":"")+(p.nome||""))+
+      ' <button type="button" class="btn mut sm" data-ivalgx="'+esc(pid)+'" aria-label="Tirar">×</button></span>';}).join("")||'<div class="help">Nenhum ainda.</div>';
+  [].forEach.call($("iv_algRes").querySelectorAll("[data-ivalg]"),function(b){b.onclick=function(){
+    ivAlg.push(b.getAttribute("data-ivalg"));$("iv_algBusca").value="";desenharAlgunsInv();try{$("iv_algBusca").focus();}catch(e){}};});
+  [].forEach.call($("iv_algSel").querySelectorAll("[data-ivalgx]"),function(b){b.onclick=function(){
+    var ix=ivAlg.indexOf(b.getAttribute("data-ivalgx"));if(ix>=0)ivAlg.splice(ix,1);desenharAlgunsInv();};});
+}
+/* ---------- DESFAZER INVENTÁRIO ---------- */
+function infoDesfazerInv(inv){
+  var ids={};(inv.ajustes||[]).forEach(function(id){ids[id]=1;});
+  movEst.forEach(function(m){if(m.inventarioId===inv.id)ids[m.id]=1;});
+  var aj=movEst.filter(function(m){return ids[m.id];});
+  var estornos=movEst.filter(function(m){return (m.estornoDe&&ids[m.estornoDe])||(m.estornoInventarioId&&m.estornoInventarioId===inv.id);});
+  return {ajustes:aj,estornos:estornos,naoCarregados:Object.keys(ids).length-aj.length};
+}
+function desfazerInv(){return travaSalvar("desfazerInv",desfazerInv__corpo,this,arguments);}
+async function desfazerInv__corpo(){
+  var inv=invAtual;if(!inv)return false;
+  if(!ehAdministrador()){$("iv_alerta").innerHTML='<div class="note crit">Só o Administrador desfaz o inventário.</div>';return false;}
+  if(inv.status!=="fechado"){$("iv_alerta").innerHTML='<div class="note crit">Só se desfaz inventário aprovado.</div>';return false;}
+  var I=infoDesfazerInv(inv);
+  /* qualquer estorno, mesmo de parte dos ajustes ou feito à mão no banco, impede: há inventários
+     desfeitos pela metade de propósito, e desfazer o resto estragaria o que já foi corrigido */
+  if(I.estornos.length){$("iv_alerta").innerHTML='<div class="note crit">Este inventário já teve ajustes desfeitos. Não é possível desfazer de novo.</div>';return false;}
+  if(I.naoCarregados){$("iv_alerta").innerHTML='<div class="note crit">Os ajustes deste inventário não estão todos carregados neste aparelho. Atualize a página e tente de novo.</div>';return false;}
+  if(!I.ajustes.length){$("iv_alerta").innerHTML='<div class="note crit">Este inventário não tem ajustes para desfazer.</div>';return false;}
+  var volta={p:{},q:0},sai={p:{},q:0};
+  I.ajustes.forEach(function(m){var x=(m.origem===inv.local)?volta:sai;x.p[m.produtoId]=1;x.q+=(+m.qtd||0);});
+  var nV=Object.keys(volta.p).length,nS=Object.keys(sai.p).length;
+  if(!confirm("Desfazer o inventário nº "+inv.numero+" · "+nomeEstoqueInv(inv.local)+"?\n\n"+
+    "• "+nV+" produto(s), "+volta.q+" peça(s) VOLTAM para o estoque (o inventário tinha tirado)\n"+
+    "• "+nS+" produto(s), "+sai.q+" peça(s) SAEM do estoque (o inventário tinha somado)\n\n"+
+    "Cada ajuste ganha um movimento contrário e o inventário fica como Desfeito. Isso não se repete."))return false;
+  var feitos=[],doc="Inventário nº "+inv.numero;
+  try{
+    for(var i=0;i<I.ajustes.length;i++){
+      var a=I.ajustes[i];
+      var m={id:uid(),loja:a.loja||lojaAtual,produtoId:a.produtoId,qtd:+a.qtd||0,origem:a.destino,destino:a.origem,doc:doc,
+        obs:"Desfazer o inventário nº "+inv.numero,estornoDe:a.id,estornoInventarioId:inv.id,centroId:"",
+        data:hojeISO(),por:usuarioAtual,em:new Date().toISOString()};
+      await gravaConf("movest",m);movEst.push(m);feitos.push(m);
+      $("iv_alerta").innerHTML='<div class="note warn">⏳ Desfazendo '+(i+1)+" de "+I.ajustes.length+"… aguarde. Não feche nem toque em nada.</div>";
+      andamentoSalvando(i+1,I.ajustes.length);
+    }
+    $("iv_alerta").innerHTML="";
+  }catch(e){
+    await desfazerMovsInv(feitos);
+    avisarRecusaBanco("iv_alerta",e,"Nada foi desfeito; o inventário continua como estava.");return false;}
+  var antes=copiaInv(inv);
+  inv.status="desfeito";inv.desfeitoPor=usuarioAtual;inv.desfeitoEm=quandoInv();inv.estornos=feitos.map(function(m){return m.id;});
+  inv.historico=(inv.historico||[]).concat([{quando:inv.desfeitoEm,por:usuarioAtual,texto:"Inventário desfeito · "+feitos.length+" ajuste(s) estornado(s)"}]);
+  if(!(await salvarInv(inv,antes))){await desfazerMovsInv(feitos);return false;}
+  toast("Inventário nº "+inv.numero+" desfeito: "+feitos.length+" ajuste(s) estornado(s).");
+  try{render();agendarEstNovas();}catch(e2){}
+  desenharInv();return true;
+}
+window.__desfazerInvMF=function(){return desfazerInv();};
+window.__infoDesfazerInvMF=function(v){var I=infoDesfazerInv(v);return {ajustes:I.ajustes.length,estornos:I.estornos.length};};
 async function carregarInventarios(forcar){
   if(invLido&&!forcar)return;
   if(invLendo)return invLendo;
@@ -23413,6 +23508,8 @@ function invDaLoja(){return inventarios.filter(function(v){return v.loja===lojaA
 function invAbertoDe(local){return invDaLoja().filter(function(v){return v.local===local&&INV_ABERTOS.indexOf(v.status)>=0;})[0]||null;}
 function ehProdSistemaInv(p){try{return produtoDeSistema(p);}catch(e){return false;}}
 function produtosDoInv(inv){
+  /* inventário de alguns produtos: só os escolhidos, mais nada */
+  if(inv&&Array.isArray(inv.pids))return produtos.filter(function(p){return inv.pids.indexOf(p.id)>=0;});
   return produtos.filter(function(p){
     if(inv.grupo&&p.grupo!==inv.grupo)return false;
     if(ehProdSistemaInv(p))return false;
@@ -23672,7 +23769,7 @@ function renderInventarios(h,b){
     var div=v.status==="contagem"?"—":its.filter(function(it){return difInv(it)!==0;}).length;
     var st=INV_SIT[v.status]||[v.status,"p-mut"];
     var tr=document.createElement("tr");tr.className="clickable";tr.setAttribute("data-ivab",v.id);
-    tr.innerHTML="<td><b>"+v.numero+"</b></td><td>"+esc(nomeEstoqueInv(v.local))+(v.grupo?'<div class="t-sub">grupo '+esc(v.grupo)+"</div>":"")+"</td>"+
+    tr.innerHTML="<td><b>"+v.numero+"</b></td><td>"+esc(nomeEstoqueInv(v.local))+'<div class="t-sub">'+esc(tipoInvTxt(v))+"</div></td>"+
       "<td>"+esc(v.abertoEm||"")+'<div class="t-sub">'+esc(v.abertoPor||"")+"</div></td>"+
       '<td><span class="pill '+st[1]+'">'+esc(st[0])+"</span>"+(v.status==="fechado"&&v.aprovadoPor?'<div class="t-sub">aprovado por '+esc(v.aprovadoPor)+"</div>":"")+"</td>"+
       '<td class="num">'+cont+'</td><td class="num">'+div+"</td>";
@@ -23684,7 +23781,7 @@ function renderInventarios(h,b){
 }
 
 function abrirInv(inv){
-  invAtual=inv;
+  invAtual=inv;ivExtra=[];
   ivsZerar();ivJaPend=null;ivBusca="";
   $("iv_alerta").innerHTML="";
   $("invModal").hidden=false;
@@ -23707,17 +23804,19 @@ function desenharInv(){
     $("iv_etapas").innerHTML=etapasInvHtml("");
     var gs={};produtos.forEach(function(p){if(p.grupo)gs[p.grupo]=1;});
     $("iv_estoque").onchange=desenharColabsInv;desenharColabsInv();
-    $("iv_grupo").innerHTML='<option value="">Todo o estoque</option>'+Object.keys(gs).sort(ordAZ)
+    $("iv_grupo").innerHTML='<option value="">Contar o estoque inteiro</option><option value="__alguns">Contar só alguns produtos</option>'+Object.keys(gs).sort(ordAZ)
       .map(function(g){return '<option value="'+esc(g)+'">Só o grupo '+esc(g)+"</option>";}).join("");
+    ivAlg=[];$("iv_algBusca").value="";
+    $("iv_grupo").onchange=desenharAlgunsInv;$("iv_algBusca").oninput=desenharAlgunsInv;desenharAlgunsInv();
     $("iv_novo").hidden=false;
     bt("iv_criar","Abrir o inventário");bt("iv_fechar","Fechar","mut");
     $("iv_criar").onclick=criarInv;
   }else{
     var st=INV_SIT[inv.status]||[inv.status,"p-mut"];
     $("iv_titulo").textContent="Inventário nº "+inv.numero;
-    $("iv_sub").innerHTML=esc(nomeEstoqueInv(inv.local))+(inv.grupo?" · grupo "+esc(inv.grupo):"")+" · aberto em "+esc(inv.abertoEm||"")+
+    $("iv_sub").innerHTML=esc(nomeEstoqueInv(inv.local))+" · <b>"+esc(tipoInvTxt(inv))+"</b> · aberto em "+esc(inv.abertoEm||"")+
       " por "+esc(inv.abertoPor||"")+' · <span class="pill '+st[1]+'">'+esc(st[0])+"</span>";
-    $("iv_etapas").innerHTML=inv.status==="cancelado"?"":etapasInvHtml(inv.status);
+    $("iv_etapas").innerHTML=(inv.status==="cancelado"||inv.status==="desfeito")?"":etapasInvHtml(inv.status);
     if(inv.status==="contagem"||inv.status==="recontagem"){
       if(podeContarInv())desenharContagemInv(inv,bt);
       else{$("iv_revisao").hidden=false;$("iv_revisao").innerHTML='<div class="note">A contagem é do almoxarifado. Quando terminar, ela vem para a aprovação do Administrador.</div>';}
@@ -23754,7 +23853,11 @@ function desenharColabsInv(){
   $("iv_colTodos").onclick=function(){[].forEach.call(w.querySelectorAll("[data-ivcol]:not(:disabled)"),function(c){c.checked=true;});};
 }
 function opcoesProdutosInv(inv){
-  var ps=produtosDoInv(inv).slice().sort(function(a,b2){return ordAZ(a.nome||"",b2.nome||"");});
+  var ps=produtosDoInv(inv).slice();
+  /* estoque inteiro: o produto encontrado na prateleira que não estava na lista também entra */
+  if(!Array.isArray(inv.pids)){var tem={};ps.forEach(function(p){tem[p.id]=1;});
+    ivExtra.concat(Object.keys(inv.itens||{})).forEach(function(pid){var p=prodPorId(pid);if(p&&!tem[pid]){tem[pid]=1;ps.push(p);}});}
+  ps.sort(function(a,b2){return ordAZ(a.nome||"",b2.nome||"");});
   if(inv.status==="recontagem")ps=ps.filter(function(p){var it=(inv.itens||{})[p.id];return it&&it.recontar;});
   return '<option value="">— escolha —</option>'+ps.map(function(p){
     return '<option value="'+esc(p.id)+'" data-cod="'+esc(p.cod||"")+'">'+esc(p.nome||"")+"</option>";}).join("");
@@ -23768,17 +23871,31 @@ function desenharContagemInv(inv,bt){
   $("iv_contar").hidden=false;
   var its=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];});
   if(fase==="c1"){
-    var bNC=baseInv(inv.local);
-    var naoContados=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return sisInv(bNC,p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
+    var naoContados=faltamContarInv(inv);
     $("iv_instr").innerHTML="<b>Contagem cega.</b> Leia o código de barras ou digite o código ou o nome, e escreva <b>quantas unidades você contou</b>. "+
       "O mesmo produto em dois lugares: registre cada lugar, o sistema soma. Pode parar e continuar depois — fica tudo salvo."+naoConteInvHtml(inv.local);
     var h='<p class="sect-t" style="margin-top:14px">Contados ('+its.filter(function(it){return (it.c1||[]).length;}).length+")</p>"+listaEntradasInv(inv,"c1");
-    if(naoContados.length)h+='<details class="iv-falta"><summary>Ainda não contados: '+naoContados.length+" produto(s) que o sistema diz ter neste estoque</summary>"+
-      '<div class="t-sub">'+naoContados.slice(0,400).map(function(p){return esc(p.nome)+(p.cod?" ("+esc(p.cod)+")":"");}).join(" · ")+
-      '</div><div class="help">O que não for contado entra como <b>zero</b> ao encerrar a contagem e vai para a recontagem.</div></details>';
+    if(naoContados.length)h+='<details class="iv-falta" id="iv_faltaBox"'+(ivFaltaId===inv.id?' open style="border:2px solid var(--crit);padding:8px;border-radius:8px"':"")+
+      '><summary>Ainda não contados: '+naoContados.length+" produto(s)"+(Array.isArray(inv.pids)?" da lista":" que o sistema diz ter neste estoque")+"</summary>"+
+      '<div class="t-sub">'+naoContados.slice(0,400).map(function(p){return '<span class="iv-falta-p" style="color:var(--crit)">'+esc(p.nome)+(p.cod?" ("+esc(p.cod)+")":"")+"</span>";}).join(" · ")+
+      '</div><div class="help">Digite a quantidade de todos (se não encontrou, digite 0). A contagem só encerra com todos contados.</div></details>';
+    /* estoque inteiro: produto que está na prateleira mas não está na lista (saldo zero no sistema) */
+    if(!Array.isArray(inv.pids))h='<div class="actions" style="margin-top:10px"><button class="btn ghost sm" type="button" id="iv_addEnc">Adicionar produto encontrado</button></div>'+
+      '<div id="iv_encBox" hidden><div class="fld"><label for="iv_encBusca">Produto encontrado (nome ou código)</label><input id="iv_encBusca" type="search" autocomplete="off" placeholder="Digite o nome ou o código"></div><div id="iv_encRes"></div></div>'+h;
     $("iv_lista").innerHTML=h;
     bt("iv_encerrar1","Encerrar a 1ª contagem");
     $("iv_encerrar1").onclick=encerrarContagemInv;
+    if($("iv_addEnc")){
+      $("iv_addEnc").onclick=function(){$("iv_encBox").hidden=!$("iv_encBox").hidden;if(!$("iv_encBox").hidden)try{$("iv_encBusca").focus();}catch(e){}};
+      $("iv_encBusca").oninput=function(){
+        var q=semAcento(this.value||"").trim();
+        var res=q.length<2?[]:produtos.filter(function(p){return !ehProdSistemaInv(p)&&semAcento((p.cod||"")+" "+(p.nome||"")).indexOf(q)>=0;}).slice(0,20);
+        $("iv_encRes").innerHTML=q.length<2?'<div class="help">Digite pelo menos 2 letras ou números.</div>':(res.length?res.map(function(p){
+          return '<button class="btn ghost sm" type="button" data-ivenc="'+esc(p.id)+'" style="margin:2px">'+esc((p.cod?p.cod+" · ":"")+(p.nome||""))+
+            ((p.status||"ativo")!=="ativo"?" (inativo)":"")+"</button>";}).join(""):'<div class="help">Nenhum produto encontrado.</div>');
+        [].forEach.call($("iv_encRes").querySelectorAll("[data-ivenc]"),function(b){b.onclick=function(){adicionarEncontradoInv(b.getAttribute("data-ivenc"));};});
+      };
+    }
   }else{
     var rec=its.filter(function(it){return it.recontar;});
     var feitos=rec.filter(function(it){return (it.c2||[]).length;});
@@ -23876,6 +23993,7 @@ async function registrarContagemInv(m){
   if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem conta é o almoxarifado.</div>';return;}
   var pid=$("iv_prod").value,qs=String($("iv_qtd").value).trim();
   if(!pid){$("iv_alerta").innerHTML='<div class="note crit"><b>Escolha o produto</b> — leia o código de barras ou digite o código ou o nome.</div>';return;}
+  if(Array.isArray(inv.pids)&&inv.pids.indexOf(pid)<0){$("iv_alerta").innerHTML='<div class="note crit">Este produto não está neste inventário.</div>';return;}
   if(qs===""||!(+qs>=0)||Math.floor(+qs)!==+qs){$("iv_alerta").innerHTML='<div class="note crit"><b>Escreva a quantidade contada</b> (número inteiro; zero se não achou nenhuma).</div>';return;}
   var fase=inv.status==="recontagem"?"c2":"c1";
   if(fase==="c2"&&!((inv.itens||{})[pid]||{}).recontar){$("iv_alerta").innerHTML='<div class="note crit">Este produto não está na recontagem.</div>';return;}
@@ -23914,6 +24032,23 @@ async function registrarContagemInv(m){
   desenharInv();
   if(pedeS&&fase==="c2")ivsAbrirEntrada(pid,fase,it[fase].length-1);
 }
+/* "Adicionar produto encontrado" (05/11): o produto entra na lista de escolha e fica selecionado para
+   digitar a quantidade; só passa a contar quando a contagem for registrada */
+function adicionarEncontradoInv(pid){
+  var inv=invAtual,p=prodPorId(pid);if(!inv||!p)return false;
+  if(Array.isArray(inv.pids)){toast("Este inventário é só de alguns produtos.");return false;}
+  if(ivExtra.indexOf(pid)<0)ivExtra.push(pid);
+  desenharInv();
+  $("iv_prod").value=pid;try{$("iv_prod").dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}
+  try{$("iv_qtd").focus();}catch(e2){}
+  toast((p.cod?p.cod+" · ":"")+(p.nome||"")+" escolhido. Digite a quantidade contada e registre.");
+  return true;
+}
+window.__addEncontradoInvMF=function(pid){return adicionarEncontradoInv(pid);};
+/* só para os roteiros de teste: digita 0, pela própria contagem, em cada produto que falta (como a pessoa faria) */
+window.__zerarFaltamInvMF=async function(){var inv=invAtual;if(!inv)return 0;var L=faltamContarInv(inv),n=0;
+  for(var i=0;i<L.length;i++){$("iv_prod").value=L[i].id;$("iv_qtd").value="0";$("iv_obs").value="";try{ivsZerar();}catch(e){}await registrarContagemInv();n++;}
+  return n;};
 /* conferência aberta com alteração: grava antes de seguir, para nada se perder */
 async function ivsSalvarSeSujo(){
   if(!IVS.alvo)return true;
@@ -23933,13 +24068,17 @@ async function encerrarContagemInv(){
   var inv=invAtual;if(!inv)return;
   if(!podeContarInv()){$("iv_alerta").innerHTML='<div class="note crit">Quem conta é o Almoxarifado ou o Administrador.</div>';return;}
   if(IVS.alvo&&!(await ivsSalvarSeSujo()))return;
-  var bE=baseInv(inv.local);
-  var naoC=produtosDoInv(inv).filter(function(p){var it=(inv.itens||{})[p.id];return sisInv(bE,p.id,inv.local)!==0&&!(it&&(it.c1||[]).length);});
-  if(!confirm("Encerrar a contagem?"+(naoC.length?" "+naoC.length+" produto(s) com saldo no sistema não foram contados e entram como ZERO.":"")+
-    " Com diferença, o inventário vai para a aprovação do Administrador."))return;
+  /* 05/11 (regra dele): produto sem contagem nunca vira zero sozinho — só encerra com todos contados */
+  var naoC=faltamContarInv(inv);
+  if(naoC.length){
+    ivFaltaId=inv.id;desenharInv();
+    $("iv_alerta").innerHTML='<div class="note crit"><b>Faltam '+naoC.length+" produto"+(naoC.length>1?"s":"")+
+      " sem contagem.</b> Digite a quantidade de todos (se não encontrou, digite 0).</div>";
+    try{$("iv_faltaBox").scrollIntoView({block:"center"});}catch(e){}
+    return;}
+  if(!confirm("Encerrar a contagem? Com diferença, o inventário vai para a aprovação do Administrador."))return;
+  ivFaltaId="";
   var antes=copiaInv(inv);
-  naoC.forEach(function(p){var it=itemInv(inv,p.id);it.naoContado=true;
-    it.c1=[Object.assign(entSisInv(bE,p.id,inv.local),{qtd:0,por:usuarioAtual,em:new Date().toISOString(),quando:quandoInv(),obs:"não encontrado na 1ª contagem"})];});
   var div=0;
   Object.keys(inv.itens||{}).forEach(function(k){var it=inv.itens[k];
     if(!(it.c1||[]).length){it.recontar=false;return;}
@@ -24010,7 +24149,15 @@ function desenharRevisaoInv(inv,bt){
     : '<div class="note">Contagem encerrada. <b>Aguardando a aprovação do Administrador.</b></div>';
   else if(inv.status==="fechado")cab='<div class="note ok"><b>'+(inv.semDiferenca?"O estoque bateu — nenhum ajuste.":"Ajustes lançados")+"</b>"+
     (inv.aprovadoPor?" · aprovado por "+esc(inv.aprovadoPor)+" em "+esc(inv.fechadoEm||""):"")+(inv.ajustes?" · "+inv.ajustes.length+" movimento(s) de ajuste":"")+"</div>";
+  else if(inv.status==="desfeito")cab='<div class="note warn"><b>Inventário desfeito</b> por '+esc(inv.desfeitoPor||"")+" em "+esc(inv.desfeitoEm||"")+
+    (inv.estornos?" · "+inv.estornos.length+" ajuste(s) estornado(s)":"")+". Este inventário já teve ajustes desfeitos. Não é possível desfazer de novo.</div>";
   else if(inv.status==="cancelado")cab='<div class="note">Cancelado por '+esc(inv.canceladoPor||"")+" em "+esc(inv.canceladoEm||"")+(inv.motivoCancel?" · "+esc(inv.motivoCancel):"")+". Nenhum ajuste foi lançado.</div>";
+  /* DESFAZER (05/11): só o Administrador, só aprovado com ajustes, e só se nenhum ajuste já foi estornado */
+  if(inv.status==="fechado"&&!inv.semDiferenca&&ehAdministrador()){
+    var dI=infoDesfazerInv(inv);
+    if(dI.estornos.length)cab+='<div class="note">Este inventário já teve ajustes desfeitos. Não é possível desfazer de novo.</div>';
+    else if(dI.ajustes.length){bt("iv_desfazer","Desfazer inventário","ghost");$("iv_desfazer").onclick=desfazerInv;}
+  }
   w.innerHTML=cab+r.html+resumoSeriesInv(inv);
   if(inv.status==="aprovacao"&&podeAprovarInv()){
     bt("iv_aprovar","Aprovar e lançar os ajustes");bt("iv_devolver","Contar de novo os marcados","ghost");
@@ -24033,6 +24180,10 @@ async function aprovarInv__corpo(){
     $("iv_alerta").innerHTML='<div class="note crit"><b>Este inventário já tem '+(jaLanc||inv.ajustes.length)+
       ' ajuste(s) lançado(s).</b> A aprovação não se repete.</div>';return;}
   var its=Object.keys(inv.itens||{}).map(function(k){return inv.itens[k];}).filter(function(it){return difInv(it)!==0;});
+  /* inventário de alguns produtos: nada fora da lista é ajustado, nem forçando a tela (05/11) */
+  if(Array.isArray(inv.pids)){var foraL=its.filter(function(it){return inv.pids.indexOf(it.pid)<0;});
+    if(foraL.length){$("iv_alerta").innerHTML='<div class="note crit"><b>Produto fora da lista deste inventário:</b> '+
+      foraL.map(function(it){return esc(it.nome);}).join(" · ")+". Nada foi lançado.</div>";return;}}
   if(!confirm("Lançar "+its.length+" ajuste(s) de inventário no "+nomeEstoqueInv(inv.local)+"?"))return;
   var feitos=[],doc="Inventário nº "+inv.numero;
   try{
@@ -24104,12 +24255,14 @@ async function criarInv__corpo(){
   var ja=locais.filter(function(l){return invAbertoDe(l);});
   if(ja.length){$("iv_alerta").innerHTML='<div class="note crit">Já existe um inventário em andamento neste estoque: '+
     ja.map(function(l){return esc(nomeEstoqueInv(l))+" (nº "+invAbertoDe(l).numero+")";}).join(" · ")+"</div>";desenharColabsInv();return;}
-  var grupo=$("iv_grupo").value,feitos=[];
+  var grupo=$("iv_grupo").value,feitos=[],alguns=(grupo==="__alguns");
+  if(alguns){grupo="";if(!ivAlg.length){$("iv_alerta").innerHTML='<div class="note crit">Escolha pelo menos um produto para contar.</div>';return;}}
   for(var i=0;i<locais.length;i++){
     var inv={id:uid(),loja:lojaAtual,numero:proximoNumeroInv(),local:locais[i],grupo:grupo,status:"contagem",
       abertoEm:quandoInv(),abertoPor:usuarioAtual,criadoEm:new Date().toISOString(),itens:{},foto:{},historico:[]};
+    if(alguns)inv.pids=ivAlg.slice();
     produtosDoInv(inv).forEach(function(p){var s=saldoEm(p.id,inv.local);if(s!==0)inv.foto[p.id]=s;});
-    inv.historico.push({quando:inv.abertoEm,por:usuarioAtual,texto:"Inventário aberto · "+nomeEstoqueInv(inv.local)});
+    inv.historico.push({quando:inv.abertoEm,por:usuarioAtual,texto:"Inventário aberto · "+nomeEstoqueInv(inv.local)+" · "+tipoInvTxt(inv)});
     inventarios.push(inv);
     if(!(await salvarInv(inv,null))){if(feitos.length)toast(feitos.length+" inventário(s) abertos antes da falha.");return;}
     feitos.push(inv);
