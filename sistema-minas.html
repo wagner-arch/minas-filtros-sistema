@@ -17557,7 +17557,7 @@ async function registrarTrocaDaVenda(ped){
   var quem=ped.vendedor||usuarioAtual;
   /* um purificador por venda (regra dele, 25/09) */
   var nUsados=1;
-  var r={id:uid(),loja:ped.loja,tipo:"requisicao",origem:"troca",colaborador:quem,data:hojeISO(),
+  var r={id:uid(),loja:ped.loja,tipo:"requisicao",origem:"troca",colaborador:quem,data:hojeISO(),abertaEm:new Date().toISOString(),
     itens:[{pid:pu.id,nome:pu.nome,cod:pu.cod,qtd:nUsados,atendida:nUsados}],
     obs:"Pego na troca · Pedido "+ped.numero+" · "+nUsados+(nUsados===1?" aparelho":" aparelhos")+
       " · "+BRL(ped.troca.valor)+" de desconto de troca",
@@ -21358,7 +21358,7 @@ function novaReqVenda(p,loc,linhas){
     itens:linhas.map(function(x){return {pid:x.it.pid,nome:x.it.nome||"",cod:x.it.cod||"",qtd:x.q,atendida:x.q};}),
     obs:"Para a venda · Pedido "+p.numero+(inst?" · instalação "+dataCurta(inst.slice(0,10))+(inst.slice(11)?" "+inst.slice(11):""):""),
     data:hojeISO(),status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual,
-    origem:"venda",pedidoId:p.id,pedidoNumero:p.numero,cliente:p.cliente||""};
+    origem:"venda",pedidoId:p.id,pedidoNumero:p.numero,cliente:p.cliente||"",abertaEm:new Date().toISOString()};
 }
 /* quanto o dono do estoque tem para esta venda: {q, tem, pu = o que dá para usar} */
 function calcUsoAut(p,it){
@@ -23188,7 +23188,7 @@ async function devolverReposicaoAceita(p){
       d.status!=="cancelada"&&d.status!=="recusada";});
     if(ja)continue;
     var l=localDaReq(r);
-    var dv={id:uid(),loja:r.loja||p.loja||lojaAtual,tipo:"devolucao",colaborador:r.colaborador||"",local:l,
+    var dv={id:uid(),loja:r.loja||p.loja||lojaAtual,tipo:"devolucao",colaborador:r.colaborador||"",local:l,abertaEm:new Date().toISOString(),
       itens:aceitos.map(function(it){var q=+(it.atendida||it.qtd)||0;
         return {pid:it.pid,nome:it.nome,cod:it.cod,qtd:q,atendida:q};}),
       obs:"Devolução · pedido "+p.numero+" cancelado (a reposição já tinha sido aceita)",
@@ -23241,7 +23241,7 @@ function abrirEstoque(modo,colab,local){
     req:"Requisitar produto ao almoxarifado",dev:"Devolver produto ao almoxarifado",
     consumo:"Lançar consumo interno"}[modo]||"Movimento";
   $("es_titulo").textContent=t;
-  $("es_sub").textContent=nomeLoja();
+  $("es_sub").textContent=nomeLoja()+((modo==="req"||modo==="dev")&&esLocal?" · "+(modo==="req"?"para o ":"do ")+nomeLocal(esLocal):"");
   opcoes("es_prod",produtos.filter(function(p){return (p.status||"ativo")==="ativo";}),
     function(p){return p.id;},function(p){return p.nome;},null);
   opcoes("es_centro",centrosOrdenados().filter(function(c){return c.tipo==="saida";}),
@@ -23308,7 +23308,7 @@ async function confirmarEstoque__corpo(){
       colaborador:ehLocalLoja(lcl)?"":(esColab||usuarioAtual),
       pedidaPor:usuarioAtual,
       itens:esItens.map(function(i){return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:i.qtd,atendida:i.qtd};}),
-      obs:obs,data:data,status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual};
+      obs:obs,data:data,status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual,abertaEm:new Date().toISOString()};
     if(esModo==="dev")r.motivoDev=$("es_motivoDev").value;
     requisicoes.push(r);
     try{await gravaConf("requisicoes",r);}
@@ -25158,10 +25158,11 @@ window.__pendenciasEstoqueMF=function(){return pendenciasEstoque().length;};
 function textoReq(r){
   var cli=r.cliente||((r.pedidoId&&(pedidos.filter(function(p){return p.id===r.pedidoId;})[0]||{}).cliente)||"");
   var num=r.pedidoNumero||((r.pedidoId&&(pedidos.filter(function(p){return p.id===r.pedidoId;})[0]||{}).numero)||"");
-  if(r.origem==="reposicao")return "Reposição do pedido aprovado nº "+num+(cli?" · "+cli:"");
-  if(r.origem==="venda")return "Para atender o pedido nº "+num+(cli?" · "+cli:"");
-  if(r.origem==="troca")return "Purificador pego na troca"+(num?" · pedido nº "+num:"")+(cli?" · "+cli:"");
-  return "Requisição de "+(r.pedidaPor||r.criadoPor||r.colaborador||"—")+" · "+dataCurta(r.data||r.criadoEm||"");
+  var qd=quandoReq(r),qdT=qd?" · "+qd:"";
+  if(r.origem==="reposicao")return "Reposição do pedido aprovado nº "+num+(cli?" · "+cli:"")+qdT;
+  if(r.origem==="venda")return "Para atender o pedido nº "+num+(cli?" · "+cli:"")+qdT;
+  if(r.origem==="troca")return "Purificador pego na troca"+(num?" · pedido nº "+num:"")+(cli?" · "+cli:"")+qdT;
+  return "Requisição de "+(r.pedidaPor||r.criadoPor||r.colaborador||"—")+qdT;
 }
 function codNomeItem(i){
   var p=prodPorId(i.pid)||{},cod=i.cod||p.cod||"",nome=i.nome||p.nome||"produto";
@@ -25176,7 +25177,8 @@ function htmlAutLeve(L){
     var p=x.ped,it=x.item,a=x.aut,ix=itensDeEstoque(p).indexOf(it),q=+(it.qtd||1);
     var tem=saldoEm(it.pid,a.local),nova=autUsaRegraNova(p,a);
     return '<div class="af-item"><div class="t">'+esc(a.pedidaPor||p.vendedor||"Alguém")+" quer "+q+"× "+esc(codNomeItem(it))+"</div>"+
-      '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+" · "+esc(textoQuemInstala(p))+" · "+esc(nomeLocal(a.local))+" tem "+tem+"</div>"+
+      '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+" · "+esc(textoQuemInstala(p))+" · "+esc(nomeLocal(a.local))+" tem "+tem+
+        (quandoAut(a)?" · pedido em "+esc(quandoAut(a)):"")+"</div>"+
       '<div class="actions">'+(nova
         ?'<button class="btn" type="button" data-afusar="'+esc(p.id)+"|"+ix+'">Usar do meu</button>'+
          '<button class="btn ghost" type="button" data-afreq="'+esc(p.id)+"|"+ix+'">Requisitar</button>'
@@ -25185,6 +25187,44 @@ function htmlAutLeve(L){
       '"Requisitar": nasce uma requisição para atender o pedido. <div class="actions"><button class="btn mut sm" type="button" data-afrec="'+esc(p.id)+"|"+esc(a.id)+'">Recusar</button></div></details></div>';
   }).join("");
 }
+/* ===== REQUISITAR PELO "USUÁRIO" ESCOLHIDO (05/11, defeito da v500) =====
+   O botão "+ Requisitar produtos" nasceu na v500 abrindo sempre no estoque de quem está logado; o
+   "Usuário" só filtrava a lista. Agora ele pede para o estoque escolhido: Estoque da Loja (sem
+   colaborador), um colaborador, ou — em "Todos" — o próprio. Quem tem só a visão leve pede só para os
+   estoques dele (o próprio e a Loja que responde). */
+var afLocNome={};
+function locDoFiltroAf(){
+  var v=($("afQuem")||{}).value||"",eu=euNoEstoque();
+  if(!v)return locColab(eu);
+  if(afLocNome[v])return afLocNome[v];
+  if(v===nomeLocal(locLoja(lojaAtual)))return locLoja(lojaAtual);
+  return locColab(v);
+}
+function requisitarDoFiltroAf(){
+  var loc=locDoFiltroAf();
+  if(!visaoCompletaEst()&&meusLocaisEst().indexOf(loc)<0){
+    toast("Você só pode requisitar para o seu estoque"+(meusLocaisEst().some(ehLocalLoja)?" ou para o Estoque da Loja que você responde":"")+". Escolha em Usuário.");
+    return false;}
+  abrirEstoque("req",ehLocalLoja(loc)?"":loc.slice(6),loc);
+  return loc;
+}
+window.__requisitarAfMF=function(){return requisitarDoFiltroAf();};
+/* ===== DATA E HORA DA REQUISIÇÃO (05/11, pedido dele) =====
+   A partir de hoje a requisição grava abertaEm (data e hora); as antigas mostram só a data. */
+function quandoIso(isoTxt){
+  var d=new Date(isoTxt);if(isNaN(d))return "";
+  var o={};new Intl.DateTimeFormat("pt-BR",{timeZone:"America/Sao_Paulo",day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:false})
+    .formatToParts(d).forEach(function(x){o[x.type]=x.value;});
+  return o.day+"/"+o.month+"/"+o.year+" "+String((+o.hour||0)%24).padStart(2,"0")+":"+o.minute;
+}
+function quandoReq(r){
+  if(!r)return "";
+  if(r.abertaEm){var q=quandoIso(r.abertaEm);if(q)return q;}
+  if(/T/.test(String(r.criadoEm||""))){var q2=quandoIso(r.criadoEm);if(q2)return q2;}
+  var d=String(r.data||r.criadoEm||"").slice(0,10);
+  return d?dataBR(d):"";
+}
+function quandoAut(a){return a&&a.pedidaEm?quandoIso(a.pedidaEm):"";}
 function htmlReqAceitar(L){
   return L.map(function(r){
     var o=r.origem||"";
@@ -25209,15 +25249,19 @@ function renderEstAfazer(){
   function kR(r){return nomeLocal(localDaReq(r))||"";}
   function kA(x){return x.aut.pedidaPor||x.ped.vendedor||"";}
   var nomesF={};
-  [reqL,minhasDev,entregar,devs].forEach(function(L){L.forEach(function(r){var k=kR(r);if(k)nomesF[k]=1;});});
+  [reqL,minhasDev,entregar,devs].forEach(function(L){L.forEach(function(r){var k=kR(r);if(k)nomesF[k]=1;afLocNome[k]=localDaReq(r);});});
   [autL,autA].forEach(function(L){L.forEach(function(x){var k=kA(x);if(k)nomesF[k]=1;});});
+  /* 05/11: o "Usuário" também diz PARA QUAL estoque o "+ Requisitar produtos" pede — então a lista traz
+     os estoques que a pessoa pode escolher, mesmo sem nada pendente neles */
+  (completa?[locLoja(lojaAtual),locColab(eu)].concat(colabsComEstoque().map(locColab)):locs).forEach(function(l){
+    if(!l||l===LOC_EMPRESA)return;var k=nomeLocal(l);if(k){nomesF[k]=1;afLocNome[k]=l;}});
   var selF=$("afQuem"),fu=selF?selF.value:"";
   if(fu)nomesF[fu]=1;
   var nomesL=Object.keys(nomesF).sort(ordAZ);
   if(selF){selF.innerHTML='<option value="">Todos</option>'+nomesL.map(function(n){return '<option value="'+esc(n)+'">'+esc(n)+"</option>";}).join("");
     selF.value=fu;selF.onchange=function(){renderEstAfazer();};}
   if($("afQuemWrap"))$("afQuemWrap").hidden=(nomesL.length<2&&!fu);
-  if($("afRequisitar"))$("afRequisitar").onclick=function(){var eu0=euNoEstoque();abrirEstoque("req",eu0,locColab(eu0));};
+  if($("afRequisitar"))$("afRequisitar").onclick=requisitarDoFiltroAf;
   if(fu){
     var fR=function(r){return kR(r)===fu;},fA=function(x){return kA(x)===fu;};
     autL=autL.filter(fA);reqL=reqL.filter(fR);minhasDev=minhasDev.filter(fR);
@@ -25227,7 +25271,7 @@ function renderEstAfazer(){
     h+=blocoAf("Autorizar",autL.length,htmlAutLeve(autL),"Nenhuma venda de outra pessoa esperando o seu estoque.");
     h+=blocoAf("Requisições para aceitar",reqL.length,htmlReqAceitar(reqL),"Nenhuma requisição esperando você aceitar.");
     h+=blocoAf("Devoluções que eu mandei",0,minhasDev.map(function(r){
-      return '<div class="af-item"><div class="t">'+esc(itensTxt(r))+'</div><div class="s">'+esc(r.motivoDev||"Devolução")+" · "+dataCurta(r.data||"")+
+      return '<div class="af-item"><div class="t">'+esc(itensTxt(r))+'</div><div class="s">'+esc(r.motivoDev||"Devolução")+" · "+esc(quandoReq(r))+
         ' · <span class="pill p-res">Aguardando</span></div></div>';}).join(""),"Nenhuma devolução esperando o almoxarifado.");
   } else {
     h+=blocoAf("Requisições para entregar",entregar.length,entregar.map(function(r){
@@ -25236,7 +25280,7 @@ function renderEstAfazer(){
     var conf=podeConferir();
     h+=blocoAf("Devoluções para conferir",devs.length,devs.map(function(r){
       return '<div class="af-item"><div class="t">'+esc(nomeLocal(localDaReq(r)))+" devolveu "+esc(itensTxt(r))+"</div>"+
-        '<div class="s">'+esc(r.motivoDev||"Sem motivo informado")+" · "+dataCurta(r.data||"")+(r.obs?" · "+esc(r.obs):"")+"</div>"+
+        '<div class="s">'+esc(r.motivoDev||"Sem motivo informado")+" · "+esc(quandoReq(r))+(r.obs?" · "+esc(r.obs):"")+"</div>"+
         (conf?'<div class="actions"><button class="btn" type="button" data-afrecv="'+esc(r.id)+'">Confirmar recebimento</button></div>'+
           '<details><summary>Ver detalhes</summary>'+(/defeito/i.test(r.motivoDev||"")?"Com defeito: a Garantia e o Descarte chegam na próxima versão; por ora, confirme o recebimento. ":"")+
           '<div class="actions"><button class="btn mut sm" type="button" data-afrdev="'+esc(r.id)+'">Recusar a devolução</button></div></details>':"")+"</div>";}).join(""),"Nenhuma devolução para conferir.");
@@ -25245,7 +25289,7 @@ function renderEstAfazer(){
       var p=x.ped,it=x.item,a=x.aut,q=+(it.qtd||1);
       var fica=saldoEm(it.pid,LOC_EMPRESA)-((reservasDe(LOC_EMPRESA,p.id)[it.pid])||0)-q;
       return '<div class="af-item"><div class="t">'+esc(a.pedidaPor||p.vendedor||"Alguém")+" quer "+q+"× "+esc(codNomeItem(it))+" do almoxarifado</div>"+
-        '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+" · "+esc(textoQuemInstala(p))+' · o almoxarifado fica com <b class="'+(fica<0?"q-neg":(fica?"q-tem":"q-zero"))+'">'+fica+"</b></div>"+
+        '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+" · "+esc(textoQuemInstala(p))+(quandoAut(a)?" · pedido em "+esc(quandoAut(a)):"")+' · o almoxarifado fica com <b class="'+(fica<0?"q-neg":(fica?"q-tem":"q-zero"))+'">'+fica+"</b></div>"+
         (podeA?'<div class="actions"><button class="btn" type="button" data-afaut="'+esc(p.id)+"|"+esc(a.id)+'">Autorizar</button>'+
           '<button class="btn mut" type="button" data-afrec="'+esc(p.id)+"|"+esc(a.id)+'">Recusar</button></div>':"")+"</div>";}).join("")+htmlAutLeve(autL),
       "Nenhuma venda esperando autorização do almoxarifado.");
@@ -25704,7 +25748,7 @@ function renderEstColab(){
       var ped=r.pedidoId?pedidos.filter(function(p){return p.id===r.pedidoId;})[0]:null;
       var cli=(ped&&ped.cliente)||r.cliente||"";
       var faltam=r.itens.filter(function(i){return !i.recebido;}).length;
-      b.innerHTML+="<tr><td>"+esc(dataCurta(r.data))+(r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+"</td>"+
+      b.innerHTML+="<tr><td>"+esc(quandoReq(r))+(r.obs?'<div class="t-sub">'+esc(r.obs)+"</div>":"")+"</td>"+
         "<td>"+(cli?"<b>"+esc(cli)+"</b>"+(ped?'<div class="t-sub">pedido '+esc(ped.numero)+"</div>":""):"—")+"</td>"+
         "<td>"+r.itens.map(function(i,ix){
           return i.recebido
@@ -44877,7 +44921,7 @@ async function aprovarVenda__corpo(p,caixaId){
           ?" (produtos vendidos, com os incluídos na instalação)":" (produtos vendidos)"),
         data:hojeISO(),status:"pendente",
         criadoEm:hojeISO(),criadoPor:usuarioAtual,origem:"reposicao",pedidoId:p.id,
-        cliente:p.cliente||"",pedidoNumero:p.numero};
+        cliente:p.cliente||"",pedidoNumero:p.numero,abertaEm:new Date().toISOString()};
       requisicoes.push(rq);
       /* gravação conferida: recusada pelo banco, a reposição sai da memória e o aviso diz */
       try{await gravaConf("requisicoes",rq);}
