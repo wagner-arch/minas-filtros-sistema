@@ -4052,6 +4052,7 @@ img{max-width:100%}
 
       <!-- FASE 2: encerramento -->
       <div class="card" id="atendFecha" hidden>
+        <div class="actions" style="margin:0 0 10px"><button class="btn mut sm" type="button" id="at_fechaVoltar">Voltar</button></div>
         <h2>Como encerrar este atendimento</h2>
         <div class="note ok" id="at_resumo"></div>
 
@@ -4074,7 +4075,7 @@ img{max-width:100%}
         </div>
 
         <div class="sect" id="at_secMotivos">
-          <p class="sect-t">3 · Motivo do encerramento</p>
+          <p class="sect-t" id="at_motivosTit">3 · Motivo do encerramento</p>
           <div class="chips" id="at_motivos"></div>
           <p class="help">Marque um ou mais. Cadastre em Configurações › Motivos de Finalização.</p>
         </div>
@@ -35249,6 +35250,7 @@ function abrirFinalizar(a,moverHoje){
       perguntarSeFoiHoje(a,function(){abrirFinalizar(a,true);});return;}
   }
   fmReg=a;fmMotivos=[];fmRetorno="";fmFalou="";fmMoverHoje=!!moverHoje;
+  var pergA=perguntaFalou(a);$("fm_falou").parentNode.hidden=!pergA;if(!pergA)fmFalou="sim";
   $("fm_reData").value="";$("fm_reHora").value="";
   Array.prototype.forEach.call($("fm_falou").querySelectorAll("button"),function(b){b.setAttribute("aria-pressed","false");});
   $("fm_sub").textContent=(a.cliente||"—")+" · "+dataCurta(a.data||"")+(a.inicio?" às "+a.inicio:"")+
@@ -35331,6 +35333,7 @@ async function confirmarFinalizar__corpo(){
   a.concluidaSemAtendimento=true;a.concluidaPor=usuarioAtual;a.concluidaEm=hojeISO();
   a.motivos=fmMotivos.slice();
   a.falouCliente=(fmFalou==="sim");
+  if(!perguntaFalou(a))a.falouAuto=true;else delete a.falouAuto;
   a.resultado=txt;
   a.obs=(a.obs?a.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): "+txt;
   a.acoes=a.acoes||[];
@@ -47830,6 +47833,13 @@ function palpiteCanal(t){
   return "outro";
 }
 function canalDe(t){return canalTipo[t]||palpiteCanal(t);}
+/* a pergunta "Conseguiu falar com o cliente?" só existe quando o contato foi por LIGAÇÃO ou
+   por abordagem PAP (porta a porta). Nos outros tipos houve contato: vale "sim" sem perguntar,
+   e o registro ganha falouAuto:true para se saber que não foi perguntado (04/11, regra dele). */
+function perguntaFalou(a){
+  var ts=(a&&a.tipos&&a.tipos.length)?a.tipos:[(a&&a.tipo)||""];
+  return ts.some(function(t){return canalDe(t)==="ligacao"||/(^|[^a-z])pap([^a-z]|$)/i.test(String(t||""));});
+}
 function canalDoRegistro(a){
   /* um registro pode ter vários tipos — vale o primeiro que não for "outro" */
   var ts=a.tipos||[];
@@ -48859,7 +48869,10 @@ async function salvarAtend__corpo(){
   if($("at_conflito"))$("at_conflito").innerHTML="";
   /* contato de aniversariante: a pergunta Sim/Não substitui "completo" e motivo, e não cria atividade */
   var anivF=ehAtendAniv(a);
-  $("at_secCompleto").hidden=anivF;$("at_secFalou").hidden=anivF;$("at_secMotivos").hidden=anivF;$("at_btnFuturo").hidden=anivF;
+  var pergF=perguntaFalou(a);
+  $("at_secCompleto").hidden=anivF;$("at_secFalou").hidden=anivF||!pergF;$("at_secMotivos").hidden=anivF;$("at_btnFuturo").hidden=anivF;
+  if(!pergF&&!anivF)falouSel="sim";
+  $("at_motivosTit").textContent=(pergF?"3":"2")+" · Motivo do encerramento";
   if(anivF)$("at_resumo").insertAdjacentHTML("beforeend","<br><br><b>Contato Aniversariante.</b> Clique em <b>Finalizar atendimento</b>: "+
     "o sistema pergunta se você conseguiu fazer contato com o aniversariante. Não gera atividade.");
   Array.prototype.forEach.call($("at_completo").querySelectorAll("button"),function(b){b.setAttribute("aria-pressed","false");});
@@ -48981,6 +48994,7 @@ async function fecharAtend__corpo(comFutura){
   }
   atendPend.completo=completoSel;atendPend.motivos=motivosSel.slice();atendPend.status="finalizado";
   atendPend.falouCliente=(falouSel==="sim");
+  if(!perguntaFalou(atendPend))atendPend.falouAuto=true;else delete atendPend.falouAuto;
   delete atendPend.fechoPendente;
   await grava("atendimentos",atendPend);
   if(comFutura){
@@ -57048,6 +57062,10 @@ function ligar(){
 
   $("atendNovo").onclick=function(){abrirAtend(null);};
   $("atendCancelar").onclick=function(){$("atendForm").hidden=true;$("atendLista").hidden=false;};
+  /* Voltar do encerramento (04/11): o atendimento já está salvo; volta ao formulário dele para
+     corrigir — salvar de novo edita o mesmo registro, nunca cria outro */
+  $("at_fechaVoltar").onclick=function(){var a=atendPend;atendPend=null;$("atendFecha").hidden=true;
+    if(a&&atendimentos.indexOf(a)>=0)abrirAtend(a);else{$("atendLista").hidden=false;render();}window.scrollTo(0,0);};
   $("atendSalvar").onclick=salvarAtend;
   $("atendBusca").oninput=renderAtend;$("atendFiltro").onchange=renderAtend;$("atendVend").onchange=renderAtend;
 
