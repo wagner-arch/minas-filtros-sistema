@@ -8645,6 +8645,18 @@ img{max-width:100%}
 </div>
 
 <!-- concluir atividade de dia futuro (04/11, regra dele) -->
+<div class="modal" id="trInstModal" hidden>
+  <div class="box">
+    <h3>O instalador mudou</h3>
+    <div id="ti_txt"></div>
+    <p class="big-q">De onde esse produto deve sair?</p>
+    <div class="actions">
+      <button class="btn" type="button" id="ti_novo">Estoque do novo instalador</button>
+      <button class="btn ghost" type="button" id="ti_loja">Estoque da Loja</button>
+      <button class="btn mut" type="button" id="ti_cancelar">Cancelar a troca do instalador</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="hojeModal" hidden>
   <div class="box">
     <h3>Esta atividade é de outro dia</h3>
@@ -19203,6 +19215,10 @@ async function salvarPedidoAgora(){
   var solDesc=r.abaixo?descSolResp:null;descSolResp=null;
   /* ESTOQUE NA VENDA (03/11): cada item novo fica com o estoque, a autorização ou a escolha
      usar/requisitar; sem saldo na entrega na hora o pedido não fecha (trava por dentro, não só na tela) */
+  /* 05/11: o instalador foi trocado nesta edição e algum produto ainda sai da caixinha de outra
+     pessoa → pergunta antes de gravar. Pedido aberto sem trocar o instalador não muda sozinho. */
+  if(pedEditando&&tiInstOriginal!==null&&instaladorForm()&&instaladorForm()!==tiInstOriginal&&
+     itensForaDoInstalador(itens,instaladorForm()).length){conferirTrocaInstalador(true);return null;}
   var falhaEst=aplicarEstoqueVenda();
   if(falhaEst){toast(falhaEst);try{abrirRevisaoPedido();}catch(eRv){}return null;}
   /* pedido reaberto pelo botão "Editar o pedido": atualiza o MESMO pedido, com o mesmo número,
@@ -20267,6 +20283,7 @@ function retomarRascunho(r){
   toast("Pedido de "+(r.cliente||"cliente")+" retomado na etapa "+(r.etapa||1)+". Finalize quando quiser.");
 }
 function limparPedido(){
+  tiInstOriginal=null;tiAntes=null;tiCtx=null;
   planoInfPend={};planoNaoPend={};try{zerarPerguntaPlano();}catch(e){}
   eqEndResp={};   /* a resposta de "continua instalado em…?" não passa para a venda seguinte */
   revEnderecos={};revRespondido={};   /* a venda nova nao herda as respostas da anterior (21/10, 22/10) */
@@ -21022,13 +21039,16 @@ function ligarBotoesAut(raiz){
     bt.onclick=function(){var v=bt.getAttribute("data-ecautn").split("|");abrirAutEstoque(v[0],v[1],true);};});
 }
 window.__textoAutEstMF=function(p,it,a){return textoAutEstoque(p,it,a);};
+/* "Instala: FULANO" ou "sem instalação", para o dono da caixinha ver quando o pedido não é dele (05/11) */
+function textoQuemInstala(p){var q=quemInstalaPedido(p);return q?"instala: "+q:"sem instalação";}
 function textoAutEstoque(p,it,a){
   if(autUsaRegraNova(p,a))return textoAutEstoqueNovo(p,it,a);
   var loc=a.local,q=+(it.qtd||1),geral=(loc===LOC_EMPRESA);
   var tem=saldoEm(it.pid,loc)-((reservasDe(loc,p.id)[it.pid])||0),fica=tem-q;
   var eu=podeAutorizarEstoque(loc)&&loc===locColab(euNoEstoque());
   var deQ=geral?"do estoque geral (almoxarifado)":(eu?"do seu estoque":"do "+nomeLocal(loc));
-  var t="<b>"+esc(a.pedidaPor||"Alguém")+"</b> quer <b>"+q+"× "+esc(it.nome||"")+"</b> "+deQ+" · pedido "+esc(p.numero)+". ";
+  var t="<b>"+esc(a.pedidaPor||"Alguém")+"</b> quer <b>"+q+"× "+esc(it.nome||"")+"</b> "+deQ+" · pedido "+esc(p.numero)+
+    " · cliente "+esc(p.cliente||"—")+" · "+esc(textoQuemInstala(p))+". ";
   t+=(geral?"O almoxarifado tem ":(eu?"Você tem ":nomeLocal(loc)+" tem "))+"<b>"+tem+"</b>";
   if(fica<0)t+=" — "+(geral?"o almoxarifado":(eu?"seu estoque":"o estoque"))+" vai ficar <b>"+fica+"</b>"+
     (geral?".":" e a reposição será pedida depois da aprovação.");
@@ -21105,6 +21125,130 @@ function instaladorForm(){
 }
 /* só a MARCAÇÃO na ficha do usuário vale aqui (não o almoxarifado, que é o responsável padrão) */
 function marcadoNaLoja(nm){return !!nm&&responsaveisMarcados(locLoja(lojaAtual)).indexOf(nm)>=0;}
+/* ---------- TROCA DO INSTALADOR (05/11, regra dele) ----------
+   Produto que sai da caixinha de um COLABORADOR ("colab:") sai da caixinha de QUEM VAI INSTALAR.
+   Estoque da Loja e almoxarifado ficam fora: a vendedora da loja vende pela Loja e outra pessoa
+   instala, e isso é normal. Sem instalador definido, não há aviso. Pedido já salvo nunca muda
+   sozinho: só quando alguém troca o instalador nele (e a aprovação financeira avisa). */
+var tiAntes=null,tiCtx=null,tiInstOriginal=null;
+/* os itens que saem da caixinha de um colaborador que não é quem instala */
+function itensForaDoInstalador(lista,inst){
+  if(!inst)return [];
+  var alvo=locColab(inst);
+  return (lista||[]).filter(function(i){
+    return !!i&&!!i.pid&&!ehPlano(i)&&!ehServico(i)&&String(i.estoque||"").indexOf("colab:")===0&&i.estoque!==alvo;});
+}
+/* quem instala o pedido salvo: o responsável da instalação futura, ou o escolhido na entrega */
+function quemInstalaPedido(p){
+  if(!p)return "";
+  if(p.instalacao)return respInstalacao(p);
+  if(p.instalacaoAgora)return p.instalador||"";
+  return "";
+}
+function itensForaDoInstaladorPed(p){return itensForaDoInstalador(itensDeEstoque(p||{}),quemInstalaPedido(p));}
+/* o produto que o dono antigo já RECEBEU do almoxarifado pela requisição desta venda: fica com ele
+   até "Devolver" (regra de 03/11) */
+function reqRecebidaDoItem(i){
+  var id=i&&i.usoEstoque&&i.usoEstoque.reqId;if(!id)return null;
+  var r=requisicoes.filter(function(x){return x.id===id;})[0];
+  if(!r)return null;
+  return (r.status==="concluida"||(r.itens||[]).some(function(x){return x.recebido;}))?r:null;
+}
+/* como o formulário está agora, para o "Cancelar a troca do instalador" voltar exatamente a isto */
+function fotoInstalador(){
+  return {tem:instRespVenda,inst:($("v_inst")||{}).value||"",iresp:($("v_iresp")||{}).value||"",
+    idata:($("v_idata")||{}).value||"",ihora:($("v_ihora")||{}).value||"",quem:instaladorForm()};
+}
+function voltarFotoInstalador(f){
+  if(!f)return;
+  try{marcarInstalacao(f.tem);}catch(e){}
+  if($("v_idata"))$("v_idata").value=f.idata;
+  if($("v_ihora"))$("v_ihora").value=f.ihora;
+  if($("v_iresp"))$("v_iresp").value=f.iresp;
+  if($("v_inst"))$("v_inst").value=f.inst;
+  try{ajustarInstalador();calcular();opcoesEstoqueItem();notaEstoqueItem();}catch(e){}
+}
+/* confere depois de uma troca; "revisao" é a última conferência antes de gravar */
+function conferirTrocaInstalador(revisao){
+  var inst=instaladorForm();
+  if(!inst){tiAntes=fotoInstalador();return true;}
+  var fora=itensForaDoInstalador(itens,inst);
+  if(!fora.length){tiAntes=fotoInstalador();return true;}
+  abrirTrocaInstalador(fora,inst,!!revisao);
+  return false;
+}
+function abrirTrocaInstalador(fora,inst,revisao){
+  tiCtx={fora:fora,inst:inst,revisao:revisao,antes:tiAntes};
+  $("ti_txt").innerHTML=fora.map(function(i){
+    var de=String(i.estoque).slice(6),rec=reqRecebidaDoItem(i);
+    return '<div class="note warn" style="margin-bottom:8px">O produto <b>'+esc(codNomeItem(i))+"</b> está saindo do estoque de <b>"+
+      esc(de)+"</b>, mas o instalador agora é <b>"+esc(inst)+"</b>."+
+      (i.autEstoque&&i.autEstoque.status==="pendente"?"<br>A autorização que está esperando "+esc(de)+" será cancelada.":"")+
+      (rec?"<br><b>"+esc(de)+" já recebeu esse produto. Ele precisa devolver ao almoxarifado pelo botão Devolver.</b>":"")+"</div>";
+  }).join("");
+  $("ti_loja").hidden=!marcadoNaLoja(euNoEstoque());
+  $("ti_cancelar").textContent=revisao?"Voltar e corrigir":"Cancelar a troca do instalador";
+  $("trInstModal").hidden=false;
+}
+/* aplica a escolha nos itens do pedido montado; o evento e o cancelamento do que ficou na caixinha
+   antiga só são gravados quando o pedido for salvo (registrarTrocasEstoque) */
+function escolherTrocaInstalador(destino){
+  var c=tiCtx;if(!c)return false;
+  var agora=new Date().toISOString(),eu=euNoEstoque();
+  var loc=(destino==="loja")?locLoja(lojaAtual):locColab(c.inst);
+  if(destino==="loja"&&!marcadoNaLoja(eu)){toast("Só quem é responsável pelo Estoque da Loja escolhe a Loja.");return false;}
+  c.fora.forEach(function(i){
+    var q=+(i.qtd||1),rec=reqRecebidaDoItem(i),t0=i.trocaEst||null;
+    i.trocaEst={de:t0?t0.de:i.estoque,para:loc,por:usuarioAtual,em:agora,instalador:c.inst,
+      autAntiga:t0?t0.autAntiga:((i.autEstoque&&i.autEstoque.status)||""),
+      reqAntiga:t0?t0.reqAntiga:((i.usoEstoque&&i.usoEstoque.reqId)||""),
+      recebido:t0&&t0.recebido?t0.recebido:(rec?rec.id:"")};
+    i.estoque=loc;
+    if(destino==="loja")delete i.autEstoque;   /* como na venda pela Loja de quem responde por ela */
+    else i.autEstoque={id:uid(),status:"autorizada",local:loc,resp:c.inst,resps:[c.inst],
+      pedidaPor:usuarioAtual,pedidaEm:agora,decididoPor:usuarioAtual,decididoEm:iso(new Date()),
+      trocaInstalador:true};
+    i.usoEstoque={usar:q,req:0,reqId:"",por:usuarioAtual,em:agora};
+  });
+  tiCtx=null;$("trInstModal").hidden=true;
+  tiAntes=fotoInstalador();
+  try{calcular();opcoesEstoqueItem();notaEstoqueItem();}catch(e){}
+  toast(c.fora.length+(c.fora.length>1?" produtos passam":" produto passa")+" a sair do "+nomeLocal(loc)+".");
+  if(c.revisao)try{abrirRevisaoPedido();}catch(e2){}
+  return true;
+}
+function cancelarTrocaInstalador(){
+  var c=tiCtx;tiCtx=null;$("trInstModal").hidden=true;
+  if(c&&!c.revisao&&c.antes)voltarFotoInstalador(c.antes);
+}
+/* ao gravar o pedido: evento no pedido e o que ficou na caixinha antiga é cancelado */
+async function registrarTrocasEstoque(p){
+  var mudou=false,its=itensDeEstoque(p);
+  for(var k=0;k<its.length;k++){
+    var it=its[k],t=it.trocaEst;if(!t)continue;
+    var de=nomeLocal(t.de),cancReq=false;
+    if(t.reqAntiga&&!its.some(function(o){return o.usoEstoque&&o.usoEstoque.reqId===t.reqAntiga;})){
+      var r=requisicoes.filter(function(x){return x.id===t.reqAntiga;})[0];
+      if(r&&(r.status==="pendente"||r.status==="separada")&&!(r.itens||[]).some(function(x){return x.recebido;})){
+        r.status="cancelada";r.motivoRecusa="o instalador do pedido "+p.numero+" foi trocado";
+        r.canceladaPor=usuarioAtual;r.canceladaEm=hojeISO();
+        try{await gravaConf("requisicoes",r);cancReq=true;}catch(e){console.warn(e);}
+      }
+    }
+    registrarEvento(p,"Instalador trocado por "+t.por+": "+(it.qtd||1)+"× "+codNomeItem(it)+" passa a sair do "+
+      nomeLocal(t.para)+" (antes: "+de+")"+
+      (t.autAntiga==="pendente"?" · a autorização que esperava "+de+" foi cancelada":"")+
+      (cancReq?" · a requisição de "+de+" ao almoxarifado foi cancelada":"")+
+      (t.recebido?" · "+de+" já recebeu o produto e precisa devolver ao almoxarifado pelo botão Devolver":""));
+    it.trocasEstoque=(it.trocasEstoque||[]).concat([t]);
+    delete it.trocaEst;mudou=true;
+  }
+  return mudou;
+}
+window.__trocaInstMF={conferir:function(r){return conferirTrocaInstalador(r);},escolher:function(d){return escolherTrocaInstalador(d);},
+  cancelar:function(){cancelarTrocaInstalador();},foto:function(){tiAntes=fotoInstalador();return tiAntes;},
+  fora:function(p){return itensForaDoInstaladorPed(p).map(function(i){return i.nome;});},
+  estado:function(){return {original:tiInstOriginal,agora:instaladorForm(),editando:!!pedEditando};}};
 function estoquePadraoVenda(){
   var t=temInstalacaoVenda(),vend=quemVendeForm(),ins=instaladorForm();
   var comInst=(t==="sim"||t==="agora");
@@ -21170,7 +21314,8 @@ function textoAutEstoqueNovo(p,it,a){
   var eu=podeAutorizarEstoque(loc)&&loc===locColab(euNoEstoque());
   var inst=String(p.instalacao||"");
   var t="<b>"+esc(a.pedidaPor||"Alguém")+"</b> quer <b>"+q+"× "+esc(it.nome||"")+"</b> "+(eu?"do seu estoque":"do "+esc(nomeLocal(loc)))+
-    " · pedido "+esc(p.numero)+(inst?" · instalação "+esc(dataCurta(inst.slice(0,10))+(inst.slice(11)?" "+inst.slice(11):"")):"")+". ";
+    " · pedido "+esc(p.numero)+" · cliente "+esc(p.cliente||"—")+
+    (inst?" · instalação "+esc(dataCurta(inst.slice(0,10))+(inst.slice(11)?" "+inst.slice(11):"")):"")+" · "+esc(textoQuemInstala(p))+". ";
   if(a.status!=="pendente")return t+(it.usoEstoque?"Decidido: "+esc(textoUsoEst(it.usoEstoque))+".":"");
   var c=calcUsoAut(p,it);
   t+=(eu?"Você tem ":esc(nomeLocal(loc))+" tem ")+"<b>"+c.tem+"</b> disponível. ";
@@ -21309,6 +21454,7 @@ function aplicarEstoqueVenda(){
    a requisição de item que saiu do pedido é cancelada (ainda não aceita — nada mudou de mãos) */
 async function criarReqsDaVenda(p){
   var porLoc={},n=0,falhou=0,mudou=false;
+  try{if(await registrarTrocasEstoque(p))mudou=true;}catch(eTr){console.warn("troca do instalador",eTr);}
   itensDeEstoque(p).forEach(function(it){
     var u=it.usoEstoque;if(!u||!(+u.req>0)||u.reqId)return;
     var l=localDoItemVenda(p,it);(porLoc[l]=porLoc[l]||[]).push({it:it,q:+u.req});});
@@ -21370,9 +21516,17 @@ window.__revEstMF=function(k,v){if(k===null){revEstoque={};return;}revEstoque[k]
 window.__estPadraoMF=function(){return estoquePadraoVenda();};
 /* trocar vendedor, instalador ou a pergunta da instalação refaz o "Sai de" */
 document.addEventListener("change",function(e){var id=e.target&&e.target.id;
-  if(id==="v_vend"||id==="v_inst"||id==="v_iresp"||id==="v_idata"){try{opcoesEstoqueItem();notaEstoqueItem();}catch(x){}}});
+  if(id==="v_vend"||id==="v_inst"||id==="v_iresp"||id==="v_idata"){try{opcoesEstoqueItem();notaEstoqueItem();}catch(x){}}
+  /* 05/11: trocou o instalador e algum produto sai da caixinha de outra pessoa → pergunta de onde sai */
+  if(id==="v_inst"||id==="v_iresp"){try{conferirTrocaInstalador(false);}catch(x){console.warn(x);}}});
+/* a foto de antes da troca, para o "Cancelar a troca do instalador" */
+document.addEventListener("focusin",function(e){var id=e.target&&e.target.id;
+  if((id==="v_inst"||id==="v_iresp")&&!tiCtx){try{tiAntes=fotoInstalador();}catch(x){}}});
+document.addEventListener("pointerdown",function(e){
+  if(e.target&&e.target.closest&&e.target.closest("#v_temInst")&&!tiCtx){try{tiAntes=fotoInstalador();}catch(x){}}},true);
 document.addEventListener("click",function(e){
-  if(e.target&&e.target.closest&&e.target.closest("#v_temInst"))setTimeout(function(){try{opcoesEstoqueItem();notaEstoqueItem();}catch(x){}},0);});
+  if(e.target&&e.target.closest&&e.target.closest("#v_temInst"))setTimeout(function(){try{opcoesEstoqueItem();notaEstoqueItem();
+    var a=tiAntes&&tiAntes.quem;if(instaladorForm()&&instaladorForm()!==a)conferirTrocaInstalador(false);}catch(x){}},0);});
 /* monta o campo "Sai de qual estoque": o meu, o da loja aberta e os dos colegas */
 function opcoesEstoqueItem(){
   var s=$("v_estoque");if(!s)return;
@@ -22762,6 +22916,11 @@ function locaisDoPedido(p){
     (m[l]=m[l]||[]).push(it);
   });
   return m;
+}
+/* os estoques de onde a baixa sai DE VERDADE (item por item), em texto (05/11) */
+function textoLocaisBaixa(p){
+  var ls=Object.keys(locaisDoPedido(p));
+  return ls.length?ls.map(nomeLocal).join(", "):nomeLocal(localDaVenda(p));
 }
 function localDaVenda(p){
   if(p&&p.osId&&p.osLocal==="loja"&&!p.instalacao)return LOC_EMPRESA;
@@ -24519,7 +24678,7 @@ function htmlAutLeve(L){
     var p=x.ped,it=x.item,a=x.aut,ix=itensDeEstoque(p).indexOf(it),q=+(it.qtd||1);
     var tem=saldoEm(it.pid,a.local),nova=autUsaRegraNova(p,a);
     return '<div class="af-item"><div class="t">'+esc(a.pedidaPor||p.vendedor||"Alguém")+" quer "+q+"× "+esc(codNomeItem(it))+"</div>"+
-      '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+" · "+esc(nomeLocal(a.local))+" tem "+tem+"</div>"+
+      '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+" · "+esc(textoQuemInstala(p))+" · "+esc(nomeLocal(a.local))+" tem "+tem+"</div>"+
       '<div class="actions">'+(nova
         ?'<button class="btn" type="button" data-afusar="'+esc(p.id)+"|"+ix+'">Usar do meu</button>'+
          '<button class="btn ghost" type="button" data-afreq="'+esc(p.id)+"|"+ix+'">Requisitar</button>'
@@ -24588,7 +24747,7 @@ function renderEstAfazer(){
       var p=x.ped,it=x.item,a=x.aut,q=+(it.qtd||1);
       var fica=saldoEm(it.pid,LOC_EMPRESA)-((reservasDe(LOC_EMPRESA,p.id)[it.pid])||0)-q;
       return '<div class="af-item"><div class="t">'+esc(a.pedidaPor||p.vendedor||"Alguém")+" quer "+q+"× "+esc(codNomeItem(it))+" do almoxarifado</div>"+
-        '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+' · o almoxarifado fica com <b class="'+(fica<0?"q-neg":(fica?"q-tem":"q-zero"))+'">'+fica+"</b></div>"+
+        '<div class="s">Pedido nº '+esc(p.numero)+" · "+esc(p.cliente||"")+" · "+esc(textoQuemInstala(p))+' · o almoxarifado fica com <b class="'+(fica<0?"q-neg":(fica?"q-tem":"q-zero"))+'">'+fica+"</b></div>"+
         (podeA?'<div class="actions"><button class="btn" type="button" data-afaut="'+esc(p.id)+"|"+esc(a.id)+'">Autorizar</button>'+
           '<button class="btn mut" type="button" data-afrec="'+esc(p.id)+"|"+esc(a.id)+'">Recusar</button></div>':"")+"</div>";}).join("")+htmlAutLeve(autL),
       "Nenhuma venda esperando autorização do almoxarifado.");
@@ -35892,6 +36051,7 @@ function abrirPedidoParaEditar(p){
   try{renderFormas();calcular();renderGarantiaEtapa();atualizarEtapas();}catch(e){console.warn(e);}
   irEtapa(1);
   renderBannerEdicao();
+  try{tiInstOriginal=instaladorForm();tiAntes=fotoInstalador();}catch(eTi){}
   toast("Pedido "+p.numero+" aberto para edição.");
 }
 /* desenha no quadro da etapa 7 a assinatura que o cliente já deu — ela continua valendo quando o
@@ -44139,8 +44299,10 @@ async function aprovarVenda__corpo(p,caixaId){
       registrarEvento(p,"Crédito aprovado por "+usuarioAtual+" · "+p.creditoFormas.join(" e "));
     }
     p.encerrada=true;p.status="Aprovada";p.devolucaoFin=null;
-    registrarEvento(p,"Recebimento aprovado · "+BRL(p.total)+" · baixa no estoque de "+nomeLocal(loc)+
-      (baixou.length?"":" (já estava baixado)"));
+    /* 05/11: o texto diz de onde a baixa saiu DE VERDADE, e não o estoque do instalador */
+    var locsB={};baixou.forEach(function(b){locsB[b.local]=1;});
+    registrarEvento(p,"Recebimento aprovado · "+BRL(p.total)+" · baixa no estoque de "+
+      (baixou.length?Object.keys(locsB).map(nomeLocal).join(", "):textoLocaisBaixa(p)+" (já estava baixado)"));
     await gravarPedido(p);
     /* 5. manutenção periódica: só agora a venda de produto com "Manutenção (dias)" dá baixa na manutenção do aparelho
        e o aparelho novo entra na lista (regra do Wagner, 14/09) */
@@ -47518,8 +47680,9 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
     (p.obsInstalacao?'<div class="note" style="margin:6px 0"><b>Instalação</b> ('+esc(p.instaladoPor||"—")+", "+
       esc(dataBR(p.instaladoEm||""))+"): "+esc(p.obsInstalacao)+"</div>":"")+
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">'+
-      '<div><div class="t-sub" style="margin-bottom:4px">Produtos · baixa do estoque de <b>'+esc(nomeLocal(localDaVenda(p)))+"</b></div>"+
+      '<div><div class="t-sub" style="margin-bottom:4px">Produtos · baixa do estoque de <b>'+esc(textoLocaisBaixa(p))+"</b></div>"+
         ((p.itens||[]).map(function(i){return (i.qtd||1)+"× "+esc(i.nome)+(i.serie?' <span class="t-sub">série '+esc(i.serie)+"</span>":"")+
+          (!ehPlano(i)&&!ehServico(i)?' <span class="t-sub">· sai do '+esc(nomeLocal(localDoItemVenda(p,i)))+"</span>":"")+
           (i.daInstalacao?' <span class="pill p-acc">incluído na instalação</span>':"");}).join("<br>")||"—")+"</div>"+
       '<div><div class="t-sub" style="margin-bottom:4px">Valores a conferir</div>'+
         (formas.map(function(f){return esc(f.tipo)+" · "+f.parc+"× · <b>"+BRL(f.valor)+"</b>";}).join("<br>")||"—")+
@@ -47533,6 +47696,8 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
           /* item que sai do estoque de outra pessoa, ainda sem a resposta do dono (23/10) */
           var autP=autorizacoesPendentes(p);
           if(autP.length)trava=trava||{texto:""};
+          /* 05/11: produto saindo da caixinha de quem NÃO vai instalar — avisa, o financeiro decide */
+          var foraI=itensForaDoInstaladorPed(p);
           return (trava&&trava.texto?'<div class="note crit" style="margin-top:10px"><b>Aprovação travada.</b> '+trava.texto+
               " O financeiro só libera esta venda depois que a retirada for <b>aceita</b> pelo responsável pelo estoque."+
               ' <button class="btn ghost sm" type="button" data-finreq="'+p.id+'" style="margin-top:8px">Ver as requisições de estoque</button></div>':"")+
@@ -47544,6 +47709,10 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
             /* o caixa NÃO é escolhido aqui: ele vem do cadastro da forma de pagamento, que é
                onde a empresa define onde o dinheiro cai (regra dele, 26/09 — o cartão da
                Rendimentos aparecia caindo na Caixa da Loja, e ele é creditado no Ascicred). */
+            (foraI.length?'<div class="note crit" style="margin-top:10px"><b>Atenção: produto saindo do estoque de quem não vai instalar.</b><br>'+
+              foraI.map(function(it){return "• "+(it.qtd||1)+"× "+esc(codNomeItem(it))+" · sai do estoque de <b>"+esc(String(it.estoque).slice(6))+
+                "</b> · instalador: <b>"+esc(quemInstalaPedido(p))+"</b>";}).join("<br>")+
+              "<br>Se aprovar assim, a baixa e a reposição vão para o estoque de quem está no produto. Para corrigir, toque em Devolver.</div>":"")+
             htmlCaixasDaVenda(formas)+
             '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:12px">'+
             '<button class="btn'+(trava?" mut":"")+'" type="button" data-finok="'+p.id+'"'+(trava?" disabled":"")+
@@ -47680,10 +47849,16 @@ function renderFin(){
       var p=porId(bt.getAttribute("data-finok"));if(!p)return;
       /* o caixa vem da forma de pagamento; este é só a reserva para forma sem caixa cadastrado */
       var cxRes=(daLoja(caixas).filter(function(c){return c.padrao==="sim";})[0]||daLoja(caixas)[0]||{}).id||"";
-      if(!confirm("Aprovar o recebimento do pedido "+p.numero+" · "+BRL(p.total)+"?\n\n"+
-        "• baixa do estoque de "+nomeLocal(localDaVenda(p))+"\n"+
+      /* 05/11: produto saindo da caixinha de quem não vai instalar — o financeiro decide */
+      var foraA=itensForaDoInstaladorPed(p);
+      if(!confirm((foraA.length?"ATENÇÃO: produto saindo do estoque de quem não vai instalar ("+quemInstalaPedido(p)+"):\n"+
+          foraA.map(function(it){return "• "+(it.qtd||1)+"× "+codNomeItem(it)+" · estoque de "+String(it.estoque).slice(6);}).join("\n")+
+          "\n\nAprovar mesmo assim?\n\n":"Aprovar o recebimento do pedido "+p.numero+" · "+BRL(p.total)+"?\n\n")+
+        "• baixa do estoque de "+textoLocaisBaixa(p)+"\n"+
         "• parcelas no Contas a Receber\n"+
-        "• entra na comissão de "+rotuloComp(p.aprovadoEm?comp(p.aprovadoEm):compAtual())))return;
+        "• entra na comissão de "+rotuloComp(p.aprovadoEm?comp(p.aprovadoEm):compAtual()))){
+        if(foraA.length&&confirm("Quer devolver o pedido "+p.numero+" para correção?"))devolverVenda(p);
+        return;}
       bt.disabled=true;
       await aprovarVenda(p,cxRes);
       render();try{renderEstEmpresa();renderEstColab();}catch(e){}
@@ -57127,6 +57302,9 @@ function ligar(){
   $("bq_reag").onclick=function(){var a=bloqPend;$("bloqAg").hidden=true;bloqPend=null;if(a)abrirReagendar(a);};
   $("ju_ok").onclick=confirmarJustificar;
   $("ju_fechar").onclick=function(){$("justModal").hidden=true;juCtx=null;};
+  $("ti_novo").onclick=function(){escolherTrocaInstalador("novo");};
+  $("ti_loja").onclick=function(){escolherTrocaInstalador("loja");};
+  $("ti_cancelar").onclick=function(){cancelarTrocaInstalador();};
   $("hj_sim").onclick=function(){var c=hjCtx;$("hojeModal").hidden=true;hjCtx=null;if(c&&c.sim)c.sim();};
   $("hj_nao").onclick=function(){var c=hjCtx;$("hojeModal").hidden=true;hjCtx=null;if(c&&c.a)abrirReagendar(c.a);};
   $("hj_fechar").onclick=function(){$("hojeModal").hidden=true;hjCtx=null;};
