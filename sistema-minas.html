@@ -3060,7 +3060,13 @@ img{max-width:100%}
           <button class="btn ghost" type="button" id="poSolicitar">Solicitar ajuste</button>
           <button class="btn ghost" type="button" id="poAjuste">Lançar/ajustar dia</button>
         </div>
-        <div class="tw"><table>
+        <!-- 05/11: os ajustes saíram de baixo da data e ficam numa aba própria -->
+        <div class="chips" id="poDiasAbas" style="margin:0 14px 10px">
+          <button type="button" data-pod="dias" aria-pressed="true">Dias</button>
+          <button type="button" data-pod="hist" aria-pressed="false">Histórico de ajustes</button>
+        </div>
+        <div id="poHistW" hidden></div>
+        <div class="tw" id="poDiasW"><table>
           <thead><tr><th>Dia</th><th>Entrada</th><th>Almoço</th><th>Retorno</th><th>Saída</th><th class="num">Atraso</th><th class="num">Trabalhado</th><th class="num">Saldo</th><th>Fotos</th><th>Situação</th></tr></thead>
           <tbody id="poBody"></tbody>
         </table></div>
@@ -6537,17 +6543,13 @@ img{max-width:100%}
 </div>
 <!-- 03/11: o colaborador pede o ajuste do próprio ponto -->
 <div class="modal" id="psModal" hidden>
-  <div class="box" style="width:min(520px,100%)">
+  <div class="box" style="width:min(620px,100%)">
     <h3>Solicitar ajuste do ponto</h3>
-    <div class="sub">O Administrador recebe no sino. Aceito, vira um ajuste com o horário batido guardado; recusado, você vê o motivo.</div>
-    <div class="grid g3" style="margin-top:12px">
-      <div class="fld"><label for="ps_data">Dia <span class="req">*</span></label><input id="ps_data" type="date"></div>
-      <div class="fld"><label for="ps_marc">Marcação <span class="req">*</span></label>
-        <select id="ps_marc"><option value="checkin">Check-in</option><option value="almocoIni">Saída para almoço</option>
-          <option value="almocoFim">Retorno do almoço</option><option value="checkout">Check-out</option></select></div>
-      <div class="fld"><label for="ps_hora">Horário <span class="req">*</span></label><input id="ps_hora" type="time"></div>
-    </div>
-    <div class="fld"><label for="ps_motivo">Motivo <span class="req">*</span></label><input id="ps_motivo" placeholder="Ex.: esqueci de bater a volta do almoço"></div>
+    <div class="sub">O Administrador recebe no sino. Você pode pedir mais de um horário do mesmo dia num pedido só. Aceito, vira um ajuste com o horário batido guardado; recusado, você vê o motivo.</div>
+    <div class="fld" style="margin-top:12px;max-width:220px"><label for="ps_data">Dia <span class="req">*</span></label><input id="ps_data" type="date"></div>
+    <div id="ps_aviso"></div>
+    <div id="ps_linhas"></div>
+    <div class="fld" style="margin-top:10px"><label for="ps_motivo">Motivo do pedido <span class="req">*</span></label><input id="ps_motivo" placeholder="Ex.: esqueci de bater a volta do almoço"></div>
     <div id="ps_alerta"></div>
     <div class="actions">
       <button class="btn" type="button" id="ps_ok">Enviar</button>
@@ -33062,27 +33064,88 @@ function textoAjuste(a){
     ", por "+a.por+" em "+dataCurta(String(a.quando||"").slice(0,10))+" "+String(a.quando||"").slice(11)+
     (a.motivo?", motivo: "+a.motivo:"")+(a.solicitacao?" (pedido de "+a.solicitacao+")":"");
 }
-/* ---- solicitação de ajuste do colaborador ---- */
-function abrirSolicitarAjuste(){
-  $("ps_data").value=hojeISO();$("ps_marc").value="almocoFim";$("ps_hora").value="";$("ps_motivo").value="";
-  $("ps_alerta").innerHTML="";$("psModal").hidden=false;
+/* ---- solicitação de ajuste do colaborador ----
+   05/11 (Parte 2): um pedido cobre vários horários do mesmo dia. Cada horário vira uma solicitação
+   própria (o formato antigo), ligadas pelo campo grupo — as antigas continuam valendo como estão. */
+function nomeMarcHist(k){
+  return {checkin:"Entrada",almocoIni:"Saída do almoço",almocoFim:"Volta do almoço",checkout:"Saída",situacao:"Situação do dia"}[k]||nomeMarcacao(k);
 }
+function nomeTipoDia(t){
+  return {normal:"Normal",falta:"Falta",justificada:"Falta justificada",folga:"Folga",ferias:"Férias"}[t||"normal"]||String(t);
+}
+/* o que impede o pedido para este dia ("" = pode pedir). Hoje só depois da saída da jornada;
+   sem jornada, a qualquer hora; dia passado, sempre; futuro, nunca. O Administrador não tem a trava de hoje. */
+function travaPedidoPonto(data){
+  var a=agoraBrasilia();
+  if(!data)return "Escolha o dia.";
+  if(data>a.data)return "O dia não pode ser no futuro.";
+  if(data<a.data||ehAdministrador())return "";
+  var j=jornadaDe(usuarioAtual);
+  if(!j.temJornada)return "";
+  if(minutos(a.hm)<minutos(j.saida))return "O pedido de ajuste de hoje libera às "+j.saida+", depois do seu expediente.";
+  return "";
+}
+function pendentesPorMarc(p){
+  var o={};((p&&p.solicitacoes)||[]).forEach(function(s){if(s.status==="pendente")o[s.marc]=s;});return o;
+}
+function abrirSolicitarAjuste(){
+  $("ps_data").value=agoraBrasilia().data;$("ps_motivo").value="";
+  $("ps_data").onchange=desenharPedidoPonto;
+  desenharPedidoPonto();$("psModal").hidden=false;
+}
+function desenharPedidoPonto(){
+  var data=$("ps_data").value,trava=travaPedidoPonto(data),p=data?pontoDe(usuarioAtual,data):null,pend=pendentesPorMarc(p);
+  $("ps_alerta").innerHTML="";
+  $("ps_aviso").innerHTML=trava?'<div class="note warn" style="margin-top:10px">'+esc(trava)+"</div>":"";
+  $("ps_linhas").innerHTML=MARCACOES.map(function(m){
+    var b=p&&p[m.k],ps=pend[m.k],bloq=!!trava||!!ps;
+    return '<div class="ps-lin" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,140px);gap:6px 12px;align-items:center;padding:8px 0;border-top:1px solid var(--line)">'+
+      "<div><b>"+esc(nomeMarcHist(m.k))+'</b><div class="t-sub">Agora: '+(b?esc(b.hora)+(b.ajustado||b.lancado?"*":""):"não batido")+
+        (ps?' · <span class="pill p-warn">já há um pedido esperando resposta: '+esc(ps.hora)+"</span>":"")+"</div></div>"+
+      '<input type="time" id="ps_h_'+m.k+'" aria-label="Horário certo: '+esc(nomeMarcHist(m.k))+'"'+(bloq?" disabled":"")+">"+
+      '<input id="ps_m_'+m.k+'" style="grid-column:1/-1" placeholder="Motivo só deste horário (opcional)" aria-label="Motivo: '+esc(nomeMarcHist(m.k))+'"'+(bloq?" disabled":"")+">"+
+      "</div>";}).join("")+
+    '<div class="help" style="margin-top:4px">Preencha só os horários que precisam mudar. Deixe em branco os que estão certos.</div>';
+  $("ps_ok").disabled=!!trava;
+}
+window.__desenharPedidoPontoMF=function(){desenharPedidoPonto();};
+window.__travaPedidoPontoMF=function(d){return travaPedidoPonto(d);};
 function enviarSolicitacaoPonto(){return travaSalvar("enviarSolicitacaoPonto",enviarSolicitacaoPonto__corpo,this,arguments);}
 async function enviarSolicitacaoPonto__corpo(){
-  var data=$("ps_data").value,k=$("ps_marc").value,hora=$("ps_hora").value,mot=$("ps_motivo").value.trim();
-  if(!data||!k||!hora||!mot){$("ps_alerta").innerHTML='<div class="note crit">Preencha o dia, a marcação, o horário e o motivo.</div>';return false;}
-  if(data>hojeISO()){$("ps_alerta").innerHTML='<div class="note crit">O dia não pode ser no futuro.</div>';return false;}
-  var p=pontoDe(usuarioAtual,data),novo=!p;
+  var data=$("ps_data").value,mot=$("ps_motivo").value.trim();
+  function erro(t){$("ps_alerta").innerHTML='<div class="note crit">'+esc(t)+"</div>";return false;}
+  var trava=travaPedidoPonto(data);if(trava)return erro(trava);
+  var p0=pontoDe(usuarioAtual,data),pend=pendentesPorMarc(p0),itens=[];
+  MARCACOES.forEach(function(m){
+    var h=($("ps_h_"+m.k)||{}).value||"",mm=String(($("ps_m_"+m.k)||{}).value||"").trim(),atual=p0&&p0[m.k]?p0[m.k].hora:"";
+    if(!h||pend[m.k]||h===atual)return;
+    itens.push({k:m.k,hora:h,motivo:mm||mot,de:atual});
+  });
+  if(!itens.length)return erro("Informe o horário certo de pelo menos uma marcação (diferente do que já está).");
+  if(itens.some(function(x){return !x.motivo;}))return erro("Escreva o motivo do pedido, ou o motivo de cada horário pedido.");
+  /* ordem: entrada < saída do almoço < volta do almoço < saída (só nos pares em que entra um horário pedido) */
+  var res={},pedido={};
+  MARCACOES.forEach(function(m){res[m.k]=p0&&p0[m.k]?p0[m.k].hora:"";});
+  itens.forEach(function(x){res[x.k]=x.hora;pedido[x.k]=1;});
+  var seq=MARCACOES.filter(function(m){return res[m.k];});
+  for(var i=1;i<seq.length;i++){
+    var a=seq[i-1],b=seq[i];
+    if((pedido[a.k]||pedido[b.k])&&minutos(res[b.k])<=minutos(res[a.k]))
+      return erro("Os horários ficaram fora de ordem: "+nomeMarcHist(a.k)+" "+res[a.k]+" e "+nomeMarcHist(b.k)+" "+res[b.k]+
+        ". A ordem é entrada, saída do almoço, volta do almoço e saída.");
+  }
+  var p=p0,novo=!p;
   if(novo)p={id:uid(),loja:lojaAtual,colaborador:usuarioAtual,data:data,tipo:"normal",criadoEm:hojeISO()};
-  var antes=JSON.parse(JSON.stringify(p));
-  p.solicitacoes=(p.solicitacoes||[]).concat([{id:uid(),marc:k,hora:hora,motivo:mot,por:usuarioAtual,
-    em:new Date().toISOString(),quando:hojeISO()+" "+agoraHM(),status:"pendente"}]);
+  var antes=JSON.parse(JSON.stringify(p)),grupo=uid(),emIso=new Date().toISOString(),qd=hojeISO()+" "+agoraHM();
+  p.solicitacoes=(p.solicitacoes||[]).concat(itens.map(function(x){
+    return {id:uid(),grupo:grupo,marc:x.k,hora:x.hora,de:x.de,motivo:x.motivo,por:usuarioAtual,
+      em:emIso,quando:qd,status:"pendente"};}));
   if(novo)pontos.push(p);
   try{await gravaConf("pontos",p);}
   catch(e){if(novo)pontos.splice(pontos.indexOf(p),1);else{Object.keys(p).forEach(function(x){delete p[x];});Object.assign(p,antes);}
     $("ps_alerta").innerHTML='<div class="note crit">Não foi salvo: '+esc((e&&e.message)||String(e))+"</div>";return false;}
   $("psModal").hidden=true;
-  toast("Solicitação enviada ao Administrador: "+nomeMarcacao(k)+" de "+dataCurta(data)+" às "+hora+".");
+  toast("Pedido enviado ao Administrador: "+itens.map(function(x){return nomeMarcHist(x.k)+" às "+x.hora;}).join(", ")+" de "+dataCurta(data)+".");
   try{renderPonto();renderSino();}catch(e2){}
   return true;
 }
@@ -33112,6 +33175,23 @@ async function responderSolicitacaoPonto__corpo(sid,aceita,motivoRecusa){
   try{renderPonto();renderSino();}catch(e2){}
   return true;
 }
+/* 05/11: aprova de uma vez os horários que ainda esperam num mesmo pedido; cada um passa pelo ajustarMarcacao */
+function aprovarGrupoPonto(){return travaSalvar("aprovarGrupoPonto",aprovarGrupoPonto__corpo,this,arguments);}
+async function aprovarGrupoPonto__corpo(pid,gid){
+  if(!podeAjustarPonto()){toast("Só quem tem a permissão \"Ajustar cartão de ponto\" responde solicitação de ajuste.");return false;}
+  var L=solicitacoesPonto("pendente").filter(function(x){return x.p.id===pid&&(x.s.grupo||x.s.id)===gid;});
+  if(!L.length){toast("Este pedido não está mais pendente.");return false;}
+  var p=L[0].p,antes=JSON.parse(JSON.stringify(p)),qd=hojeISO()+" "+agoraHM();
+  L.forEach(function(x){var s0=x.s;s0.status="aceita";s0.respPor=usuarioAtual;s0.respEm=qd;s0.visto=false;
+    ajustarMarcacao(p,s0.marc,s0.hora,s0.motivo,s0.por);});
+  try{await gravaConf("pontos",p);}
+  catch(e){Object.keys(p).forEach(function(k){delete p[k];});Object.assign(p,antes);
+    toast("Não foi salvo: "+((e&&e.message)||e));return false;}
+  toast("Ajuste feito: "+L.length+" horário"+(L.length===1?"":"s")+" de "+L[0].s.por+" em "+dataCurta(p.data)+".");
+  try{renderPonto();renderSino();}catch(e2){}
+  return true;
+}
+window.__aprovarGrupoPontoMF=function(pid,gid){return aprovarGrupoPonto(pid,gid);};
 /* o colaborador viu a resposta: some do sino dele */
 async function marcarRespostasVistas(){
   var mud=[];
@@ -33189,22 +33269,44 @@ function renderPontoSolic(){
   var w=$("poSolicW");if(!w)return;
   if(!podeAjustarPonto()){w.innerHTML="";return;}
   var pend=solicitacoesPonto("pendente"),resp=solicitacoesPonto().filter(function(x){return x.s.status!=="pendente";});
+  /* 05/11: os pendentes aparecem agrupados por pedido (um pedido pode ter vários horários do dia) */
+  var grupos=[],gi={};
+  pend.forEach(function(x){var g=x.p.id+"|"+(x.s.grupo||x.s.id);
+    if(!gi[g]){gi[g]={p:x.p,gid:x.s.grupo||x.s.id,L:[]};grupos.push(gi[g]);}gi[g].L.push(x);});
+  function atualTxt(p,k){var b=p[k];return b?b.hora+(b.ajustado||b.lancado?"*":""):"não batido";}
+  function cartaoGrupo(g){var x0=g.L[0],ord={};MARCACOES.forEach(function(m,i){ord[m.k]=i;});
+    g.L.sort(function(a,b){return ord[a.s.marc]-ord[b.s.marc];});
+    var mots={};g.L.forEach(function(x){mots[x.s.motivo]=1;});var umMot=Object.keys(mots).length===1;
+    return '<div class="card" style="margin:0 0 10px" data-psgrupo="'+esc(g.gid)+'">'+
+      '<div class="toolbar" style="padding:0 0 8px"><div><b>'+esc(x0.s.por)+"</b> · dia "+esc(dataBR(g.p.data))+
+        '<div class="t-sub">pedido em '+esc(x0.s.quando||"")+(umMot?" · motivo: "+esc(x0.s.motivo):"")+"</div></div>"+
+        '<span class="sp"></span>'+(g.L.length>1?'<button class="btn sm" type="button" data-psgr="'+esc(g.gid)+'" data-pspid="'+esc(g.p.id)+'">Aprovar tudo</button>':"")+"</div>"+
+      '<div class="tw cartoes"><table><thead><tr><th>Marcação</th><th>Agora</th><th>Pedido</th>'+(umMot?"":"<th>Motivo</th>")+"<th></th></tr></thead><tbody>"+
+      g.L.map(function(x){var s=x.s;
+        return '<tr><td data-r="Marcação"><b>'+esc(nomeMarcHist(s.marc))+'</b></td><td data-r="Agora">'+esc(atualTxt(g.p,s.marc))+
+          '</td><td data-r="Pedido"><b>'+esc(s.hora)+"</b></td>"+(umMot?"":'<td data-r="Motivo">'+esc(s.motivo)+"</td>")+
+          '<td class="num"><button class="btn sm" type="button" data-psok="'+esc(s.id)+'">Aprovar</button> '+
+          '<button class="btn mut sm" type="button" data-psno="'+esc(s.id)+'">Recusar</button></td></tr>';}).join("")+
+      "</tbody></table></div></div>";}
   function lin(x,botoes){var s=x.s;
-    return "<tr><td><b>"+esc(s.por)+"</b></td><td>"+esc(dataCurta(x.p.data))+"</td><td>"+esc(nomeMarcacao(s.marc))+"</td><td><b>"+esc(s.hora)+"</b></td>"+
+    return "<tr><td><b>"+esc(s.por)+"</b></td><td>"+esc(dataCurta(x.p.data))+"</td><td>"+esc(nomeMarcHist(s.marc))+"</td><td><b>"+esc(s.hora)+"</b></td>"+
       "<td>"+esc(s.motivo)+'<div class="t-sub">pedido em '+esc(s.quando||"")+"</div></td>"+
       (botoes?'<td class="num"><button class="btn sm" type="button" data-psok="'+esc(s.id)+'">Aceitar</button> '+
         '<button class="btn mut sm" type="button" data-psno="'+esc(s.id)+'">Recusar</button></td>'
         :'<td><span class="pill '+(s.status==="aceita"?"p-ok":"p-crit")+'">'+(s.status==="aceita"?"aceita":"recusada")+"</span>"+
           '<div class="t-sub">por '+esc(s.respPor||"")+" em "+esc(s.respEm||"")+(s.motivoRecusa?" · "+esc(s.motivoRecusa):"")+"</div></td>")+"</tr>";}
   var cab="<thead><tr><th>Quem</th><th>Dia</th><th>Marcação</th><th>Horário informado</th><th>Motivo</th><th></th></tr></thead>";
-  w.innerHTML='<div class="card flush"><div class="toolbar"><b>Pendentes</b><span class="count">'+pend.length+"</span></div>"+
-    '<div class="tw"><table>'+cab+"<tbody>"+(pend.length?pend.map(function(x){return lin(x,true);}).join(""):
-      '<tr><td colspan="6"><div class="empty"><div class="big">Nenhuma solicitação pendente</div></div></td></tr>')+"</tbody></table></div></div>"+
+  w.innerHTML='<div class="card flush"><div class="toolbar"><b>Pendentes</b><span class="count">'+grupos.length+(grupos.length===1?" pedido":" pedidos")+
+      " · "+pend.length+(pend.length===1?" horário":" horários")+"</span></div>"+
+    (grupos.length?'<div style="padding:0 14px 4px">'+grupos.map(cartaoGrupo).join("")+"</div>":
+      '<div class="empty"><div class="big">Nenhuma solicitação pendente</div></div>')+"</div>"+
     '<div class="card flush"><div class="toolbar"><b>Respondidas</b><span class="count">'+resp.length+"</span></div>"+
     '<div class="tw"><table>'+cab+"<tbody>"+(resp.length?resp.slice(0,200).map(function(x){return lin(x,false);}).join(""):
       '<tr><td colspan="6"><div class="empty">Nenhuma ainda</div></td></tr>')+"</tbody></table></div></div>";
   Array.prototype.forEach.call(w.querySelectorAll("[data-psok]"),function(b){
     b.onclick=function(){responderSolicitacaoPonto(b.getAttribute("data-psok"),true,"");};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-psgr]"),function(b){
+    b.onclick=function(){aprovarGrupoPonto(b.getAttribute("data-pspid"),b.getAttribute("data-psgr"));};});
   Array.prototype.forEach.call(w.querySelectorAll("[data-psno]"),function(b){
     b.onclick=function(){var m=prompt("Motivo da recusa (vai para o colaborador):");if(m===null)return;
       responderSolicitacaoPonto(b.getAttribute("data-psno"),false,m);};});
@@ -34424,11 +34526,8 @@ function renderPonto(){
     function cel(k){var v=x[k];return v?esc(v.hora)+(v.ajustado||v.lancado?"*":"")+(v.semGeo?' <span class="pill p-warn" title="sem localização">!</span>':"")+
       (v.origem==="computador"?' <span class="pill p-acc" title="'+esc(v.aparelho||"")+'">PC</span>':""):"—";}
     var tr=document.createElement("tr");tr.className=podeAjustarPonto()?"clickable":"";
-    /* o colaborador vê os ajustes feitos nele, com o motivo (03/11) */
-    var ajTxt=(x.ajustes||[]).map(function(a){return '<div class="t-sub">'+esc(textoAjuste(a))+"</div>";}).join("")+
-      (x.solicitacoes||[]).filter(function(s){return s.status==="recusada";}).map(function(s){
-        return '<div class="t-sub">pedido de ajuste recusado ('+esc(nomeMarcacao(s.marc))+" "+esc(s.hora)+"): "+esc(s.motivoRecusa||"")+"</div>";}).join("");
-    tr.innerHTML="<td><b>"+esc(dataBR(x.data))+"</b>"+ajTxt+"</td>"+
+    /* 05/11: os ajustes saíram daqui e ficam na aba "Histórico de ajustes"; o asterisco continua */
+    tr.innerHTML="<td><b>"+esc(dataBR(x.data))+"</b></td>"+
       "<td>"+cel("checkin")+"</td><td>"+cel("almocoIni")+"</td><td>"+cel("almocoFim")+"</td><td>"+cel("checkout")+"</td>"+
       '<td class="num">'+(d.atraso||"—")+'</td><td class="num">'+hhmm(d.trabalhado)+"</td>"+
       '<td class="num"><b style="color:'+(d.saldo<0?"var(--crit)":"var(--ok)")+'">'+(d.saldo>=0?"+":"")+hhmm(d.saldo)+"</b></td>"+
@@ -34448,6 +34547,7 @@ function renderPonto(){
 
   Array.prototype.forEach.call(b.querySelectorAll("[data-pof]"),function(bt){
     bt.onclick=function(ev){ev.stopPropagation();verFotosDia(quem,bt.getAttribute("data-pof"));};});
+  try{renderPontoHist(quem,c);}catch(eH){console.warn("histórico de ajustes",eH);}
 
   var u=usuarioPor(quem)||{},tot=totalRemuneracao(quem,c);
   $("po_premios").innerHTML=
@@ -34480,6 +34580,58 @@ function renderPonto(){
                         :"metas desabilitadas para "+esc(quem)+" em Configurações › Configurações de Meta — sem prêmio de desempenho."))+"</div>";
   ligarPenalidades(quem);
 }
+/* ===== HISTÓRICO DE AJUSTES (05/11, Parte 3) =====
+   Mesmo filtro de colaborador e mês da aba Dias. Entra o ajuste feito (pedido aceito ou lançado pelo
+   Administrador, inclusive a situação do dia), o pedido recusado e o que espera resposta. */
+var poDiasAba="dias";
+function quandoAjTxt(q){q=String(q||"");return q?dataBR(q.slice(0,10))+(q.length>10?" "+q.slice(11,16):""):"";}
+function linhasHistAjustes(quem,c){
+  var L=[];
+  pontos.forEach(function(p){
+    if(p.loja!==lojaAtual||p.colaborador!==quem||String(p.data||"").slice(0,7)!==c)return;
+    (p.ajustes||[]).forEach(function(a){
+      var sit=a.marc==="situacao";
+      L.push({dia:p.data,marc:nomeMarcHist(a.marc),
+        antes:sit?nomeTipoDia(a.de):(a.de||"não batido"),depois:sit?nomeTipoDia(a.para):(a.para||"tirado"),
+        quem:a.por||"",quando:quandoAjTxt(a.quando),motivo:a.motivo||"",obs:"",
+        origem:a.solicitacao?"Pedido do colaborador":"Lançado pelo Administrador",situacao:"Aprovado",ord:String(a.quando||"")});});
+    (p.solicitacoes||[]).forEach(function(s){
+      if(s.status==="aceita")return;
+      var pend=s.status==="pendente",b=p[s.marc];
+      var antes=(s.de!=null)?(s.de||"não batido"):(b?b.hora:"não batido");
+      L.push({dia:p.data,marc:nomeMarcHist(s.marc),antes:antes,depois:s.hora,
+        quem:pend?"":(s.respPor||""),quando:pend?"":quandoAjTxt(s.respEm),motivo:s.motivo||"",
+        obs:pend?"pedido em "+quandoAjTxt(s.quando):(s.motivoRecusa?"motivo da recusa: "+s.motivoRecusa:""),
+        origem:"Pedido do colaborador",situacao:pend?"Aguardando aprovação":"Recusado",
+        ord:String(pend?(s.quando||""):(s.respEm||s.quando||""))});});
+  });
+  return L.sort(function(a,b){return b.ord.localeCompare(a.ord)||String(b.dia).localeCompare(String(a.dia));});
+}
+function renderPontoHist(quem,c){
+  var w=$("poHistW");if(!w)return;
+  var ab=$("poDiasAbas");
+  if(ab)Array.prototype.forEach.call(ab.querySelectorAll("button"),function(bt){
+    bt.setAttribute("aria-pressed",String(bt.getAttribute("data-pod")===poDiasAba));
+    bt.onclick=function(){poDiasAba=bt.getAttribute("data-pod");renderPonto();};});
+  $("poDiasW").hidden=poDiasAba!=="dias";w.hidden=poDiasAba!=="hist";
+  if(poDiasAba!=="hist")return;
+  var L=linhasHistAjustes(quem,c);
+  $("poCount").textContent=L.length+(L.length===1?" ajuste":" ajustes");
+  if(!L.length){w.innerHTML='<div class="empty" style="padding:24px"><div class="big">Nenhum ajuste neste mês.</div></div>';return;}
+  var cor={"Aprovado":"p-ok","Recusado":"p-crit","Aguardando aprovação":"p-warn"};
+  w.innerHTML='<div class="tw cartoes"><table><thead><tr><th>Dia</th><th>Marcação</th><th>Antes</th><th>Depois</th><th>Quem ajustou</th>'+
+      "<th>Quando ajustou</th><th>Motivo</th><th>Origem</th><th>Situação</th></tr></thead><tbody>"+
+    L.map(function(l){
+      return '<tr><td data-r="Dia"><b>'+esc(dataBR(l.dia))+'</b></td><td data-r="Marcação">'+esc(l.marc)+
+        '</td><td data-r="Antes">'+esc(l.antes)+'</td><td data-r="Depois"><b>'+esc(l.depois)+"</b></td>"+
+        '<td data-r="Quem ajustou">'+esc(l.quem||"—")+'</td><td data-r="Quando ajustou">'+esc(l.quando||"—")+"</td>"+
+        '<td data-r="Motivo">'+esc(l.motivo||"—")+'</td><td data-r="Origem">'+esc(l.origem)+"</td>"+
+        '<td data-r="Situação"><span class="pill '+cor[l.situacao]+'">'+esc(l.situacao)+"</span>"+
+          (l.obs?'<div class="t-sub">'+esc(l.obs)+"</div>":"")+"</td></tr>";}).join("")+
+    "</tbody></table></div>";
+}
+window.__histAjustesMF=function(q,c){return linhasHistAjustes(q,c);};
+window.__abaDiasPontoMF=function(a){poDiasAba=a==="hist"?"hist":"dias";renderPonto();};
 function verFotosDia(quem,data){
   var p=pontoDe(quem,data);if(!p)return;
   var u=usuarioPor(quem)||{};
@@ -53077,10 +53229,15 @@ function pendenciasMF(){
   }catch(eOo){console.warn("pend orçamento OS",eOo);}
   /* 03/11: solicitações de ajuste do ponto (Administrador) e a resposta para o colaborador */
   try{
-    if(podeAjustarPonto())solicitacoesPonto("pendente").forEach(function(x){
-      põe({chave:"psol:"+x.s.id,icone:"⏱",titulo:"Solicitação de ajuste do ponto",
-        texto:x.s.por+" · "+dataCurta(x.p.data)+" · "+nomeMarcacao(x.s.marc)+" às "+x.s.hora+" · "+x.s.motivo,
-        quando:String(x.s.em||""),ir:function(){ir("ponto");mostrarAbaPonto("solic");}});});
+    if(podeAjustarPonto()){
+      var gPs={},oPs=[];
+      solicitacoesPonto("pendente").forEach(function(x){var g=x.p.id+"|"+(x.s.grupo||x.s.id);
+        if(!gPs[g]){gPs[g]=[];oPs.push(g);}gPs[g].push(x);});
+      oPs.forEach(function(g){var L=gPs[g],x=L[0];
+        põe({chave:"psol:"+(x.s.grupo||x.s.id),icone:"⏱",titulo:"Solicitação de ajuste do ponto",
+          texto:x.s.por+" · "+dataCurta(x.p.data)+" · "+L.map(function(y){return nomeMarcHist(y.s.marc)+" às "+y.s.hora;}).join(", ")+" · "+x.s.motivo,
+          quando:String(x.s.em||""),ir:function(){ir("ponto");mostrarAbaPonto("solic");}});});
+    }
     pontos.forEach(function(p){
       if(p.loja!==lojaAtual||p.colaborador!==usuarioAtual)return;
       (p.solicitacoes||[]).forEach(function(s){
