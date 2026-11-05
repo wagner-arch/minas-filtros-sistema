@@ -1504,6 +1504,16 @@
       conferir(r, "marcar respostas do ponto como vistas", true);
       return r.data || 0;
     };
+    /* USO SEM INTERNET E SEM PONTO (05/11, proposta B): o celular manda o que anotou; o Administrador le */
+    adapter.registrarUsoSemPonto = async function (o) {
+      conferir(await comSessao(function () { return sb.from("uso_sem_ponto").insert(o); }), "registrar uso sem ponto", true);
+      return true;
+    };
+    adapter.usosSemPonto = async function (desde) {
+      var r = conferir(await sb.from("uso_sem_ponto").select("id,nome,loja,dia,de,ate,motivo,criado_em")
+        .gte("dia", desde).order("criado_em", { ascending: false }).limit(200), "usos sem ponto", false);
+      return r.data || [];
+    };
     adapter.celularesPonto = async function () {
       var r = conferir(await sb.from("dispositivos_ponto")
         .select("nome,tipo,permissao,ativo,atualizado_em,modelo").limit(500), "celulares do lembrete de ponto", false);

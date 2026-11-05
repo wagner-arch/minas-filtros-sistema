@@ -8750,7 +8750,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=512"></script>
+<script src="supabase/adapter.js?v=513"></script>
 <script>
 (function(){
 "use strict";
@@ -9637,9 +9637,286 @@ async function cofreGravarAFila(){
     await new Promise(function(ok){setTimeout(ok,60);});   /* deixa a tela respirar */
   }
 }
+/* ============ SEM INTERNET — ETAPA 1: CONSULTAR (05/11, pedido dele) ============
+   COMO FUNCIONA: com internet, tudo o que a entrada lê do banco é ANOTADO (gravadorDeLeituras) e,
+   com a tela aberta, guardado no cofre do aparelho, por empresa e por usuário (chave
+   "__semInternet"); as 4 listas grandes já ficavam no cofre (v349). Sem internet, o sistema abre
+   com um "banco de mentira" (dbSemInternet) que responde a MESMA leitura com o que foi anotado — o
+   carregar() roda igual, sem mudar uma linha — e recusa toda gravação: nesta etapa só se consulta.
+   Quem abre sem internet é o último que entrou com internet neste aparelho, com a sessão dele ainda
+   salva, e só até 3 dias depois da última vez com sinal. Sair apaga tudo; usuário desativado
+   também. As telas que gravam mostram "Precisa de internet para usar esta tela."
+   TRAVA DO PONTO SEM INTERNET (proposta B, decisão dele): o sistema abre só para consulta, com a faixa
+   vermelha, e cada uso fica anotado no aparelho; com a internet de volta vai para o banco
+   (uso_sem_ponto) e o Administrador vê no sino. */
+var SEM_INTERNET=null;
+var MSG_SEM_INTERNET="Sem internet: por enquanto só dá para consultar.";
+var MSG_PRECISA_INTERNET="Precisa de internet para usar esta tela.";
+var TELAS_SEM_INTERNET=["dash","agenda","aniver","atend","ativ","clientes","leads","manut","produtos","pedidos","orcam","os"];
+var SEM_INTERNET_DIAS=3,CHAVE_SEM_INTERNET="mf_sem_internet",CHAVE_USO_SEM_PONTO="mf_uso_sem_ponto";
+var LEITURAS_GRAV=null;
+function chaveLeitura(c,f){
+  var o={};
+  if(f&&typeof f==="object")Object.keys(f).sort().forEach(function(k){if(typeof f[k]!=="function")o[k]=f[k];});
+  return c+"|"+JSON.stringify(o);
+}
+function listaDoSnap(sn){return (sn&&sn.docs||[]).map(function(d){return {id:d.id,data:d.data()};});}
+/* anota as leituras do banco de verdade (só enquanto LEITURAS_GRAV existe: a entrada) */
+function gravadorDeLeituras(d){
+  if(!d||d.__gravador)return d;
+  function anotar(k,v){if(LEITURAS_GRAV)LEITURAS_GRAV[k]=v;}
+  function embrulhaDoc(cam,ref){
+    if(ref&&typeof ref.get==="function"){var og=ref.get;
+      ref.get=function(){var p=og.apply(ref,arguments);
+        p.then(function(sn){if(sn)anotar("doc:"+cam,{existe:!!sn.exists,data:sn.exists?sn.data():null});},function(){});return p;};}
+    return ref;
+  }
+  function embrulhaCol(c,ref){
+    if(!ref)return ref;
+    if(typeof ref.get==="function"){var og=ref.get;
+      ref.get=function(f){var p=og.apply(ref,arguments);
+        if(GRANDES_BOOT.indexOf(c)<0)p.then(function(sn){if(sn&&!sn.parouPorFalha)anotar("col:"+chaveLeitura(c,f),{lista:listaDoSnap(sn),total:sn.total});},function(){});
+        return p;};}
+    if(typeof ref.limit==="function"){var ol=ref.limit;ref.limit=function(){return embrulhaCol(c,ol.apply(ref,arguments));};}
+    if(typeof ref.doc==="function"){var od=ref.doc;ref.doc=function(id){return embrulhaDoc(c+"/"+id,od.apply(ref,arguments));};}
+    return ref;
+  }
+  try{
+    var oc=d.collection;d.collection=function(n){return embrulhaCol(n,oc.apply(d,arguments));};
+    var odc=d.doc;d.doc=function(p){return embrulhaDoc(String(p),odc.apply(d,arguments));};
+    if(typeof d.varias==="function"){var ov=d.varias;d.varias=function(cs){var p=ov.apply(d,arguments);
+      p.then(function(m){if(m)Object.keys(m).forEach(function(c){anotar("col:"+chaveLeitura(c,null),{lista:listaDoSnap(m[c]),total:m[c].total});});},function(){});return p;};}
+    if(typeof d.configs==="function"){var ocf=d.configs;d.configs=function(){var p=ocf.apply(d,arguments);
+      p.then(function(m){if(m)Object.keys(m).forEach(function(n){var x=m[n];anotar("doc:config/"+n,{existe:!!(x&&x.exists),data:x&&x.exists?x.data():null});});},function(){});return p;};}
+    if(typeof d.perfil==="function"){var opf=d.perfil;d.perfil=function(){var p=opf.apply(d,arguments);p.then(function(v){anotar("perfil",v||null);},function(){});return p;};}
+    if(typeof d.perfis==="function"){var ops=d.perfis;d.perfis=function(){var p=ops.apply(d,arguments);p.then(function(v){anotar("perfis",v||[]);},function(){});return p;};}
+    if(d.auth&&typeof d.auth.sessao==="function"){var oss=d.auth.sessao;d.auth.sessao=function(){var p=oss.apply(d.auth,arguments);
+      p.then(function(v){if(v&&v.user)anotar("sessao",{user:{id:v.user.id,email:v.user.email||""}});},function(){});return p;};}
+  }catch(e){console.warn("sem internet: anotar leituras",e);}
+  d.__gravador=true;
+  return d;
+}
+/* o banco de mentira: responde as leituras anotadas e recusa toda gravação */
+function dbSemInternet(g){
+  var L=(g&&g.leituras)||{};
+  function erro(){var e=new Error(MSG_SEM_INTERNET);e.semInternet=true;return e;}
+  function rej(){return Promise.reject(erro());}
+  function snap(lista,total){
+    var docs=(lista||[]).map(function(l){var dd=l.data;return {id:l.id,exists:true,data:function(){return dd;}};});
+    return {docs:docs,size:docs.length,empty:!docs.length,total:typeof total==="number"?total:docs.length,truncado:false,
+      forEach:function(fn,e){docs.forEach(fn,e);}};
+  }
+  function docSnap(id,r){return {id:id,exists:!!(r&&r.existe),data:function(){return r&&r.existe?r.data:undefined;}};}
+  function lerCol(c,f){var r=L["col:"+chaveLeitura(c,f)]||L["col:"+chaveLeitura(c,null)];return Promise.resolve(snap(r?r.lista:[],r?r.total:undefined));}
+  function semOuvir(){return function(){};}
+  function refDoc(c,id){return {id:id,get:function(){return Promise.resolve(docSnap(id,L["doc:"+c+"/"+id]));},
+    set:rej,update:rej,delete:rej,onSnapshot:semOuvir};}
+  function refCol(c){
+    function comLim(){return {get:function(f){return lerCol(c,f);},limit:comLim,onSnapshot:semOuvir};}
+    return {id:c,limit:comLim,doc:function(id){return refDoc(c,id);},get:function(f){return lerCol(c,f);},onSnapshot:semOuvir,add:rej};
+  }
+  var d={semInternet:true,lojaPadrao:g&&g.loja,sb:null,falhaPendente:null,reconhecerFalha:function(){},
+    collection:refCol,
+    doc:function(p){var t=String(p),k=t.lastIndexOf("/");return refDoc(t.slice(0,k),t.slice(k+1));},
+    varias:function(cs){var o={};(cs||[]).forEach(function(c){var r=L["col:"+chaveLeitura(c,null)];o[c]=snap(r?r.lista:[],r?r.total:undefined);});return Promise.resolve(o);},
+    configs:function(ns){var o={};(ns||[]).forEach(function(n){o[n]=docSnap(n,L["doc:config/"+n]);});return Promise.resolve(o);},
+    perfil:function(){return Promise.resolve(L.perfil||null);},
+    perfis:function(){return Promise.resolve(L.perfis||[]);},
+    resumo:rej,mudancas:rej,gravarVarios:rej,horaServidor:rej,
+    snapDeLista:function(l,t){return snap((l||[]).map(function(o){return {id:o&&o.id,data:o};}),t);},
+    idConfigReal:function(c,id){return id;},idConfigVisivel:function(c,id){return id;},
+    registrarAcesso:function(){return Promise.resolve();},
+    auth:{sessao:function(){return Promise.resolve(L.sessao||null);},sessaoFresca:function(){return Promise.resolve(L.sessao||null);},
+      sair:function(){return Promise.resolve();},entrar:rej},
+    rastro:new Proxy({},{get:function(){return rej;}})};
+  /* qualquer outra coisa do banco (assinatura, numeração, funções...) recusa com a mesma frase */
+  return new Proxy(d,{get:function(t,p){if(p in t)return t[p];if(typeof p==="symbol"||p==="then")return undefined;return rej;}});
+}
+/* guardar no cofre o que a consulta sem internet precisa (com a tela aberta e internet) */
+async function cofreGravarBruto(c,valor){
+  var b=await cofreAbrir();if(!b)return false;
+  return new Promise(function(ok){
+    try{var t=b.transaction(COFRE_ARMARIO,"readwrite");
+      t.objectStore(COFRE_ARMARIO).put({chave:cofreChave(c),colecao:c,loja:lojaAtual,usuario:usuarioAtual,bruto:valor,quando:new Date().toISOString()});
+      t.oncomplete=function(){ok(true);};t.onerror=function(){ok(false);};t.onabort=function(){ok(false);};
+    }catch(e){ok(false);}
+  });
+}
+async function cofreLerBruto(c){
+  var b=await cofreAbrir();if(!b)return null;
+  return new Promise(function(ok){
+    try{var r=b.transaction(COFRE_ARMARIO,"readonly").objectStore(COFRE_ARMARIO).get(cofreChave(c));
+      r.onsuccess=function(){ok(r.result&&r.result.bruto||null);};r.onerror=function(){ok(null);};
+    }catch(e){ok(null);}
+  });
+}
+async function salvarParaSemInternet(){
+  if(!modoBanco()||SEM_INTERNET||!LEITURAS_GRAV||!usuarioAtual||!db)return false;
+  var uid="";try{var se=await db.auth.sessao();uid=(se&&se.user&&se.user.id)||"";}catch(e){}
+  if(!uid)return false;
+  /* o ponto vai como está NA MEMÓRIA (com a batida feita depois da entrada) */
+  Object.keys(LEITURAS_GRAV).forEach(function(k){
+    if(k.indexOf("col:pontos|")===0)LEITURAS_GRAV[k]={lista:pontos.map(function(p){return {id:p.id,data:p};}),total:pontos.length};});
+  var g={leituras:LEITURAS_GRAV,quando:new Date().toISOString(),usuario:usuarioAtual,loja:lojaAtual,uid:uid,desvio:desvioServidor||0};
+  var ok=false;
+  try{ok=await cofreGravarBruto("__semInternet",g);}catch(e){ok=false;}
+  if(ok)try{localStorage.setItem(CHAVE_SEM_INTERNET,JSON.stringify({uid:uid,usuario:usuarioAtual,loja:lojaAtual,quando:g.quando}));}catch(e){}
+  return ok;
+}
+/* depois de uma batida: só o ponto é trocado no que já está guardado */
+async function atualizarPontoSemInternet(){
+  var g=await cofreLerBruto("__semInternet");if(!g||!g.leituras)return false;
+  var achou=false;
+  Object.keys(g.leituras).forEach(function(k){
+    if(k.indexOf("col:pontos|")===0){achou=true;g.leituras[k]={lista:pontos.map(function(p){return {id:p.id,data:p};}),total:pontos.length};}});
+  if(!achou)return false;
+  return cofreGravarBruto("__semInternet",g);
+}
+function apagarGuardadoSemInternet(){
+  try{localStorage.removeItem(CHAVE_SEM_INTERNET);}catch(e){}
+  try{cofreApagarTudo();}catch(e){}
+}
+function semInternetVencido(quando,agoraMs){
+  var t=Date.parse(quando||"");if(!t)return true;
+  return ((agoraMs||Date.now())-t)>SEM_INTERNET_DIAS*24*3600*1000;
+}
+/* a sessão do login continua salva no aparelho? (o Sair e o "desconectar à distância" a apagam) */
+function sessaoSalvaDe(uid){
+  try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);
+    if(/^sb-.*-auth-token$/.test(k)){var o=JSON.parse(localStorage.getItem(k)||"null");
+      var u=o&&(o.user||(o.currentSession&&o.currentSession.user));if(u&&u.id===uid)return true;}}}catch(e){}
+  return false;
+}
+/* há internet de verdade? (o celular pode dizer que tem rede e não passar nada) */
+async function temInternet(){
+  if(window.MODO_DEMO_MF&&window.__semInternetTesteMF!=null)return !window.__semInternetTesteMF;
+  if(navigator.onLine===false)return false;
+  try{
+    var ctl=window.AbortController?new AbortController():null;
+    var tm=setTimeout(function(){try{ctl&&ctl.abort();}catch(e){}},5000);
+    var r=await fetch("versao.txt?nc="+Date.now(),{cache:"no-store",signal:ctl?ctl.signal:undefined});
+    clearTimeout(tm);return !!(r&&r.ok);
+  }catch(e){return false;}
+}
+async function abrirSemInternet(teste){
+  var id=null,g=null;
+  if(teste&&window.MODO_DEMO_MF){g=teste;id={uid:"teste",usuario:g.usuario,loja:g.loja,quando:g.quando};}
+  else{
+    try{id=JSON.parse(localStorage.getItem(CHAVE_SEM_INTERNET)||"null");}catch(e){id=null;}
+    if(!id||!id.uid||!sessaoSalvaDe(id.uid)){
+      alertaLogin("Sem internet. Entre uma vez com internet neste aparelho para poder usar sem sinal.");return false;}
+    if(semInternetVencido(id.quando)){
+      alertaLogin("Sem internet, e a última vez com sinal neste aparelho foi há mais de "+SEM_INTERNET_DIAS+" dias. Conecte-se à internet para continuar.");return false;}
+    usuarioAtual=id.usuario;lojaAtual=id.loja;
+    g=await cofreLerBruto("__semInternet");
+    if(!g||g.uid!==id.uid){alertaLogin("Sem internet. Entre uma vez com internet neste aparelho para poder usar sem sinal.");usuarioAtual="";return false;}
+  }
+  if(teste)semInternetVencido(g.quando);
+  SEM_INTERNET={quando:g.quando};
+  try{desvioServidor=+g.desvio||0;}catch(e){}
+  usuarioAtual=g.usuario;lojaAtual=g.loja;
+  db=protegerDbConfig(dbSemInternet(g));
+  mostrarFaixaSemInternet();
+  vigiarVoltaInternet();
+  var ok=await entrarComPerfil();
+  if(ok){try{var ini=veTela("agenda")?"agenda":"clientes";ir(ini);}catch(e){}}
+  return ok;
+}
+function mostrarFaixaSemInternet(){
+  var f=$("semInternetFaixa");
+  if(!f){f=document.createElement("div");f.id="semInternetFaixa";f.setAttribute("role","status");
+    f.style.cssText="position:fixed;left:0;right:0;bottom:0;z-index:99990;background:#7a5b00;color:#fff;font-size:14px;"+
+      "padding:8px 14px calc(8px + env(safe-area-inset-bottom));text-align:center;box-shadow:0 -4px 14px rgba(0,0,0,.25)";
+    document.body.appendChild(f);}
+  if(!SEM_INTERNET){f.hidden=true;return;}
+  var q=SEM_INTERNET.quando?new Date(SEM_INTERNET.quando):null;
+  var quando=q&&!isNaN(q)?quandoIso(SEM_INTERNET.quando).replace(" "," às "):"";
+  f.innerHTML="<b>Sem internet</b> · dados de "+esc(quando)+" · só consulta"+
+    (SEM_INTERNET.semPonto?'<div style="background:#b00020;margin:6px -14px -8px;padding:6px 14px"><b>Você ainda não bateu o ponto.</b> Bata assim que tiver sinal.</div>':"");
+  f.hidden=false;
+}
+function avisoPrecisaInternet(){
+  var m=$("semIntModal");
+  if(!m){m=document.createElement("div");m.className="modal";m.id="semIntModal";
+    m.innerHTML='<div class="box" style="width:min(420px,100%)"><h3>Sem internet</h3><p id="semIntTexto"></p>'+
+      '<div class="actions"><button class="btn" type="button" id="semIntOk">Entendi</button></div></div>';
+    document.body.appendChild(m);$("semIntOk").onclick=function(){m.hidden=true;};}
+  $("semIntTexto").textContent=MSG_PRECISA_INTERNET;
+  m.hidden=false;
+}
+/* a internet voltou: atualiza sozinho (se não houver janela aberta) */
+var vigiaInternetLigado=false,vigiaTestando=false;
+function vigiarVoltaInternet(){
+  if(vigiaInternetLigado)return;vigiaInternetLigado=true;
+  window.addEventListener("online",function(){conferirVoltaInternet();});
+  setInterval(conferirVoltaInternet,30000);
+}
+async function conferirVoltaInternet(){
+  if(!SEM_INTERNET||vigiaTestando)return false;
+  vigiaTestando=true;
+  var ok=false;try{ok=await temInternet();}catch(e){ok=false;}
+  vigiaTestando=false;
+  if(!ok)return false;
+  var f=$("semInternetFaixa");
+  var aberta=document.querySelector(".modal:not([hidden])");
+  if(aberta&&aberta.id!=="semIntModal"){
+    if(f){f.style.background="#1b6e2a";f.innerHTML='<b>Internet de volta.</b> <button class="btn sm" type="button" id="semIntAtualizar" style="margin-left:8px">Atualizar agora</button>';
+      $("semIntAtualizar").onclick=function(){recarregarSemInternet();};}
+    return true;
+  }
+  if(f){f.style.background="#1b6e2a";f.innerHTML="<b>Internet de volta.</b> Atualizando…";}
+  recarregarSemInternet();
+  return true;
+}
+function recarregarSemInternet(){
+  if(window.__semRecarregarMF){window.__recarregouMF="internet";return;}
+  location.reload();
+}
+/* ---- a trava do ponto sem internet (proposta B): anota o uso no aparelho ---- */
+function registrarUsoSemPonto(m){
+  try{
+    var ag=agoraBrasilia(),L=JSON.parse(localStorage.getItem(CHAVE_USO_SEM_PONTO)||"[]");
+    var ult=L.filter(function(x){return x.usuario===usuarioAtual&&x.loja===lojaAtual&&x.dia===ag.data;}).slice(-1)[0];
+    if(ult&&minutos(ag.hm)-minutos(ult.ate)<=10)ult.ate=ag.hm;
+    else L.push({usuario:usuarioAtual,loja:lojaAtual,dia:ag.data,de:ag.hm,ate:ag.hm,motivo:(m&&m.texto)||""});
+    localStorage.setItem(CHAVE_USO_SEM_PONTO,JSON.stringify(L.slice(-200)));
+  }catch(e){}
+}
+async function enviarUsosSemPonto(){
+  if(!modoBanco()||SEM_INTERNET||!db||!db.registrarUsoSemPonto)return 0;
+  var L=[];try{L=JSON.parse(localStorage.getItem(CHAVE_USO_SEM_PONTO)||"[]");}catch(e){L=[];}
+  var meus=L.filter(function(x){return x.usuario===usuarioAtual;}),n=0;
+  for(var i=0;i<meus.length;i++){
+    try{await db.registrarUsoSemPonto({loja:meus[i].loja,dia:meus[i].dia,de:meus[i].de,ate:meus[i].ate,motivo:meus[i].motivo});
+      meus[i].enviado=true;n++;}catch(e){console.warn("uso sem ponto",e);}
+  }
+  try{localStorage.setItem(CHAVE_USO_SEM_PONTO,JSON.stringify(L.filter(function(x){return !x.enviado;})));}catch(e){}
+  return n;
+}
+var USOS_SEM_PONTO=[];
+async function lerUsosSemPonto(){
+  if(!modoBanco()||SEM_INTERNET||!db||!db.usosSemPonto||!ehAdministrador())return;
+  try{var d0=new Date(Date.now()-3*24*3600*1000);USOS_SEM_PONTO=(await db.usosSemPonto(iso(d0)))||[];renderSino();}
+  catch(e){console.warn("usos sem ponto",e);}
+}
+window.__semInternetMF={
+  abrir:function(g){return abrirSemInternet(g);},gravador:function(d){LEITURAS_GRAV={};return gravadorDeLeituras(d);},
+  leituras:function(){return LEITURAS_GRAV;},banco:function(g){return dbSemInternet(g);},vencido:function(q,a){return semInternetVencido(q,a);},
+  estado:function(){return SEM_INTERNET;},voltou:function(){return conferirVoltaInternet();},
+  usos:function(){try{return JSON.parse(localStorage.getItem(CHAVE_USO_SEM_PONTO)||"[]");}catch(e){return [];}},
+  chave:function(c){return cofreChave(c);},apagar:function(){apagarGuardadoSemInternet();},
+  sinoUsos:function(L){USOS_SEM_PONTO=L||[];}};
+window.__usuarioAtualMF=function(){return usuarioAtual;};
+window.__gravaConfMF=function(c,o){return gravaConf(c,o);};
 /* a leitura de uma coleção grande, usando o que já está no aparelho */
 async function lerGrandeGuardada(c,teto,filtros){
   var f=filtros||{},cof=null,res=null,t0=Date.now();
+  /* sem internet: só o que está no aparelho */
+  if(SEM_INTERNET){
+    try{cof=await cofreLer(c);}catch(e){cof=null;}
+    if(cof){COFRE_USADO[c]={de:"aparelho (sem internet)",quantos:cof.lista.length,ms:Date.now()-t0};return db.snapDeLista(cof.lista,cof.total);}
+    return col(c).limit(teto).get(f);
+  }
   try{cof=await cofreLer(c);}catch(e){cof=null;}
   try{res=await db.resumo(c,f);}catch(e){res=null;}
   /* sem resposta do resumo (banco fora, sem permissão): o caminho de sempre */
@@ -32936,6 +33213,9 @@ function motivoTravaPonto(quem){
 /* liga ou desliga a aparência travada (menu escondido e o aviso) e devolve o motivo */
 function aplicarTravaPonto(){
   var m=null;try{m=motivoTravaPonto();}catch(e){console.warn("trava do ponto",e);m=null;}
+  /* sem internet (proposta B, 05/11): não trava — só consulta, com a faixa vermelha, e o uso fica anotado */
+  if(SEM_INTERNET){var antes=!!SEM_INTERNET.semPonto;SEM_INTERNET.semPonto=!!m;if(m)registrarUsoSemPonto(m);
+    if(antes!==!!m)try{mostrarFaixaSemInternet();}catch(eF){}m=null;}
   travaPontoAtual=m;
   try{document.body.classList.toggle("trava-ponto",!!m);
     var av=$("travaPontoAviso");if(av){av.hidden=!m;av.textContent=m?m.texto:"";}
@@ -34767,6 +35047,7 @@ function gravarBatida(u,k,m,j,p,hoje,quem,foto,sig,extra){
     renderPonto();
     try{checarTravaPonto();}catch(eTv){}
     try{checarLembretePonto(true);}catch(eLb){}
+    try{if(!SEM_INTERNET&&modoBanco())atualizarPontoSemInternet();}catch(eSi){}
   });
 }
 function renderPonto(){
@@ -53558,6 +53839,13 @@ function pendenciasMF(){
         ir:function(){verAvisoTecOrcOS(o);}});
     });
   }catch(eOo){console.warn("pend orçamento OS",eOo);}
+  /* 05/11: uso do sistema SEM INTERNET e SEM o ponto batido (proposta B) — o Administrador vê */
+  try{
+    if(ehAdministrador())(USOS_SEM_PONTO||[]).forEach(function(u){
+      põe({chave:"usp:"+u.id,icone:"⏱",titulo:"Uso sem internet e sem ponto batido",
+        texto:u.nome+" usou o sistema sem internet e sem ponto batido, dia "+dataCurta(u.dia)+" das "+u.de+" às "+u.ate,
+        quando:String(u.criado_em||""),ir:function(){ir("ponto");}});});
+  }catch(eUs){console.warn("uso sem ponto",eUs);}
   /* 03/11: solicitações de ajuste do ponto (Administrador) e a resposta para o colaborador */
   try{
     if(podeAjustarPonto()){
@@ -56433,6 +56721,8 @@ function ir(s,doMenu){
      por qualquer caminho que chame uma tela */
   var tvP=aplicarTravaPonto();
   if(tvP&&s!=="ponto"){if(telaAtual==="ponto"){toast(tvP.texto);return false;}s="ponto";aliasEst="";}
+  /* sem internet (05/11): só as telas de consulta */
+  if(SEM_INTERNET&&TODAS_TELAS.indexOf(s)>=0&&TELAS_SEM_INTERNET.indexOf(s)<0){avisoPrecisaInternet();return false;}
   /* 27/10 (decisão dele): atalho para tela que a pessoa não tem recusa com aviso — antes ele
      abria a tela mesmo assim, e desmarcar só tirava o item do menu */
   if(TODAS_TELAS.indexOf(s)>=0&&!veTela(s)&&!(tvP&&s==="ponto")){
@@ -58882,6 +59172,7 @@ function sairSistema(){
      no celular — quem sai do sistema não deixa a base da loja no aparelho. */
   if(modoBanco()&&db){(async function(){
     esquecerEmpresaEscolhida();
+    try{localStorage.removeItem(CHAVE_SEM_INTERNET);}catch(e){}
     try{await cofreApagarTudo();}catch(e){}
     try{await db.auth.sair();}catch(e){}
     location.reload();
@@ -59011,6 +59302,7 @@ async function entrarBanco(){
     alertaLogin((e&&e.message)||"Não foi possível entrar.");$("lg_senha").value="";$("lg_senha").focus();return;
   }
   bt.textContent="Carregando o sistema…";
+  if(!LEITURAS_GRAV)LEITURAS_GRAV={};
   try{await entrarComPerfil(true);}finally{bt.disabled=false;bt.textContent="Entrar";}
 }
 /* a empresa escolhida no login, guardada no aparelho até a pessoa SAIR (29/10) */
@@ -59034,6 +59326,7 @@ async function entrarComPerfil(viaSenha){
   var p=null;
   try{p=await db.perfil();}catch(e){alertaLogin("Não consegui ler o seu cadastro no banco: "+((e&&e.message)||e));$("login").hidden=false;return false;}
   if(!p||p.ativo===false){
+    if(!SEM_INTERNET)apagarGuardadoSemInternet();
     alertaLogin(p?"Seu usuário está desativado. Fale com o Administrador."
       :"Seu login existe, mas ainda não foi liberado no sistema. Peça ao Administrador para criar o seu perfil.");
     try{await db.auth.sair();}catch(e){}
@@ -59082,7 +59375,7 @@ async function entrarComPerfil(viaSenha){
   db.lojaPadrao=lojaAtual;
   try{$("loja").value=lojaAtual;}catch(e){}
   $("login").hidden=true;
-  try{await db.registrarAcesso();}catch(e){}
+  if(!SEM_INTERNET)try{await db.registrarAcesso();}catch(e){}
   /* A TELA AZUL DE PREPARO (13/10): vale no login e também quando a sessão já está salva —
      ou seja, no F5. Ninguém trabalha antes de tudo estar pronto. */
   abrirTelaCarga();
@@ -59111,6 +59404,9 @@ async function entrarComPerfil(viaSenha){
   try{var su=$("usuario");su.value=usuarioAtual;su.disabled=true;}catch(e){}
   try{aplicarPerfil();}catch(e){}
   try{iniciarLembretePonto();}catch(e){console.warn("lembrete de ponto",e);}
+  if(SEM_INTERNET){toast("Sem internet: dados guardados neste aparelho. Só consulta.");try{aplicarTravaPonto();}catch(e){}return true;}
+  /* SEM INTERNET (05/11): guarda o que a consulta sem sinal precisa, manda os usos sem ponto anotados */
+  setTimeout(function(){salvarParaSemInternet().then(function(){LEITURAS_GRAV=null;});enviarUsosSemPonto();lerUsosSemPonto();},8000);
   toast("Bem-vindo, "+String(p.nome).split(" ")[0]+". Dados gravados no banco.");
   return true;
 }
@@ -59430,13 +59726,19 @@ function erro(msg){
     $("offline").hidden=true;
     prepararLoginBanco();
     $("login").hidden=false;
-    if(!bancoCarregado()){alertaLogin("Não consegui carregar o banco de dados (sem internet?). Recarregue a página.");return;}
-    try{db=protegerDbConfig(window.criarDbSupabase(SUPABASE_URL,SUPABASE_CHAVE,{aoEstado:estadoBanco,aoTruncar:avisarTruncado}));}
+    /* SEM INTERNET (05/11): abre com o que está guardado no aparelho, só para consulta */
+    try{if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw-ponto.js").catch(function(){});}catch(eSw){}
+    if(!bancoCarregado()||!(await temInternet())){await abrirSemInternet();return;}
+    try{LEITURAS_GRAV={};db=protegerDbConfig(gravadorDeLeituras(window.criarDbSupabase(SUPABASE_URL,SUPABASE_CHAVE,{aoEstado:estadoBanco,aoTruncar:avisarTruncado})));}
     catch(e){alertaLogin("Banco de dados: "+e.message);return;}
     var sessao=null;
     try{sessao=await db.auth.sessao();}catch(e){}
     if(sessao)await entrarComPerfil();
-    else{try{$("lg_email").focus();}catch(e){}}
+    else{
+      /* com internet e sem sessão (saiu, ou foi desconectado à distância): nada fica guardado */
+      apagarGuardadoSemInternet();
+      try{$("lg_email").focus();}catch(e){}
+    }
     return;
   }
   try{db=protegerDbConfig(await claude.use("db"));}catch(e){db=null;}
