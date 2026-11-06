@@ -9927,6 +9927,73 @@ function avisoPrecisaInternet(){
   $("semIntTexto").textContent=MSG_PRECISA_INTERNET;
   m.hidden=false;
 }
+/* ============ AVISO DO SISTEMA PARA TODOS (06/11, pedido dele) ============
+   Uma faixa no alto da tela, para todos os usuários, ligada pelo banco: documento
+   config/aviso_sistema (um por empresa: "aviso_sistema" e "wf:aviso_sistema") com
+   {texto, trava, em, ate}. Com trava:true o sistema fica SÓ CONSULTA: o próprio banco recusa
+   toda gravação (menos a batida de ponto; supabase/trava-sistema.sql) e a tela avisa por quê,
+   sem fechar o que a pessoa preenchia — ela salva depois do aviso de liberado. Sem trava, a
+   faixa é verde e some no "×" ou na hora marcada em "ate". Conferido a cada 20 s com o
+   sistema na frente da pessoa e na volta para a aba. Sem internet não se confere nada. */
+var AVISO_SISTEMA=null,avisoSisConfEm=0,avisoSisFechado="",avisoSisLigado=false;
+var MSG_TRAVA_SISTEMA="O sistema está atualizando os produtos e códigos: por alguns minutos só consulta. "+
+  "Nada foi salvo e o que você preencheu continua na tela. Salve de novo depois do aviso de liberado.";
+function sistemaEmAtualizacao(){return !!(AVISO_SISTEMA&&AVISO_SISTEMA.trava);}
+function avisoSistemaVisivel(a){
+  if(!a||!String(a.texto||"").trim())return false;
+  if(a.trava)return true;
+  if(a.ate){var t=Date.parse(a.ate);if(!isNaN(t)&&Date.now()>t)return false;}
+  return avisoSisFechado!==(a.em||a.texto);
+}
+function renderAvisoSistema(){
+  var a=AVISO_SISTEMA,f=$("avisoSistemaFaixa"),raiz=document.documentElement;
+  if(!avisoSistemaVisivel(a)){
+    if(f)f.hidden=true;
+    document.body.classList.remove("com-aviso-sistema");raiz.style.removeProperty("--aviso-sis-h");return;
+  }
+  if(!$("avisoSistemaEstilo")){
+    var st=document.createElement("style");st.id="avisoSistemaEstilo";
+    st.textContent="#avisoSistemaFaixa{position:fixed;left:0;right:0;top:0;z-index:99991;display:flex;align-items:center;"+
+      "justify-content:center;gap:12px;padding:calc(9px + env(safe-area-inset-top)) 14px 9px;font-size:14px;line-height:1.35;"+
+      "text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.22)}"+
+      "#avisoSistemaFaixa.aviso-trava{background:#fde68a;color:#3d2a00}#avisoSistemaFaixa.aviso-ok{background:#1b7a3d;color:#fff}"+
+      "#avisoSistemaFaixa button{background:transparent;border:0;color:inherit;font-size:22px;line-height:1;cursor:pointer;padding:0 4px}"+
+      "body.com-aviso-sistema{padding-top:var(--aviso-sis-h,0px)}body.com-aviso-sistema .top{top:var(--aviso-sis-h,0px)}";
+    document.head.appendChild(st);
+  }
+  if(!f){f=document.createElement("div");f.id="avisoSistemaFaixa";f.setAttribute("role","status");document.body.appendChild(f);}
+  f.className=a.trava?"aviso-trava":"aviso-ok";
+  f.innerHTML="<span>"+(a.trava?"⏳ ":"✓ ")+esc(a.texto)+"</span>"+
+    (a.trava?"":'<button type="button" aria-label="Fechar o aviso">×</button>');
+  f.hidden=false;
+  var b=f.querySelector("button");
+  if(b)b.onclick=function(){avisoSisFechado=a.em||a.texto;renderAvisoSistema();};
+  document.body.classList.add("com-aviso-sistema");
+  raiz.style.setProperty("--aviso-sis-h",f.offsetHeight+"px");
+}
+async function conferirAvisoSistema(forcar){
+  if(!db||SEM_INTERNET)return;
+  if(document.hidden&&!forcar)return;
+  var agora=Date.now();
+  if(!forcar&&avisoSisConfEm&&agora-avisoSisConfEm<15000)return;
+  avisoSisConfEm=agora;
+  var antes=sistemaEmAtualizacao();
+  try{var g=await db.doc("config/aviso_sistema").get();AVISO_SISTEMA=(g&&g.exists)?(g.data()||null):null;}
+  catch(e){return;}                                   /* sem resposta: fica como estava */
+  renderAvisoSistema();
+  if(antes&&!sistemaEmAtualizacao())toast("Liberado: pode salvar normalmente.");
+}
+function iniciarAvisoSistema(){
+  if(avisoSisLigado)return;avisoSisLigado=true;
+  conferirAvisoSistema(true);
+  setInterval(function(){conferirAvisoSistema(false);},20000);
+  document.addEventListener("visibilitychange",function(){if(!document.hidden)conferirAvisoSistema(true);});
+  window.addEventListener("resize",function(){var f=$("avisoSistemaFaixa");
+    if(f&&!f.hidden)document.documentElement.style.setProperty("--aviso-sis-h",f.offsetHeight+"px");});
+}
+window.__avisoSistemaMF={conferir:conferirAvisoSistema,estado:function(){return AVISO_SISTEMA;},
+  travado:sistemaEmAtualizacao,iniciar:iniciarAvisoSistema,msg:MSG_TRAVA_SISTEMA,
+  definir:function(a){AVISO_SISTEMA=a;renderAvisoSistema();}};   /* só os testes usam */
 /* a internet voltou: atualiza sozinho (se não houver janela aberta) */
 var vigiaInternetLigado=false,vigiaTestando=false;
 function vigiarVoltaInternet(){
@@ -26567,6 +26634,8 @@ async function gravaConf(colecao,obj){
   /* chave só dos testes: liga a recusa do banco para conferir que a tela avisa e nada se
      perde. Em uso normal ela nunca existe, e a função cai direto no banco de verdade. */
   if(window.__falhaBancoMF)throw new Error("o banco recusou (teste)");
+  /* 06/11: sistema em atualização (aviso do sistema com trava) — só consulta; o banco também recusa */
+  if(sistemaEmAtualizacao()&&colecao!=="pontos"&&colecao!=="facial")throw new Error(MSG_TRAVA_SISTEMA);
   if(!db){if(colecao==="atendimentos"){try{dividirPelaAtividade(obj);}catch(eDv){}}return comAvisoGravando(function(){});}
   await col(colecao).doc(obj.id).set(obj);
   if(colecao==="atendimentos"){try{dividirPelaAtividade(obj);}catch(eDv){console.warn("dividir cliente",eDv);}}
@@ -60206,6 +60275,8 @@ async function entrarComPerfil(viaSenha){
   try{aplicarPerfil();}catch(e){}
   try{iniciarLembretePonto();}catch(e){console.warn("lembrete de ponto",e);}
   if(SEM_INTERNET){toast("Sem internet: dados guardados neste aparelho. Só consulta.");try{aplicarTravaPonto();}catch(e){}return true;}
+  /* AVISO DO SISTEMA (06/11): faixa no alto para todos, ligada pelo banco */
+  try{iniciarAvisoSistema();}catch(e){console.warn("aviso do sistema",e);}
   /* SEM INTERNET (05/11): guarda o que a consulta sem sinal precisa, manda os usos sem ponto anotados */
   setTimeout(function(){salvarParaSemInternet().then(function(){LEITURAS_GRAV=null;});enviarUsosSemPonto();lerUsosSemPonto();},8000);
   toast("Bem-vindo, "+String(p.nome).split(" ")[0]+". Dados gravados no banco.");
