@@ -5548,6 +5548,10 @@ img{max-width:100%}
             <div class="fld"><label for="u_telasNovas">Usar as telas novas (teste)</label>
               <select id="u_telasNovas"><option value="nao">Não</option><option value="sim">Sim</option></select>
               <div class="help" id="u_telasNovasNota">Novo Pedido e Novo Atendimento novos. Só o Administrador muda.</div></div>
+            <!-- 06/11: WhatsApp pelo sistema — só o Administrador libera quem conecta o próprio chip -->
+            <div class="fld"><label for="u_zapConectar">Pode conectar o WhatsApp</label>
+              <select id="u_zapConectar"><option value="nao">Não</option><option value="sim">Sim</option></select>
+              <div class="help">Conecta o chip comercial da pessoa ao sistema (QR Code) para enviar pedido e link de assinatura. Só o Administrador muda.</div></div>
           </div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="u_ctps">CTPS</label><input id="u_ctps"></div>
@@ -27112,6 +27116,7 @@ async function desativarColaborador(){
          :"Ele sai do menu de responsáveis e das listas, e não consegue mais entrar no sistema. O histórico dele continua inteiro.")))return;
   u.ativo=ligar;$("u_ativo").value=ligar?"sim":"nao";
   await gravarUsuarios();sincronizarEquipe();
+  if(!ligar)desligarZapDe(u.nome);   /* 06/11: inativado não envia mais pelo WhatsApp do sistema */
   var aviso="";
   if(modoBanco()&&u.temLogin){
     try{
@@ -27179,6 +27184,7 @@ async function desconectarAcessoColaborador(){
   else{u.desconectadoEm=hojeISO()+" "+agoraHM();u.desconectadoPor=usuarioAtual;u.ativo=false;}
   $("u_ativo").value=u.ativo===false?"nao":"sim";
   await gravarUsuarios();sincronizarEquipe();
+  if(u.ativo===false)desligarZapDe(u.nome);   /* 06/11: acesso desconectado desliga o WhatsApp do sistema */
   var agora=!!(r&&r.sessoesEncerradas);
   avisoUsuario(voltar
     ? '<div class="note ok"><b>'+esc(u.nome)+" — acesso reconectado.</b> Volta a entrar com o mesmo e-mail e a mesma senha.</div>"
@@ -27461,6 +27467,7 @@ function abrirUsuario(i){
   $("u_tolerancia").value=(u.tolerancia==null?2:u.tolerancia);
   $("u_bateponto").value=u.bateponto||"sim";
   $("u_telasNovas").value=(u.telasNovas===true)?"sim":"nao";$("u_telasNovas").disabled=!ehAdministrador();
+  $("u_zapConectar").value=(u.zapConectar===true)?"sim":"nao";$("u_zapConectar").disabled=!ehAdministrador();
   usFilhos=(u.filhos||[]).slice();
   $("u_temfilhos").value=(usFilhos.length?"sim":(u.temfilhos||"nao"));
   $("u_alerta").innerHTML="";
@@ -48491,6 +48498,241 @@ function clientePorTelZap(tel){
   if(!d)return null;
   return clientes.filter(function(c){return [c.tel,c.tel2,c.tel3,c.tel4].some(function(t){return String(t||"").replace(/[^0-9]/g,"")===d;});})[0]||null;
 }
+/* ================= WHATSAPP PELO SISTEMA (06/11, plano aprovado por ele) =================
+   Cada colaborador que o Administrador marca na ficha ("Pode conectar o WhatsApp") conecta o
+   PRÓPRIO chip comercial lendo um QR Code (botão "WhatsApp" no alto da tela). Conectado, o
+   pedido com o PDF e o link de assinatura saem pelo WhatsApp dele, daqui do sistema, sem abrir
+   nada. Quem fala com o WhatsApp é SÓ a função "whatsapp" do servidor (supabase/functions/
+   whatsapp): a chave fica no cofre e é lá que valem as regras — só cliente em atendimento (30 dias),
+   só celular válido com DDD, 20 s entre envios, 30 por hora, ninguém envia pela conexão de outro.
+   Não deu (desconectado, telefone que não é celular, limite, falha): avisa em português e segue
+   pelo caminho de hoje (WhatsApp do celular / do computador). Tudo fica registrado
+   (whatsapp_envios). A troca futura pelo caminho oficial da Meta é só dentro da função. */
+var ZAP_SIS={pode:false,conexao:null,carregadoEm:0,lista:null};
+var DDDS_ZAP=" 11 12 13 14 15 16 17 18 19 21 22 24 27 28 31 32 33 34 35 37 38 41 42 43 44 45 46 47 48 49 51 53 54 55 "+
+  "61 62 63 64 65 66 67 68 69 71 73 74 75 77 79 81 82 83 84 85 86 87 88 89 91 92 93 94 95 96 97 98 99 ";
+/* celular brasileiro com DDD (o mesmo teste da função do servidor): devolve 55+DDD+número ou null */
+function celularBRZap(t){
+  var d=String(t||"").replace(/\D/g,"");
+  if(d.length>=12&&d.indexOf("55")===0)d=d.slice(2);
+  if(d.length===10&&/^[6-9]/.test(d.slice(2)))d=d.slice(0,2)+"9"+d.slice(2);
+  if(d.length!==11)return null;
+  if(DDDS_ZAP.indexOf(" "+d.slice(0,2)+" ")<0||d.charAt(2)!=="9")return null;
+  return "55"+d;
+}
+async function zapChamar(acao,dados){
+  var corpo={acao:acao,loja:lojaAtual};Object.keys(dados||{}).forEach(function(k){corpo[k]=dados[k];});
+  if(window.__zapTesteMF)return window.__zapTesteMF(acao,corpo);   /* só os testes */
+  if(SEM_INTERNET)return {ok:false,motivo:"Sem internet."};
+  if(!db||!db.sb||!db.auth)return {ok:false,motivo:"Sem conexão com o banco."};
+  try{
+    var s=db.auth.sessaoFresca?await db.auth.sessaoFresca():await db.auth.sessao();
+    if(!s)return {ok:false,motivo:"Sessão expirada — entre no sistema de novo."};
+    var r=await fetch(SUPABASE_URL+"/functions/v1/whatsapp",{method:"POST",
+      headers:{"Content-Type":"application/json","apikey":SUPABASE_CHAVE,"Authorization":"Bearer "+s.access_token},
+      body:JSON.stringify(corpo)});
+    var j=null;try{j=await r.json();}catch(e){}
+    return j||{ok:false,motivo:"O WhatsApp do sistema não respondeu ("+r.status+")."};
+  }catch(e){return {ok:false,motivo:"O WhatsApp do sistema não respondeu. Confira a internet."};}
+}
+function zapLiberado(){var u=usuarioPor(usuarioAtual)||{};return u.zapConectar===true&&u.ativo!==false;}
+function zapConectado(){
+  return zapLiberado()&&!SEM_INTERNET&&!!ZAP_SIS.conexao&&ZAP_SIS.conexao.situacao==="conectado"&&ZAP_SIS.conexao.loja===lojaAtual;
+}
+async function atualizarEstadoZap(){
+  if(!zapLiberado()&&!ehAdministrador()){renderBotaoZap();return;}
+  var r=await zapChamar("estado");
+  if(r&&r.ok){ZAP_SIS.pode=!!r.pode;ZAP_SIS.conexao=r.conexao||null;ZAP_SIS.carregadoEm=Date.now();}
+  renderBotaoZap();
+  try{renderSino();}catch(e){}
+}
+var zapLigado=false;
+function iniciarZapSistema(){
+  renderBotaoZap();
+  if(zapLigado)return;zapLigado=true;
+  atualizarEstadoZap();
+  setInterval(function(){if(!document.hidden)atualizarEstadoZap();},300000);
+}
+/* botão "WhatsApp" no alto, ao lado do sino: só para quem pode conectar e para o Administrador */
+function renderBotaoZap(){
+  var sino=$("sinoBt");if(!sino)return;
+  var b=$("zapBt");
+  if(!b){
+    b=document.createElement("button");b.type="button";b.id="zapBt";b.className="sair";
+    b.style.cssText="margin-left:10px;display:inline-flex;align-items:center;gap:6px";
+    b.onclick=function(){abrirConexaoZap();};
+    sino.parentNode.insertBefore(b,sino);
+  }
+  var ver=(zapLiberado()||ehAdministrador())&&!SEM_INTERNET;
+  b.hidden=!ver;b.style.display=ver?"inline-flex":"none";
+  var c=ZAP_SIS.conexao,cor="#9aa5b1",txt="desconectado";
+  if(c&&c.situacao==="conectado"&&c.loja===lojaAtual){cor="#25d366";txt="conectado";}
+  else if(c&&c.situacao==="aguardando"){cor="#f5b400";txt="aguardando o QR Code";}
+  b.innerHTML='<span aria-hidden="true" style="width:9px;height:9px;border-radius:50%;background:'+cor+';display:inline-block"></span>WhatsApp';
+  b.title="Meu WhatsApp no sistema: "+(zapLiberado()?txt:"não liberado");
+  b.setAttribute("aria-label",b.title);
+}
+function textoSituacaoZap(c){
+  if(!c)return "Nunca conectado.";
+  if(c.situacao==="conectado")return c.loja!==lojaAtual?"Conectado na outra empresa.":"Conectado"+(c.numero?" · número "+fmtNumeroZap(c.numero):"")+".";
+  if(c.situacao==="aguardando")return "Esperando a leitura do QR Code.";
+  return "Desconectado"+(c.motivo?" ("+c.motivo+")":"")+".";
+}
+function fmtNumeroZap(n){var d=String(n||"").replace(/\D/g,"").replace(/^55/,"");
+  return d.length===11?"("+d.slice(0,2)+") "+d.slice(2,7)+"-"+d.slice(7):d;}
+var zapQrTimer=null,zapQrAte=0;
+function pararQrZap(){if(zapQrTimer){clearInterval(zapQrTimer);zapQrTimer=null;}}
+function abrirConexaoZap(){
+  var m=$("zapConModal");
+  if(!m){
+    m=document.createElement("div");m.className="modal";m.id="zapConModal";
+    m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Meu WhatsApp no sistema</h3>'+
+      '<div id="zc_eu"></div><div id="zc_qr" style="text-align:center"></div><div id="zc_alerta"></div>'+
+      '<div class="actions" id="zc_acoes"></div><div id="zc_admin"></div>'+
+      '<div class="actions"><button class="btn mut" type="button" id="zc_fechar">Fechar</button></div></div>';
+    document.body.appendChild(m);
+    $("zc_fechar").onclick=function(){pararQrZap();m.hidden=true;};
+  }
+  m.hidden=false;
+  if(ZAP_SIS.conexao&&ZAP_SIS.conexao.aviso_visto===false){ZAP_SIS.conexao.aviso_visto=true;zapChamar("visto");try{renderSino();}catch(e){}}
+  desenharConexaoZap();
+  if(ehAdministrador())carregarListaZap();
+}
+function desenharConexaoZap(){
+  var c=ZAP_SIS.conexao,eu=$("zc_eu"),ac=$("zc_acoes");if(!eu)return;
+  if(!zapLiberado()){
+    eu.innerHTML='<div class="note">O seu WhatsApp ainda não foi liberado para conectar ao sistema. Quem libera é o Administrador, na sua ficha de colaborador.</div>';
+    ac.innerHTML="";$("zc_qr").innerHTML="";return;
+  }
+  var con=c&&c.situacao==="conectado"&&c.loja===lojaAtual;
+  eu.innerHTML='<div class="note '+(con?"ok":"warn")+'"><b>'+esc(textoSituacaoZap(c))+"</b>"+
+    (con?" O pedido com o PDF e o link de assinatura saem pelo seu WhatsApp, daqui do sistema."
+        :" Conecte o chip comercial que você usa com os clientes. Nunca conecte um número que já esteja em outro sistema.")+"</div>";
+  ac.innerHTML=con
+    ?'<button class="btn mut" type="button" id="zc_sair">Desconectar o meu WhatsApp</button>'
+    :'<button class="btn" type="button" id="zc_conectar">Conectar (mostrar o QR Code)</button>';
+  if($("zc_conectar"))$("zc_conectar").onclick=function(){pedirQrZap();};
+  if($("zc_sair"))$("zc_sair").onclick=async function(){
+    if(!confirm("Desconectar o seu WhatsApp do sistema? Os envios voltam a abrir o WhatsApp do celular."))return;
+    var r=await zapChamar("desconectar");
+    if(!r||!r.ok){$("zc_alerta").innerHTML='<div class="note crit">'+esc((r&&r.motivo)||"Não deu para desconectar.")+"</div>";return;}
+    toast("WhatsApp desconectado do sistema.");await atualizarEstadoZap();desenharConexaoZap();
+  };
+  if(con){$("zc_qr").innerHTML="";pararQrZap();}
+}
+async function pedirQrZap(){
+  var q=$("zc_qr"),al=$("zc_alerta");al.innerHTML="";
+  q.innerHTML='<div class="note">Gerando o QR Code…</div>';
+  var r=await zapChamar("conectar");
+  if(!r||!r.ok){q.innerHTML="";al.innerHTML='<div class="note crit">'+esc((r&&r.motivo)||"Não deu para gerar o QR Code.")+"</div>";return;}
+  ZAP_SIS.conexao=r.conexao||ZAP_SIS.conexao;renderBotaoZap();
+  if(r.conexao&&r.conexao.situacao==="conectado"){toast("WhatsApp conectado.");desenharConexaoZap();return;}
+  q.innerHTML=(r.qr?'<img alt="QR Code para conectar o WhatsApp" src="'+esc(r.qr)+'" style="width:min(280px,80vw);height:auto;margin:8px auto;display:block">':
+      '<div class="note warn">O QR Code ainda não chegou. Toque em Conectar de novo.</div>')+
+    '<div class="help" style="text-align:left">No celular do chip comercial: abra o <b>WhatsApp</b> › toque em <b>⋮</b> (ou em <b>Configurações</b> no iPhone) › '+
+    '<b>Aparelhos conectados</b> › <b>Conectar um aparelho</b> e aponte a câmera para o código. O código muda sozinho a cada 30 segundos.</div>';
+  /* confere a cada 4 s se conectou; o QR é renovado a cada 30 s; para em 3 minutos */
+  pararQrZap();zapQrAte=Date.now()+180000;var n=0;
+  zapQrTimer=setInterval(async function(){
+    if(!$("zapConModal")||$("zapConModal").hidden||Date.now()>zapQrAte){pararQrZap();
+      if(Date.now()>zapQrAte&&$("zc_qr"))$("zc_qr").innerHTML='<div class="note">O tempo do QR Code acabou. Toque em Conectar de novo.</div>';return;}
+    n++;
+    var e=await zapChamar("estado");
+    if(e&&e.ok){ZAP_SIS.conexao=e.conexao;renderBotaoZap();
+      if(e.conexao&&e.conexao.situacao==="conectado"){pararQrZap();toast("WhatsApp conectado ao sistema.");desenharConexaoZap();
+        if(ehAdministrador())carregarListaZap();return;}}
+    if(n%7===0){var r2=await zapChamar("conectar");
+      if(r2&&r2.ok&&r2.qr){var im=$("zc_qr").querySelector("img");if(im)im.src=r2.qr;}}
+  },4000);
+}
+/* Administrador: as conexões da empresa aberta, com quem está desconectado */
+async function carregarListaZap(){
+  var w=$("zc_admin");if(!w)return;
+  w.innerHTML='<p class="sect-t" style="margin-top:14px">Conexões da empresa</p><div class="note">Carregando…</div>';
+  var r=await zapChamar("lista");
+  if(!r||!r.ok){w.innerHTML='<div class="note crit">'+esc((r&&r.motivo)||"Não deu para carregar.")+"</div>";return;}
+  ZAP_SIS.lista=r;
+  var porNome={};(r.conexoes||[]).forEach(function(c){porNome[c.nome]=c;});
+  var nomes=(r.marcados||[]).slice();(r.conexoes||[]).forEach(function(c){if(nomes.indexOf(c.nome)<0)nomes.push(c.nome);});
+  nomes.sort(ordAZ);
+  w.innerHTML='<p class="sect-t" style="margin-top:14px">Conexões da empresa</p>'+(nomes.length?
+    '<div class="tw"><table><thead><tr><th>Colaborador</th><th>Situação</th><th>Número</th><th></th></tr></thead><tbody>'+
+    nomes.map(function(nm){var c=porNome[nm];var con=c&&c.situacao==="conectado";
+      return "<tr><td>"+esc(nm)+(r.marcados.indexOf(nm)<0?' <span class="pill p-mut">sem permissão</span>':"")+"</td>"+
+        '<td data-zapsit="'+esc(nm)+'"><span class="pill '+(con?"p-ok":"p-warn")+'">'+(c?(con?"conectado":c.situacao==="aguardando"?"aguardando":"desconectado"):"nunca conectou")+"</span>"+
+        (c&&!con&&c.desconectado_em?'<div class="t-sub">desde '+esc(String(quandoIso?quandoIso(c.desconectado_em):c.desconectado_em))+"</div>":"")+"</td>"+
+        "<td>"+(c&&c.numero?esc(fmtNumeroZap(c.numero)):"—")+"</td>"+
+        "<td>"+(con?'<button class="btn mut sm" type="button" data-zapdesl="'+esc(nm)+'">Desligar</button>':"")+"</td></tr>";}).join("")+
+    "</tbody></table></div>":'<div class="note">Ninguém liberado ainda. Libere na ficha do colaborador ("Pode conectar o WhatsApp").</div>');
+  Array.prototype.forEach.call(w.querySelectorAll("[data-zapdesl]"),function(bt){
+    bt.onclick=async function(){var nm=bt.getAttribute("data-zapdesl");
+      if(!confirm("Desligar o WhatsApp de "+nm+" do sistema?"))return;
+      var r2=await zapChamar("desligar",{nome:nm});
+      toast(r2&&r2.ok?"WhatsApp de "+nm+" desligado.":((r2&&r2.motivo)||"Não deu."));carregarListaZap();};
+  });
+}
+/* inativado ou sem a marca: desliga na hora (a faxina do servidor também confere de 5 em 5 min) */
+function desligarZapDe(nome){
+  if(!nome||!ehAdministrador())return;
+  Promise.resolve(zapChamar("desligar",{nome:nome})).catch(function(){});
+}
+function registrarCelularZap(z,tel,motivo){
+  Promise.resolve(zapChamar("registrar",{tipo:z.tipo,clienteId:z.clienteId||"",clienteNome:z.clienteNome||"",telefone:String(tel||""),
+    refId:z.refId||"",refNumero:z.refNumero||"",motivo:motivo||""})).catch(function(){});
+}
+/* o caminho do envio: devolve "enviado" ou "celular" (quem chamou segue pelo caminho de hoje) */
+async function enviarPeloZapSistema(z,tel,texto,pdfFile){
+  if(!zapLiberado()||SEM_INTERNET)return "celular";
+  if(!zapConectado()){registrarCelularZap(z,tel,"WhatsApp do sistema desconectado");
+    toast("Seu WhatsApp não está conectado ao sistema. Abrindo o WhatsApp como hoje.");return "celular";}
+  if(!celularBRZap(tel)){registrarCelularZap(z,tel,"telefone não é celular válido");
+    toast("O telefone do cliente não é um celular válido com DDD. Abrindo o WhatsApp como hoje.");return "celular";}
+  var corpo={tipo:z.tipo,clienteId:z.clienteId||"",clienteNome:z.clienteNome||"",telefone:String(tel),texto:texto||"",
+    refId:z.refId||"",refNumero:z.refNumero||""};
+  if(pdfFile){
+    try{corpo.pdf=await new Promise(function(res,rej){var fr=new FileReader();
+      fr.onload=function(){res(String(fr.result||"").split(",")[1]||"");};fr.onerror=rej;fr.readAsDataURL(pdfFile);});}
+    catch(e){toast("Não deu para preparar o PDF. Abrindo o WhatsApp como hoje.");return "celular";}
+    corpo.arquivo=pdfFile.name||"documento.pdf";
+  }
+  var r=await zapChamar("enviar",corpo);
+  if(r&&r.ok)return "enviado";
+  var mot=(r&&r.motivo)||"O envio falhou.";
+  registrarCelularZap(z,tel,mot);
+  toast(mot+" Abrindo o WhatsApp como hoje.");
+  return "celular";
+}
+async function enviarPdfPeloZapSistema(cfg,f,botao,rotulo){
+  if(!zapLiberado())return "celular";
+  if(botao){botao.disabled=true;botao.textContent="Enviando pelo seu WhatsApp…";}
+  var r;
+  try{r=await enviarPeloZapSistema(cfg.zap,cfg.tel,cfg.msg,f);}
+  finally{if(botao){botao.disabled=false;botao.textContent=rotulo;}}
+  if(r!=="enviado")return r;
+  try{if(cfg.zap.aoEnviar)cfg.zap.aoEnviar();}catch(e){}
+  try{await cfg.registrar("pelo WhatsApp conectado ao sistema");}catch(e){console.warn("registro do envio",e);}
+  toast(cfg.titulo+" enviado pelo seu WhatsApp para "+(primeiroNome(cfg.cliente)||"o cliente")+".");
+  return "enviado";
+}
+/* link de assinatura: devolve true quando saiu pelo WhatsApp do sistema */
+async function enviarLinkPeloZapSistema(p,c){
+  if(!zapLiberado()||!p||!p.id)return false;
+  var z={tipo:"link_assinatura",clienteId:p.clienteId||"",clienteNome:p.cliente||c.nome||"",refId:p.id,refNumero:p.numero};
+  var tel=p.tel||c.tel||"";
+  if(!zapConectado()||!celularBRZap(tel)){await enviarPeloZapSistema(z,tel,"",null);return false;}
+  var m1=textoLinkAssinatura(p),m2=textoLinkAssinatura(p,2);
+  var n=await new Promise(function(res){
+    if(m2&&m2!==m1)escolherMensagemZap(m1,m2,"Enviar o link de assinatura",res);else res(1);});
+  var r=await enviarPeloZapSistema(z,tel,n===2?m2:m1,null);
+  if(r!=="enviado")return false;
+  try{registrarEvento(p,"Link de assinatura enviado pelo WhatsApp conectado ao sistema");p.zapLinkEnviadoEm=agoraCarimbo();await gravarPedido(p);}
+  catch(e){console.warn("registro do link",e);}
+  toast("Link de assinatura enviado pelo seu WhatsApp para "+(primeiroNome(z.clienteNome)||"o cliente")+".");
+  return true;
+}
+window.__zapSisMF={celular:celularBRZap,estado:function(){return ZAP_SIS;},atualizar:atualizarEstadoZap,iniciar:iniciarZapSistema,
+  abrir:abrirConexaoZap,liberado:zapLiberado,conectado:zapConectado,enviar:enviarPeloZapSistema,link:enviarLinkPeloZapSistema,
+  definir:function(c){ZAP_SIS.conexao=c;renderBotaoZap();}};
 /* ================= CONFIGURAÇÕES › MENSAGENS DO WHATSAPP (pedido dele, 27/10) =================
    "preciso mudar as mensagens de envio do whatsapp" — os textos eram fixos no código. Agora cada
    modelo tem um texto padrão (o que o sistema sempre mandou) e o Administrador pode trocá-lo.
@@ -49115,6 +49357,12 @@ async function enviarPdfWhatsApp(cfg,botao){
   }
   var f=pdfPronto.file,tel=telWhatsApp(cfg.tel);
   if(botao){botao.disabled=false;botao.textContent=rotulo;}
+  /* 06/11: WhatsApp conectado ao sistema — envia daqui, com o PDF junto. Não deu (desconectado,
+     telefone que não é celular, limite, falha): avisa e segue pelo caminho de hoje, logo abaixo. */
+  if(cfg.zap){
+    var rz=await enviarPdfPeloZapSistema(cfg,f,botao,rotulo);
+    if(rz==="enviado")return;
+  }
   /* O COMPARTILHAR DO SISTEMA FICOU SÓ PARA O CELULAR (19/10, com print dele).
      A v283 mandava tentar SEMPRE, na esperança de que o painel do Windows listasse o WhatsApp.
      No computador dele ele NÃO lista: o painel abre com OneNote, Vincular ao Celular, Outlook e
@@ -49255,7 +49503,10 @@ function cfgVendaWhatsApp(p){
     titulo:"Pedido "+p.numero,oQue:"do pedido "+p.numero,
     msg:textoZap("pedido",varsBaseZap({nome:p.cliente||""},{numero:p.numero})),
     msg2:textoZap("pedido",varsBaseZap({nome:p.cliente||""},{numero:p.numero}),2),
-    registrar:async function(como){registrarEvento(p,"Pedido de venda enviado pelo WhatsApp ("+como+")");await gravarPedido(p);}};
+    registrar:async function(como){registrarEvento(p,"Pedido de venda enviado pelo WhatsApp ("+como+")");await gravarPedido(p);},
+    /* 06/11: pelo WhatsApp conectado ao sistema, quando a pessoa tem */
+    zap:{tipo:"pedido_pdf",clienteId:p.clienteId||"",clienteNome:p.cliente||"",refId:p.id,refNumero:p.numero,
+      aoEnviar:function(){p.zapEnviadoEm=agoraCarimbo();p.zapEnviadoPor=usuarioAtual;}}};
 }
 function prepararPdfVenda(p){var cf=cfgVendaWhatsApp(p);return prepararPdf(cf.chave,cf.gerar);}
 function enviarVendaWhatsApp(p,botao){if(!p)return;return enviarPdfWhatsApp(cfgVendaWhatsApp(p),botao);}
@@ -54444,6 +54695,25 @@ async function limparRastroAntigo(){
 function pendenciasMF(){
   var L=[];
   function põe(o){L.push(o);}
+  /* 06/11: o WhatsApp da pessoa caiu — ela é avisada até abrir a janela de conexão */
+  try{
+    var zc=ZAP_SIS.conexao;
+    if(zapLiberado()&&zc&&zc.situacao!=="conectado"&&zc.aviso_visto===false)
+      põe({chave:"zapcaiu:"+(zc.desconectado_em||""),icone:"📵",titulo:"Seu WhatsApp desconectou do sistema",
+        texto:"Os envios estão abrindo o WhatsApp do celular. Toque para conectar de novo (QR Code).",
+        quando:String(zc.desconectado_em||""),ir:function(){abrirConexaoZap();}});
+  }catch(eZc){console.warn("aviso do WhatsApp",eZc);}
+  /* 06/11: pedido feito SEM INTERNET não envia nada sozinho; quando a fila subir e o pedido
+     ganhar número, quem vendeu recebe "pronto para enviar" e envia com um toque */
+  try{
+    pedidos.forEach(function(p){
+      if(p.loja!==lojaAtual||!p.feitoSemInternet||!p.numero||p.zapEnviadoEm||p.status==="Cancelada")return;
+      if(p.vendedor!==usuarioAtual&&p.criadoPor!==usuarioAtual)return;
+      põe({chave:"zappronto:"+p.id,icone:"📤",titulo:"Pedido "+p.numero+" pronto para enviar",
+        texto:(p.cliente||"")+" · o pedido feito sem internet já tem número. Toque para abrir e enviar ao cliente pelo WhatsApp.",
+        quando:String(p.data||""),ir:function(){abrirPedido(p);}});
+    });
+  }catch(eZp){console.warn("pedido pronto para enviar",eZp);}
   /* 03/11: o orçamento da OS ganhou peça ou serviço depois de pronto — o técnico é avisado */
   try{
     ordens.forEach(function(o){
@@ -57721,9 +57991,11 @@ function ligar(){
     if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(c.value).then(function(){},function(){});
     toast(feito||navigator.clipboard?"Link copiado — é só colar na conversa com o cliente.":"Selecione o link e copie.");
   };
-  $("lk_zap").onclick=function(){
+  $("lk_zap").onclick=async function(){
     if(!lkUrl)return;
     var p=lkPedido||{},c=cliPorId(p.clienteId)||{};
+    /* 06/11: WhatsApp conectado ao sistema — envia daqui; não deu, abre o do celular como hoje */
+    if(await enviarLinkPeloZapSistema(p,c))return;
     abrirWhatsApp({tel:p.tel||c.tel||"",cliente:c.id?c:null,nome:p.cliente||c.nome||"",
       mensagem:textoLinkAssinatura(p),mensagem2:textoLinkAssinatura(p,2),titulo:"Enviar o link de assinatura",origem:"link de assinatura"});
   };
@@ -57869,6 +58141,11 @@ function ligar(){
       var tnQuer=$("u_telasNovas").value==="sim";
       if(tnQuer!==(u.telasNovas===true)){u.telasNovas=tnQuer;
         u.telasNovasHist=(u.telasNovasHist||[]).concat([{quando:agoraCarimbo(),por:usuarioAtual,ligada:tnQuer}]);}
+      /* 06/11: WhatsApp pelo sistema — tirou a marca: a conexão da pessoa é desligada na hora */
+      var zqQuer=$("u_zapConectar").value==="sim";
+      if(zqQuer!==(u.zapConectar===true)){u.zapConectar=zqQuer;
+        u.zapConectarHist=(u.zapConectarHist||[]).concat([{quando:agoraCarimbo(),por:usuarioAtual,ligada:zqQuer}]);
+        if(!zqQuer)desligarZapDe(u.nome);}
     }
     u.temfilhos=$("u_temfilhos").value;
     u.filhos=(u.temfilhos==="sim")?usFilhos.filter(function(f){return f.nome||f.nasc;}):[];
@@ -60277,6 +60554,8 @@ async function entrarComPerfil(viaSenha){
   if(SEM_INTERNET){toast("Sem internet: dados guardados neste aparelho. Só consulta.");try{aplicarTravaPonto();}catch(e){}return true;}
   /* AVISO DO SISTEMA (06/11): faixa no alto para todos, ligada pelo banco */
   try{iniciarAvisoSistema();}catch(e){console.warn("aviso do sistema",e);}
+  /* WHATSAPP PELO SISTEMA (06/11): botão no alto e a situação da conexão de quem pode */
+  try{iniciarZapSistema();}catch(e){console.warn("WhatsApp do sistema",e);}
   /* SEM INTERNET (05/11): guarda o que a consulta sem sinal precisa, manda os usos sem ponto anotados */
   setTimeout(function(){salvarParaSemInternet().then(function(){LEITURAS_GRAV=null;});enviarUsosSemPonto();lerUsosSemPonto();},8000);
   toast("Bem-vindo, "+String(p.nome).split(" ")[0]+". Dados gravados no banco.");
