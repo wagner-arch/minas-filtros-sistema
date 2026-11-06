@@ -8764,7 +8764,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=514"></script>
+<script src="supabase/adapter.js?v=515"></script>
 <script>
 (function(){
 "use strict";
@@ -9280,7 +9280,7 @@ var LEITURAS_BOOT=[
   ["equipamentos",30000],["usados",500],["veiculos",100],["abastecimentos",2000],["manutveic",1000],
   ["posses",500],["vistorias",500],["multas",500],["rascunhos",300],
   ["prestadores",300],["servprest",200],["remunprest",3000],["recibosprest",1000],
-  ["custodia",1000]
+  ["custodia",1000],["sucatatroca",1000]
 ];
 /* um lugar só para o teto de cada coleção */
 function tetoBoot(c){
@@ -10461,6 +10461,9 @@ async function carregar(){
     multas=mlt.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     var usd=await jaPedido("col:usados",function(){return col("usados").limit(tetoBoot("usados")).get();});
     usados=usd.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    /* v515: pendências de devolver a sucata da troca ao cliente */
+    try{var sct=await jaPedido("col:sucatatroca",function(){return col("sucatatroca").limit(tetoBoot("sucatatroca")).get();});
+      sucataPend=sct.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});}catch(eSct){console.warn("sucata da troca",eSct);sucataPend=[];}
     var pd=await jaPedido("cfg:padroes_lanc",function(){return db.doc("config/padroes_lanc").get();});
     if(pd.exists&&pd.data()&&pd.data().lista&&pd.data().lista.length)PADROES_LANC=pd.data().lista;
     else{PADROES_LANC=JSON.parse(JSON.stringify(SEED_PADROES));await gravarPadroes();}
@@ -17895,6 +17898,147 @@ async function registrarTrocaDaVenda(ped){
   ped.troca.requisicaoId=r.id;
   return r;
 }
+/* ===================== SUCATA DA TROCA ENTRA SOZINHA (v515, regra dele de 06/11) =====================
+   Acabou a pergunta "Você recebeu do cliente o purificador da troca?". A sucata (1 Purificador Sucata
+   por aparelho da troca) entra SOZINHA no estoque de QUEM INSTALOU:
+   · sem instalação marcada para depois (o vendedor instala na hora, instalação "agora", serviço feito
+     na OS externa, ou sem instalação): no momento em que o pedido é finalizado, no estoque de quem
+     instala (sem instalador, o vendedor);
+   · com instalação para depois: no momento em que a instalação é concluída, no estoque do responsável.
+   O resto da regra continua: avaliação depois, no almoxarifado; devolução ao almoxarifado no dia seguinte.
+   O movimento leva o pedido e o cliente. Pedido cancelado, ou reaberto e renegociado SEM a troca: a
+   sucata volta ao cliente — o sistema procura onde ela está (estoque de quem recebeu, almoxarifado,
+   Estoque da Loja), tira de lá e cria a pendência "devolver sucata ao cliente" para quem responde por
+   aquele estoque; não achando, avisa o Administrador. Pedido de TESTE não mexe no estoque.
+   Os códigos dos registros são fixos por pedido: repetir nunca duplica a sucata. */
+var sucataPend=[];   /* coleção "sucatatroca": as pendências de devolver a sucata ao cliente */
+function trocaNoPedido(p){return !!p&&trocaDasFormas(p.formas)>0;}
+function qtdSucataDoPedido(p){return Math.max(1,parseInt(p&&p.troca&&p.troca.qtd,10)||1);}
+function instalacaoPendentePed(p){return !!(p&&p.instalacao&&!p.instaladoEm);}
+function quemRecebeSucata(p){return quemInstalaPedido(p)||(p&&p.vendedor)||usuarioAtual;}
+/* a sucata deste pedido que ainda está com a empresa (entrada nova ou do jeito antigo, confirmada) */
+function sucataDoPedido(p){
+  if(!p)return null;
+  var s=p.sucataTroca;
+  if(s&&s.entrouEm)return s.saiuEm?null:s;
+  if(s&&s.saiuEm)return null;
+  /* do jeito antigo: a requisição "pego na troca" confirmada pelo vendedor */
+  var r=requisicoes.filter(function(x){return x.origem==="troca"&&x.pedidoId===p.id&&x.status==="concluida";})[0];
+  if(!r)return null;
+  var q=(r.itens||[]).reduce(function(a,it){return a+(it.recebido?(+(it.atendida||it.qtd)||0):0);},0);
+  return q>0?{antiga:true,ciclo:0,qtd:q,local:localDaReq(r),quem:r.colaborador,entrouEm:r.recebidaEm||r.data||""}:null;
+}
+function respsSucata(loc){
+  if(String(loc||"").indexOf("colab:")===0)return [loc.slice(6)];
+  try{return responsaveisDoEstoque(loc)||[];}catch(e){return [];}
+}
+/* põe a sucata no estoque de quem instalou; devolve a mensagem de erro, ou "" */
+async function entrarSucataDoPedido(p){
+  if(!p||!trocaNoPedido(p)||p.teste||p.status==="Cancelada")return "";
+  if(sucataDoPedido(p))return "";
+  var pu=produtoUsadoTroca();if(!pu)return "o produto Purificador Sucata não está cadastrado";
+  var ciclo=p.sucataTroca?((+p.sucataTroca.ciclo||0)+1):0;
+  var q=qtdSucataDoPedido(p),quem=quemRecebeSucata(p);
+  var m={id:"suc-"+p.id+"-"+ciclo,loja:p.loja||lojaAtual,produtoId:pu.id,qtd:q,origem:"troca",destino:locColab(quem),
+    doc:"Troca do pedido "+p.numero,obs:"Sucata da troca · pedido "+p.numero+" · cliente "+(p.cliente||""),
+    pedidoId:p.id,pedidoNumero:p.numero,clienteId:p.clienteId||"",cliente:p.cliente||"",sucataTroca:true,
+    centroId:"",data:hojeISO(),por:usuarioAtual,em:new Date().toISOString()};
+  var antes=p.sucataTroca;
+  try{
+    await gravaConf("movest",m);
+    movEst=movEst.filter(function(x){return x.id!==m.id;});movEst.push(m);
+    p.sucataTroca={ciclo:ciclo,movId:m.id,qtd:q,quem:quem,local:m.destino,entrouEm:hojeISO(),por:usuarioAtual};
+    registrarEvento(p,q+(q===1?" Purificador Sucata":" Purificadores Sucata")+" da troca no estoque de "+quem);
+    await gravaConf("pedidos",p);
+  }catch(e){
+    p.sucataTroca=antes;
+    return motivoBanco(e);
+  }
+  return "";
+}
+/* procura onde a sucata deste pedido está agora: quem recebeu → almoxarifado → Estoque da Loja */
+function ondeEstaSucata(p,suc){
+  var pu=produtoUsadoTroca();if(!pu||!suc)return null;
+  var lista=[suc.local,LOC_EMPRESA,locLoja(lojaAtual)].filter(function(l,i,a){return l&&a.indexOf(l)===i;});
+  for(var i=0;i<lista.length;i++)if(saldoEm(pu.id,lista[i])>=suc.qtd)return lista[i];
+  return null;
+}
+/* devolve a sucata ao cliente; devolve "" ou a mensagem de erro */
+async function devolverSucataAoCliente(p,motivo){
+  var suc=sucataDoPedido(p);if(!suc||p.teste)return "";
+  var pu=produtoUsadoTroca();if(!pu)return "o produto Purificador Sucata não está cadastrado";
+  var ciclo=+suc.ciclo||0,loc=ondeEstaSucata(p,suc);
+  var pend={id:"sdc-"+p.id+"-"+ciclo,loja:p.loja||lojaAtual,tipo:"devolverCliente",
+    status:loc?"pendente":"naoEncontrada",pedidoId:p.id,pedidoNumero:p.numero,clienteId:p.clienteId||"",cliente:p.cliente||"",
+    qtd:suc.qtd,local:loc||"",localEntrada:suc.local||"",responsaveis:loc?respsSucata(loc):[],motivo:motivo||"",
+    criadoEm:agoraCarimbo(),criadoPor:usuarioAtual};
+  var m=loc?{id:"sucdev-"+p.id+"-"+ciclo,loja:p.loja||lojaAtual,produtoId:pu.id,qtd:suc.qtd,origem:loc,destino:"cliente",
+    doc:"Devolução da troca · pedido "+p.numero,obs:"Sucata da troca volta ao cliente "+(p.cliente||"")+" · pedido "+p.numero+(motivo?" · "+motivo:""),
+    pedidoId:p.id,pedidoNumero:p.numero,clienteId:p.clienteId||"",cliente:p.cliente||"",sucataTroca:true,
+    centroId:"",data:hojeISO(),por:usuarioAtual,em:new Date().toISOString()}:null;
+  var antes=p.sucataTroca;
+  try{
+    if(m){await gravaConf("movest",m);movEst=movEst.filter(function(x){return x.id!==m.id;});movEst.push(m);}
+    await gravaConf("sucatatroca",pend);
+    sucataPend=sucataPend.filter(function(x){return x.id!==pend.id;});sucataPend.push(pend);
+    var base=suc.antiga?{ciclo:0,antiga:true,qtd:suc.qtd,quem:suc.quem,local:suc.local,entrouEm:suc.entrouEm}:JSON.parse(JSON.stringify(suc));
+    base.saiuEm=hojeISO();base.saiuDe=loc||"";base.pendenciaId=pend.id;base.motivoSaida=motivo||"";
+    p.sucataTroca=base;
+    registrarEvento(p,loc
+      ?"Sucata da troca volta ao cliente: saiu de "+nomeLocal(loc)+" · pendência para "+(pend.responsaveis.join(", ")||"o responsável")+" ("+(motivo||"")+")"
+      :"Sucata da troca NÃO encontrada no estoque — o Administrador foi avisado ("+(motivo||"")+")");
+    await gravaConf("pedidos",p);
+  }catch(e){p.sucataTroca=antes;return motivoBanco(e);}
+  return "";
+}
+/* depois de uma alteração no pedido: a troca saiu → a sucata volta; a troca entrou → a sucata entra */
+async function ajustarSucataDoPedido(p,motivo){
+  var err="";
+  if(sucataDoPedido(p)&&(!trocaNoPedido(p)||p.status==="Cancelada"))err=await devolverSucataAoCliente(p,motivo);
+  else if(trocaNoPedido(p)&&!sucataDoPedido(p)&&!instalacaoPendentePed(p)&&p.status!=="Cancelada")err=await entrarSucataDoPedido(p);
+  if(err)toast("A sucata da troca do pedido "+p.numero+" não foi ajustada no estoque: "+err+". Confira a internet e salve o pedido de novo.");
+  return err;
+}
+/* a pendência: quem responde pelo estoque entrega a sucata ao cliente e confirma */
+function sucataParaDevolver(quem){
+  var q=quem||euNoEstoque();
+  return sucataPend.filter(function(x){return x.loja===lojaAtual&&x.status==="pendente"&&
+    ((x.responsaveis||[]).indexOf(q)>=0||(x.local&&respondePeloEstoque(q,x.local))||
+     (x.local===LOC_EMPRESA&&!quem&&podeConferir()));});
+}
+function sucataNaoEncontrada(){
+  return ehAdministrador()?sucataPend.filter(function(x){return x.loja===lojaAtual&&x.status==="naoEncontrada";}):[];
+}
+function confirmarEntregaSucata(id){return travaSalvar("confirmarEntregaSucata",confirmarEntregaSucata__corpo,this,arguments);}
+async function confirmarEntregaSucata__corpo(id){
+  var x=sucataPend.filter(function(y){return y.id===id;})[0];if(!x||x.status!=="pendente")return false;
+  if(!confirm("Confirma que a sucata da troca ("+x.qtd+"×) foi entregue ao cliente "+(x.cliente||"")+" · pedido "+x.pedidoNumero+"?"))return false;
+  var antes=JSON.stringify(x);
+  x.status="entregue";x.entregueEm=agoraCarimbo();x.entreguePor=usuarioAtual;
+  try{await gravaConf("sucatatroca",x);}
+  catch(e){var b=JSON.parse(antes);Object.keys(b).forEach(function(k){x[k]=b[k];});delete x.entregueEm;delete x.entreguePor;
+    toast(RECUSA_BANCO+" (Motivo: "+motivoBanco(e)+")");return false;}
+  toast("Sucata entregue ao cliente "+(x.cliente||"")+". Pendência encerrada.");
+  try{renderEstAfazer();atualizarBadgeEstoque();renderSino();}catch(e2){}
+  return true;
+}
+function cienteSucataNaoEncontrada(id){return travaSalvar("cienteSucata",cienteSucataNaoEncontrada__corpo,this,arguments);}
+async function cienteSucataNaoEncontrada__corpo(id){
+  var x=sucataPend.filter(function(y){return y.id===id;})[0];if(!x||x.status!=="naoEncontrada")return false;
+  var obs=prompt("A sucata da troca do pedido "+x.pedidoNumero+" ("+(x.cliente||"")+") não foi encontrada no estoque.\n"+
+    "Escreva o que aconteceu com ela (por exemplo: já foi desmontada ou descartada) para encerrar o aviso:","");
+  if(obs===null||!obs.trim())return false;
+  x.status="resolvida";x.resolvidaEm=agoraCarimbo();x.resolvidaPor=usuarioAtual;x.resolucao=obs.trim();
+  try{await gravaConf("sucatatroca",x);}
+  catch(e){x.status="naoEncontrada";delete x.resolvidaEm;delete x.resolvidaPor;delete x.resolucao;toast(RECUSA_BANCO);return false;}
+  toast("Aviso da sucata do pedido "+x.pedidoNumero+" encerrado.");
+  try{renderSino();}catch(e2){}
+  return true;
+}
+window.__sucataTrocaMF={entrar:function(p){return entrarSucataDoPedido(p);},devolver:function(p,m){return devolverSucataAoCliente(p,m);},
+  ajustar:function(p,m){return ajustarSucataDoPedido(p,m);},onde:function(p){return ondeEstaSucata(p,sucataDoPedido(p));},
+  doPedido:function(p){return sucataDoPedido(p);},pend:function(){return sucataPend;},paraDevolver:function(q){return sucataParaDevolver(q);},
+  entregue:function(id){return confirmarEntregaSucata__corpo(id);}};
 /* depois da venda: abre o estoque do vendedor já perguntando se recebeu o usado */
 function abrirRecebimentoTroca(r){
   if(!r)return;
@@ -19741,9 +19885,12 @@ async function salvarPedidoAgora(){
     setTimeout(function(){toast("Venda abaixo da tabela: a solicitação de autorização do pedido "+ped.numero+" foi enviada ao Administrador.");
       try{avisarDescontos();}catch(e){}},3600);
   }
-  /* purificador usado da troca: requisição para o vendedor confirmar que recebeu (entra no estoque dele) */
-  var reqTroca=null;
-  try{reqTroca=await registrarTrocaDaVenda(ped);if(reqTroca&&db)await col("pedidos").doc(ped.id).set(ped);}catch(eU){console.warn(eU);}
+  /* v515: a sucata da troca entra SOZINHA no estoque de quem instala (sem a pergunta "recebeu?").
+     Com instalação para depois, ela entra quando a instalação for concluída. */
+  var errSuc="";
+  if(trocaNoPedido(ped)&&!instalacaoPendentePed(ped)){
+    try{errSuc=await entrarSucataDoPedido(ped);}catch(eU){errSuc=motivoBanco(eU);}
+  }
   trocaResp=null;
   if(osDoPed){
     osDoPed.pedidoId=ped.id;osDoPed.itensOS=JSON.parse(JSON.stringify(ped.itens));osDoPed.formasOS=JSON.parse(JSON.stringify(ped.formas));
@@ -19889,12 +20036,14 @@ async function salvarPedidoAgora(){
   }else if(osDoPed&&msgOSFim){
     setTimeout(function(){toast(msgOSFim);},2600);
   }
-  /* venda com Desconto de Troca: fechada a janela do envio, abre o estoque do vendedor para confirmar o usado */
-  if(reqTroca){
-    var antesTroca=vendaOkDepois;
-    vendaOkDepois=function(){
-      if(antesTroca)antesTroca();
-      setTimeout(function(){abrirRecebimentoTroca(reqTroca);},antesTroca?900:300);};
+  /* v515: venda com Desconto de Troca — avisa onde a sucata entrou (ou que entra na instalação) */
+  if(trocaNoPedido(ped)&&!ped.teste){
+    var msgSuc=errSuc
+      ? "Atenção: a sucata da troca NÃO entrou no estoque ("+errSuc+"). Abra o pedido e salve de novo com internet."
+      : (instalacaoPendentePed(ped)
+        ? "A sucata da troca entra no estoque de "+quemRecebeSucata(ped)+" quando a instalação for concluída."
+        : (ped.sucataTroca&&ped.sucataTroca.entrouEm?"Sucata da troca no estoque de "+ped.sucataTroca.quem+". Transfira para o almoxarifado amanhã (Meu Estoque › Devolver).":""));
+    if(msgSuc)setTimeout(function(){toast(msgSuc);},errSuc?1200:4200);
   }
   /* finalizou a venda: janela com "Enviar Pedido Venda para cliente via WhatsApp" */
   abrirVendaOk(ped);
@@ -23496,6 +23645,9 @@ async function cancelarPedido__corpo(p,motivo){
         texto:"Aparelho desativado porque o pedido "+p.numero+" foi cancelado"}]);
       await grava("equipamentos",eC);
     }
+    /* v515: pedido cancelado → a sucata da troca volta ao cliente (pendência para quem está com ela) */
+    var errSucC="";try{errSucC=await devolverSucataAoCliente(p,"pedido cancelado");}catch(eSc){errSucC=motivoBanco(eSc);}
+    if(errSucC)setTimeout(function(){toast("Atenção: a sucata da troca do pedido "+p.numero+" não foi devolvida no estoque ("+errSucC+"). Avise o Administrador.");},3000);
     registrarEvento(p,"Cancelada: "+motivo.trim());await gravarPedido(p);
     toast("Pedido "+p.numero+" cancelado · "+abertos.length+" título(s) cancelado(s)"+
       (devolvidas?" · "+devolvidas+" unidade(s) de volta ao estoque":" · reserva de estoque liberada")+
@@ -25462,7 +25614,8 @@ window.__podeAceitarReqMF=function(r){return podeAceitarReq(r);};
 function reqParaAceitar(){
   var locs=meusLocaisEst();
   return requisicoes.filter(function(r){
-    return r.loja===lojaAtual&&r.tipo==="requisicao"&&(r.status==="pendente"||r.status==="separada")&&
+    /* v515: a requisição "pego na troca" não pede mais confirmação (a sucata entra sozinha) */
+    return r.loja===lojaAtual&&r.tipo==="requisicao"&&r.origem!=="troca"&&(r.status==="pendente"||r.status==="separada")&&
       locs.indexOf(localDaReq(r))>=0&&podeAceitarReq(r)&&!(r.itens||[]).every(function(i){return i.recebido;});});
 }
 function autParaMeuEstoque(){
@@ -25479,6 +25632,7 @@ function devolucoesParaConferir(){
 /* o número do A fazer (menu e título): só o que depende da pessoa */
 function pendenciasEstoque(){
   var L=[].concat(autParaMeuEstoque(),reqParaAceitar());
+  try{L=L.concat(sucataParaDevolver());}catch(eSd){}   /* v515: devolver a sucata da troca ao cliente */
   if(visaoCompletaEst()){
     L=L.concat(autDoAlmox());
     if(podeConferir())L=L.concat(devolucoesParaConferir());
@@ -25628,8 +25782,19 @@ function renderEstAfazer(){
     var nNeg=0;try{nNeg=estoquesNegativos().length;}catch(eN){}
     if(nNeg)avisos='<div class="note crit" style="cursor:pointer" id="afNeg"><b>'+nNeg+" produto(s) com estoque negativo.</b> Toque para ver no Saldo.</div>";
   }
+  /* v515: sucata da troca que tem de voltar ao cliente (pedido cancelado ou renegociado sem a troca) */
+  var sdL=[];try{sdL=completa?sucataPend.filter(function(x){return x.loja===lojaAtual&&x.status==="pendente";}):sucataParaDevolver();}catch(eSd){}
+  if(sdL.length)h=blocoAf("Devolver sucata ao cliente",sdL.length,sdL.map(function(x){
+    var minha=sucataParaDevolver().indexOf(x)>=0;
+    return '<div class="af-item"><div class="t">'+x.qtd+"× Purificador Sucata → "+esc(x.cliente||"cliente")+"</div>"+
+      '<div class="s">Pedido nº '+esc(x.pedidoNumero)+" · "+esc(x.motivo||"")+" · saiu de "+esc(nomeLocal(x.local))+
+      " · com "+esc((x.responsaveis||[]).join(", ")||"—")+(x.criadoEm?" · desde "+esc(dataBR(x.criadoEm)):"")+"</div>"+
+      (minha?'<div class="actions"><button class="btn" type="button" data-afsuc="'+esc(x.id)+'">Entreguei ao cliente</button></div>':"")+"</div>";
+  }).join(""),"")+h;
   $("afAvisos").innerHTML=avisos;
   w.innerHTML=h;
+  Array.prototype.forEach.call(w.querySelectorAll("[data-afsuc]"),function(b){b.onclick=function(){
+    Promise.resolve(confirmarEntregaSucata(b.getAttribute("data-afsuc"))).then(function(){renderEstAfazer();atualizarBadgeEstoque();});};});
   if($("afNeg"))$("afNeg").onclick=function(){ir("estSaldo");};
   function par(v){var c=v.split("|");return {p:c[0],x:c[1]};}
   function cada(sel,fn){Array.prototype.forEach.call(w.querySelectorAll("["+sel+"]"),function(b){b.onclick=function(){fn(b.getAttribute(sel));};});}
@@ -25923,7 +26088,8 @@ function renderEstColab(){
   var comigo=produtos.filter(function(p){return saldoEm(p.id,loc)!==0||(reserv[p.id]||0)>0;});
   var unid=comigo.reduce(function(a,p){return a+saldoEm(p.id,loc);},0);
   var valor=comigo.reduce(function(a,p){return a+saldoEm(p.id,loc)*custoTotalDe(p);},0);
-  var receber=requisicoes.filter(function(r){return r.loja===lojaAtual&&localDaReq(r)===loc&&
+  /* v515: a requisição "pego na troca" sai daqui — a sucata entra sozinha, sem confirmar */
+  var receber=requisicoes.filter(function(r){return r.loja===lojaAtual&&localDaReq(r)===loc&&r.origem!=="troca"&&
     r.tipo==="requisicao"&&(r.status==="pendente"||r.status==="separada");});
   var devol=requisicoes.filter(function(r){return r.loja===lojaAtual&&localDaReq(r)===loc&&r.tipo==="devolucao";});
   $("ecResumo").textContent=ehLoja
@@ -37633,6 +37799,8 @@ async function aplicarEdicaoPedido(cli,r,solDesc){
   }
   try{await gerarAjustes(p,antes,{base:r.base,pontos:r.pontos},"Pedido "+p.numero+" editado");}catch(e){console.warn(e);}
   try{await criarReqsDaVenda(p);}catch(eRv){console.warn("requisição da venda",eRv);}
+  /* v515: renegociado sem a troca → a sucata volta ao cliente; com troca nova → a sucata entra */
+  try{await ajustarSucataDoPedido(p,"pedido renegociado sem a troca");}catch(eSc){console.warn("sucata",eSc);}
   var alvo=p;
   pedEditando=null;
   try{limparPedido();}catch(e){}
@@ -45687,6 +45855,8 @@ function ligarPedDet(){
         " — voltou para a Aprovação Financeira");
     }
     await gravarPedido(p);
+    /* v515: reaberto e renegociado sem a troca → a sucata volta ao cliente */
+    try{await ajustarSucataDoPedido(p,eraReaberta?"pedido reaberto e renegociado sem a troca":"pedido alterado sem a troca");}catch(eSc){console.warn("sucata",eSc);}
     /* mês de origem já fechado? então a diferença vira crédito ou débito no mês corrente */
     var gerados=await gerarAjustes(p,antes,{base:r.base,pontos:r.pontos},
       "Pedido "+p.numero+" alterado — "+motivo);
@@ -46283,6 +46453,10 @@ async function finalizarInstalacao__corpo(p,obs){
   p.status=etapaVenda(p);
   registrarEvento(p,"Instalação finalizada"+(ms.length?" · incluídos na venda: "+usados+" · total "+BRL(p.total):"")+" · "+obs);
   await gravarPedido(p);
+  /* v515: com a instalação concluída, a sucata da troca entra no estoque de quem instalou */
+  var errSucI="";
+  if(trocaNoPedido(p)){try{errSucI=await entrarSucataDoPedido(p);}catch(eSi){errSucI=motivoBanco(eSi);}}
+  if(errSucI)setTimeout(function(){toast("Atenção: a sucata da troca NÃO entrou no estoque ("+errSucI+"). Finalize de novo com internet ou avise o Administrador.");},2200);
   /* prestador: o serviço entra na remuneração dele AGORA, com assinatura, foto e nota (05/10) */
   try{await gravarFechoPrest(p);}catch(ePm){console.warn("fecho do prestador",ePm);}
   /* pedido de uma OS interna com instalação futura: instalação finalizada = OS finalizada (regra do Wagner, 14/09) */
@@ -53953,6 +54127,17 @@ function pendenciasMF(){
         ir:function(){verAvisoTecOrcOS(o);}});
     });
   }catch(eOo){console.warn("pend orçamento OS",eOo);}
+  /* v515: sucata da troca para devolver ao cliente (quem está com ela) e sucata não encontrada (Administrador) */
+  try{
+    sucataParaDevolver(euNoEstoque()).forEach(function(x){
+      põe({chave:"sdc:"+x.id,icone:"📦",titulo:"Devolver sucata ao cliente",
+        texto:x.qtd+"× Purificador Sucata para "+(x.cliente||"o cliente")+" · pedido "+x.pedidoNumero+" · "+(x.motivo||""),
+        quando:String(x.criadoEm||""),ir:function(){ir("estColab");}});});
+    sucataNaoEncontrada().forEach(function(x){
+      põe({chave:"sne:"+x.id,icone:"⚠",titulo:"Sucata da troca não encontrada",
+        texto:"Pedido "+x.pedidoNumero+" · "+(x.cliente||"")+" · "+(x.motivo||"")+": a sucata ("+x.qtd+"×) devia voltar ao cliente, mas não está no estoque de quem recebeu, no almoxarifado nem no Estoque da Loja. Toque para registrar o que aconteceu com ela.",
+        quando:String(x.criadoEm||""),ir:function(){cienteSucataNaoEncontrada(x.id);}});});
+  }catch(eSuc){console.warn("pend sucata",eSuc);}
   /* 05/11: uso do sistema SEM INTERNET e SEM o ponto batido (proposta B) — o Administrador vê */
   try{
     if(ehAdministrador())(USOS_SEM_PONTO||[]).forEach(function(u){
@@ -54240,6 +54425,7 @@ function avisosDoTrabalho(){
   /* a requisição que o almoxarifado já separou: falta eu confirmar que recebi */
   requisicoes.filter(function(r){
     if(r.tipo!=="requisicao"||r.status!=="separada"||!daLoja(r))return false;
+    if(r.origem==="troca")return false;   /* v515: a sucata da troca entra sozinha, sem confirmar */
     var l=localDaReq(r);
     if(ehLocalLoja(l))return respondePeloEstoque(euE,l);
     return r.colaborador===euE;
