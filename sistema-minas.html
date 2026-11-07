@@ -4203,7 +4203,9 @@ img{max-width:100%}
             <button class="btn mut sm" type="button" id="mpMesProx" title="Mês seguinte">›</button>
             <select id="mpMostrar" style="max-width:290px" title="O que mostrar deste mês">
               <option value="">Todos os aparelhos (sem filtro de mês)</option>
-              <option value="ambos">Trocas do mês + atrasadas</option>
+              <!-- v521 (07/11, regra dele): a tela ABRE no mês de hoje com as vencidas de qualquer
+                   tempo + as que vencem até o fim do mês; o usuário troca o mês ou o modo se quiser -->
+              <option value="ambos" selected>Trocas do mês + atrasadas</option>
               <option value="mes">Só as que vencem no mês</option>
               <option value="atraso">Só as atrasadas</option>
             </select>
@@ -4213,8 +4215,8 @@ img{max-width:100%}
             <select id="mpAtrasoMax" style="max-width:215px" title="Até quanto tempo de atraso entra na lista" hidden>
               <option value="3">Atraso de até 3 meses</option>
               <option value="6">Atraso de até 6 meses</option>
-              <option value="12" selected>Atraso de até 12 meses</option>
-              <option value="0">Qualquer atraso</option>
+              <option value="12">Atraso de até 12 meses</option>
+              <option value="0" selected>Qualquer atraso</option>
             </select>
             <button class="btn" type="button" id="mpTrocasMes">Trocas deste mês</button>
             <span class="sp"></span>
@@ -40335,7 +40337,7 @@ function pxM(e){var m=memoMP();if(!(e.id in m.px))m.px[e.id]=proximaDe(e);return
 function sitM(e){var m=memoMP();if(!(e.id in m.sit))m.sit[e.id]=sitEq(e);return m.sit[e.id];}
 function stM(e){var m=memoMP();if(!(e.id in m.st))m.st[e.id]=statusManut(e);return m.st[e.id];}
 function plM(e){var m=memoMP();if(!(e.id in m.pl))m.pl[e.id]=planoAtivoEquip(e);return m.pl[e.id];}
-function mesM(e,j){var m=memoMP();if(m.mesK!==j.ini){m.mes={};m.mesK=j.ini;}
+function mesM(e,j){var m=memoMP();if(m.mesK!==j.de){m.mes={};m.mesK=j.de;}
   if(!(e.id in m.mes))m.mes[e.id]=situacaoMesManut(e,j);return m.mes[e.id];}
 /* o texto da busca de cada aparelho, guardado no próprio objeto (fora do banco, como o __bt) */
 function textoBuscaEquip(e){
@@ -55010,13 +55012,17 @@ var _trocasMeus={chave:"",em:0,lista:[]};
 function trocasRefilDosMeus(){
   var ch=usuarioAtual+"|"+lojaAtual+"|"+equipamentos.length+"|"+pedidos.length;
   if(_trocasMeus.chave===ch&&Date.now()-_trocasMeus.em<600000)return _trocasMeus.lista;
-  var hj=hojeISO(),de=somaDias(hj,-7),ate=somaDias(hj,7),out=[];
+  /* v521 (07/11, regra dele): só as trocas VENCIDAS (de qualquer tempo) e as que vencem até o
+     fim do mês de hoje — a mesma lista com que a Manutenção Periódica abre. Antes: 7 dias para
+     trás e 7 para a frente, o que punha no aviso troca do mês seguinte. */
+  var hj=hojeISO(),ate=janelaMesManut(hj).ate,out=[];
   IDX_PED=montarIdxPedidos();
   try{
   equipamentos.forEach(function(e){
     if(e.ativo===false||!e.clienteId||!e.manutDias)return;
     if(e.loja&&e.loja!==lojaAtual)return;
-    var px=proximaDe(e);if(!px||px<de||px>ate)return;
+    if(!aparelhoAcompanhado(e)||aparelhoForaDaManut(e))return;   /* os mesmos da tela */
+    var px=proximaDe(e);if(!px||px>ate)return;
     var c=cliPorId(e.clienteId);if(!c)return;
     var v="";try{v=vendedorDoCliente(c);}catch(x){v="";}
     if(v!==usuarioAtual)return;
@@ -55027,6 +55033,16 @@ function trocasRefilDosMeus(){
   _trocasMeus={chave:ch,em:Date.now(),lista:out};
   return out;
 }
+/* para os testes (rot-trocasvenc): a próxima troca do aviso do sino e da lista aberta na Manutenção */
+window.__trocasMF={
+  sino:function(){_trocasMeus.chave="";return trocasRefilDosMeus().map(function(x){return x.px;});},
+  tela:function(){return (mpListaAtual||[]).map(function(e){return proximaDe(e);});},
+  aviso:function(){var a=avisosDoTrabalho().filter(function(x){return /^trocas:/.test(x.chave);})[0];return a?a.titulo:"";},
+  usuario:function(u){if(u)usuarioAtual=u;return usuarioAtual;},
+  fimMes:function(){return janelaMesManut(hojeISO()).ate;},
+  vendedores:function(){var v={};IDX_PED=montarIdxPedidos();
+    try{equipamentos.forEach(function(e){var c=cliPorId(e.clienteId);if(c)try{var n=vendedorDoCliente(c);if(n)v[n]=1;}catch(x){}});}
+    finally{IDX_PED=null;}return Object.keys(v);}};
 function avisosDoTrabalho(){
   var L=[],euE=euNoEstoque(),hj=hojeISO();
   function daLoja(r){return (r.loja||lojaAtual)===lojaAtual;}
@@ -55104,10 +55120,20 @@ function avisosDoTrabalho(){
   /* as trocas de refil dos meus clientes (uma linha só) */
   var tr=[];try{tr=trocasRefilDosMeus();}catch(e){tr=[];}
   if(tr.length)L.push({chave:"trocas:"+hj,icone:"💧",
-    titulo:tr.length+(tr.length===1?" troca de refil de cliente seu":" trocas de refil de clientes seus")+" nesta semana",
+    titulo:(function(){
+      var nV=tr.filter(function(x){return x.px<hj;}).length,nM=tr.length-nV,mes=String(janelaMesManut(hj).rot).split(" de ")[0];
+      return "Trocas de refil de clientes seus: "+(nV?nV+(nV===1?" vencida":" vencidas"):"")+
+        (nV&&nM?" · ":"")+(nM?nM+" vence"+(nM===1?"":"m")+" até o fim de "+mes:"");})(),
     texto:tr.slice(0,3).map(function(x){return (x.c.nome||"")+" "+dataCurta(x.px);}).join(" · ")+(tr.length>3?" · …":""),
     quando:tr[0].px,
-    ir:function(){ir("manut");}});
+    ir:function(){
+      /* abre a lista de trabalho do mês de hoje: vencidas de qualquer tempo + as do mês */
+      mpMesRef=hojeISO();
+      if($("mpMostrar"))$("mpMostrar").value="ambos";
+      if($("mpAtrasoMax"))$("mpAtrasoMax").value="0";
+      if($("mpDe"))$("mpDe").value="";
+      if($("mpAte"))$("mpAte").value="";
+      ir("manut");}});
   return L;
 }
 var _pendSino=[];
@@ -58652,6 +58678,7 @@ function ligar(){
   if($("mpTrocasMes"))$("mpTrocasMes").onclick=function(){
     mpMesRef=hojeISO();
     if($("mpMostrar"))$("mpMostrar").value="ambos";
+    if($("mpAtrasoMax"))$("mpAtrasoMax").value="0";   /* v521: o mês de hoje e tudo o que venceu antes */
     if($("mpBusca"))$("mpBusca").value="";
     if($("mpSit"))$("mpSit").value="";
     if($("mpDe"))$("mpDe").value="";
