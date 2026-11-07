@@ -1686,6 +1686,16 @@ body.trava-ponto .app{grid-template-columns:minmax(0,1fr)!important}
 .dg-l{display:flex;justify-content:space-between;gap:8px;font-size:14px;border-bottom:1px solid var(--line);padding:3px 0}
 .dg-l b{font-size:17px}
 @media (max-width:620px){.kpi-grupos{grid-column:auto}.dg-lista{grid-template-columns:1fr}}
+/* botão da versão no alto (v522) */
+#verBt{margin-left:10px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+#verBt.ver-nova{background:#FFD84D;color:#3A2A00;border-color:#D9A900}
+#verBt.ver-obrig{background:#D93A3A;color:#fff;border-color:#B02020}
+#verBt:disabled{opacity:.6}
+@media (max-width:700px){#verBt{margin-left:6px;padding-left:8px;padding-right:8px}#verBt .ver-l{display:none}#verBt b::before{content:"v"}}
+/* no celular o alto é apertado (o sino ficava cortado, print dele de 07/11): WhatsApp vira "Zap" e a versão só o número */
+#zapBt .zap-c{display:none}
+@media (max-width:480px){#zapBt .zap-l{display:none}#zapBt .zap-c{display:inline}
+  #verBt,#zapBt{margin-left:4px!important;padding-left:8px!important;padding-right:8px!important}}
 </style>
 
 <!-- ============ AJUSTES DE CELULAR (estilo) — fica logo após o estilo principal
@@ -48570,7 +48580,7 @@ function renderBotaoZap(){
   var c=ZAP_SIS.conexao,cor="#9aa5b1",txt="desconectado";
   if(c&&c.situacao==="conectado"&&c.loja===lojaAtual){cor="#25d366";txt="conectado";}
   else if(c&&c.situacao==="aguardando"){cor="#f5b400";txt="aguardando o QR Code";}
-  b.innerHTML='<span aria-hidden="true" style="width:9px;height:9px;border-radius:50%;background:'+cor+';display:inline-block"></span>WhatsApp';
+  b.innerHTML='<span aria-hidden="true" style="width:9px;height:9px;border-radius:50%;background:'+cor+';display:inline-block"></span><span class="zap-l">WhatsApp</span><span class="zap-c">Zap</span>';
   b.title="Meu WhatsApp no sistema: "+(zapLiberado()?txt:"não liberado");
   b.setAttribute("aria-label",b.title);
 }
@@ -55138,6 +55148,7 @@ function avisosDoTrabalho(){
 }
 var _pendSino=[];
 function renderSino(){
+  try{if(!$("verBt"))renderBotaoVersao();}catch(e){}   /* v522: o botão da versão nasce junto com o sino */
   /* solicitação pendente que não tem mais motivo é encerrada sozinha, no máximo uma vez por minuto */
   if(Date.now()-_solicResolvidaEm>60000){
     _solicResolvidaEm=Date.now();
@@ -60583,6 +60594,7 @@ async function entrarComPerfil(viaSenha){
   try{iniciarAvisoSistema();}catch(e){console.warn("aviso do sistema",e);}
   /* WHATSAPP PELO SISTEMA (06/11): botão no alto e a situação da conexão de quem pode */
   try{iniciarZapSistema();}catch(e){console.warn("WhatsApp do sistema",e);}
+  try{renderBotaoVersao();}catch(e){console.warn("botão da versão",e);}
   /* SEM INTERNET (05/11): guarda o que a consulta sem sinal precisa, manda os usos sem ponto anotados */
   setTimeout(function(){salvarParaSemInternet().then(function(){LEITURAS_GRAV=null;});enviarUsosSemPonto();lerUsosSemPonto();},8000);
   toast("Bem-vindo, "+String(p.nome).split(" ")[0]+". Dados gravados no banco.");
@@ -60808,7 +60820,57 @@ function reabrirPedidoGuardado(){
   toast("Sistema atualizado. O pedido de "+(r.cliente||"cliente")+" voltou de onde você parou.");
   return true;
 }
+/* ===== BOTÃO DA VERSÃO NO ALTO (07/11, v522, pedido dele: "um botão informando a última versão
+   e se clicar nele atualiza a última que tiver") =====
+   Mostra a versão aberta ("Versão 522"); havendo versão nova, fica amarelo (vermelho se obrigatória)
+   com "Atualizar para 523". O toque confere o versao.txt NA HORA e, havendo versão nova, atualiza
+   pelo mesmo caminho da faixa (atualizarSistemaAgora: guarda o pedido pela metade e não deixa
+   perder cadastro sem salvar). Já na última: avisa. Sem internet: avisa que não deu para conferir. */
+function versaoAbertaNum(){return window.__VERSAO_TESTE_MF||VERSAO_ABERTA||0;}
+function renderBotaoVersao(){
+  var sino=$("sinoBt");if(!sino)return;
+  var atual=versaoAbertaNum(),b=$("verBt");
+  if(!b){
+    if(!atual)return;
+    b=document.createElement("button");b.type="button";b.id="verBt";b.className="sair";
+    b.onclick=function(){tocarBotaoVersao();};
+    var antes=$("zapBt")||sino;antes.parentNode.insertBefore(b,antes);
+  }
+  var nova=versaoNova&&versaoNova>atual;
+  b.classList.toggle("ver-nova",!!nova&&!versaoObrig);
+  b.classList.toggle("ver-obrig",!!nova&&versaoObrig);
+  b.innerHTML=nova?'<span class="ver-l">Atualizar para </span><b>'+versaoNova+"</b>":'<span class="ver-l">Versão </span><b>'+atual+"</b>";
+  b.title=nova?"Versão "+atual+" aberta. Toque para atualizar para a "+versaoNova+(versaoObrig?" (obrigatória)":"")+".":
+    "Versão "+atual+" do sistema. Toque para conferir se há uma mais nova e atualizar.";
+  b.setAttribute("aria-label",b.title);
+}
+var verBtOcupado=false;
+async function tocarBotaoVersao(){
+  if(verBtOcupado)return;verBtOcupado=true;
+  var b=$("verBt"),atual=versaoAbertaNum();
+  if(b)b.disabled=true;
+  try{
+    var num=0,obr=false;
+    try{
+      var r=await fetch((window.__VERSAO_URL_MF||"versao.txt")+"?nc="+Date.now(),{cache:"no-store"});
+      if(!r.ok)throw new Error("http "+r.status);
+      var t=String(await r.text()||""),n=t.match(/[0-9]+/);
+      if(!n)throw new Error("sem número");
+      num=+n[0];obr=/obrigat/i.test(t);
+    }catch(e){toast("Sem internet: não deu para conferir a versão agora. Tente de novo quando tiver sinal.");return;}
+    if(num>atual){
+      versaoNova=num;versaoObrig=obr;versaoConfEm=Date.now();
+      renderFaixaVersao();
+      toast("Atualizando para a versão "+num+"…");
+      await atualizarSistemaAgora();
+    }else{
+      versaoNova=0;versaoObrig=false;renderFaixaVersao();
+      toast("Você já está na última versão ("+atual+").");
+    }
+  }finally{verBtOcupado=false;if(b)b.disabled=false;}
+}
 function renderFaixaVersao(){
+  try{renderBotaoVersao();}catch(e){}
   var d=$("avisoVersao");if(!d)return;
   /* o pedido de salvar some quando já não há nada em andamento */
   try{if(versaoMsg&&!trabalhoEmAndamento())versaoMsg="";}catch(e){}
