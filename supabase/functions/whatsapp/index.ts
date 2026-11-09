@@ -14,7 +14,8 @@
 // REGRAS (aprovadas por ele em 06/11)
 //   - só conecta quem o Administrador marcou na ficha (config/usuarios: zapConectar) e está ativo;
 //     uma conexão por pessoa, presa à empresa em que conectou; ninguém envia pela conexão de outro;
-//   - envia só para cliente com pedido, orçamento, atendimento/atividade ou OS nos últimos 30 dias,
+//   - envia só para cliente com pedido, orçamento, atendimento/atividade ou OS nos últimos 30 dias
+//     (na manutenção, também quem tem troca de refil vencida ou vencendo em 30 dias),
 //     só celular válido com DDD e que tenha WhatsApp; 20 s entre envios e no máximo 30 por hora por
 //     pessoa; nada de envio em massa (um cliente por chamada);
 //   - tudo fica em whatsapp_envios (enviado, falhou ou aberto no celular);
@@ -34,7 +35,8 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
-const TIPOS = ["pedido_pdf", "link_assinatura"];
+const TIPOS = ["pedido_pdf", "link_assinatura", "manutencao"];
+const DIAS_TROCA = 30;   // manutenção: troca de refil vencida ou vencendo nos próximos 30 dias (Etapa 2, 09/11)
 const INTERVALO_S = 20, POR_HORA = 30, DIAS_ATENDIMENTO = 30;
 const DDDS = new Set(("11 12 13 14 15 16 17 18 19 21 22 24 27 28 31 32 33 34 35 37 38 41 42 43 44 45 46 47 48 49 51 53 54 55 " +
   "61 62 63 64 65 66 67 68 69 71 73 74 75 77 79 81 82 83 84 85 86 87 88 89 91 92 93 94 95 96 97 98 99").split(" "));
@@ -181,6 +183,34 @@ async function emAtendimento(loja: string, clienteId: string) {
   return (count || 0) > 0;
 }
 
+/* Etapa 2 (09/11): na Manutenção periódica também pode receber quem tem aparelho com a troca de
+   refil vencida ou vencendo nos próximos 30 dias. A conta é a mesma da tela, pelo cadastro do
+   aparelho: base = a data mais nova entre compra, instalação e última manutenção; próxima troca =
+   base + manutDias. (Uma venda aprovada depois disso só adiaria a troca; aqui ela não é olhada,
+   então a conferência nunca recusa quem a tela mostra.) */
+function somaDiasISO(iso: string, d: number) {
+  const x = new Date(iso.slice(0, 10) + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10);
+}
+export function trocaPertoDe(eqs: any[], hoje: string) {
+  const ate = somaDiasISO(hoje, DIAS_TROCA);
+  return eqs.some((e) => {
+    if (!e || e.ativo === false) return false;
+    if (e.naoNosso && !e.acompanhar) return false;
+    const dias = +e.manutDias || 0;
+    if (!dias) return false;
+    const base = [e.compradoEm, e.instaladoEm, e.ultimaManut].map((v) => String(v || "").slice(0, 10)).filter(Boolean).sort().pop();
+    if (!base) return false;
+    return somaDiasISO(base, dias) <= ate;
+  });
+}
+async function trocaPerto(loja: string, clienteId: string) {
+  if (!clienteId) return false;
+  const { data } = await sb.from("docs").select("data").eq("loja", loja).eq("colecao", "equipamentos")
+    .eq("data->>clienteId", clienteId).limit(200);
+  const hoje = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);   // dia em Brasília
+  return trocaPertoDe((data || []).map((x: any) => x.data), hoje);
+}
+
 async function enviar(p: any, b: any) {
   const loja = String(b.loja || "");
   const base = { loja, user_id: p.user_id, nome: p.nome, cliente_id: b.clienteId || null, cliente_nome: b.clienteNome || null,
@@ -195,7 +225,10 @@ async function enviar(p: any, b: any) {
   if (c.situacao !== "conectado") throw new Recusa("Seu WhatsApp está desconectado.");
   const numero = celularBR(base.telefone);
   if (!numero) throw new Recusa("O telefone do cliente não é um celular válido com DDD.");
-  if (!(await emAtendimento(loja, base.cliente_id || ""))) throw new Recusa("O cliente não está em atendimento (sem pedido, orçamento ou atendimento nos últimos 30 dias).");
+  if (!(await emAtendimento(loja, base.cliente_id || ""))) {
+    if (base.tipo !== "manutencao") throw new Recusa("O cliente não está em atendimento (sem pedido, orçamento ou atendimento nos últimos 30 dias).");
+    if (!(await trocaPerto(loja, base.cliente_id || ""))) throw new Recusa("O cliente não está em atendimento e não tem troca de refil vencida nem vencendo nos próximos 30 dias.");
+  }
   const agora = Date.now();
   const { data: ult } = await sb.from("whatsapp_envios").select("criado_em").eq("user_id", p.user_id).eq("situacao", "enviado")
     .order("criado_em", { ascending: false }).limit(1);

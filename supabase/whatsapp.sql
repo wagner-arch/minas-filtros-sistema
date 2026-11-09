@@ -34,7 +34,7 @@ create table if not exists public.whatsapp_envios (
   cliente_id    text,
   cliente_nome  text,
   telefone      text,
-  tipo          text not null,           -- pedido_pdf | link_assinatura
+  tipo          text not null,           -- pedido_pdf | link_assinatura | manutencao (Etapa 2, 09/11)
   ref_id        text,                    -- o pedido
   ref_numero    text,
   situacao      text not null,           -- enviado | falhou | celular

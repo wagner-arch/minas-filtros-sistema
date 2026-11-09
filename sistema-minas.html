@@ -7691,6 +7691,8 @@ img{max-width:100%}
       <button class="btn ghost" type="button" id="zp_copiar">Copiar a mensagem</button>
       <button class="btn ghost" type="button" id="zp_aba">Abrir em nova aba</button>
       <button class="btn" type="button" id="zp_programar" hidden>Programar a mensagem</button>
+      <!-- Etapa 2 do WhatsApp (09/11): na Manutenção periódica, envia pelo WhatsApp conectado -->
+      <button class="btn zap" type="button" id="zp_sis" hidden>Enviar pelo meu WhatsApp</button>
       <button class="btn zap" type="button" id="zp_lado">Abrir o WhatsApp ao lado do sistema</button>
       <button class="btn zap" type="button" id="zp_app" hidden>Abrir o WhatsApp</button>
     </div>
@@ -40426,7 +40428,7 @@ function montarPreManut(modoMes,jmes,tetoAtr,limiteAtr,perDatas){
   atendimentos.forEach(function(a){if(a.equipId)(IDX_VISITAS[a.equipId]||(IDX_VISITAS[a.equipId]=[])).push(a);});
   IDX_PED=montarIdxPedidos();
   try{
-  C.idxZap=indiceContatoZap();   /* o último WhatsApp de cada cliente, uma vez por desenho (27/10) */
+  C.idxZap=indiceContatoZap();C.idxAviso=indiceAvisoManutZap();   /* o último WhatsApp de cada cliente, uma vez por desenho (27/10) */
   /* endereço vem do cadastro do cliente, para os filtros encadearem (índice por id, v352) */
   base.forEach(function(e){e._c=cliPorId(e.clienteId)||{};});
   encherMulti("mpUF",unicos(base.map(function(e){return e._c;}),"uf"),"Todos os estados","estados");
@@ -40627,7 +40629,9 @@ function renderManutFiltro(){
           (telTxt?esc(telTxt):'<span class="pill p-warn">sem telefone</span>')+
           (ondeTxt?(telTxt?" · ":"")+esc(ondeTxt):"")+"</div>":"")+
         /* etiqueta do WhatsApp (27/10): só informa, não esconde de filtro e não conta como troca */
-        (ezap?'<div class="t-sub mp-zap" data-mpzap="'+ezap.k+'"><span class="pill '+ezap.cls+'">'+esc(ezap.n)+"</span></div>":"")+"</td>"+
+        (ezap?'<div class="t-sub mp-zap" data-mpzap="'+ezap.k+'"><span class="pill '+ezap.cls+'">'+esc(ezap.n)+"</span></div>":"")+
+        /* Etapa 2 do WhatsApp (09/11): enviado pelo WhatsApp conectado */
+        ((CACHE_MP.idxAviso||{})[e.id]?'<div class="t-sub" data-mpaviso="'+esc(CACHE_MP.idxAviso[e.id])+'"><span class="pill p-ok">avisado em '+esc(dataCurta(CACHE_MP.idxAviso[e.id]).slice(0,5))+"</span></div>":"")+"</td>"+
       '<td><div class="t-main">'+esc(e.produto||"—")+"</div>"+
         /* a série identifica o aparelho quando o cliente tem mais de um, então ela fica — mas só
            quando existe: o "sem série" encheria a tela depois da importação da base antiga (v257).
@@ -49050,6 +49054,7 @@ function ajustarProgZap(){
      "ao lado do sistema" não abre nada */
   $("zp_lado").hidden=on||ehCelularZap();$("zp_aba").hidden=on||ehCelularZap();
   if($("zp_app"))$("zp_app").hidden=on;
+  if($("zp_sis")&&on)$("zp_sis").hidden=true;
   var nota=$("zp_progNota");
   nota.hidden=!on;
   if(on){
@@ -49124,11 +49129,14 @@ function abrirWhatsApp(ctx){
   var mods=modelosZap(ctx);zapCtx.modelos=mods;
   $("zp_titulo").textContent="WhatsApp · "+(c.nome||ctx.nome||tel);
   $("zp_sub").textContent=String(tel)+(c.cidade?" · "+c.cidade:"")+(c.id?(ehLead(c)?" · lead":" · cliente"):"");
+  /* vindo da Manutenção periódica, já abre na mensagem da manutenção (09/11) */
+  var iMan=-1;mods.forEach(function(x,i){if(x.k==="manut"&&iMan<0)iMan=i;});
+  var i0=ctx.mensagem?0:(ctx.equip&&iMan>=0?iMan:1);
   $("zp_modelos").innerHTML=mods.map(function(x,i){
-    return '<button type="button" data-zpm="'+i+'" aria-pressed="'+(i===(ctx.mensagem?0:1)?"true":"false")+'">'+esc(x.n)+"</button>";}).join("");
-  $("zp_msg").value=mods[ctx.mensagem?0:1].t;
-  zapCtx.modeloIdx=ctx.mensagem?0:1;
-  mostrarVarsZap(mods[ctx.mensagem?0:1]);
+    return '<button type="button" data-zpm="'+i+'" aria-pressed="'+(i===i0?"true":"false")+'">'+esc(x.n)+"</button>";}).join("");
+  $("zp_msg").value=mods[i0].t;
+  zapCtx.modeloIdx=i0;
+  mostrarVarsZap(mods[i0]);
   /* o atendimento é registrado SOZINHO ao abrir o WhatsApp (27/10) — a caixinha de anotar saiu */
   var rn=$("zp_regNota");
   if(rn){
@@ -49142,6 +49150,11 @@ function abrirWhatsApp(ctx){
      sem abrir aba nenhuma no navegador (regra dele, 03/10) */
   $("zp_lado").hidden=cel;$("zp_aba").hidden=cel;$("zp_app").hidden=false;
   $("zp_app").textContent=cel?"Abrir o WhatsApp":"Abrir no aplicativo do WhatsApp (o que já está aberto)";
+  /* Etapa 2 (09/11): manutenção periódica de cliente cadastrado, para quem tem o WhatsApp liberado */
+  var zs=$("zp_sis");
+  if(zs){zs.hidden=!(ctx.equip&&c.id&&zapLiberado()&&!SEM_INTERNET);zs.disabled=false;zs.textContent="Enviar pelo meu WhatsApp";
+    if(!zs.hidden&&rn&&!rn.hidden)rn.innerHTML="<b>Enviar pelo meu WhatsApp</b> manda a mensagem daqui, pelo seu WhatsApp conectado ao sistema, e registra o atendimento no histórico do cliente e deste aparelho. "+
+      "Se não der (desconectado, telefone que não é celular, número sem WhatsApp), o sistema avisa e abre o WhatsApp como hoje.";}
   $("zp_nota").innerHTML=cel
     ?"Abre o app do WhatsApp deste celular, já na conversa, com a mensagem escrita — é só conferir e enviar."
     :"<b>Aplicativo do WhatsApp</b>: usa o programa que já está aberto no computador, sem abrir aba no navegador "+
@@ -49158,6 +49171,48 @@ function abrirWhatsApp(ctx){
   zm.hidden=false;
   setTimeout(function(){try{$("zp_msg").focus();}catch(e){}},50);
 }
+/* ===== MANUTENÇÃO PERIÓDICA PELO WHATSAPP CONECTADO (Etapa 2, 09/11, pedido dele) =====
+   Um toque por cliente (nada de "enviar para todos"). A mensagem é a que está na caixa: a sugerida
+   pela tela ou a que a pessoa editou. Quem confere tudo é o servidor (cliente em atendimento OU com
+   troca vencida/vencendo em 30 dias, celular com DDD, número com WhatsApp, 20 s, 30 por hora).
+   Saiu: registra o atendimento como o contato de hoje (no cliente e no aparelho) e a lista mostra
+   "avisado em dd/mm". Não saiu: avisa em português e abre o WhatsApp do celular como hoje. */
+async function enviarManutPeloZap(){
+  var ctx=zapCtx;if(!ctx||ctx.__enviando||!ctx.equip)return;
+  var c=ctx.cliente||{},eq=ctx.equip,msg=$("zp_msg").value.trim();
+  if(!msg){toast("Escreva a mensagem antes de enviar.");return;}
+  ctx.__enviando=true;
+  var bt=$("zp_sis");["zp_lado","zp_app","zp_aba","zp_sis"].forEach(function(id){if($(id))$(id).disabled=true;});
+  if(bt)bt.textContent="Enviando pelo seu WhatsApp…";
+  var z={tipo:"manutencao",clienteId:c.id||"",clienteNome:c.nome||ctx.nome||"",refId:eq.id,refNumero:eq.produto||""};
+  var r="celular";
+  try{r=await enviarPeloZapSistema(z,ctx.telUsado,msg,null);}catch(e){r="celular";}
+  ctx.__enviando=false;
+  if(bt)bt.textContent="Enviar pelo meu WhatsApp";
+  ["zp_lado","zp_app","zp_aba","zp_sis"].forEach(function(id){if($(id))$(id).disabled=false;});
+  if(r==="enviado"){
+    $("zapModal").hidden=true;
+    try{await registrarAtendZap(ctx,msg,"sistema");}catch(eZ){console.warn("atendimento do WhatsApp",eZ);}
+    toast("Mensagem enviada pelo seu WhatsApp para "+(primeiroNome(c.nome||ctx.nome)||"o cliente")+".");
+    if(zapCtx===ctx)zapCtx=null;
+    try{render();}catch(e){}
+    return "enviado";
+  }
+  /* o aviso do motivo já saiu (enviarPeloZapSistema); segue pelo caminho de hoje */
+  await confirmarWhatsApp(ehCelularZap()?"app":modoJanelaZap());
+  return "celular";
+}
+/* "avisado em dd/mm": o último envio da manutenção pelo WhatsApp conectado, por aparelho */
+function indiceAvisoManutZap(){
+  var m={};
+  atendimentos.forEach(function(a){
+    if(!a.zapAuto||a.zapModo!=="sistema"||!a.manutEquipId||(a.loja&&a.loja!==lojaAtual))return;
+    var d=String(a.data||"").slice(0,10);
+    if(!m[a.manutEquipId]||d>m[a.manutEquipId])m[a.manutEquipId]=d;
+  });
+  return m;
+}
+window.__manutZapMF={enviar:enviarManutPeloZap,avisos:indiceAvisoManutZap};
 async function confirmarWhatsApp(modo){
   var ctx=zapCtx;if(!ctx||ctx.__enviando)return;
   /* UM REGISTRO POR ENVIO (27/10): o botão fica desligado enquanto grava */
@@ -49210,8 +49265,9 @@ async function registrarAtendZap(ctx,msg,modo){
   var c=ctx&&ctx.cliente;
   if(!c||!c.id||ctx.followup)return null;
   var eq=ctx.equip||null,assunto=assuntoZap(ctx),agoraMs=new Date().getTime(),carimbo=new Date().toISOString();
-  var comoAbriu={lado:"WhatsApp Web ao lado do sistema",aba:"WhatsApp Web em nova aba",app:"aplicativo do WhatsApp"}[modo]||"WhatsApp";
-  var linha=agoraCarimbo()+" · "+usuarioAtual+" abriu o WhatsApp ("+comoAbriu+") · "+assunto;
+  var comoAbriu={lado:"WhatsApp Web ao lado do sistema",aba:"WhatsApp Web em nova aba",app:"aplicativo do WhatsApp",
+    sistema:"WhatsApp conectado ao sistema"}[modo]||"WhatsApp";
+  var linha=agoraCarimbo()+" · "+usuarioAtual+(modo==="sistema"?" enviou a mensagem pelo ":" abriu o WhatsApp (")+comoAbriu+(modo==="sistema"?"":")")+" · "+assunto;
   /* o mesmo cliente, pela mesma pessoa (e o mesmo aparelho), em até 10 minutos: não cria outro */
   var ja=atendimentos.filter(function(a){
     return a.zapAuto&&a.clienteId===c.id&&a.colaborador===usuarioAtual&&(!a.loja||a.loja===lojaAtual)&&
@@ -49320,6 +49376,7 @@ function ligarWhatsApp(){
   $("zp_aba").onclick=function(){confirmarWhatsApp("aba");};
   $("zp_copiar").onclick=function(){confirmarWhatsApp("copiar");};
   $("zp_app").onclick=function(){confirmarWhatsApp("app");};
+  if($("zp_sis"))$("zp_sis").onclick=function(){enviarManutPeloZap();};
   /* follow-up programado (04/10) */
   $("zp_prog").onchange=function(){ajustarProgZap();};
   $("zp_programar").onclick=programarMensagemZap;
