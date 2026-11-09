@@ -4181,7 +4181,8 @@ img{max-width:100%}
           <p class="sect-t">Atividade futura</p>
           <div class="grid g4">
             <div class="fld"><label for="af_data">Data <span class="req">*</span></label><input id="af_data" type="date"></div>
-            <div class="fld"><label for="af_ini">Horário</label><input id="af_ini" type="time"></div>
+            <div class="fld"><label for="af_ini">Início</label><input id="af_ini" type="time"></div>
+            <div class="fld"><label for="af_fim">Término</label><input id="af_fim" type="time"></div>
             <div class="fld"><label for="af_resp">Responsável</label><select id="af_resp"></select></div>
             <div class="fld"><label for="af_obs">O que fazer</label><input id="af_obs" placeholder="Ex.: retornar com proposta"></div>
           </div>
@@ -8719,7 +8720,8 @@ img{max-width:100%}
     </div>
     <div class="grid g3" style="margin-top:4px">
       <div class="fld"><label for="na_data">Data <span class="req">*</span></label><input id="na_data" type="date"></div>
-      <div class="fld"><label for="na_hora">Horário</label><input id="na_hora" type="time"></div>
+      <div class="fld"><label for="na_hora">Início</label><input id="na_hora" type="time"></div>
+      <div class="fld"><label for="na_fim">Término</label><input id="na_fim" type="time"></div>
       <div class="fld"><label for="na_resp">Responsável</label><select id="na_resp"></select></div>
     </div>
     <div class="fld" style="margin-top:14px"><label for="na_obs" id="na_obsLbl">O que fazer nesta atividade</label>
@@ -37533,7 +37535,7 @@ async function reagendarPeloFinalizar(a,txt){
   var antes=copiaReg(a);
   a.historico=a.historico||[];
   a.historico.push({de:a.data+(a.inicio?" "+a.inicio:""),para:d+" "+h,quando:iso(new Date()),por:usuarioAtual,obs:txt,motivos:fmMotivos.slice()});
-  a.data=d;a.inicio=h;a.situacao="pendente";
+  a.fim=fimReagendado(a,h);a.data=d;a.inicio=h;a.situacao="pendente";
   a.obs=(a.obs?a.obs+"\n\n":"")+"→ "+hojeISO()+" ("+usuarioAtual+"): Reagendou para "+dataBR(d)+" às "+h+" — "+txt;
   a.acoes=a.acoes||[];
   a.acoes.push({tipo:"reagenda",id:"",numero:"",quando:hojeISO(),por:usuarioAtual,texto:"Reagendada para "+dataBR(d)+" às "+h+" · "+fmMotivos.join(", ")+" — "+txt});
@@ -45310,6 +45312,7 @@ function abrirNovaAtividade(ctx){
   sr.value=ctx.colaborador||usuarioAtual;
   var d=new Date();d.setDate(d.getDate()+(ctx.dias||3));
   $("na_data").value=iso(d);$("na_hora").value=ctx.hora||"09:00";
+  $("na_fim").value=fimSugerido($("na_hora").value);$("na_fim").__auto=true;
   $("na_obs").value=ctx.obs||"";$("na_alerta").innerHTML="";
   if($("na_conflito"))$("na_conflito").innerHTML="";
   naLimparCadastro();
@@ -45367,6 +45370,9 @@ async function criarAtividadeRetorno__corpo(){
   var dNA=$("na_data").value,hNA=$("na_hora").value||"";
   if(dNA<hojeISO()||(dNA===hojeISO()&&hNA&&hNA<agoraHM())){
     $("na_alerta").innerHTML='<div class="note crit"><b>Esse dia e horário já passaram.</b> Escolha de agora em diante.</div>';return;}
+  if($("na_fim").__auto)$("na_fim").value=fimSugerido(hNA);
+  var tNA=erroTermino(hNA,$("na_fim").value);
+  if(tNA){$("na_alerta").innerHTML='<div class="note crit"><b>'+tNA+'</b></div>';return;}
   /* a próxima de uma atividade que está sendo encerrada não pode cair no mesmo dia dela (04/11, regra dele) */
   var origNA=(naCtx.deConclusao&&naCtx.origemAtiv)?atendPorId(naCtx.origemAtiv):null;
   if(origNA&&String(origNA.data||"").slice(0,10)===dNA){
@@ -45411,7 +45417,7 @@ async function criarAtividadeRetorno__corpo(){
     $("na_obs").value=$("na_obs").value.replace(/^OS nova/,"OS "+osNovaAberta.numero);
   }
   /* já tem compromisso nesse horário? avisa e mostra os horários livres (24/10) */
-  var cfN=conflitoDeAgenda($("na_resp").value,$("na_data").value,$("na_hora").value,"",null);
+  var cfN=conflitoDeAgenda($("na_resp").value,$("na_data").value,$("na_hora").value,$("na_hora").value?$("na_fim").value:"",null);
   if(cfN&&!confirm(textoConflito(cfN,$("na_resp").value,$("na_data").value)+"\n\nMarcar assim mesmo?"))return;
   var vinc=clientes.filter(function(c){return c.id===naCtx.clienteId;})[0]||{};
   var a={id:uid(),loja:lojaAtual,natureza:"atividade",
@@ -45426,7 +45432,7 @@ async function criarAtividadeRetorno__corpo(){
        continua podendo alterar e finalizar o que marcou */
     criadoPor:usuarioAtual,
     tipos:naTipos.slice(),tipo:naTipos.join(" · "),
-    data:$("na_data").value,inicio:$("na_hora").value,fim:"",
+    data:$("na_data").value,inicio:$("na_hora").value,fim:$("na_hora").value?$("na_fim").value:"",
     obs:$("na_obs").value.trim(),origemOrc:naCtx.orcId||"",
     origemAtiv:naCtx.origemAtiv||"",
     /* reagendada ou retorno de uma visita de manutenção continua ligada ao aparelho */
@@ -51154,6 +51160,8 @@ async function salvarAtend__corpo(){
       "Compromisso de outra pessoa ou atividade já finalizada.</div>";return;}
   if(modoEd==="hora"){
     var ini2=$("at_ini").value,fim2=$("at_fim").value;
+    /* mudou só o início: o término anda junto, com a mesma duração (v525) */
+    if(ini2&&editandoAt.inicio&&ini2!==editandoAt.inicio&&fim2&&fim2===(editandoAt.fim||""))fim2=fimReagendado(editandoAt,ini2)||fim2;
     if(fim2&&ini2&&fim2<ini2){$("at_alerta").innerHTML='<div class="note crit"><b>O fim não pode ser antes do início.</b></div>';return;}
     var cf=conflitoDeAgenda(editandoAt.colaborador,editandoAt.data,ini2,fim2,editandoAt.id);
     if(cf&&!confirm(textoConflito(cf,editandoAt.colaborador,editandoAt.data)+"\n\nMarcar assim mesmo?"))return;
@@ -51318,7 +51326,7 @@ async function salvarAtend__corpo(){
       "Ele passa para Clientes sozinho quando a primeira venda for lançada.":
      (ehLead(clienteVinc)?"<br><br>Lead "+esc(clienteVinc.codigo||"")+" — ainda sem venda.":
       "<br><br>Cliente "+esc(clienteVinc.codigo||"")+" · "+vendasDe(clienteVinc.id).length+" venda(s) no histórico."));
-  $("af_data").value="";$("af_ini").value="";$("af_obs").value="";
+  $("af_data").value="";$("af_ini").value="";$("af_fim").value="";$("af_fim").__auto=true;$("af_obs").value="";
   var eqF=equipamentos.filter(function(x){return !!x.id&&x.id===(a.manutEquipId||a.equipId);})[0];
   if(eqF){
     $("af_obs").value="Visita de manutenção periódica · "+(eqF.produto||"")+(eqF.serie?" · série "+eqF.serie:(eqF.local?" · "+eqF.local:""));
@@ -51411,7 +51419,7 @@ async function agendarFuturaDoAtend(at){
   var f={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:at.clienteId,cliente:at.cliente,
     criadoPor:usuarioAtual,
     colaborador:$("af_resp").value,tipos:(at.tipos||[]).slice(),tipo:at.tipo,
-    data:$("af_data").value,inicio:$("af_ini").value,fim:"",obs:$("af_obs").value.trim(),
+    data:$("af_data").value,inicio:$("af_ini").value,fim:$("af_ini").value?$("af_fim").value:"",obs:$("af_obs").value.trim(),
     origemAtend:at.id,
     equipId:(($("af_equipWrap")&&!$("af_equipWrap").hidden&&$("af_equip").value)||at.manutEquipId||at.equipId||""),status:"aberto"};
   atendimentos.push(f);
@@ -51429,6 +51437,9 @@ async function fecharAtend__corpo(comFutura){
   if(comFutura&&!$("af_data").value){
     $("at_fechaAlerta").innerHTML='<div class="note crit"><b>Informe a data da atividade futura.</b></div>';
     $("at_futuraBloco").hidden=false;return;}
+  if(comFutura&&$("af_fim").__auto)$("af_fim").value=fimSugerido($("af_ini").value);
+  if(comFutura){var tAF=erroTermino($("af_ini").value,$("af_fim").value);
+    if(tAF){$("at_fechaAlerta").innerHTML='<div class="note crit"><b>'+tAF+'</b></div>';$("at_futuraBloco").hidden=false;return;}}
   /* troca de refil / manutenção: escolher o purificador (27/10) */
   if(comFutura){
     afAjustarEquip(atendPend);
@@ -51439,7 +51450,7 @@ async function fecharAtend__corpo(comFutura){
   }
   /* a atividade futura também confere a agenda de quem vai executar (24/10) */
   if(comFutura){
-    var cfF=conflitoDeAgenda($("af_resp").value,$("af_data").value,$("af_ini").value,"",null);
+    var cfF=conflitoDeAgenda($("af_resp").value,$("af_data").value,$("af_ini").value,$("af_ini").value?$("af_fim").value:"",null);
     if(cfF&&!confirm(textoConflito(cfF,$("af_resp").value,$("af_data").value)+"\n\nMarcar assim mesmo?")){
       $("at_futuraBloco").hidden=false;return;}
   }
@@ -55532,7 +55543,7 @@ async function remarcar__corpo(){
   var antes=agPend.data+(agPend.inicio?" "+agPend.inicio:"");
   agPend.historico=(agPend.historico||[]);
   agPend.historico.push({de:antes,para:d+" "+h,quando:iso(new Date()),por:usuarioAtual,obs:$("ag_motivo").value.trim()});
-  agPend.data=d;agPend.inicio=h;
+  agPend.fim=fimReagendado(agPend,h);agPend.data=d;agPend.inicio=h;
   if($("ag_motivo").value.trim())agPend.obs=(agPend.obs?agPend.obs+" · ":"")+"Remarcado: "+$("ag_motivo").value.trim();
   try{await gravaConf("atendimentos",agPend);}
   catch(eRm){voltarReg(agPend,copiaAg);avisarRecusaBanco("ag_alerta",eRm,"A atividade continua no horário de antes.");return;}
@@ -55613,6 +55624,23 @@ function eventos(){
    mesmo horário confirma e segue, porque às vezes é de propósito.
    Compromisso sem hora de fim conta DUR_PADRAO minutos, senão nada se sobreporia a ele. */
 var DUR_PADRAO=60,PASSO_AGENDA=30;
+/* TÉRMINO DA ATIVIDADE (08/11, v525, pedido dele): quem cria a atividade diz início e término.
+   O término nasce 1 hora depois do início e acompanha o início enquanto a pessoa não mexer nele. */
+function fimSugerido(ini){return ini?hmDeMinutos(minutosHM(ini)+DUR_PADRAO):"";}
+function erroTermino(ini,fim){
+  if(fim&&!ini)return "Informe o horário de início.";
+  if(ini&&!fim)return "Informe o horário de término.";
+  /* 23:59 não tem "depois" no mesmo dia: término igual ao início só vale aí */
+  if(ini&&fim&&(minutosHM(fim)<minutosHM(ini)||(fim===ini&&ini!=="23:59")))return "O término tem de ser depois do início.";
+  return "";
+}
+/* reagendar mantém a mesma duração que a atividade tinha */
+function fimReagendado(a,h){
+  if(!a||!a.fim||!a.inicio||!h)return a&&a.fim&&!h?a.fim:"";
+  var dur=minutosHM(a.fim)-minutosHM(a.inicio);
+  return dur>0?hmDeMinutos(minutosHM(h)+dur):"";
+}
+window.__terminoMF={fimSugerido:fimSugerido,erroTermino:erroTermino,fimReagendado:fimReagendado};
 function fimDoCompromisso(hora,fim){
   var i=minutosHM(hora);
   var f=fim?minutosHM(fim):0;
@@ -58628,17 +58656,25 @@ function ligar(){
   /* AVISO DE HORÁRIO OCUPADO enquanto a pessoa preenche (24/10): nas duas telas que agendam,
      mexer na data, na hora ou no responsável já mostra o conflito e os horários livres. */
   function ligarAvisoAgenda(ids,alvo,quemFn,dataFn,horaFn){
+    var fimEl=$(ids[2]);
     ids.forEach(function(id){
       var e=$(id);if(!e)return;
       e.addEventListener("change",function(){
         var box=$(alvo);if(!box)return;
-        box.innerHTML=avisoConflitoHTML(quemFn(),dataFn(),horaFn(),"",null);
+        box.innerHTML=avisoConflitoHTML(quemFn(),dataFn(),horaFn(),fimEl?fimEl.value:"",null);
       });
     });
   }
-  ligarAvisoAgenda(["na_data","na_hora","na_resp"],"na_conflito",
+  [["na_hora","na_fim"],["af_ini","af_fim"]].forEach(function(p){
+    var ini=$(p[0]),fim=$(p[1]);if(!ini||!fim)return;
+    ini.addEventListener("change",function(){
+      if(fim.__auto||!fim.value||minutosHM(fim.value)<=minutosHM(ini.value)){fim.value=fimSugerido(ini.value);fim.__auto=true;}
+    });
+    fim.addEventListener("input",function(){fim.__auto=false;});
+  });
+  ligarAvisoAgenda(["na_data","na_hora","na_fim","na_resp"],"na_conflito",
     function(){return $("na_resp").value;},function(){return $("na_data").value;},function(){return $("na_hora").value;});
-  ligarAvisoAgenda(["af_data","af_ini","af_resp"],"at_conflito",
+  ligarAvisoAgenda(["af_data","af_ini","af_fim","af_resp"],"at_conflito",
     function(){return $("af_resp").value;},function(){return $("af_data").value;},function(){return $("af_ini").value;});
   /* dois cliques no cadastro do cliente, dentro dos Detalhes (24/10) */
   var dc=$("dt_cliente");
