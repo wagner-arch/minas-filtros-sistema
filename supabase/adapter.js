@@ -105,7 +105,8 @@
      tipos e motivos desativados e o canal de cada tipo: IGUAIS nas duas empresas (04/11, pedido dele).
      Acrescentou numa, aparece na outra. */
   var CONFIG_GLOBAL = ["usuarios", "mensagens_zap", "grupos_produtos", "serie", "preco", "importacoes_catalogo",
-    "tipos_atendimento", "motivos_finalizacao", "tipos_off", "motivos_off", "canais_tipo"];
+    "tipos_atendimento", "motivos_finalizacao", "tipos_off", "motivos_off", "canais_tipo",
+    "pedido_tela_antiga"];   /* 09/11 (v529): a chave de emergência da tela do pedido vale para as duas empresas */
   function configGlobal(colecao, id) {
     return colecao === "config" && CONFIG_GLOBAL.indexOf(String(id || "")) >= 0;
   }
