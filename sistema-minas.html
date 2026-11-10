@@ -18931,6 +18931,63 @@ function baseDoItem(i){return i.planoCobre?0:centavos(valorBaseItem(i)*(i.qtd||1
    R$ 119,53 de depreciado contra R$ 115,87 de valor comercial (print dele).
    Agora o comercial é refeito do valor final a cada cálculo, com o coeficiente da parcela atual.
    É idempotente: parte sempre do `valorFinal`, que não muda — sem deriva de centavo. */
+/* O QUE O VENDEDOR DIGITOU POR ÚLTIMO (10/11, v532, regra dele). Defeito: valor final R$ 600 no
+   débito virava "desconto de R$ 12,24" (a taxa da maquininha); trocando para o PIX o desconto
+   ficava e o item caía abaixo da tabela. Agora cada item guarda o que foi digitado por último:
+     digitou:"final"    → `finalDigitado` (por unidade) FICA; o desconto é refeito a cada conta
+                          = tabela da forma atual − valor final, nunca negativo;
+     digitou:"desconto" → o desconto FICA (R$ ou %, como foi digitado) e o valor final sai da tabela.
+   Item sem nada digitado segue a tabela; coberto pelo plano e sucata ficam fora. A tabela da forma
+   é a mesma do campo (`precoPelaForma` com `tabelaTotalVenda`), sem conta nova. */
+function itemForaDoDigitado(i){return !i||!!i.planoCobre||String(i.cod||"").toUpperCase()==="SUCATA";}
+function tabelaNaFormaItem(i){
+  return precoPelaForma(precoTabela(produtoPor(i.pid)||{})||(+i.valorTabela||0),1,tabelaTotalVenda(false));
+}
+/* a MESMA conta que o campo "Valor final" sempre fez — agora num lugar só */
+function aplicarFinalDigitado(it,v){
+  it.valorBase=baseDoFinal(v,it.qtd||1,tabelaTotalVenda(false));
+  it.valor=v;it.valorFinal=v;
+  var tabU=tabelaNaFormaItem(it);
+  if(tabU>0&&v<tabU){
+    it.desconto=Math.max(0,centavos(baseDoFinal(tabU,1,0)-baseDoFinal(v,1,0)));it.descontoTipo="rs";
+    /* com desconto, o valor volta a sair da conta (senão a tela e a comissão divergem) */
+    it.valorBase=baseDoFinal(tabU,it.qtd||1,tabelaTotalVenda(false));
+    it.valorFinal=0;
+  }else{
+    /* igual ou acima da tabela: desconto ZERO, nunca negativo */
+    it.desconto=0;it.descontoTipo="rs";
+  }
+}
+/* o DESCONTO foi o digitado por último: ele vale sobre a tabela da forma, não sobre um valor final antigo */
+function marcarDescontoDigitado(it){
+  if(+it.valorFinal>0){var tb=tabelaNaFormaItem(it);if(tb>0)it.valorBase=baseDoFinal(tb,it.qtd||1,tabelaTotalVenda(false));}
+  it.digitou="desconto";it.finalDigitado=0;it.valorFinal=0;
+  if(assinFormasItem)assinFormasItem.delete(it);
+}
+/* forma, parcelas ou divisão: o "jeito" do pagamento, para saber quando ele mudou */
+function assinaturaFormasVenda(){
+  return JSON.stringify((formas||[]).map(function(f){return [f.tipo||"",+f.parc||1];}))+"|"+(formasComJuros().length?centavos(entradaSemJuros()||0):0);
+}
+var assinFormasItem=(typeof WeakMap!=="undefined")?new WeakMap():null;
+function refazerDigitadosPelaForma(lista){
+  if(!lista||!lista.length)return;
+  if(!lista.some(function(i){return i&&(i.digitou==="final"||(!i.digitou&&+i.desconto>0));}))return;
+  /* a divisão digitada nas formas vale já nesta conta (o calcular só a copia para o valor mais adiante) */
+  (formas||[]).forEach(function(f){if(f.__auto===false&&f.base!=null&&f.base!=="")f.valor=centavos(+f.base||0);});
+  var sig=assinaturaFormasVenda();
+  lista.forEach(function(i){
+    if(itemForaDoDigitado(i))return;
+    /* PEDIDO ANTIGO (sem a marca): nada muda ao abrir. Só quando a forma, as parcelas ou a
+       divisão mudam, o valor que estava no item passa a valer como "valor final digitado". */
+    if(!i.digitou&&+i.desconto>0&&i.descontoTipo!=="pct"&&assinFormasItem){
+      var ant=assinFormasItem.get(i);
+      if(ant==null){assinFormasItem.set(i,sig);return;}
+      if(ant===sig)return;
+      if(+i.valor>0){i.digitou="final";i.finalDigitado=+i.valor;}
+    }
+    if(i.digitou==="final"&&+i.finalDigitado>0)aplicarFinalDigitado(i,+i.finalDigitado);
+  });
+}
 function redepreciarItensDigitados(lista){
   if(!lista||!lista.length)return;
   var T=tabelaTotalVenda(false);
@@ -19032,6 +19089,7 @@ function calcular(){
   try{aplicarProspectorVenda();}catch(eAp){}
   normalizarValoresItens(itens);
   normalizarFormasVenda(formas);
+  refazerDigitadosPelaForma(itens);
   redepreciarItensDigitados(itens);
   /* ETAPA A: o valor comercial da venda */
   var xv=extrasVenda();
@@ -19248,29 +19306,19 @@ function calcular(){
       var it=itens[+inp.getAttribute("data-vu")];if(!it)return;
       var v=numMF(inp.value);
       if(v<0)v=0;
-      /* v224: o campo é o valor FINAL — volta para o comercial, que é a base da comissão */
-      it.valorBase=baseDoFinal(v,it.qtd||1,tabelaTotalVenda(false));
-      it.valor=v;
+      /* v224: o campo é o valor FINAL — volta para o comercial, que é a base da comissão.
+         v532: guarda que foi o VALOR FINAL o digitado por último (ele fica ao trocar a forma) */
+      it.digitou="final";it.finalDigitado=v;
+      if(assinFormasItem)assinFormasItem.delete(it);
       /* O VALOR DIGITADO É O VALOR (relato dele, 03/10): "toda vez que coloco um valor no produto
          ele não aceita e aumenta um pouco — coloquei 3.400,00 e o sistema pôs 3.404,28".
          O recálculo refazia o preço a partir da base (`precoPelaForma`), e o arredondamento para
          cima de cada parcela devolvia alguns centavos a mais. Guardando o valor digitado, ele é
          respeitado em qualquer recálculo; a base da comissão continua saindo dele. */
-      it.valorFinal=v;
-      /* valor digitado à mão: o item para de acompanhar o preço da forma de pagamento */
       /* DIGITAR O VALOR FINAL CALCULA O DESCONTO (21/10, regra dele: "os dois sempre batem").
          O desconto passa a ser, em reais, o que falta do preço de tabela daquele item na
          forma escolhida — assim o vendedor pode trabalhar pelo lado que preferir. */
-      var tabU=precoPelaForma(precoTabela(produtoPor(it.pid)||{})||(+it.valorTabela||0),1,somaTabelaCarrinho());
-      if(tabU>0&&v<tabU){
-        var dComercial=Math.max(0,centavos(baseDoFinal(tabU,1,0)-baseDoFinal(v,1,0)));
-        it.desconto=dComercial;it.descontoTipo="rs";
-        /* com desconto, o valor volta a sair da conta (senão a tela e a comissão divergem) */
-        it.valorBase=baseDoFinal(tabU,it.qtd||1,tabelaTotalVenda(false));
-        it.valorFinal=0;
-      }else{
-        it.desconto=0;it.descontoTipo="rs";
-      }
+      aplicarFinalDigitado(it,v);
       it.precoAuto=false;
       /* com uma forma só, o valor dela volta a acompanhar o total */
       if(formas.length===1)formas[0].__auto=true;
@@ -19288,6 +19336,8 @@ function calcular(){
       var it=itens[+inp.getAttribute("data-vd")];if(!it)return;
       it.desconto=Math.max(0,numMF(inp.value)||0);
       if(it.desconto&&it.descontoTipo==="pct")it.desconto=Math.min(100,it.desconto);
+      /* v532: o DESCONTO foi o digitado por último — ele fica ao trocar a forma */
+      marcarDescontoDigitado(it);
       calcular();
     };
   });
@@ -19296,6 +19346,7 @@ function calcular(){
       var it=itens[+sel.getAttribute("data-vdt")];if(!it)return;
       it.descontoTipo=(sel.value==="pct")?"pct":"rs";
       if(it.descontoTipo==="pct")it.desconto=Math.min(100,+it.desconto||0);
+      marcarDescontoDigitado(it);
       calcular();
     };
   });
@@ -20127,7 +20178,7 @@ async function salvarPedidoAgora(){
   trocaResp=trocaV>0?{tem:true,viaForma:true,valor:Math.round(trocaV*100)/100,qtd:1,
     serie:"",quando:hojeISO()+" "+agoraHM(),por:usuarioAtual}:null;
   /* venda abaixo da tabela (regra do Wagner, 16/09): o vendedor pede a autorização com o motivo antes de finalizar */
-  if(r.abaixo&&!descSolResp){abrirSolDesconto(recalcPedido(itens,formas,null,numMF(($("v_descGeral")||{}).value||0)||0,freteLojaVenda()));return;}
+  if(r.abaixo&&!descSolResp&&!(pedEditando&&pedEditando.descontoAutorizado&&autorizacaoContinua(pedEditando,itens))){abrirSolDesconto(recalcPedido(itens,formas,null,numMF(($("v_descGeral")||{}).value||0)||0,freteLojaVenda()));return;}
   var solDesc=r.abaixo?descSolResp:null;descSolResp=null;
   /* ESTOQUE NA VENDA (03/11): cada item novo fica com o estoque, a autorização ou a escolha
      usar/requisitar; sem saldo na entrega na hora o pedido não fecha (trava por dentro, não só na tela) */
@@ -38935,6 +38986,7 @@ function desenharAssinaturaSalva(src){
    salvarPedido — este ramo entra depois delas. */
 async function aplicarEdicaoPedido(cli,r,solDesc){
   var p=pedEditando;if(!p)return null;
+  var descAut0=descontoDaAutorizacao(p);   /* antes de trocar os itens (v532) */
   var antes={base:+p.base||0,pontos:+p.pontos||0,total:+p.total||0};
   var assNova=assinaturaParaDoc();
   p.historico=(p.historico||[]);
@@ -38962,8 +39014,8 @@ async function aplicarEdicaoPedido(cli,r,solDesc){
   p.instalacaoAgora=(temInstalacaoVenda()==="agora"&&!$("v_idata").value);
   p.prestadorId=(ehValorPrest(valorIresp())?idDoValorPrest(valorIresp()):"");
   p.obs=$("v_obs").value.trim();p.usoImagem=$("v_imagem").value;
-  p.abaixoTabela=!!r.abaixo;
-  if(solDesc)p.solicitacaoDesconto=solDesc;
+  revisarAutorizacaoDesconto(p,r,solDesc,descAut0,p.itens);
+  if(solDesc)registrarEvento(p,"Autorização de desconto solicitada: "+solDesc.motivo);
   /* anexo escolhido durante a edição entra junto dos que já estavam */
   var novosAnx=ANEXOS.filter(function(a){return a.dados;}).map(function(a){return a.dados;});
   if(novosAnx.length){
@@ -46626,6 +46678,52 @@ var pedAberto=null,pedRasc=null,avisoAjuste="";
 /* fatorAbaixo: tabela escolhida pelo Administrador ao autorizar a venda abaixo da tabela (regra do Wagner, 16/09);
    sem ele, o item abaixo da tabela entra zerado */
 function fatorDesc(p){return (p&&p.descontoAutorizado&&p.descontoAutorizado.fator!=null)?+p.descontoAutorizado.fator:null;}
+/* AUTORIZAÇÃO DE DESCONTO ACOMPANHA O DESCONTO (10/11, v532, regra dele):
+   - pedido de autorização PENDENTE e o pedido não está mais abaixo da tabela → cancelado sozinho,
+     com registro no histórico do pedido;
+   - autorização DADA e o desconto DIMINUIU (ou ficou igual) → continua valendo;
+   - autorização DADA e o desconto AUMENTOU → precisa de nova autorização (a antiga fica guardada).
+   "Desconto" = quanto os itens ficaram abaixo da tabela, no valor comercial (sem o acréscimo do
+   parcelamento), somado. Item coberto pelo plano fica fora. */
+function descontoTotalItens(lista){
+  return centavos((lista||[]).reduce(function(a,i){
+    if(!i||i.planoCobre||i.valorBase==null)return a;
+    var tb=precoTabela(produtoPor(i.pid)||{})||(+i.valorTabela||0);
+    return a+Math.max(0,tb-valorBaseItem(i))*(i.qtd||1);},0));
+}
+/* o desconto que a autorização cobriu: o gravado nela (v532) ou, na autorização antiga, o dos itens salvos */
+function descontoDaAutorizacao(p){
+  if(!p||!p.descontoAutorizado)return null;
+  if(p.descontoAutorizado.descItens!=null)return +p.descontoAutorizado.descItens;
+  return descontoTotalItens(p.itens||[]);
+}
+function autorizacaoContinua(p,itensNovos){
+  var d0=descontoDaAutorizacao(p);
+  return d0!=null&&descontoTotalItens(itensNovos)<=d0+0.01;
+}
+function revisarAutorizacaoDesconto(p,r,solDesc,d0,itensNovos){
+  p.abaixoTabela=!!r.abaixo;
+  var dNovo=descontoTotalItens(itensNovos);
+  if(p.descontoAutorizado&&r.abaixo&&d0!=null&&dNovo>d0+0.01){
+    p.descontosAutorizadosAntes=(p.descontosAutorizadosAntes||[]).concat([
+      Object.assign({},p.descontoAutorizado,{deixouDeValer:agoraCarimbo(),descAntes:d0,descDepois:dNovo})]);
+    registrarEvento(p,"O desconto aumentou depois da autorização ("+BRL(d0)+" → "+BRL(dNovo)+
+      " no valor comercial): precisa de nova autorização");
+    p.descontoAutorizado=null;p.descontoRecusado=null;
+    if(!solDesc)p.solicitacaoDesconto=null;
+  }
+  if(!r.abaixo){
+    var s=p.solicitacaoDesconto;
+    if(s&&!p.descontoAutorizado&&!s.cancelada){
+      p.solicitacoesDescontoCanceladas=(p.solicitacoesDescontoCanceladas||[]).concat([
+        Object.assign({},s,{canceladaEm:agoraCarimbo(),canceladaPor:usuarioAtual,motivoCancel:"o pedido não está mais abaixo da tabela"})]);
+      p.solicitacaoDesconto=null;
+      registrarEvento(p,"Pedido de autorização de desconto cancelado sozinho: a venda não está mais abaixo da tabela");
+    }
+    p.descontoRecusado=null;
+  }
+  if(solDesc){p.solicitacaoDesconto=solDesc;p.descontoRecusado=null;}
+}
 function recalcPedido(itens,formas,fatorAbaixo,descEspecial,freteLoja){
   /* Desconto Especial: repartido entre os itens antes de decidir a tabela e a comissão — a mesma
      conta da tela (`fatorDescontoComissao`). Sem ele, o desconto derrubava só o depreciado. */
@@ -47096,7 +47194,8 @@ function ligarPedDet(){
        vale a mesma conferência da venda nova (desconto abaixo da tabela pede o motivo) */
     var eraReaberta=!!(p.encerrada&&p.reabertura&&p.reabertura.status==="aprovada");
     var novaSol=null,emEtapa=(!p.encerrada||eraReaberta)&&p.status!=="Cancelada";
-    if(emEtapa&&r.abaixo&&!p.descontoAutorizado&&(p.descontoRecusado||!p.solicitacaoDesconto)){
+    var descAut0=descontoDaAutorizacao(p),autSegue=!p.descontoAutorizado||autorizacaoContinua(p,pedRasc.itens);
+    if(emEtapa&&r.abaixo&&(!p.descontoAutorizado||!autSegue)&&(p.descontoRecusado||!p.solicitacaoDesconto||p.descontoAutorizado)){
       var mt=prompt("Os itens continuam abaixo da tabela. Escreva o motivo do desconto para pedir a autorização ao Administrador:",
         (p.solicitacaoDesconto&&p.solicitacaoDesconto.motivo)||"");
       if(mt===null||!mt.trim()){toast("Sem o motivo a solicitação não é enviada — ajuste o valor ou escreva o motivo.");return;}
@@ -47127,9 +47226,8 @@ function ligarPedDet(){
     }
     if(p.descontoAutorizado)p.descontoAutorizado.depAbaixo=Math.round((r.depAbaixo||0)*100)/100;
     if(emEtapa){
-      p.abaixoTabela=!!r.abaixo;
-      if(!r.abaixo)p.descontoRecusado=null;
-      if(novaSol){p.solicitacaoDesconto=novaSol;p.descontoRecusado=null;registrarEvento(p,"Autorização de desconto solicitada: "+novaSol.motivo);}
+      revisarAutorizacaoDesconto(p,r,novaSol,descAut0,p.itens);
+      if(novaSol)registrarEvento(p,"Autorização de desconto solicitada: "+novaSol.motivo);
       if(/^Aguardando|desconto/.test(p.status||""))p.status=etapaVenda(p);
     }
     var ajEst=0,titCanc=0,titPagos=0;
@@ -47152,8 +47250,8 @@ function ligarPedDet(){
           await grava("titulos",tt);titCanc++;
         }else titPagos++;
       }
-      p.abaixoTabela=!!r.abaixo;if(!r.abaixo)p.descontoRecusado=null;
-      if(novaSol){p.solicitacaoDesconto=novaSol;p.descontoRecusado=null;registrarEvento(p,"Autorização de desconto solicitada: "+novaSol.motivo);}
+      revisarAutorizacaoDesconto(p,r,novaSol,descAut0,p.itens);
+      if(novaSol)registrarEvento(p,"Autorização de desconto solicitada: "+novaSol.motivo);
       p.status=etapaVenda(p);
       registrarEvento(p,"Venda reaberta alterada por "+usuarioAtual+" ("+motivo+"): de "+BRL(antes.total)+" para "+BRL(r.total)+
         " — voltou para a Aprovação Financeira");
@@ -47462,7 +47560,8 @@ async function autorizarDesconto(p,fator){
   if(fator==null){abrirAutDesconto(p);return false;}
   var r=recalcPedido(p.itens||[],p.formas||[],fator,+p.descontoGeral||0,freteLojaDe(p)),tab=nomeTabelaDesc(fator);
   p.abaixoTabela=true;
-  p.descontoAutorizado={por:usuarioAtual,quando:hojeISO()+" "+agoraHM(),tabela:tab,fator:+fator,depAbaixo:Math.round(r.depAbaixo*100)/100};
+  p.descontoAutorizado={por:usuarioAtual,quando:hojeISO()+" "+agoraHM(),tabela:tab,fator:+fator,depAbaixo:Math.round(r.depAbaixo*100)/100,
+    descItens:descontoTotalItens(p.itens||[])};
   p.descontoRecusado=null;
   p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
   p.status=etapaVenda(p);
