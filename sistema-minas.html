@@ -18964,6 +18964,29 @@ function marcarDescontoDigitado(it){
   it.digitou="desconto";it.finalDigitado=0;it.valorFinal=0;
   if(assinFormasItem)assinFormasItem.delete(it);
 }
+/* DESCONTO EM REAIS NO VALOR QUE O CLIENTE PAGA (10/11, v533, regra dele): o campo mostra e recebe o
+   desconto na mesma moeda da linha de baixo ("− R$ 12,24/un"), não no valor comercial. O digitado fica
+   em `descontoFinalDig` (por unidade) e, a cada conta, vira o valor final = tabela da forma − desconto,
+   pela mesma conta do campo "Valor final" (`aplicarFinalDigitado`). */
+function aplicarDescontoFinalDigitado(it,d){
+  d=Math.max(0,centavos(+d||0));
+  it.digitou="desconto";it.descontoTipo="rs";it.descontoFinalDig=d;it.finalDigitado=0;
+  if(assinFormasItem)assinFormasItem.delete(it);
+  var tabU=tabelaNaFormaItem(it);
+  if(!(d>0)||!(tabU>0)){
+    /* sem desconto: o item volta a seguir a tabela */
+    if(+it.valorFinal>0&&tabU>0)it.valorBase=baseDoFinal(tabU,it.qtd||1,tabelaTotalVenda(false));
+    it.desconto=0;it.valorFinal=0;return;
+  }
+  aplicarFinalDigitado(it,Math.max(0,centavos(tabU-d)));
+  it.digitou="desconto";it.descontoTipo="rs";
+}
+/* o número que o campo mostra: R$ no valor final (o digitado, se houver) ou o percentual */
+function descontoNoCampo(i){
+  if(i.descontoTipo==="pct")return +i.desconto||0;
+  if(i.digitou==="desconto"&&i.descontoFinalDig!=null)return +i.descontoFinalDig||0;
+  return descontoItemFinal(i,somaTabelaCarrinho());
+}
 /* forma, parcelas ou divisão: o "jeito" do pagamento, para saber quando ele mudou */
 function assinaturaFormasVenda(){
   return JSON.stringify((formas||[]).map(function(f){return [f.tipo||"",+f.parc||1];}))+"|"+(formasComJuros().length?centavos(entradaSemJuros()||0):0);
@@ -18971,7 +18994,7 @@ function assinaturaFormasVenda(){
 var assinFormasItem=(typeof WeakMap!=="undefined")?new WeakMap():null;
 function refazerDigitadosPelaForma(lista){
   if(!lista||!lista.length)return;
-  if(!lista.some(function(i){return i&&(i.digitou==="final"||(!i.digitou&&+i.desconto>0));}))return;
+  if(!lista.some(function(i){return i&&(i.digitou==="final"||(i.digitou==="desconto"&&+i.descontoFinalDig>0)||(!i.digitou&&+i.desconto>0));}))return;
   /* a divisão digitada nas formas vale já nesta conta (o calcular só a copia para o valor mais adiante) */
   (formas||[]).forEach(function(f){if(f.__auto===false&&f.base!=null&&f.base!=="")f.valor=centavos(+f.base||0);});
   var sig=assinaturaFormasVenda();
@@ -18986,6 +19009,7 @@ function refazerDigitadosPelaForma(lista){
       if(+i.valor>0){i.digitou="final";i.finalDigitado=+i.valor;}
     }
     if(i.digitou==="final"&&+i.finalDigitado>0)aplicarFinalDigitado(i,+i.finalDigitado);
+    else if(i.digitou==="desconto"&&i.descontoTipo!=="pct"&&+i.descontoFinalDig>0)aplicarDescontoFinalDigitado(i,+i.descontoFinalDig);
   });
 }
 function redepreciarItensDigitados(lista){
@@ -19239,7 +19263,7 @@ function calcular(){
     if(mudouPreco)i.valorTabela=tabNova;
     /* item abaixo do mínimo fica em vermelho na linha inteira (pedido dele, 22/10) */
     if(fx.abaixo)tr.className="it-abaixo";
-    var dscU=cobPl?0:descontoItemFinal(i,somaTabelaCarrinho());
+    var dscU=cobPl?0:(i.descontoTipo!=="pct"&&i.digitou==="desconto"&&i.descontoFinalDig!=null?+i.descontoFinalDig:descontoItemFinal(i,somaTabelaCarrinho()));
     tr.innerHTML='<td><div class="t-main"><button class="lixo" type="button" data-rm="'+idx+
         '" title="Remover este item" aria-label="Remover '+esc(i.nome)+'">&#128465;</button>'+
         '<span class="nome-item" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+'</span></div><div class="t-sub"><code>'+esc(i.cod)+"</code> · "+garPill+
@@ -19284,7 +19308,7 @@ function calcular(){
          calcula o valor final; digitar o valor final calcula daqui — os dois sempre batem. */
       '<td class="num" data-r="Desconto">'+(cobPl?"—"
         : '<div class="dsc-cel"><input class="v-dsc" type="text" inputmode="decimal" data-vd="'+idx+
-          '" value="'+(i.desconto?brMF(+i.desconto):"")+'" placeholder="0" aria-label="Desconto de '+esc(i.nome)+'">'+
+          '" value="'+(descontoNoCampo(i)>0?brMF(descontoNoCampo(i)):"")+'" placeholder="0" aria-label="Desconto de '+esc(i.nome)+'">'+
           '<select class="v-dtp" data-vdt="'+idx+'" aria-label="Tipo do desconto de '+esc(i.nome)+'">'+
           '<option value="rs"'+((i.descontoTipo!=="pct")?" selected":"")+">R$</option>"+
           '<option value="pct"'+((i.descontoTipo==="pct")?" selected":"")+">%</option>"+
@@ -19334,19 +19358,20 @@ function calcular(){
   Array.prototype.forEach.call(tb.querySelectorAll("[data-vd]"),function(inp){
     inp.onchange=function(){
       var it=itens[+inp.getAttribute("data-vd")];if(!it)return;
-      it.desconto=Math.max(0,numMF(inp.value)||0);
-      if(it.desconto&&it.descontoTipo==="pct")it.desconto=Math.min(100,it.desconto);
-      /* v532: o DESCONTO foi o digitado por último — ele fica ao trocar a forma */
-      marcarDescontoDigitado(it);
+      var dg=Math.max(0,numMF(inp.value)||0);
+      /* v532: o DESCONTO foi o digitado por último — ele fica ao trocar a forma.
+         v533: em R$, o número é o que o cliente deixa de pagar (o mesmo da linha de baixo) */
+      if(it.descontoTipo==="pct"){it.desconto=Math.min(100,dg);marcarDescontoDigitado(it);}
+      else aplicarDescontoFinalDigitado(it,dg);
       calcular();
     };
   });
   Array.prototype.forEach.call(tb.querySelectorAll("[data-vdt]"),function(sel){
     sel.onchange=function(){
       var it=itens[+sel.getAttribute("data-vdt")];if(!it)return;
-      it.descontoTipo=(sel.value==="pct")?"pct":"rs";
-      if(it.descontoTipo==="pct")it.desconto=Math.min(100,+it.desconto||0);
-      marcarDescontoDigitado(it);
+      var noCampo=numMF((tb.querySelector('[data-vd="'+sel.getAttribute("data-vdt")+'"]')||{}).value||0)||0;
+      if(sel.value==="pct"){it.descontoTipo="pct";it.descontoFinalDig=null;it.desconto=Math.min(100,noCampo);marcarDescontoDigitado(it);}
+      else aplicarDescontoFinalDigitado(it,noCampo);
       calcular();
     };
   });
@@ -46729,7 +46754,7 @@ function recalcPedido(itens,formas,fatorAbaixo,descEspecial,freteLoja){
      conta da tela (`fatorDescontoComissao`). Sem ele, o desconto derrubava só o depreciado. */
   var fDesc=1;
   if(+descEspecial>0){
-    var pgR=itens.reduce(function(a,i){return i.planoCobre?a:a+((i.valorBase!=null)?centavos((+i.valorBase||0)*(i.qtd||1)):0);},0);
+    var pgR=itens.reduce(function(a,i){return i.planoCobre?a:a+((i.valorBase!=null)?centavos(valorBaseItem(i)*(i.qtd||1)):0);},0);
     if(pgR>0)fDesc=Math.max(0,(pgR-(+descEspecial||0))/pgR);
   }
   var total=itens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
@@ -46756,8 +46781,12 @@ function recalcPedido(itens,formas,fatorAbaixo,descEspecial,freteLoja){
     /* pedido do modelo novo (v206) guarda o valor base do item: a tabela é decidida por ele.
        Pedido antigo continua pela repartição do depreciado, como sempre foi. */
     var novoM=(i.valorBase!=null);
-    var depI=novoM?centavos((+i.valorBase||0)*(i.qtd||1)*fDesc):(partesP[ix]||0);
-    var unit=novoM?centavos((+i.valorBase||0)*fDesc):centavos(depI/(i.qtd||1));
+    /* v533: o valor do item JÁ COM o desconto dele (`valorBaseItem`), a mesma conta da tela. Antes
+       entrava o `valorBase` cheio: na autorização de desconto, na conclusão da instalação e no ajuste
+       da venda reaberta a base voltava para a tabela, como se o item não tivesse desconto. */
+    var vbI=novoM?valorBaseItem(i):0;
+    var depI=novoM?centavos(vbI*(i.qtd||1)*fDesc):(partesP[ix]||0);
+    var unit=novoM?centavos(vbI*fDesc):centavos(depI/(i.qtd||1));
     var fx=faixa(unit,p);
     var f=(fx.f===0&&fatorAbaixo!=null)?+fatorAbaixo:fx.f;
     base+=depI*f;pontos+=(+i.pontos||0)*(i.qtd||1)*f;
