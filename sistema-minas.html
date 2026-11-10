@@ -20213,6 +20213,8 @@ async function salvarPedidoAgora(){
      itensForaDoInstalador(itens,instaladorForm()).length){conferirTrocaInstalador(true);return null;}
   var falhaEst=aplicarEstoqueVenda();
   if(falhaEst){toast(falhaEst);try{abrirRevisaoPedido();}catch(eRv){}return null;}
+  /* v535: dono sem saldo → a requisição ao almoxarifado nasce sozinha (nunca reserva o que não existe) */
+  try{resolverAutSemSaldo(itens,(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"");}catch(eSs){console.warn("sem saldo",eSs);}
   /* pedido reaberto pelo botão "Editar o pedido": atualiza o MESMO pedido, com o mesmo número,
      a mesma data e a mesma assinatura — não nasce outro (regra dele, 22/09) */
   if(pedEditando){
@@ -21806,9 +21808,22 @@ function seloEstoqueItem(it){
   if(!a)return ' <span class="pill p-mut">sai do '+esc(nome)+"</span>";
   if(a.status==="pendente")return ' <span class="pill p-warn">aguardando autorização de '+
     esc(a.resp||nome)+"</span>";
+  if(a.status==="requisicao")return ' <span class="pill p-warn">'+esc(nome)+" sem saldo · requisição ao almoxarifado para "+esc(a.resp||nome)+"</span>";
   if(a.status==="autorizada")return ' <span class="pill p-ok">'+esc(nome)+" · autorizado por "+
     esc(a.decididoPor||"")+(it.usoEstoque?" · "+esc(textoUsoCurto(it.usoEstoque)):"")+"</span>";
   return ' <span class="pill p-crit">'+esc(nome)+" · recusado</span>";
+}
+/* v535: requisição ao almoxarifado DESTE pedido que o dono ainda não aceitou (retirou e confirmou) */
+function reqsDoPedidoNaoAceitas(p){
+  return requisicoes.filter(function(r){
+    if(r.origem!=="venda"||r.pedidoId!==(p&&p.id)||r.status==="cancelada"||r.status==="recusada"||r.status==="concluida")return false;
+    return (r.itens||[]).some(function(i){return !i.recebido;});
+  });
+}
+function textoReqNaoAceita(r){
+  return "• "+(r.itens||[]).filter(function(i){return !i.recebido;}).map(function(i){return (i.atendida||i.qtd)+"× "+(i.nome||"");}).join(", ")+
+    " · <b>"+esc(donoDaReq(r)||nomeLocal(localDaReq(r)))+"</b> precisa retirar no almoxarifado e aceitar em Demandas do Estoque"+
+    (r.status==="separada"?" (já separada)":"");
 }
 /* os itens deste pedido que estão esperando autorização de estoque */
 function autorizacoesPendentes(p){
@@ -22132,7 +22147,8 @@ function regraNovaEstoque(){
   if(typeof pedEditando!=="undefined"&&pedEditando&&pedEditando.osId)return false;
   return true;
 }
-function autUsaRegraNova(p,a){return !!a&&!(p&&p.osId)&&a.local!==LOC_EMPRESA;}
+/* v535: vale também no pedido que nasce de OS; só o estoque geral (almoxarifado) fica com a autorização de sempre */
+function autUsaRegraNova(p,a){return !!a&&a.local!==LOC_EMPRESA;}
 function quemVendeForm(){return ($("v_vend")&&$("v_vend").value)||euNoEstoque();}
 /* quem vai instalar, pela resposta da pergunta da instalação */
 function instaladorForm(){
@@ -22206,7 +22222,8 @@ function abrirTrocaInstalador(fora,inst,revisao){
     return '<div class="note warn" style="margin-bottom:8px">O produto <b>'+esc(codNomeItem(i))+"</b> está saindo do estoque de <b>"+
       esc(de)+"</b>, mas o instalador agora é <b>"+esc(inst)+"</b>."+
       (i.autEstoque&&i.autEstoque.status==="pendente"?"<br>A autorização que está esperando "+esc(de)+" será cancelada.":"")+
-      (rec?"<br><b>"+esc(de)+" já recebeu esse produto. Ele precisa devolver ao almoxarifado pelo botão Devolver.</b>":"")+"</div>";
+      (rec?"<br><b>O produto está com "+esc(de)+": transfira para "+esc(inst)+".</b> Depois de gravar, o pedido mostra o atalho da transferência.":"")+
+      (i.autEstoque||i.usoEstoque?"":"")+"</div>";
   }).join("");
   $("ti_loja").hidden=!marcadoNaLoja(euNoEstoque());
   $("ti_cancelar").textContent=revisao?"Voltar e corrigir":"Cancelar a troca do instalador";
@@ -22226,11 +22243,15 @@ function escolherTrocaInstalador(destino){
       reqAntiga:t0?t0.reqAntiga:((i.usoEstoque&&i.usoEstoque.reqId)||""),
       recebido:t0&&t0.recebido?t0.recebido:(rec?rec.id:"")};
     i.estoque=loc;
-    if(destino==="loja")delete i.autEstoque;   /* como na venda pela Loja de quem responde por ela */
-    else i.autEstoque={id:uid(),status:"autorizada",local:loc,resp:c.inst,resps:[c.inst],
-      pedidaPor:usuarioAtual,pedidaEm:agora,decididoPor:usuarioAtual,decididoEm:iso(new Date()),
-      trocaInstalador:true};
-    i.usoEstoque={usar:q,req:0,reqId:"",por:usuarioAtual,em:agora};
+    /* v535 (regra dele): quem decide é SEMPRE o dono do estoque. Antes a troca gravava a autorização
+       como dada, em nome de quem trocou, e reservava no estoque do novo mesmo sem saldo. */
+    if(destino==="loja"||!precisaAutorizacaoEstoque(loc,eu)){
+      delete i.autEstoque;   /* a Loja de quem responde por ela, ou o próprio estoque: como sempre */
+      i.usoEstoque={usar:q,req:0,reqId:"",por:usuarioAtual,em:agora};
+    }else{
+      i.autEstoque=novaAutEstoque(loc,eu);i.autEstoque.trocaInstalador=true;
+      delete i.usoEstoque;   /* sem saldo, vira requisição automática ao gravar (resolverAutSemSaldo) */
+    }
   });
   tiCtx=null;$("trInstModal").hidden=true;
   tiAntes=fotoInstalador();
@@ -22261,7 +22282,7 @@ async function registrarTrocasEstoque(p){
       nomeLocal(t.para)+" (antes: "+de+")"+
       (t.autAntiga==="pendente"?" · a autorização que esperava "+de+" foi cancelada":"")+
       (cancReq?" · a requisição de "+de+" ao almoxarifado foi cancelada":"")+
-      (t.recebido?" · "+de+" já recebeu o produto e precisa devolver ao almoxarifado pelo botão Devolver":""));
+      (t.recebido?" · o produto está com "+de+": transfira para "+nomeLocal(t.para):""));
     it.trocasEstoque=(it.trocasEstoque||[]).concat([t]);
     delete it.trocaEst;mudou=true;
   }
@@ -22328,8 +22349,10 @@ function novaReqVenda(p,loc,linhas){
 function calcUsoAut(p,it){
   var a=it&&it.autEstoque;if(!autUsaRegraNova(p,a))return null;
   var q=+(it.qtd||1),disp=saldoEm(it.pid,a.local)-((reservasDe(a.local,p.id)[it.pid])||0),tem=Math.max(0,disp);
-  /* 04/11 (regra dele): "Usar do meu" vale sempre — sem saldo, fica negativo e reservado */
-  return {q:q,tem:tem,pu:q};
+  /* v535 (regra dele, 10/11): NUNCA reservar produto que não existe no estoque de outra pessoa. O dono
+     usa do dele só o que tem disponível (saldo − reservado); o que falta vira requisição ao almoxarifado.
+     (A regra de 04/11, "usar vale sempre, fica negativo", continua só para o PRÓPRIO estoque de quem vende.) */
+  return {q:q,tem:tem,pu:Math.min(q,tem)};
 }
 function textoAutEstoqueNovo(p,it,a){
   var loc=a.local,q=+(it.qtd||1);
@@ -22341,11 +22364,32 @@ function textoAutEstoqueNovo(p,it,a){
   if(a.status!=="pendente")return t+(it.usoEstoque?"Decidido: "+esc(textoUsoEst(it.usoEstoque))+".":"");
   var c=calcUsoAut(p,it);
   t+=(eu?"Você tem ":esc(nomeLocal(loc))+" tem ")+"<b>"+c.tem+"</b> disponível. ";
-  /* 04/11: "Usar do meu" vale sempre — sem saldo fica negativo e reservado */
-  if(c.tem<q)t+="Escolha: usar do seu estoque (sem saldo, fica negativo e reservado; depois da aprovação o almoxarifado repõe) ou requisitar do almoxarifado.";
+  /* v535: só usa o que tem; sem saldo, só requisitar */
+  if(!c.tem)t+="Sem saldo: a requisição ao almoxarifado é o único caminho — retire lá e aceite em Demandas do Estoque.";
+  else if(c.tem<q)t+="Escolha: usar os "+c.tem+" que tem e requisitar os "+(q-c.tem)+" que faltam, ou requisitar tudo do almoxarifado.";
   else t+="Escolha: usar do estoque (depois da aprovação o almoxarifado repõe) ou requisitar do almoxarifado.";
   return t;
 }
+/* v535: DONO SEM SALDO. Antes de gravar a venda, o item que pede autorização a um estoque que não tem
+   NADA disponível não espera resposta: vira requisição ao almoxarifado no nome do dono, ligada ao
+   pedido (a criarReqsDaVenda grava). Não é autorização — o sistema nunca autoriza por ninguém;
+   fica `status:"requisicao"`, `auto:true`. Tendo parte, a autorização continua com o dono. */
+function resolverAutSemSaldo(lista,pedId,pNum){
+  var n=0,usados={},resC={};
+  function res(l){return resC[l]||(resC[l]=reservasDe(l,pedId||""));}
+  (lista||[]).forEach(function(it){
+    var a=it&&it.autEstoque;
+    if(!a||a.status!=="pendente"||!autUsaRegraNova(null,a)||ehPlano(it)||ehServico(it))return;
+    var k=it.pid+"|"+a.local,q=+(it.qtd||1);
+    var disp=saldoEm(it.pid,a.local)-((res(a.local)[it.pid])||0)-(usados[k]||0);
+    if(disp>0){usados[k]=(usados[k]||0)+Math.min(q,disp);return;}
+    a.status="requisicao";a.auto=true;a.decididoPor="automático · sem saldo";a.decididoEm=iso(new Date());
+    it.usoEstoque={usar:0,req:q,reqId:"",por:"automático · sem saldo",em:new Date().toISOString(),auto:true};
+    n++;
+  });
+  return n;
+}
+window.__resolverAutSemSaldoMF=function(l,id){return resolverAutSemSaldo(l,id);};
 /* a escolha na janela da autorização */
 function ligarUsoAut(p,it,a,podeDecidir){
   var ub=$("aut_uso");if(!ub)return;
@@ -22485,7 +22529,9 @@ async function criarReqsDaVenda(p){
     var rq=novaReqVenda(p,locs[i],porLoc[locs[i]]);requisicoes.push(rq);
     try{await gravaConf("requisicoes",rq);
       porLoc[locs[i]].forEach(function(x){x.it.usoEstoque.reqId=rq.id;});n++;mudou=true;
-      registrarEvento(p,"Requisição ao almoxarifado para a venda · "+nomeLocal(locs[i])+" · "+
+      var autoQ=porLoc[locs[i]].some(function(x){return x.it.usoEstoque&&x.it.usoEstoque.auto;});
+      if(autoQ){rq.auto=true;rq.obs="Sem saldo no estoque · "+rq.obs;try{await grava("requisicoes",rq);}catch(eAq){}}
+      registrarEvento(p,(autoQ?"Sem saldo no "+nomeLocal(locs[i])+": requisição automática ao almoxarifado · ":"Requisição ao almoxarifado para a venda · "+nomeLocal(locs[i])+" · ")+
         porLoc[locs[i]].map(function(x){return x.q+"× "+(x.it.nome||"");}).join(", "));}
     catch(e){requisicoes.splice(requisicoes.indexOf(rq),1);falhou++;}
   }
@@ -23995,7 +24041,7 @@ function saidasLiquidas(p){
 /* soEntregues (inventário, 03/11): só as vendas cujo produto já saiu de verdade — sem instalação
    esperando para ser feita (balcão, ou instalação já feita) */
 function reservasDe(local,excluirId,soEntregues){
-  var r={},aRec=reqVendaAReceber();
+  var r={},aRec=reqVendaAReceber(),pend={};
   pedidos.forEach(function(p){
     if(p.loja!==lojaAtual||!vendaPendente(p))return;
     if(excluirId&&p.id===excluirId)return;
@@ -24005,12 +24051,19 @@ function reservasDe(local,excluirId,soEntregues){
     saidasLiquidas(p).forEach(function(s){if(s.local===local)saiu[s.pid]=(saiu[s.pid]||0)+s.qtd;});
     itensDeEstoque(p).forEach(function(it){
       if(localDoItemVenda(p,it)!==local)return;
+      /* v535: esperando a decisão do dono, reserva só até o que ele tem disponível (nunca acima do saldo) */
+      if(it.autEstoque&&it.autEstoque.status==="pendente"&&autUsaRegraNova(p,it.autEstoque)){
+        if(!(saidasLiquidas(p).some(function(s){return s.local===local&&s.pid===it.pid;})))pend[it.pid]=(pend[it.pid]||0)+(+(it.qtd||1));
+        return;}
       pede[it.pid]=(pede[it.pid]||0)+(it.qtd||1);});
     /* o que vem do almoxarifado pela requisição desta venda ainda não está no estoque: não reserva (03/11) */
     var ar=aRec[p.id]||{};
     Object.keys(pede).forEach(function(pid){pede[pid]-=(ar[pid+"|"+local]||0);});
     Object.keys(pede).forEach(function(pid){r[pid]=(r[pid]||0)+Math.max(0,pede[pid]-(saiu[pid]||0));});
   });
+  Object.keys(pend).forEach(function(pid){
+    var livre=Math.max(0,saldoEm(pid,local)-(r[pid]||0));
+    if(Math.min(pend[pid],livre)>0)r[pid]=(r[pid]||0)+Math.min(pend[pid],livre);});
   return r;
 }
 /* deixa o estoque igual aos itens do pedido: baixa o que falta do local da venda,
@@ -26821,7 +26874,7 @@ function eventosEstoque(locs,de,ate){
       txt:(m.doc||"")+(m.obs?" · "+m.obs:""),por:m.por||""});
   });
   autorizacoesEstoque().forEach(function(x){
-    var a=x.aut;if(a.status==="pendente"||!na(a.local))return;
+    var a=x.aut;if(a.status==="pendente"||a.status==="requisicao"||!na(a.local))return;
     var dia=String(a.decididoEm||"").slice(0,10);if(!dentro(dia))return;
     E.push({dia:dia,em:a.decididoEm||"",tipo:a.status==="autorizada"?"reservou":"recusou",pid:x.item.pid,qtd:+(x.item.qtd||1),loc:a.local,
       txt:"Pedido nº "+x.ped.numero+" · "+(x.ped.cliente||"")+(a.status==="autorizada"?(x.item.usoEstoque?" · "+textoUsoEst(x.item.usoEstoque):""):" · "+(a.motivo||"")),
@@ -27090,6 +27143,7 @@ function renderEstColab(){
       var a=x.aut,pend=(a.status==="pendente"),euDecido=pend&&podeAutorizarEstoque(a.local);
       var sit=pend?'<span class="pill p-warn">aguardando'+(euDecido?" você":" "+esc(a.resp||"—"))+"</span>"
         :a.status==="autorizada"?'<span class="pill p-ok">autorizada</span>'
+        :a.status==="requisicao"?'<span class="pill p-warn">sem saldo · requisição automática</span>'
         :'<span class="pill p-crit">recusada</span>';
       b.innerHTML+='<tr><td><b>'+esc(x.ped.numero)+'</b><div class="t-sub">'+esc(x.ped.cliente||"")+"</div></td>"+
         '<td><div class="t-main">'+esc(x.item.nome||"")+'</div><div class="t-sub">'+(x.item.qtd||1)+"× "+
@@ -47033,6 +47087,12 @@ function renderPedDet(){
         :"<br>Só quem participa desta venda ou a gestão pode alterá-la.")+"</div>";
     if(stp.indexOf("esconto")>=0&&pode("aprovarDesconto"))
       ac+='<button class="btn" type="button" id="pd_desconto">Autorizar desconto</button>';
+    /* v535: trocou o instalador depois que o antigo JÁ aceitou a requisição — o produto está com ele */
+    try{transfPendentesDoPedido(p).forEach(function(x){
+      av+='<div class="note warn"><b>O produto está com '+esc(nomeLocal(x.de))+": transfira para "+esc(nomeLocal(x.para))+".</b> "+
+        esc(x.qtd+"× "+x.nome)+" · o instalador do pedido foi trocado depois que ele recebeu do almoxarifado."+
+        '<div style="margin-top:8px"><button class="btn sm" type="button" data-pdtransf="'+esc([x.pid,x.de,x.para,x.qtd].join("|"))+'">Transferir entre estoques</button></div></div>';
+    });}catch(eTf){}
     if(p.descontoAutorizado&&p.descontoAutorizado.tabela)
       av+='<div class="note ok"><b>Desconto autorizado</b> por '+esc(p.descontoAutorizado.por)+" · "+esc(p.descontoAutorizado.tabela)+
         (verRemun?" na comissão: a venda conta "+BRL(valorDepreciadoPedido(p))+" (depreciado "+BRL(p.depreciado)+").":".")+"</div>";
@@ -47121,7 +47181,29 @@ function recomporFormasPedido(rasc,p){
   var outras=rasc.formas.reduce(function(a,f){return a+((f===maior)?0:(+f.valor||0));},0);
   maior.valor=centavos(Math.max(0,tot-outras));
 }
+/* v535: o que ficou com o instalador antigo (requisição já aceita) e ainda não foi transferido ao novo */
+function transfPendentesDoPedido(p){
+  var out=[];
+  itensDeEstoque(p||{}).forEach(function(it){
+    (it.trocasEstoque||[]).forEach(function(tr){
+      if(!tr.recebido||!tr.de||!tr.para||tr.de===tr.para)return;
+      var feito=movEst.some(function(m){return m.produtoId===it.pid&&m.origem===tr.de&&m.destino===tr.para&&
+        (m.em?String(m.em)>=String(tr.em||""):String(m.data||"")>=String(tr.em||"").slice(0,10));});
+      if(!feito)out.push({pid:it.pid,nome:it.nome||"",qtd:+(it.qtd||1),de:tr.de,para:tr.para});
+    });
+  });
+  return out;
+}
+function abrirTransfDoPedido(v){
+  var x=String(v||"").split("|");
+  abrirEstoque("transf");
+  try{$("es_origem").value=x[1];$("es_destino").value=x[2];$("es_prod").value=x[0];
+    $("es_prod").dispatchEvent(new Event("change",{bubbles:true}));
+    if($("es_qtd"))$("es_qtd").value=x[3]||"1";}catch(e){}
+}
 function ligarPedDet(){
+  Array.prototype.forEach.call(document.querySelectorAll("[data-pdtransf]"),function(b){
+    b.onclick=function(){abrirTransfDoPedido(b.getAttribute("data-pdtransf"));};});
 
   var p=pedAberto;
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-pi]"),function(el){
@@ -47379,6 +47461,13 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm){
       autPend.map(function(it){return (it.qtd||1)+"× "+it.nome+" ("+
         (it.autEstoque.resp||nomeLocal(it.autEstoque.local))+")";}).join(" · ")+
       ". Aprove depois da resposta.");
+    return false;}
+  /* v535: requisição do pedido ainda não aceita pelo dono → não aprova (o produto ainda não está com ele) */
+  var reqNA=reqsDoPedidoNaoAceitas(p);
+  if(reqNA.length){
+    toast("Este pedido espera a requisição ao almoxarifado ser aceita: "+reqNA.map(function(r){
+      return (donoDaReq(r)||nomeLocal(localDaReq(r)))+" retira e aceita "+(r.itens||[]).filter(function(i){return !i.recebido;})
+        .map(function(i){return (i.atendida||i.qtd)+"× "+(i.nome||"");}).join(", ");}).join(" · ")+". Aprove depois do aceite.");
     return false;}
   if(aprovandoVenda[p.id])return false;
   aprovandoVenda[p.id]=true;
@@ -51269,8 +51358,8 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
           /* venda sem estoque do vendedor: sem o aceite do responsável pelo estoque, não aprova */
           var trava=retiradaPendentePedido(p);
           /* item que sai do estoque de outra pessoa, ainda sem a resposta do dono (23/10) */
-          var autP=autorizacoesPendentes(p);
-          if(autP.length)trava=trava||{texto:""};
+          var autP=autorizacoesPendentes(p),reqNA=reqsDoPedidoNaoAceitas(p);
+          if(autP.length||reqNA.length)trava=trava||{texto:""};
           /* 05/11: produto saindo da caixinha de quem NÃO vai instalar — avisa, o financeiro decide */
           var foraI=itensForaDoInstaladorPed(p);
           return (trava&&trava.texto?'<div class="note crit" style="margin-top:10px"><b>Aprovação travada.</b> '+trava.texto+
@@ -51281,6 +51370,9 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
               autP.map(function(it){return "• "+(it.qtd||1)+"× "+esc(it.nome)+" · "+esc(nomeLocal(it.autEstoque.local))+
                 " · aguardando <b>"+esc(it.autEstoque.resp||"sem responsável")+"</b>";}).join("<br>")+
               "</div>":"")+
+            (reqNA.length?'<div class="note crit" style="margin-top:10px" data-trava-req="1"><b>Aprovação travada.</b> '+
+              "O produto deste pedido vem do almoxarifado e ainda não foi aceito por quem vai usar:<br>"+
+              reqNA.map(textoReqNaoAceita).join("<br>")+"<br>O financeiro aprova depois do aceite.</div>":"")+
             /* o caixa NÃO é escolhido aqui: ele vem do cadastro da forma de pagamento, que é
                onde a empresa define onde o dinheiro cai (regra dele, 26/09 — o cartão da
                Rendimentos aparecia caindo na Caixa da Loja, e ele é creditado no Ascicred). */
@@ -56338,10 +56430,24 @@ function pendenciasMF(){
         ir:function(){abrirAutEstoque(x.ped.id,x.aut.id);}});
     });
   }catch(e){console.warn("pend autorização de estoque",e);}
+  /* 1b2. v535: a requisição que nasceu sozinha no MEU nome (eu não tinha saldo) — retirar e aceitar */
+  try{
+    var euR=euNoEstoque();
+    requisicoes.filter(function(r){
+      return r.origem==="venda"&&r.auto&&r.loja===lojaAtual&&(r.status==="pendente"||r.status==="separada")&&
+        (localDaReq(r)===locColab(euR)||respondePeloEstoque(euR,localDaReq(r)));
+    }).forEach(function(r){
+      põe({chave:"reqauto:"+r.id,icone:"📦",titulo:"Requisição criada para o pedido "+(r.pedidoNumero||""),
+        texto:"Retire no almoxarifado e aceite: "+(r.itens||[]).map(function(i){return (i.atendida||i.qtd)+"× "+(i.nome||"");}).join(", ")+
+          (r.cliente?" · cliente "+r.cliente:""),
+        quando:r.abertaEm||r.data||"",
+        ir:function(){try{ir("estAfazer");}catch(e){}}});
+    });
+  }catch(e){console.warn("pend requisição automática",e);}
   /* 1c. a autorização que EU pedi foi respondida e ainda não vi */
   try{
     autorizacoesEstoque().filter(function(x){
-      return x.aut.pedidaPor===euNoEstoque()&&x.aut.status!=="pendente"&&!x.aut.vista;
+      return x.aut.pedidaPor===euNoEstoque()&&x.aut.status!=="pendente"&&x.aut.status!=="requisicao"&&!x.aut.vista;
     }).forEach(function(x){
       var ok=(x.aut.status==="autorizada");
       põe({chave:"autr:"+x.aut.id,icone:ok?"✅":"⛔",
