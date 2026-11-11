@@ -4929,12 +4929,14 @@ img{max-width:100%}
       <div class="page-head"><h1>Aprovação Financeira</h1><p>O financeiro confirma que os valores e comprovantes chegaram. É nesse clique que o estoque baixa, as parcelas vão para o Contas a Receber e a venda entra na comissão do mês.</p></div>
       <div class="card" style="padding:16px 22px;margin-bottom:20px">
         <div class="toolbar" style="padding:0">
-          <input id="finBusca" placeholder="Buscar por pedido ou cliente" style="max-width:280px">
+          <input id="finBusca" placeholder="Buscar por pedido ou cliente" style="max-width:280px" autocomplete="off">
           <select id="finQuem" style="max-width:230px"></select>
           <span class="sp"></span>
           <span class="count" id="finCount"></span>
         </div>
       </div>
+      <!-- v539: com busca ou colaborador filtrando, a faixa diz quanto está escondido e limpa -->
+      <div id="finFiltroFaixa"></div>
       <div class="kpis" id="finKpis"></div>
       <!-- Servico de Orcamento recebido na abertura da OS interna (regra do Wagner, 20/09) -->
       <div id="finOrc" hidden></div>
@@ -48399,14 +48401,20 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm){
     delete aprovandoVenda[p.id];
   }
 }
-async function devolverVenda(p){
+async function devolverVenda(p,opc){
+  opc=opc||{};
   if(!pode("aprovarFinanceiro")){toast("Só o financeiro devolve a venda.");return false;}
-  var m=prompt("Devolver o pedido "+p.numero+" para "+(responsavelVenda(p)||"o responsável")+
+  /* v539: "Recusar crédito" é este mesmo devolver, com o motivo do crédito no histórico */
+  if(opc.credito&&!podeAprovarCredito()){toast("Quem recusa o crédito é o departamento financeiro.");return false;}
+  var m=prompt(opc.credito
+    ? "Recusar o crédito do pedido "+p.numero+" ("+formasCreditoDaVenda(p).join(" e ")+") e devolver para "+(responsavelVenda(p)||"o responsável")+".\n\nPor que o crédito foi recusado?"
+    : "Devolver o pedido "+p.numero+" para "+(responsavelVenda(p)||"o responsável")+
     ".\n\nO que faltou? (valor, comprovante, assinatura…)");
   if(m===null)return false;
-  if(!m.trim()){toast("Escreva o que faltou — é o que o colaborador vai ler.");return false;}
-  p.devolucaoFin={motivo:m.trim(),por:usuarioAtual,quando:iso(new Date())};
-  registrarEvento(p,"Devolvido pelo financeiro: "+m.trim());
+  if(!m.trim()){toast(opc.credito?"Escreva por que o crédito foi recusado — é o que o colaborador vai ler.":"Escreva o que faltou — é o que o colaborador vai ler.");return false;}
+  p.devolucaoFin={motivo:(opc.credito?"Crédito recusado: ":"")+m.trim(),por:usuarioAtual,quando:iso(new Date())};
+  if(opc.credito){p.devolucaoFin.credito=true;p.creditoRecusadoPor=usuarioAtual;p.creditoRecusadoEm=hojeISO();p.creditoRecusadoHora=agoraHM();}
+  registrarEvento(p,(opc.credito?"Crédito recusado pelo financeiro ("+formasCreditoDaVenda(p).join(" e ")+"): ":"Devolvido pelo financeiro: ")+m.trim());
   await gravarPedido(p);
   toast("Pedido "+p.numero+" devolvido para "+(responsavelVenda(p)||"o responsável")+".");
   render();return true;
@@ -52165,12 +52173,21 @@ function htmlCreditoVenda(p){
     "departamento financeiro"+(postos.length?" ("+esc(postos.join(", "))+")":"")+
     ". Quem aprovar fica registrado no pedido.</div>";
 }
+/* v539: o tipo de cada venda na fila — crédito ainda não liberado (cheque, boleto) ou financeira */
+function credFin(p){return vendaPedeCredito(p)&&!p.creditoAprovadoEm;}
+function tipoFilaFin(p){
+  if(!credFin(p))return "Financeira";
+  var fs=formasCreditoDaVenda(p);
+  var b=fs.filter(function(x){return /boleto/i.test(x);})[0],c=fs.filter(function(x){return /cheque/i.test(x);})[0];
+  return "Crédito – "+[b,c].filter(Boolean).join(" e ");
+}
 function cartaoFin(p,podeAprovar,cxs,cxPadrao){
   var dd=diasDe(p.data);
   var formas=(p.formas||[]).filter(function(f){return +f.valor>0;});
   return '<div data-finp="'+p.id+'" style="border-top:1px solid var(--line);padding:14px 0">'+
     '<div style="display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline">'+
       "<b>Pedido "+p.numero+'</b><span class="t-sub">'+esc(dataBR(p.data))+(dd>0?" · há "+dd+" dia"+(dd===1?"":"s"):"")+"</span>"+
+      '<span class="pill '+(credFin(p)?"p-warn":"p-acc")+'">'+esc(tipoFilaFin(p))+"</span>"+
       '<span style="margin-left:auto"><b>'+BRL(p.total)+"</b></span></div>"+
     '<div class="t-sub" style="margin:4px 0 8px">'+esc(p.cliente)+" · vendedor "+esc(p.vendedor||"—")+
       (p.instalacao?" · instalação "+esc(respInstalacao(p)||"—")+(p.instaladoEm?" em "+esc(dataBR(p.instaladoEm)):""):" · sem instalação")+"</div>"+
@@ -52226,9 +52243,13 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
               "<br>Se aprovar assim, a baixa e a reposição vão para o estoque de quem está no produto. Para corrigir, toque em Devolver.</div>":"")+
             htmlCaixasDaVenda(formas)+
             '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:12px">'+
-            '<button class="btn'+(trava?" mut":"")+'" type="button" data-finok="'+p.id+'"'+(trava?" disabled":"")+
-              ' title="'+(trava?"Retirada de estoque não regularizada":"Aprovar o recebimento")+'">Aprovar recebimento</button>'+
-            '<button class="btn mut" type="button" data-findev="'+p.id+'">Devolver</button>'+
+            (credFin(p)&&!podeAprovarCredito()
+              ? '<span class="t-sub">Venda em crédito: quem aprova é o departamento financeiro ('+esc(EQUIPE.filter(podeAprovarCredito).join(", ")||"ninguém")+").</span>"
+              : '<button class="btn'+(trava?" mut":"")+'" type="button" data-finok="'+p.id+'"'+(trava?" disabled":"")+
+              ' title="'+(trava?"Retirada de estoque não regularizada":"Aprovar o recebimento")+'">'+(credFin(p)?"Aprovar crédito e recebimento":"Aprovar recebimento")+"</button>")+
+            (credFin(p)
+              ? '<button class="btn mut" type="button" data-fincred="'+p.id+'">Recusar crédito</button>'
+              : '<button class="btn mut" type="button" data-findev="'+p.id+'">Devolver</button>')+
           "</div>";})()
       : '<div class="help" style="margin-top:8px">Só o Financeiro aprova o recebimento.</div>')+
   "</div>";
@@ -52328,8 +52349,11 @@ function renderFin(){
   function casa(p){return !q||semAcento(String(p.numero)+" "+(p.cliente||"")).indexOf(q)>=0;}
   function soma(l){return l.reduce(function(a,p){return a+(+p.total||0);},0);}
   function porId(id){return pedPorId(id);}
-  var fila=daqui.filter(function(p){return vendaPendente(p)&&p.status==="Aguardando aprovação financeira";});
-  var antes=daqui.filter(function(p){return vendaPendente(p)&&p.status!=="Aguardando aprovação financeira";});
+  /* v539 (11/11): o crédito (cheque, boleto) é tarefa do financeiro — entra na fila, com a etiqueta;
+     antes caía em "Ainda não chegaram", com o botão errado "Abrir a instalação" */
+  var NA_FILA=["Aguardando aprovação financeira","Aguardando aprovação de crédito"];
+  var fila=daqui.filter(function(p){return vendaPendente(p)&&NA_FILA.indexOf(p.status)>=0;});
+  var antes=daqui.filter(function(p){return vendaPendente(p)&&NA_FILA.indexOf(p.status)<0;});
   var limite=somaDias(hojeISO(),-30);
   var feitas=daqui.filter(function(p){return p.aprovado&&(p.aprovadoEm||"")>=limite;})
     .sort(function(a,b){return (b.aprovadoEm||"").localeCompare(a.aprovadoEm||"")||b.numero-a.numero;});
@@ -52344,6 +52368,14 @@ function renderFin(){
   var quem=sq.value;
   var visivel=fila.filter(function(p){return casa(p)&&(!quem||(responsavelVenda(p)||"—")===quem);});
   var devolvidas=fila.filter(function(p){return p.devolucaoFin;}).length;
+  var ff=$("finFiltroFaixa");
+  if(ff){
+    var tF=[];if(q)tF.push("busca “"+esc($("finBusca").value.trim())+"”");if(quem)tF.push("colaborador "+esc(quem));
+    ff.innerHTML=tF.length?'<div class="note warn" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px"><span><b>Filtrando por '+tF.join(" e ")+
+      ":</b> mostrando "+visivel.length+" de "+fila.length+(fila.length===1?" venda":" vendas")+" na fila. As listas de baixo também seguem a busca.</span>"+
+      '<button class="btn sm" type="button" id="finLimpar" style="margin-left:auto">Limpar</button></div>':"";
+    if($("finLimpar"))$("finLimpar").onclick=function(){$("finBusca").value="";$("finQuem").value="";renderFin();};
+  }
   $("finKpis").innerHTML=
     '<div class="kpi"><div class="l">Aguardando aprovação</div><div class="v">'+fila.length+'</div><div class="t-sub">'+BRL(soma(fila))+"</div></div>"+
     '<div class="kpi"><div class="l">Devolvidas ao colaborador</div><div class="v" style="color:'+(devolvidas?"var(--warn)":"inherit")+'">'+devolvidas+"</div></div>"+
@@ -52474,6 +52506,8 @@ function renderFin(){
     bt.onclick=function(){ir("pgto");};});
   Array.prototype.forEach.call(tela.querySelectorAll("[data-findev]"),function(bt){
     bt.onclick=function(){var p=porId(bt.getAttribute("data-findev"));if(p)devolverVenda(p);};});
+  Array.prototype.forEach.call(tela.querySelectorAll("[data-fincred]"),function(bt){
+    bt.onclick=function(){var p=porId(bt.getAttribute("data-fincred"));if(p)devolverVenda(p,{credito:true});};});
   Array.prototype.forEach.call(tela.querySelectorAll("[data-finver]"),function(bt){
     bt.onclick=function(){var p=porId(bt.getAttribute("data-finver"));if(p)abrirInstalacao(p,"venda");};});
   if(finFoco){
@@ -61826,7 +61860,8 @@ function ligar(){
   /* série digitada ou lida pela câmera: a localização passa a opcional na hora */
   $("v_serie").addEventListener("input",ajustarLocalItem);
   $("v_gar").onchange=notaGarantia;$("v_imagem").onchange=calcular;
-  $("finBusca").oninput=renderFin;$("finQuem").onchange=renderFin;
+  $("finBusca").value="";$("finBusca").oninput=renderFin;$("finQuem").onchange=renderFin;
+  window.addEventListener("pageshow",function(){try{if($("finBusca").value){$("finBusca").value="";renderFin();}}catch(eP){}});
   ["v_valor","v_qtd"].forEach(function(id){$(id).oninput=calcular;$(id).onchange=calcular;});
   /* digitou o valor à mão: trocar a forma de pagamento não sobrescreve mais (v161) */
   $("v_valor").addEventListener("input",function(){this.__manual=true;});
