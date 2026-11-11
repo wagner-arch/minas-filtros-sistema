@@ -772,6 +772,9 @@ body.tn .tv-so{display:none!important}
   }
   /* 04/11: o motivo define como fica — não realizada (cinza), reagendada (cinza azulado), cancelada (riscada) */
   .ev.naofeita{background:#8A94A3}.ev.reag{background:#8C9FB8}.ev.cancelada{background:#A7AFBA;text-decoration:line-through}
+  /* v538: realizada sem visita (finalizada com motivo de "não realizada") — cor própria */
+  .ev.semvisita{background:#B7791F}.dot.semvisita{background:#B7791F}.dot.reag{background:#8C9FB8}
+  .pill.p-semvisita{background:#FCEFD9;color:#8A5A12}
   /* horário ocupado na agenda de outra pessoa (Etapa 2): sem cliente e sem clique */
   .ev .ev-cid{display:block;font-size:10.5px;opacity:.85}
   .ev.clicavel{cursor:pointer}
@@ -2366,6 +2369,8 @@ img{max-width:100%}
           <div class="cal-titulo" id="cal_titulo"></div>
           <span class="sp"></span>
           <select id="agendaPessoa" style="max-width:260px"></select>
+          <select id="agSit" style="max-width:240px" title="Situação"></select>
+          <select id="agMot" style="max-width:240px" title="Motivo"></select>
           <div class="cal-views">
             <button type="button" data-v="mes" aria-current="true">Mês</button>
             <button type="button" data-v="semana">Semana</button>
@@ -2382,6 +2387,8 @@ img{max-width:100%}
           <span><i class="dot ativ"></i> Atividade agendada</span>
           <span><i class="dot atend"></i> Atendimento realizado</span>
           <span><i class="dot inst"></i> Instalação</span>
+          <span><i class="dot semvisita"></i> Realizada – sem visita</span>
+          <span><i class="dot reag"></i> Reagendada</span>
         </div>
 
         <div id="cal_area"></div>
@@ -3200,20 +3207,20 @@ img{max-width:100%}
     <!-- PEDIDOS -->
     <!-- ATIVIDADES -->
     <section class="screen" id="s-ativ" hidden>
-      <div class="page-head"><h1>Atividades</h1><p>O contato que ainda vai acontecer. Ao registrar o contato, a atividade vira atendimento e sai desta lista.</p></div>
+      <div class="page-head"><h1>Atividades</h1><p>As atividades de toda a equipe: em aberto, atrasadas, realizadas, sem visita e reagendadas. A pessoa escolhida é quem executa — igual à Agenda.</p></div>
       <div id="ativAviso"></div>
       <div class="kpis" id="avKpis"></div>
       <div class="card flush">
         <div class="toolbar">
           <input id="avBusca" placeholder="Buscar por cliente">
-          <select id="avQuando" style="max-width:190px">
-            <option value="">Todas em aberto</option>
-            <option value="atraso">Atrasadas</option>
-            <option value="hoje">Hoje</option>
-            <option value="semana">Próximos 7 dias</option>
-            <option value="feitas">Já realizadas</option>
-          </select>
+          <!-- v538: as mesmas situações da Agenda (opcoesSituacao) -->
+          <select id="avQuando" style="max-width:240px" title="Situação"></select>
           <select id="avQuem" style="max-width:210px"></select>
+          <select id="avMot" style="max-width:240px" title="Motivo"></select>
+          <select id="avPer" style="max-width:170px" title="Filtrar pela data">
+            <option value="">Qualquer data</option><option value="dia">Dia</option><option value="semana">Semana</option><option value="mes">Mês</option><option value="periodo">Período</option>
+          </select>
+          <span class="mp-datas per-campos" id="avPerCampos" hidden><input type="date" id="avPerDe" aria-label="Dia"><span id="avPerAteR">até</span><input type="date" id="avPerAte" aria-label="Até"><input type="month" id="avPerMes" aria-label="Mês"></span>
           <span class="count" id="avCount"></span>
           <span class="sp"></span>
           <button class="btn" type="button" id="avNova">Nova atividade</button>
@@ -10751,7 +10758,8 @@ async function carregar(){
     var cn=await jaPedido("cfg:canais_tipo",function(){return db.doc("config/canais_tipo").get();});
     if(cn.exists&&cn.data()&&cn.data().mapa)canalTipo=cn.data().mapa;
     var ms=await jaPedido("cfg:motivos_finalizacao",function(){return db.doc("config/motivos_finalizacao").get();});
-    if(ms.exists&&ms.data()&&ms.data().lista&&ms.data().lista.length){motivos=ms.data().lista;MOTIVO_GRUPO=ms.data().grupos||{};}
+    if(ms.exists&&ms.data()&&ms.data().lista&&ms.data().lista.length){motivos=ms.data().lista;MOTIVO_GRUPO=ms.data().grupos||{};MOTIVO_ID=ms.data().ids||{};
+      if(garantirIdsMotivos()&&podeGravarConfig())await gravarMotivos();}
     else{await gravarMotivos();}
     /* tipo e motivos do contato de aniversariante entram nas listas já gravadas */
     var gAn=garantirAniversarioCfg();
@@ -38840,6 +38848,55 @@ function comoFicou(a){
   return "realizada";
 }
 window.__comoFicouMF=function(a){return comoFicou(a);};
+/* CLASSE ÚNICA DO REGISTRO (v538, pedido dele de 10/11): Agenda e Atividades usam a MESMA conta,
+   para mostrarem o mesmo para a mesma pessoa e o mesmo dia.
+     aberta / atrasada · concluido (atendimento concluído: o contato aconteceu) ·
+     semvisita (finalizada com motivo de não realizada: "Realizada – sem visita") ·
+     reagendada · cancelada */
+function classeReg(a){
+  var cf=comoFicou(a);
+  if(cf==="aberta"){var d=quando(a);return (d&&d<new Date())?"atrasada":"aberta";}
+  if(cf==="realizada")return "concluido";
+  if(cf==="nao")return "semvisita";
+  return cf;
+}
+var OPCOES_SITUACAO=[["","Todas em aberto"],["atraso","Atrasadas"],["realizadas","Realizadas (todas)"],
+  ["concluido","Atendimento concluído"],["reagendada","Reagendadas"],["semvisita","Finalizadas sem visita e não reagendadas"],["todas","Todas"]];
+function passaSituacao(a,s){
+  var k=classeReg(a);
+  if(!s)return k==="aberta"||k==="atrasada";
+  if(s==="atraso")return k==="atrasada";
+  if(s==="realizadas")return k==="concluido"||k==="semvisita"||k==="reagendada";
+  if(s==="todas")return true;
+  return k===s;
+}
+/* motivo: "" qualquer · nome do motivo · "__ni" Motivo não identificado (finalizada sem visita ou
+   reagendada cujo motivo não está mais na lista) */
+function semMotivoIdentificado(a){var k=classeReg(a);return (k==="semvisita"||k==="reagendada")&&!motivosIdentificados(a).length;}
+function passaMotivo(a,m){
+  if(!m)return true;
+  if(m==="__ni")return semMotivoIdentificado(a);
+  return motivosIdentificados(a).indexOf(m)>=0;
+}
+function montarOpcoesSituacao(sel,padrao){
+  if(!sel||sel.options.length)return;
+  sel.innerHTML=OPCOES_SITUACAO.map(function(o){return '<option value="'+o[0]+'">'+esc(o[1])+"</option>";}).join("");
+  sel.value=padrao||"";
+}
+function montarOpcoesMotivo(sel){
+  if(!sel)return;
+  var assin=motivos.join("|");if(sel.__assin===assin)return;
+  var antes=sel.value;sel.__assin=assin;
+  sel.innerHTML='<option value="">Qualquer motivo</option>'+motivos.map(function(m){return '<option value="'+esc(m)+'">'+esc(m)+"</option>";}).join("")+
+    '<option value="__ni">Motivo não identificado</option>';
+  sel.value=[].slice.call(sel.options).some(function(o){return o.value===antes;})?antes:"";
+}
+/* rótulo da situação fechada, igual nas telas */
+function rotuloSemVisita(a){
+  var ms=motivosIdentificados(a);
+  return "Realizada – sem visita ("+(ms.length?ms.join(", "):"Motivo não identificado")+")";
+}
+window.__classeRegMF={classe:function(a){return classeReg(a);},passa:function(a,s,m){return passaSituacao(a,s)&&passaMotivo(a,m);},rotuloSemVisita:function(a){return rotuloSemVisita(a);}};
 function situacaoDe(a){
   var cf=comoFicou(a);
   if(cf==="cancelada")return sitPorK("cancelada");
@@ -39192,7 +39249,7 @@ async function confirmarFinalizar__corpo(){
   if(fmMoverHoje)moverParaHoje(a);
   a.status="finalizado";a.situacao=(grupoF==="nao"?"naoRealizada":"concluida");
   a.concluidaSemAtendimento=true;a.concluidaPor=usuarioAtual;a.concluidaEm=hojeISO();
-  a.motivos=fmMotivos.slice();
+  a.motivos=fmMotivos.slice();a.motivoIds=idsDosMotivos(a.motivos);
   a.falouCliente=(fmFalou==="sim");
   if(!perguntaFalou(a))a.falouAuto=true;else delete a.falouAuto;
   a.resultado=txt;
@@ -40559,39 +40616,42 @@ function renderAtividades(){
     /* nasce no nome de quem está usando (24/10); remontagem pela troca de equipe devolve a escolha */
     sq.value=(sq.__valorAnterior!==undefined&&sq.__valorAnterior!==null)?sq.__valorAnterior:pessoaInicialFiltro(EQUIPE);
   }
-  travarSelectPessoa(sq,"Minhas atividades");
-  var q=semAcento($("avBusca").value||""),f=$("avQuando").value,quem=sq.value;
-  var hoje=iso(new Date()),agora=new Date();
-  var sem=new Date();sem.setDate(sem.getDate()+7);var semISO=iso(sem);
+  /* v538: todos veem as atividades de todos os colaboradores da empresa (pedido dele); a pessoa
+     escolhida é o RESPONSÁVEL (quem executa), como na Agenda. Só altera quem pode (podeEditarAtiv),
+     e o compromisso de outra pessoa abre só para olhar (soCompromisso). */
+  sq.disabled=false;
+  var vAnt=sq.options.length?sq.value:((sq.__valorAnterior!==undefined&&sq.__valorAnterior!==null)?sq.__valorAnterior:pessoaInicialFiltro(EQUIPE));
+  montarPessoaAgenda(sq);sq.value=vAnt;if(sq.value!==vAnt)sq.value="";
+  montarOpcoesSituacao($("avQuando"),"");montarOpcoesMotivo($("avMot"));
+  ligarPeriodo("av",renderAtividades);
+  var q=semAcento($("avBusca").value||""),f=$("avQuando").value,quem=sq.value,mot=$("avMot").value,fxV=faixaPeriodo("av");
+  var hoje=iso(new Date());
 
-  var base=atendimentos.filter(function(a){return a.loja===lojaAtual&&meuAtend(a);});
-  var abertas=base.filter(function(a){return a.natureza==="atividade"&&a.status!=="finalizado";});
-  /* realizada é tanto a que virou atendimento quanto a que foi concluída direto */
-  var feitas=base.filter(function(a){
-    return a.eraAtividade||(a.natureza==="atividade"&&a.status==="finalizado");});
-
-  var lista=(f==="feitas"?feitas:abertas)
-    .filter(function(a){return !quem||a.colaborador===quem;})
-    .filter(function(a){return !q||semAcento(a.cliente).indexOf(q)>=0;})
-    .filter(function(a){
-      if(f==="atraso"){var d=quando(a);return d&&d<agora;}
-      if(f==="hoje")return a.data===hoje;
-      if(f==="semana")return a.data>=hoje&&a.data<=semISO;
-      return true;})
-    .sort(function(x,y){return (x.data+(x.inicio||"")).localeCompare(y.data+(y.inicio||""));});
-
-  var minhasAtras=abertas.filter(function(a){
-    var d=quando(a);return d&&d<agora&&(!quem||a.colaborador===quem);});
+  /* atividade = a agendada (aberta ou fechada) e a antiga que virou atendimento */
+  var base=atendimentos.filter(function(a){
+    return a.loja===lojaAtual&&(a.natureza==="atividade"||a.eraAtividade)&&
+      (!quem||a.colaborador===quem)&&(!q||semAcento(a.cliente).indexOf(q)>=0)&&dentroPeriodo(fxV,a.data);});
+  /* os números do topo seguem pessoa, busca, data e motivo (a situação é o próprio cartão) */
+  var baseM=base.filter(function(a){return passaMotivo(a,mot);});
+  var lista=baseM.filter(function(a){return passaSituacao(a,f);})
+    .sort(function(x,y){
+      var ab=!f||f==="atraso";
+      var c=(x.data+(x.inicio||"")).localeCompare(y.data+(y.inicio||""));
+      return ab?c:-c;});
+  function conta(s){return baseM.filter(function(a){return passaSituacao(a,s);}).length;}
   /* v537: o toque no cartão leva a lista para aquele filtro (o cartão escolhido fica marcado) */
   function kpiAv(filtro,rot,val,cor){
     return '<div class="kpi kpi-bt" data-avk="'+filtro+'" role="button" tabindex="0" title="Ver a lista"'+
       (f===filtro?' style="border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset"':"")+'>'+
       '<div class="l">'+rot+'</div><div class="v"'+(cor?' style="color:'+cor+'"':"")+'>'+val+"</div></div>";}
+  var nAtr=conta("atraso");
   $("avKpis").innerHTML=
-    kpiAv("","Em aberto",abertas.filter(function(a){return !quem||a.colaborador===quem;}).length)+
-    kpiAv("atraso","Atrasadas",minhasAtras.length,minhasAtras.length?"var(--crit)":"")+
-    kpiAv("hoje","Hoje",abertas.filter(function(a){return a.data===hoje&&(!quem||a.colaborador===quem);}).length)+
-    kpiAv("feitas","Realizadas",feitas.filter(function(a){return !quem||a.colaborador===quem;}).length);
+    kpiAv("","Em aberto",conta(""))+
+    kpiAv("atraso","Atrasadas",nAtr,nAtr?"var(--crit)":"")+
+    kpiAv("realizadas","Realizadas",conta("realizadas"))+
+    kpiAv("concluido","Atendimento concluído",conta("concluido"))+
+    kpiAv("semvisita","Sem visita",conta("semvisita"))+
+    kpiAv("reagendada","Reagendadas",conta("reagendada"));
   Array.prototype.forEach.call($("avKpis").querySelectorAll("[data-avk]"),function(k){
     function ir(){$("avQuando").value=k.getAttribute("data-avk");renderAtividades();
       try{$("avCount").scrollIntoView({behavior:"smooth",block:"start"});}catch(eS){}}
@@ -40605,14 +40665,15 @@ function renderAtividades(){
     b.innerHTML='<tr><td colspan="7"><div class="empty"><div class="big">Nenhuma atividade nesta visão</div>Use <b>Nova atividade</b> para agendar o próximo contato.</div></td></tr>';
     return;}
   lista.forEach(function(a){
-    var d=quando(a),atrasou=(f!=="feitas"&&d&&d<agora);
+    var kR=classeReg(a),atrasou=(kR==="atrasada");
     var trava=bloqueada(a),podeEd=podeEditarAtiv(a);
     var sO=situacaoDe(a);
-    var sit=(a.status==="finalizado")
-      ? '<span class="pill p-ok">'+(a.situacao==="reagendada"?"Reagendada":"Concluída")+"</span>"+
+    var sit=(kR==="concluido"||kR==="semvisita"||kR==="reagendada"||kR==="cancelada")
+      ? (kR==="semvisita"?'<span class="pill p-semvisita">'+esc(rotuloSemVisita(a))+"</span>"
+        :'<span class="pill '+(kR==="cancelada"?"p-mut":(kR==="reagendada"?"p-acc":"p-ok"))+'">'+({concluido:"Atendimento concluído",reagendada:"Reagendada",cancelada:"Cancelada"}[kR])+"</span>")+
         (textoReagenda(a)?'<div class="t-sub"><b>'+esc(textoReagenda(a))+"</b></div>":"")+
         (a.concluidaEm?'<div class="t-sub">'+esc(dataBR(a.concluidaEm))+" · "+esc(a.concluidaPor||"")+"</div>":"")+
-        (a.motivos&&a.motivos.length?'<div class="t-sub">'+esc(a.motivos.join(", "))+"</div>":"")
+        (kR!=="semvisita"&&a.motivos&&a.motivos.length?'<div class="t-sub">'+esc(a.motivos.join(", "))+"</div>":"")
       : (atrasou?'<span class="pill p-crit">Atrasada</span>'
         :(a.data===hoje?'<span class="pill p-warn">Hoje</span>'
           :'<span class="pill '+sO.cls+'">'+sO.n+"</span>"));
@@ -52659,7 +52720,25 @@ var MOTIVOS_NOVOS_MF=["Sem crédito / não aprovado","Fechou com concorrente","T
 var MOTIVOS_RENOMEADOS_MF=[["Não atendeu","Não atendeu o telefone"],["Cliente não estava","Não estava no endereço (visita)"]];
 var MOTIVOS_RETIRADOS_MF=["Orçamento enviado"];
 var motivos=[];
-async function gravarMotivos(){if(!db)return;try{await db.doc("config/motivos_finalizacao").set({lista:motivos,grupos:MOTIVO_GRUPO});}catch(e){console.warn(e);}}
+async function gravarMotivos(){if(!db)return;garantirIdsMotivos();try{await db.doc("config/motivos_finalizacao").set({lista:motivos,grupos:MOTIVO_GRUPO,ids:MOTIVO_ID});}catch(e){console.warn(e);}}
+/* CÓDIGO DO MOTIVO (v538): cada motivo ganha um código fixo em config/motivos_finalizacao.ids
+   ({nome:código}). O código nasce do nome (o mesmo em todo aparelho até ser gravado) e, gravado,
+   não muda mais: renomear leva o código junto. A atividade grava motivoIds ao lado dos nomes.
+   Registro antigo só se liga pelo nome EXATO; o que não casa aparece como "Motivo não identificado". */
+var MOTIVO_ID={};
+function codigoNovoMotivo(m){var h=0,s=String(m||"");for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))|0;return "mot-"+(h>>>0).toString(36);}
+function garantirIdsMotivos(){var mud=false;motivos.forEach(function(m){if(!MOTIVO_ID[m]){MOTIVO_ID[m]=codigoNovoMotivo(m);mud=true;}});return mud;}
+function idDoMotivo(m){if(!MOTIVO_ID[m]&&motivos.indexOf(m)>=0)MOTIVO_ID[m]=codigoNovoMotivo(m);return MOTIVO_ID[m]||"";}
+function idsDosMotivos(l){return (l||[]).map(idDoMotivo).filter(Boolean);}
+function motivoPorId(id){garantirIdsMotivos();var n="";Object.keys(MOTIVO_ID).forEach(function(k){if(MOTIVO_ID[k]===id&&motivos.indexOf(k)>=0)n=k;});return n;}
+/* os motivos IDENTIFICADOS do registro: pelo código quando há; senão pelo nome exato da lista */
+function motivosIdentificados(a){
+  var out=[];
+  (a&&a.motivoIds||[]).forEach(function(id){var n=motivoPorId(id);if(n&&out.indexOf(n)<0)out.push(n);});
+  (a&&a.motivos||[]).forEach(function(n){if(motivos.indexOf(n)>=0&&out.indexOf(n)<0)out.push(n);});
+  return out;
+}
+window.__motivoIdMF={ids:function(){garantirIdsMotivos();return MOTIVO_ID;},de:idsDosMotivos,identificados:motivosIdentificados};
 /* O MOTIVO DEFINE COMO A ATIVIDADE FICA (04/11, regra dele). Cada motivo de finalização tem um grupo,
    guardado junto da lista (config/motivos_finalizacao.grupos, por empresa):
      realizada  — o contato ou a visita aconteceu: verde;
@@ -52964,6 +53043,7 @@ function renderMotivos(){
       if(alvo.length&&!confirm(alvo.length+" registro(s) usam "+velho+" e vão passar para "+novo+".\n\nConfirma?"))return;
       motivos[i]=novo;
       if(MOTIVO_GRUPO[velho]){MOTIVO_GRUPO[novo]=MOTIVO_GRUPO[velho];delete MOTIVO_GRUPO[velho];}
+      if(MOTIVO_ID[velho]){MOTIVO_ID[novo]=MOTIVO_ID[velho];delete MOTIVO_ID[velho];}
       MOTIVOS_OFF=MOTIVOS_OFF.map(function(m){return ordAZ(m,velho)===0?novo:m;});
       for(var j=0;j<alvo.length;j++){
         var a=alvo[j];
@@ -57980,13 +58060,15 @@ function eventos(){
   var pessoa=selP?selP.value:"",out=[],agora=new Date();
   /* a trava (só atrasada) é calculada uma vez por desenho */
   var trv=ehGestor()?null:(atrasadasQueTravam(usuarioAtual)[0]||null);
-  var CLS={realizada:"atend",nao:"naofeita",reagendada:"reag",cancelada:"cancelada"};
-  atendimentos.filter(function(a){return a.loja===lojaAtual;}).forEach(function(a){
+  var CLS={realizada:"atend",nao:"semvisita",reagendada:"reag",cancelada:"cancelada"};
+  montarOpcoesSituacao($("agSit"),"todas");montarOpcoesMotivo($("agMot"));
+  var agS=$("agSit")?$("agSit").value:"todas",agM=$("agMot")?$("agMot").value:"";
+  atendimentos.filter(function(a){return a.loja===lojaAtual&&passaSituacao(a,agS)&&passaMotivo(a,agM);}).forEach(function(a){
     var d=quando(a),cf=comoFicou(a),ativ=(a.natureza==="atividade");
     var atrasou=(ativ&&cf==="aberta"&&d&&d<agora);
     var travada=!!(trv&&ativ&&cf==="aberta"&&!atrasou&&(a.colaborador||"")===usuarioAtual&&ativNaFila(a));
     var rotA=cf==="aberta"?(atrasou?"Atividade atrasada":"Atividade"):
-      ({realizada:ativ?"Atividade concluída":"Atendimento",nao:ativ?"Atividade não realizada":"Atendimento sem contato",
+      ({realizada:ativ?"Atividade concluída":"Atendimento",nao:ativ?rotuloSemVisita(a):"Atendimento sem contato",
         reagendada:ativ?"Atividade reagendada":"Atendimento · reagendou",cancelada:"Atividade cancelada"})[cf];
     out.push({id:a.id,data:String(a.data||"").slice(0,10),hora:a.inicio||"",fim:a.fim||"",quem:a.colaborador||"",
       cliente:a.cliente||"",cidade:cidadeDoEvento(a,a.clienteId),tipo:a.tipo||"",obs:soCompromisso(a)?"":(a.resultado||a.obs||""),
@@ -57995,7 +58077,16 @@ function eventos(){
       rot:rotA+(ativ&&textoReagenda(a)?" · "+textoReagenda(a):"")+(ativ&&cf!=="aberta"&&textoConcluidaEm(a)?" · "+textoConcluidaEm(a):"")+(ativ&&cf==="aberta"&&a.vendaLancada?" · venda lançada (pedido "+a.vendaLancada.numero+")":"")});
   });
   /* pedido CANCELADO nao deixa instalacao na agenda (21/10) */
-  pedidos.filter(function(p){return p.loja===lojaAtual&&p.instalacao&&p.status!=="Cancelada";}).forEach(function(p){
+  /* instalação: aberta até instalar, depois concluída; com filtro de motivo não entra */
+  pedidos.filter(function(p){
+    if(!(p.loja===lojaAtual&&p.instalacao&&p.status!=="Cancelada"))return false;
+    if(agM)return false;
+    if(agS==="todas")return true;
+    var kI=p.instaladoEm?"concluido":"aberta";
+    if(!agS)return !p.instaladoEm;
+    if(agS==="atraso")return !p.instaladoEm&&String(p.instalacao).slice(0,10)<hojeISO();
+    if(agS==="realizadas")return kI==="concluido";
+    return kI===agS;}).forEach(function(p){
     var pr=String(p.instalacao).split(" ");
     /* id "ped:": o clique abre a janela da instalação */
     out.push({id:"ped:"+p.id,pedido:p.id,data:pr[0],hora:pr[1]||"",fim:"",quem:respInstalacao(p),
@@ -61134,7 +61225,7 @@ function ligar(){
     var c=cliPorId(id);if(c){ir("clientes");abrirCliente(c);}
   };
   $("avBusca").oninput=renderAtividades;
-  $("avQuando").onchange=renderAtividades;$("avQuem").onchange=renderAtividades;
+  $("avQuando").onchange=renderAtividades;$("avQuem").onchange=renderAtividades;$("avMot").onchange=renderAtividades;
   $("avNova").onclick=function(){
     abrirNovaAtividade({clienteId:"",cliente:"",colaborador:usuarioAtual,dias:1,obs:"",
       nota:"<b>Nova atividade.</b> Escolha o cliente pelo nome — se ele já tiver cadastro, o sistema vincula sozinho."});};
@@ -62253,6 +62344,7 @@ function ligar(){
     editandoPg=null;$("pgtoForm").hidden=true;$("pgtoLista").hidden=false;
     toast("Forma excluída.");renderPgto();renderFormas();calcular();};
   $("agendaPessoa").onchange=renderAgenda;
+  $("agSit").onchange=renderAgenda;$("agMot").onchange=renderAgenda;
 }
 /* ---------- formas de pagamento (configuração) ---------- */
 var editandoPg=null,pgLinhas=[];
