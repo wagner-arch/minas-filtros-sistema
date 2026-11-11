@@ -41,7 +41,9 @@ begin
   if p_n = 1 then
     v_msg := jsonb_build_object('c', p_col, 'id', p_um, 'op', p_op, 'por', p_por);
   else
-    v_msg := jsonb_build_object('c', p_col, 'op', p_op, 'n', p_n, 'por', p_por);
+    -- id vazio de propósito: o realtime.send põe um id aleatório quando falta, e o aparelho
+    -- reconhece o lote pelo id vazio
+    v_msg := jsonb_build_object('c', p_col, 'id', null, 'op', p_op, 'n', p_n, 'por', p_por);
     if p_op = 'DELETE' and p_ids is not null and p_n <= 1000 then
       v_msg := v_msg || jsonb_build_object('ids', to_jsonb(p_ids));
     end if;
