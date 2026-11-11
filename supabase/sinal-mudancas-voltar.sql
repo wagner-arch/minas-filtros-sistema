@@ -12,6 +12,17 @@
 -- Nenhum dado é tocado. Cópia do estado de antes: backup.sinal_antes_v541.
 -- =====================================================================
 
+-- v542 (aviso por lote). Para voltar SÓ ao aviso por registro da v541, rode estas 3 linhas
+-- e depois: create trigger docs_sinal_mudanca after insert or update or delete on public.docs
+--             for each row execute function public.docs_sinal_mudanca();
+drop trigger if exists docs_sinal_lote_ins on public.docs;
+drop trigger if exists docs_sinal_lote_upd on public.docs;
+drop trigger if exists docs_sinal_lote_del on public.docs;
+drop function if exists public.docs_sinal_lote_novos();
+drop function if exists public.docs_sinal_lote_velhos();
+drop function if exists public.docs_sinal_mandar(text, text, bigint, text, text[], text, text);
+
+-- v541 (aviso por registro)
 drop trigger if exists docs_sinal_mudanca on public.docs;
 drop function if exists public.docs_sinal_mudanca();
 drop policy if exists sinal_mudancas_ler on realtime.messages;
@@ -25,7 +36,7 @@ begin
 end $volta$;
 
 -- conferência: as três primeiras devem dar 0 e a última 1
-select (select count(*) from pg_trigger where tgname = 'docs_sinal_mudanca') as gatilho,
+select (select count(*) from pg_trigger where tgname like 'docs_sinal_%') as gatilho,
        (select count(*) from pg_proc where proname = 'docs_sinal_mudanca') as funcao,
        (select count(*) from pg_policies where policyname = 'sinal_mudancas_ler') as regra,
        (select count(*) from pg_publication_tables
