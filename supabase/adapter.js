@@ -1357,6 +1357,64 @@
       return buscarColecao(colecao, null, f);
     };
 
+    /* AVISO DE MUDANÇA ENTRE APARELHOS (v541): UM canal por aparelho, o PRIVADO da empresa
+       aberta ("sinal:mf" / "sinal:wf"). O banco manda só {c, id, op, por} (o gatilho
+       docs_sinal_mudanca, supabase/sinal-mudancas.sql); o dado é buscado depois, por
+       db.mudancas, só do que mudou. aoEstado recebe "ok" / "fora" para o sistema ligar a
+       conferência de reserva. Reconecta sozinho (1 s → 30 s). Devolve {cancelar, reabrir}. */
+    adapter.ouvirSinais = function (loja, aoSinal, aoEstado) {
+      if (!lojaSegura(loja)) estourar(ErroBanco("Loja inválida no aviso de mudança: " + loja, "sinal", null));
+      var vivo = true, canal = null, timerRetry = null, espera = 1000, trocando = false;
+      function estado(s) { if (aoEstado) { try { aoEstado(s); } catch (e) { /* ignora */ } } }
+      function fechar() {
+        if (!canal) return;
+        trocando = true;
+        try { sb.removeChannel(canal); } catch (e) { /* ignora */ }
+        canal = null; trocando = false;
+      }
+      function agendarRetry() {
+        estado("fora");
+        if (!vivo || timerRetry) return;
+        timerRetry = setTimeout(function () {
+          timerRetry = null; espera = Math.min(espera * 2, 30000); abrir();
+        }, espera);
+      }
+      async function abrir() {
+        if (!vivo) return;
+        fechar();
+        /* canal privado: o Realtime confere a regra de acesso com o login de quem ouve */
+        try {
+          var ss = await sb.auth.getSession();
+          var tk = ss && ss.data && ss.data.session && ss.data.session.access_token;
+          if (tk) await sb.realtime.setAuth(tk);
+        } catch (e) { /* sem sessão: o canal recusa e a reserva de 30 s assume */ }
+        if (!vivo) return;
+        var meu = sb.channel("sinal:" + loja, { config: { private: true } });
+        canal = meu;
+        meu.on("broadcast", { event: "mudou" }, function (msg) {
+          if (meu !== canal) return;
+          try { aoSinal((msg && msg.payload) || {}); } catch (e) { console.warn("aviso de mudança", e); }
+        });
+        meu.subscribe(function (st, err) {
+          if (!vivo || meu !== canal) return;
+          if (st === "SUBSCRIBED") { espera = 1000; estado("ok"); }
+          else if (st === "CHANNEL_ERROR" || st === "TIMED_OUT") {
+            if (err) anotar(traduzir(err, "aviso de mudança"));
+            agendarRetry();
+          } else if (st === "CLOSED") { if (!trocando) agendarRetry(); }
+        });
+      }
+      abrir();
+      return {
+        cancelar: function () {
+          vivo = false;
+          if (timerRetry) { clearTimeout(timerRetry); timerRetry = null; }
+          fechar(); estado("fora");
+        },
+        reabrir: function () { if (!vivo) return; if (timerRetry) { clearTimeout(timerRetry); timerRetry = null; } espera = 1000; abrir(); }
+      };
+    };
+
     /* monta um snap (o formato que o sistema inteiro consome) a partir de uma lista que veio
        do aparelho: e assim que o guardado local entra sem mudar uma linha do carregar() */
     adapter.snapDeLista = function (lista, total) {

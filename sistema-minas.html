@@ -834,6 +834,13 @@ body.tn .tv-so{display:none!important}
   .sino-cab{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;
     border-bottom:1px solid var(--line);font-size:15px}
   .sino-lista{overflow:auto;padding:6px}
+  /* v541: "este registro foi alterado por outra pessoa" — fica por cima, sem cobrir o formulário */
+  .viva-faixa{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top,0px) + 64px);z-index:9000;
+    width:min(640px,calc(100vw - 24px));box-sizing:border-box;display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;
+    background:#FFF4D6;color:#5A3E00;border:1px solid #E5B94A;border-radius:12px;padding:10px 12px;
+    box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:14px}
+  .viva-faixa>span{flex:1 1 240px}
+  .viva-faixa .btn{flex:0 0 auto}
   .sino-it{display:flex;gap:11px;width:100%;text-align:left;padding:11px 12px;border:0;border-radius:10px;
     background:transparent;color:inherit;font:inherit;cursor:pointer;align-items:flex-start}
   .sino-it:hover{background:var(--bg)}
@@ -1866,6 +1873,11 @@ body.trava-ponto .app{grid-template-columns:minmax(0,1fr)!important}
 #verBt.ver-nova{background:#FFD84D;color:#3A2A00;border-color:#D9A900}
 #verBt.ver-obrig{background:#D93A3A;color:#fff;border-color:#B02020}
 #verBt:disabled{opacity:.6}
+#vivaInd{margin-left:10px;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:12px;font-weight:600;padding:4px 9px;border-radius:999px;border:1px solid #9BC9A6;background:#E6F5EA;color:#1D6B33;cursor:pointer}
+#vivaInd i{width:8px;height:8px;border-radius:50%;background:#2E9E4F;display:inline-block}
+#vivaInd.fora{border-color:#E0B341;background:#FFF4D6;color:#7A5200}
+#vivaInd.fora i{background:#E0A100}
+@media (max-width:700px){#vivaInd{margin-left:6px;padding:4px 7px}#vivaInd .vi-l{display:none}}
 @media (max-width:700px){#verBt{margin-left:6px;padding-left:8px;padding-right:8px}#verBt .ver-l{display:none}#verBt b::before{content:"v"}}
 /* no celular o alto é apertado (o sino ficava cortado, print dele de 07/11): WhatsApp vira "Zap" e a versão só o número */
 #zapBt .zap-c{display:none}
@@ -9177,7 +9189,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=529"></script>
+<script src="supabase/adapter.js?v=541"></script>
 <script>
 (function(){
 "use strict";
@@ -10478,6 +10490,7 @@ function gruposDoBoot(){
 }
 function aquecerBoot(){
   if(!db)return;
+  VIVA_T0=Date.now();   /* v541: a atualização na hora busca o que mudou desde aqui */
   PRE_BOOT={};
   var tetos={};LEITURAS_BOOT.forEach(function(a){tetos[a[0]]=a[1];});
   /* uma leitura já feita não se refaz: na primeira vez isto está vazio; no "Tentar de novo",
@@ -38864,6 +38877,7 @@ function abrirCompromissoPed(p){
 }
 window.__soCompromissoMF=function(a){return soCompromisso(a);};
 function abrirDetalhes(a){
+  try{if(a&&a.colaborador===usuarioAtual){marcarAtivVista(a.id);setTimeout(function(){try{renderSino();}catch(e){}},50);}}catch(eV){}
   if(soCompromisso(a)){abrirCompromisso(a);return;}
   var tvD=bloqueada(a);
   if(tvD){avisarBloqueio(tvD);return;}
@@ -52859,6 +52873,329 @@ function ouvirPedidos(){
     });
   }catch(e){console.warn("onSnapshot pedidos",e);}
 }
+/* ===== ATUALIZAÇÃO NA HORA ENTRE APARELHOS (v541, pedido dele de 11/11) =====================
+   "Uma atividade criada para o colega só aparecia na Agenda dele depois de sair e entrar."
+   COMO FUNCIONA:
+   1. UM canal por aparelho: o aviso PRIVADO da empresa aberta (db.ouvirSinais, "sinal:mf" ou
+      "sinal:wf"). O banco manda só {coleção, código, tipo, quem gravou} — nunca o registro.
+      O canal da MF não deixa entrar quem é só da WF (regra no banco), e o aparelho ainda confere.
+   2. Ao receber: junta a rajada (VIVA_JUNTA ms) e, por coleção, pergunta o resumo (contagem e
+      último carimbo) e busca SÓ o que mudou depois do carimbo (db.mudancas). Duas leituras
+      leves por coleção por rajada, não importa quantos avisos vieram. Apagado sai pelo código
+      do aviso; se a contagem ainda não fechar, a coleção é relida uma vez.
+   3. Reserva: canal caído → conferência leve a cada 30 s, só com o aplicativo na frente da
+      pessoa; e sempre que ela volta para o aplicativo. Em segundo plano, nada.
+   4. Nunca atropela quem está editando: o registro aberto num formulário NÃO é trocado; aparece
+      a faixa "Este registro foi alterado por X — Recarregar" e a pessoa decide.
+   5. Nada disto entra na entrada do sistema (LEITURAS_BOOT): começa depois que o sistema abre.
+   Coleções: atendimentos (atividades e atendimentos), pedidos (com as autorizações de estoque,
+   que moram nos itens), requisições, OS, orçamentos, aparelhos, produtos e clientes. */
+var VIVA_COLS=["atendimentos","pedidos","requisicoes","ordens","orcamentos","equipamentos","produtos","clientes"];
+var VIVA_JUNTA=400,VIVA_RESERVA=30000,VIVA_T0=0;
+var VIVA={ligado:false,canal:"fora",ctl:null,carimbo:{},fila:{},timer:null,ocupado:false,denovo:false,
+  pend:{},log:[],leituras:0,buscados:0,sinais:0,reservaTimer:null,relida:{},ultConf:0};
+function listaViva(c){
+  switch(c){case "atendimentos":return atendimentos;case "pedidos":return pedidos;case "requisicoes":return requisicoes;
+    case "ordens":return ordens;case "orcamentos":return orcamentos;case "equipamentos":return equipamentos;
+    case "produtos":return produtos;case "clientes":return clientes;}
+  return null;
+}
+/* a mesma leitura da entrada: empresa aberta (mais o que é das duas); cadastros sem anexos */
+function filtroViva(c){return c==="clientes"?{fonte:"docs_sem_anexo"}:{};}
+function daEmpresaViva(c,o){return c==="produtos"||!o||!o.loja||o.loja===lojaAtual;}
+function contaLocalViva(c){var L=listaViva(c)||[],n=0;L.forEach(function(o){if(daEmpresaViva(c,o))n++;});return n;}
+function anotaViva(t){VIVA.log.push(new Date().toTimeString().slice(0,8)+" "+t);if(VIVA.log.length>80)VIVA.log.shift();try{console.log("[na hora] "+t);}catch(e){}}
+/* igualdade sem depender da ordem das chaves (o banco devolve o JSON reordenado) */
+function chaveEstavel(o){
+  if(o===null||typeof o!=="object")return JSON.stringify(o);
+  if(Array.isArray(o))return "["+o.map(chaveEstavel).join(",")+"]";
+  return "{"+Object.keys(o).sort().filter(function(k){return o[k]!==undefined;}).map(function(k){return JSON.stringify(k)+":"+chaveEstavel(o[k]);}).join(",")+"}";
+}
+/* ---- o registro está aberto num formulário? ---- */
+var FORMS_VIVOS=[["atendForm","atendimentos"],["cliForm","clientes"],["prodForm","produtos"],["mpForm","equipamentos"],
+  ["orcForm","orcamentos"],["osForm","ordens"]];
+function registroAbertoViva(c,id){
+  for(var i=0;i<FORMS_VIVOS.length;i++){
+    var f=FORMS_VIVOS[i];if(f[1]!==c)continue;
+    var el=$(f[0]);if(el&&!el.hidden&&el.getAttribute("data-editid")===id)return f[0];
+  }
+  if(c==="atendimentos"){
+    if(typeof editandoAt!=="undefined"&&editandoAt&&editandoAt.id===id&&
+      (($("atendForm")&&!$("atendForm").hidden)||($("atendFecha")&&!$("atendFecha").hidden)))return $("atendFecha")&&!$("atendFecha").hidden?"atendFecha":"atendForm";
+    if(typeof detReg!=="undefined"&&detReg&&detReg.id===id&&$("detModal")&&!$("detModal").hidden)return "detModal";
+  }
+  if(c==="pedidos"&&typeof pedEditando!=="undefined"&&pedEditando&&pedEditando.id===id)return "pedido";
+  return "";
+}
+/* ---- a faixa "alterado por outra pessoa" ---- */
+function faixaViva(){
+  var ks=Object.keys(VIVA.pend).filter(function(k){var p=VIVA.pend[k];return !p.mantido&&registroAbertoViva(p.c,p.o.id);});
+  var w=$("vivaFaixa");
+  if(!ks.length){if(w)w.hidden=true;return;}
+  if(!w){w=document.createElement("div");w.id="vivaFaixa";w.className="viva-faixa";w.setAttribute("role","alert");document.body.appendChild(w);}
+  var p=VIVA.pend[ks[0]];
+  w.innerHTML='<span>Este registro foi alterado por <b>'+esc(p.por||"outra pessoa")+"</b>"+(p.oQue?" ("+esc(p.oQue)+")":"")+
+    ". O que você digitou continua aqui.</span>"+
+    '<button class="btn sm" type="button" id="vivaRecarregar">Recarregar</button>'+
+    '<button class="btn ghost sm" type="button" id="vivaManter">Continuar com o meu</button>';
+  w.hidden=false;
+  $("vivaRecarregar").onclick=function(){recarregarPendViva(ks[0]);};
+  $("vivaManter").onclick=function(){p.mantido=true;faixaViva();};
+}
+function oQueViva(c){return {atendimentos:"atividade ou atendimento",pedidos:"pedido",ordens:"OS",orcamentos:"orçamento",
+  clientes:"cadastro do cliente",produtos:"cadastro do produto",equipamentos:"aparelho do cliente",requisicoes:"requisição"}[c]||"";}
+function recarregarPendViva(k){
+  var p=VIVA.pend[k];if(!p)return;
+  var onde=registroAbertoViva(p.c,p.o.id);
+  if(onde&&onde!=="detModal"&&!confirm("Recarregar o registro com a alteração de "+(p.por||"outra pessoa")+"?\n\nO que você digitou e ainda não salvou neste formulário será perdido."))return;
+  delete VIVA.pend[k];
+  var n=aplicarViva(p.c,p.o);
+  try{
+    if(onde==="atendForm")abrirAtend(n);
+    else if(onde==="atendFecha"||onde==="detModal"){if($("atendFecha"))$("atendFecha").hidden=true;abrirDetalhes(n);}
+    else if(onde==="cliForm")abrirCliente(n);
+    else if(onde==="prodForm")abrirProduto(n);
+    else if(onde==="mpForm")abrirEquip(n);
+    else if(onde==="orcForm")abrirOrc(n);
+    else if(onde==="osForm")abrirOS(n);
+    else if(onde==="pedido")abrirPedidoParaEditar(n);
+  }catch(e){console.warn("recarregar o registro",e);}
+  try{if(onde)formSujo[onde]=false;}catch(e){}
+  faixaViva();redesenharViva([p.c]);
+}
+/* troca (ou acrescenta) o registro na lista da memória, no mesmo lugar */
+function aplicarViva(c,o){
+  var L=listaViva(c);if(!L)return o;
+  for(var i=0;i<L.length;i++)if(L[i]&&L[i].id===o.id){L[i]=o;return o;}
+  L.push(o);return o;
+}
+function tirarViva(c,id){
+  var L=listaViva(c);if(!L)return false;
+  for(var i=L.length-1;i>=0;i--)if(L[i]&&L[i].id===id){L.splice(i,1);return true;}
+  return false;
+}
+/* o que estava pendente (formulário fechado sem recarregar) entra quando o formulário fecha */
+function soltarPendViva(){
+  var mud=[];
+  Object.keys(VIVA.pend).forEach(function(k){
+    var p=VIVA.pend[k];
+    if(registroAbertoViva(p.c,p.o.id))return;
+    delete VIVA.pend[k];aplicarViva(p.c,p.o);if(mud.indexOf(p.c)<0)mud.push(p.c);
+  });
+  if(mud.length)redesenharViva(mud);
+  faixaViva();
+}
+/* ---- mescla o que veio do banco ---- */
+function mesclarViva(c,docs,quem){
+  var L=listaViva(c);if(!L)return 0;
+  var mapa={};L.forEach(function(x,i){if(x&&x.id)mapa[x.id]=i;});
+  var n=0;
+  docs.forEach(function(o){
+    if(!daEmpresaViva(c,o))return;
+    var i=mapa[o.id],k=c+":"+o.id,por=(quem&&quem[o.id])||"";
+    if(i!==undefined&&chaveEstavel(L[i])===chaveEstavel(o)){delete VIVA.pend[k];return;}
+    if(registroAbertoViva(c,o.id)){
+      /* a minha própria gravação voltando: o formulário já tem o que vale */
+      if(por&&por===usuarioAtual)return;
+      VIVA.pend[k]={c:c,o:o,por:por,oQue:oQueViva(c),em:Date.now()};
+      return;
+    }
+    delete VIVA.pend[k];
+    if(i!==undefined)L[i]=o;else{L.push(o);mapa[o.id]=L.length-1;}
+    n++;
+  });
+  return n;
+}
+/* ---- redesenha só a tela aberta (o render() já faz isso), o sino e os contadores ---- */
+function redesenharViva(cols){
+  var y=window.scrollY||0,ae=document.activeElement;
+  try{esquecerIndices();}catch(e){}
+  if(cols.indexOf("clientes")>=0||cols.indexOf("equipamentos")>=0){try{esquecerManutCli();}catch(e){}}
+  if(cols.indexOf("pedidos")>=0){
+    try{if(pedAberto&&!registroAbertoViva("pedidos",pedAberto.id)){var f=pedPorId(pedAberto.id);if(f&&f!==pedAberto){pedAberto=f;renderPedDet();}}}catch(e){}
+    try{checarPendencias();}catch(e){}
+  }
+  if(cols.indexOf("produtos")>=0){try{opcoesProduto();}catch(e){}}
+  try{render();}catch(e){console.warn("redesenhar",e);}
+  try{renderSino();}catch(e){}
+  try{if(Math.abs((window.scrollY||0)-y)>1)window.scrollTo(0,y);}catch(e){}
+  try{if(ae&&ae!==document.activeElement&&document.body.contains(ae)&&ae.focus)ae.focus({preventScroll:true});}catch(e){}
+}
+/* ---- os avisos que chegam ---- */
+function sinalViva(m){
+  if(!m||VIVA_COLS.indexOf(m.c)<0||!m.id)return;
+  if(m.loja&&m.loja!==lojaAtual)return;          /* outra empresa: nunca */
+  VIVA.sinais++;
+  var q=VIVA.fila[m.c]=VIVA.fila[m.c]||{quem:{},apagar:{}};
+  if(m.op==="DELETE")q.apagar[m.id]=m.por||"";else q.quem[m.id]=m.por||"";
+  agendarViva();
+}
+function agendarViva(){
+  if(VIVA.timer)return;
+  VIVA.timer=setTimeout(function(){VIVA.timer=null;processarViva();},VIVA_JUNTA);
+}
+async function processarViva(){
+  if(VIVA.ocupado){VIVA.denovo=true;return;}
+  var fila=VIVA.fila;VIVA.fila={};
+  var cols=Object.keys(fila);if(!cols.length)return;
+  VIVA.ocupado=true;
+  var mudou=[];
+  try{
+    for(var i=0;i<cols.length;i++){
+      var c=cols[i],q=fila[c],n=0;
+      Object.keys(q.apagar).forEach(function(id){if(tirarViva(c,id))n++;delete VIVA.pend[c+":"+id];});
+      n+=await buscarViva(c,q.quem);   /* aviso ou conferência: resumo e, se mudou, só o que mudou */
+      if(n&&mudou.indexOf(c)<0)mudou.push(c);
+    }
+  }catch(e){console.warn("atualização na hora",e);}
+  VIVA.ocupado=false;
+  if(mudou.length)redesenharViva(mudou);
+  faixaViva();
+  if(VIVA.denovo){VIVA.denovo=false;agendarViva();}
+}
+/* resumo + só o que mudou depois do carimbo; a contagem é a prova */
+async function buscarViva(c,quem){
+  var f=filtroViva(c),desde=VIVA.carimbo[c]||"";
+  var r=await db.resumo(c,f);VIVA.leituras++;
+  if(desde&&r.ultima&&r.ultima<=desde&&r.total===contaLocalViva(c))return 0;   /* nada novo */
+  var n=0,veio=0;
+  if(desde){
+    var s=await db.mudancas(c,desde,f);VIVA.leituras++;
+    var docs=s.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+    veio=docs.length;VIVA.buscados+=veio;
+    n=mesclarViva(c,docs,quem);
+  }
+  if(r.ultima&&(!desde||r.ultima>desde))VIVA.carimbo[c]=r.ultima;
+  anotaViva(c+": "+veio+" buscado"+(veio===1?"":"s")+" ("+n+" mudou na tela)");
+  /* apagado sem aviso (ou aviso perdido): a contagem não fecha → relê a coleção, uma vez */
+  var teto=tetoBoot(c)||0;
+  if(r.total&&(!teto||r.total<teto)&&contaLocalViva(c)!==r.total){
+    var r2=await db.resumo(c,f);VIVA.leituras++;
+    if(contaLocalViva(c)!==r2.total&&VIVA.relida[c]!==r2.total){
+      VIVA.relida[c]=r2.total;
+      n+=await relerViva(c);
+      if(r2.ultima)VIVA.carimbo[c]=r2.ultima;
+    }
+  }
+  return n;
+}
+async function relerViva(c){
+  var s=await col(c).limit(tetoBoot(c)||3000).get(filtroViva(c));VIVA.leituras++;
+  if(!s||s.parouPorFalha||s.truncado)return 0;
+  var docs=s.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;}),ids={};
+  docs.forEach(function(o){ids[o.id]=1;});
+  var L=listaViva(c),tirou=0;
+  for(var i=L.length-1;i>=0;i--){var x=L[i];if(x&&daEmpresaViva(c,x)&&!ids[x.id]&&!registroAbertoViva(c,x.id)){L.splice(i,1);tirou++;}}
+  var n=mesclarViva(c,docs,{});
+  VIVA.buscados+=docs.length;
+  anotaViva(c+": relida inteira (a contagem não fechou) · "+docs.length+" registros, "+tirou+" saíram");
+  return n+tirou;
+}
+/* ---- conferência leve: todas as coleções (reserva de 30 s, volta ao aplicativo, internet de volta) ---- */
+async function conferirViva(motivo){
+  if(!VIVA.ligado||!db||SEM_INTERNET)return;
+  if(VIVA.ocupado){VIVA.denovo=true;return;}
+  VIVA.ultConf=Date.now();
+  anotaViva("conferência ("+motivo+")");
+  VIVA_COLS.forEach(function(c){VIVA.fila[c]=VIVA.fila[c]||{quem:{},apagar:{}};});
+  await processarViva();
+}
+function tickReservaViva(){
+  if(!VIVA.ligado||document.hidden)return;              /* segundo plano ou tela desligada: nada */
+  if(VIVA.canal!=="ok")conferirViva("reserva, canal fora");
+  if(Object.keys(VIVA.pend).length)soltarPendViva();
+}
+/* Só o Administrador vê, no alto, se o canal está ligado ("Na hora", verde) ou se caiu e o
+   aparelho está na conferência de 30 s (âmbar). Tocar mostra o detalhe. */
+function mostrarCanalViva(){
+  var el=document.getElementById("vivaInd");
+  var ver=false;try{ver=VIVA.ligado&&ehAdministrador()&&!SEM_INTERNET;}catch(e){ver=false;}
+  if(!ver){if(el)el.remove();return;}
+  if(!el){
+    var ref=document.getElementById("verBt")||document.getElementById("zapBt")||document.getElementById("sinoBt");
+    if(!ref||!ref.parentNode)return;
+    el=document.createElement("button");el.type="button";el.id="vivaInd";
+    el.onclick=function(){
+      var ok=VIVA.canal==="ok",ult=VIVA.ultConf?new Date(VIVA.ultConf).toLocaleTimeString("pt-BR"):"—";
+      alert((ok?"Atualização na hora LIGADA: as mudanças dos outros aparelhos chegam em menos de 1 segundo.":
+        "O canal da atualização na hora CAIU. Enquanto ele não volta, o sistema confere a cada 30 segundos (só com o sistema aberto na tela).")+
+        "\n\nAvisos recebidos nesta abertura: "+VIVA.sinais+"\nÚltima conferência: "+ult+"\n\n(Só o Administrador vê esta marca.)");};
+    ref.parentNode.insertBefore(el,ref);
+  }
+  var ok=VIVA.canal==="ok";
+  el.classList.toggle("fora",!ok);
+  el.innerHTML=ok?'<i></i><span class="vi-l">Na hora</span>':'<i></i><span class="vi-l">Conferindo a cada </span>30 s';
+  el.title=ok?"Atualização na hora ligada (só o Administrador vê)":"Canal caiu: conferindo a cada 30 s (só o Administrador vê)";
+  el.setAttribute("aria-label",el.title);
+}
+function estadoCanalViva(s){
+  var antes=VIVA.canal;VIVA.canal=s;
+  try{mostrarCanalViva();}catch(e){}
+  if(s!==antes)anotaViva("canal "+(s==="ok"?"aberto":"fora"));
+  /* reabriu depois de cair: o que mudou nesse meio tempo vem agora */
+  if(s==="ok"&&antes==="fora"&&VIVA.carimboPronto)conferirViva("canal de volta");
+}
+async function iniciarViva(forcar){
+  if(VIVA.ligado||!db||(!forcar&&!modoBanco())||SEM_INTERNET)return false;
+  if(!db.ouvirSinais||!db.mudancas||!db.resumo)return false;   /* sem o canal novo: nada (o aviso antigo dos pedidos foi desligado na v541) */
+  VIVA.ligado=true;
+  /* o que mudou enquanto a entrada baixava (com 2 minutos de folga): vem na primeira conferência */
+  var desde=new Date((VIVA_T0||Date.now())-120000).toISOString();
+  VIVA_COLS.forEach(function(c){VIVA.carimbo[c]=desde;});
+  try{mostrarCanalViva();}catch(e){}
+  VIVA.ctl=db.ouvirSinais(lojaAtual,sinalViva,estadoCanalViva);
+  await conferirViva("abertura");
+  VIVA.carimboPronto=true;
+  VIVA.reservaTimer=setInterval(tickReservaViva,VIVA_RESERVA);
+  document.addEventListener("visibilitychange",function(){if(!document.hidden)conferirViva("volta ao aplicativo");});
+  window.addEventListener("online",function(){
+    anotaViva("internet de volta");
+    try{if(VIVA.ctl&&VIVA.ctl.reabrir)VIVA.ctl.reabrir();}catch(e){}
+    conferirViva("internet de volta");});
+  window.addEventListener("offline",function(){estadoCanalViva("fora");});
+  return true;
+}
+window.__vivaMF={iniciar:iniciarViva,sinal:sinalViva,conferir:conferirViva,tick:tickReservaViva,estado:estadoCanalViva,
+  info:function(){return {ligado:VIVA.ligado,canal:VIVA.canal,leituras:VIVA.leituras,buscados:VIVA.buscados,sinais:VIVA.sinais,
+    pend:Object.keys(VIVA.pend),log:VIVA.log.slice(),carimbo:Object.assign({},VIVA.carimbo)};},
+  mostrar:mostrarCanalViva,zerar:function(){VIVA.leituras=0;VIVA.buscados=0;VIVA.sinais=0;VIVA.log=[];},
+  soltar:soltarPendViva,faixa:faixaViva};
+
+/* ===== AVISO NO SINO: ATIVIDADE CRIADA OU REAGENDADA PARA OUTRA PESSOA (v541) =================
+   O responsável recebe "Nova atividade: [cliente], [data] [hora], criada por [quem]" (ou
+   "reagendada"). Quem criou não recebe. Aparece uma vez (fica marcada como vista neste
+   aparelho) e some ao abrir a atividade. Só as criadas depois que o aviso passou a existir
+   para a pessoa — não acorda o histórico inteiro na primeira vez. */
+function chaveAvisoAtiv(){return "mf_ativ_aviso:"+lojaAtual+":"+usuarioAtual;}
+function lerAvisoAtiv(){
+  var o=null;try{o=JSON.parse(localStorage.getItem(chaveAvisoAtiv())||"null");}catch(e){o=null;}
+  if(!o||!o.desde){o={desde:Date.now(),vistas:{}};try{localStorage.setItem(chaveAvisoAtiv(),JSON.stringify(o));}catch(e){}}
+  return o;
+}
+function marcarAtivVista(id){
+  if(!id)return;var o=lerAvisoAtiv();if(o.vistas[id])return;
+  o.vistas[id]=1;var ks=Object.keys(o.vistas);if(ks.length>400)ks.slice(0,ks.length-400).forEach(function(k){delete o.vistas[k];});
+  try{localStorage.setItem(chaveAvisoAtiv(),JSON.stringify(o));}catch(e){}
+}
+function quemCriouAtiv(a){return a.reagendadaPor||criadorDaAtividade(a)||"";}
+function avisosAtivDeOutros(){
+  if(!usuarioAtual)return [];
+  var o=lerAvisoAtiv();
+  return atendimentos.filter(function(a){
+    if(!a||a.natureza!=="atividade"||a.colaborador!==usuarioAtual||(a.loja&&a.loja!==lojaAtual))return false;
+    if(ativFechada(a)||a.situacao==="cancelada")return false;
+    var q=quemCriouAtiv(a);if(!q||q===usuarioAtual)return false;
+    if(o.vistas[a.id])return false;
+    return instanteDoRegistro(a)>=o.desde-60000;
+  }).map(function(a){
+    var reag=!!(a.reagendadaDe&&a.reagendadaDe.id||a.reagendadaPor);
+    return {chave:"ativnova:"+a.id,icone:"📅",
+      titulo:(reag?"Atividade reagendada: ":"Nova atividade: ")+(a.cliente||"sem cliente")+", "+dataCurta(a.data)+(a.inicio?" "+a.inicio:""),
+      texto:(reag?"reagendada":"criada")+" por "+quemCriouAtiv(a),
+      quando:String(a.data||""),ir:function(){marcarAtivVista(a.id);abrirDetalhes(a);}};
+  });
+}
+
 async function decidir(p,ok,obs){
   var meu=p.reabertura.precisa.filter(function(x){return x.quem===usuarioAtual&&x.ok===null;})[0];
   if(!meu)return;
@@ -57450,6 +57787,8 @@ async function limparRastroAntigo(){
 function pendenciasMF(){
   var L=[];
   function põe(o){L.push(o);}
+  /* v541: atividade criada ou reagendada para mim por outra pessoa */
+  try{avisosAtivDeOutros().forEach(põe);}catch(eAv){console.warn("aviso de atividade",eAv);}
   /* 06/11: o WhatsApp da pessoa caiu — ela é avisada até abrir a janela de conexão */
   try{
     var zc=ZAP_SIS.conexao;
@@ -63557,7 +63896,9 @@ async function continuarBoot(){
   await passoBoot("desenhar a tela inicial",async function(){
     try{opcoesProduto();renderFormas();renderEssencial();}catch(e){erro("render: "+e.message);}
   });
-  try{ouvirPedidos();}catch(e){console.warn(e);}
+  /* v541: atualização na hora entre aparelhos (um canal, só o que mudou), DEPOIS de abrir,
+     com 3 s de folga para as arrumações da entrada; sem o canal novo, o aviso antigo dos pedidos */
+  setTimeout(function(){try{iniciarViva();}catch(e){console.warn(e);}},3000);
   /* ===== O QUE NÃO É DADO DA PESSOA SAI DO CAMINHO DA ENTRADA (14/10) =====
      Medido no computador dele: os dados ficavam prontos aos 14,9 s e a tela de preparo só
      liberava aos 28,8 s — 13,9 SEGUNDOS de arrumação rodando com a pessoa esperando.
