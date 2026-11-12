@@ -1600,6 +1600,37 @@
        Devolve {gravados, blocos}. Erro em um bloco estoura como qualquer gravação,
        e os blocos anteriores JÁ ESTÃO gravados (a importação continua de onde parou,
        porque quem chama pula o que já existe). */
+    /* v543: GRAVAÇÃO "TUDO OU NADA" — vários registros de coleções diferentes num comando só.
+       Vai num único upsert na tabela docs: o banco grava todos ou nenhum (se uma linha for
+       recusada, nenhuma fica). Usada onde uma ação não pode ficar pela metade (estorno da
+       entrada de nota: estoque, custo, contas e a nota juntos). lista = [{colecao, obj}]. */
+    adapter.gravarJuntos = async function (lista) {
+      if (!Array.isArray(lista) || !lista.length) throw new Error("gravarJuntos(): lista vazia.");
+      if (lista.length > 1000) throw new Error("gravarJuntos(): no máximo 1.000 registros de uma vez.");
+      var vistos = {};
+      var linhas = lista.map(function (x) {
+        var colecao = x && x.colecao, obj = x && x.obj;
+        if (!ehTexto(colecao)) throw new Error("gravarJuntos(): informe a coleção.");
+        if (obj === null || typeof obj !== "object" || !ehTexto(obj.id)) {
+          throw new Error("gravarJuntos(" + colecao + "): todo objeto precisa de id.");
+        }
+        var chave = colecao + "/" + obj.id;
+        if (vistos[chave]) throw new Error("gravarJuntos(): " + chave + " repetido.");
+        vistos[chave] = 1;
+        var campo = campoLojaDe(colecao), corpo = {};
+        Object.keys(obj).forEach(function (k) { if (obj[k] !== undefined) corpo[k] = obj[k]; });
+        var loja = null;
+        if (campo) loja = ehTexto(corpo[campo]) ? corpo[campo] : (ehTexto(adapter.lojaPadrao) ? adapter.lojaPadrao : null);
+        return { colecao: colecao, id: corpo.id, loja: loja, data: corpo };
+      });
+      conferir(
+        await comSessao(function () { return sb.from(TABELA).upsert(linhas, { onConflict: "colecao,id" }); }),
+        "gravar " + linhas.length + " registros juntos",
+        true
+      );
+      return { gravados: linhas.length };
+    };
+
     adapter.gravarVarios = async function (colecao, lista, ops) {
       if (!ehTexto(colecao)) throw new Error("gravarVarios(): informe a coleção.");
       if (!Array.isArray(lista)) throw new Error("gravarVarios(): informe uma lista de objetos.");
