@@ -18745,6 +18745,9 @@ function atualizarParcelasFormas(){
        O que muda por dentro é a depreciação, que aparece como "a empresa recebe". */
     var br=centavos(+f.valor||0),dp=centavos(+f.baseDep||br);
     var linha=textoParcelaForma(f);
+    /* v548: quando vence (Promissória, Boleto Loja e Cheque) */
+    var tv=textoVenc1(f,dataVendaForm());
+    if(tv)linha=(linha?linha+" · ":"")+esc(tv);
     el.innerHTML=(br>0)
       ? '<div class="t-sub"><b>'+BRL(br)+"</b> nesta forma"+
         ((br-dp>0.004)?(" · a empresa recebe "+BRL(dp)+" (a operadora fica com "+BRL(centavos(br-dp))+")"):"")+
@@ -18779,6 +18782,11 @@ function renderFormas(){
       '<div class="fld" style="justify-content:flex-end">'+(travadaORC
         ?'<span class="help" style="margin:0">já recebido na abertura da OS</span>'
         :(formas.length>1?'<button class="btn mut sm" type="button" data-rmf="'+i+'">Remover</button>':'<span class="help" style="margin:0">à vista não deprecia</span>'))+'</div>'+
+      /* v548: vencimento da 1ª parcela (Promissória, Boleto Loja e Cheque): nasce em 30 dias, troca-se */
+      (formaComVenc1(f.tipo)
+        ?'<div class="fld"><label>Vencimento da 1ª parcela</label><input type="date" data-f="venc1" data-i="'+i+'" value="'+
+          esc(venc1DaForma(f,dataVendaForm()))+'" min="'+esc(dataVendaForm())+'"></div>'
+        :"")+
       /* quanto fica cada parcela desta forma (pedido dele, 20/09) */
       '<div class="pg-parc" data-pgp="'+i+'"></div>'+
       /* NEGOCIAÇÃO COM TROCA: a empresa pega UM purificador por venda (regra dele, 25/09) — não
@@ -18795,7 +18803,16 @@ function renderFormas(){
     el.oninput=el.onchange=function(){
       var i=+el.getAttribute("data-i"),k=el.getAttribute("data-f");
       if(k==="valor"){formas[i].base=numMF(el.value);formas[i].__auto=false;}
+      else if(k==="venc1"){
+        /* apagou a data: volta para a de 30 dias; antes do dia da venda: avisa (a gravação recusa) */
+        formas[i].venc1=el.value||"";
+        if(!el.value){el.value=venc1DaForma(formas[i],dataVendaForm());}
+        else if(el.value<dataVendaForm())toast("O vencimento da 1ª parcela não pode ser antes do dia da venda.");
+        atualizarParcelasFormas();return;
+      }
       else formas[i][k]=(k==="parc"?parseInt(el.value,10):el.value);
+      /* trocou a forma: a data escolhida na forma anterior não vale para a nova */
+      if(k==="tipo")delete formas[i].venc1;
       /* trocou a forma ou o parcelamento: o preço do item novo se refaz pela tabela cheia,
          a menos que alguém já tenha digitado um valor à mão (v161) */
       if(k==="tipo"||k==="parc"){try{atualizarPrecoItemNovo();}catch(e){}}
@@ -19876,7 +19893,9 @@ function abrirRevisaoPedido(){
   var fh=formas.map(function(f){
     /* textoParcelaForma já devolve HTML (o <b> do valor da parcela): escapar aqui fazia a
        revisão mostrar as tags escritas na tela — "<b>24× de R$ 116,58</b>" (24/10) */
+    var tv=textoVenc1(f,dataVendaForm());   /* v548 */
     return "<tr><td>"+esc(f.tipo||"—")+"</td><td>"+textoParcelaForma(f)+
+      (tv?'<div class="t-sub">'+esc(tv)+"</div>":"")+
       '</td><td class="num">'+BRL(+f.valor||0)+"</td></tr>";
   }).join("");
   h+='<div class="sect"><p class="sect-t">Pagamento</p><div class="tw"><table><thead><tr>'+
@@ -20335,6 +20354,9 @@ async function salvarPedidoAgora(){
     if(x)i.endInst=x;else if(i.endInst)delete i.endInst;
   });
   if(formas.some(function(f){return (+f.valor||0)>0&&!f.tipo;})){toast("Escolha a forma de pagamento de cada valor.");irEtapa(2);return;}
+  /* v548: vencimento da 1ª parcela nunca antes do dia da venda; ao gravar, a data fica na forma */
+  var eV1=erroVenc1(formas,dataVendaForm());
+  if(eV1){toast(eV1);irEtapa(2);return;}
   if(r.dif!==0){toast(vendaNova()?("O pagamento não bate com o total: "+(r.dif>0?"faltam "+BRL(r.dif):"sobram "+BRL(-r.dif))+"."):"O que está repartido nas formas não fecha com o total base da venda.");irEtapa(2);return;}
   /* v517 (tela nova): frete respondido com valor, e plano pago em purificador novo com o número de série */
   if(vendaNova()){
@@ -20469,7 +20491,7 @@ async function salvarPedidoAgora(){
     respInstalacao:$("v_idata").value?(ehValorPrest(valorIresp())
       ?((prestPorId(idDoValorPrest(valorIresp()))||{}).nome||$("v_vend").value)
       :(valorIresp()||$("v_inst").value||$("v_vend").value)):"",
-    itens:itens.slice(),formas:formas.slice(),total:r.total,depreciado:r.dep,base:r.base,pontos:r.pontos,
+    itens:itens.slice(),formas:(fixarVenc1(formas,hojeISO()),formas.slice()),total:r.total,depreciado:r.dep,base:r.base,pontos:r.pontos,
     /* v206: fica gravado o que é valor comercial e o que é acréscimo do parcelamento */
     modelo:"base",totalBase:r.totalBase,acrescimo:r.acrescimo,
     frete:(r.comp?r.comp.frete:0),descontoGeral:(r.comp?r.comp.desc:0),
@@ -30372,6 +30394,45 @@ function diasCreditoForma(tipo){
   if(ehAntecipada(tipo))return 0;
   return aVista(tipo)?0:30;
 }
+/* v548 (13/11, pedido dele): VENCIMENTO DA 1ª PARCELA escolhido na venda, só nestas formas.
+   O campo já nasce com a regra de sempre (venda + dias de crédito da forma = 30 dias) e o
+   vendedor pode trocar; as outras parcelas seguem de 30 em 30 dias a partir dele. Pedido antigo
+   sem `venc1` continua com a conta antiga, que dá as mesmas datas. */
+var FORMAS_VENC1=["Promissória","Boleto Loja","Cheque"];
+function formaComVenc1(tipo){return FORMAS_VENC1.indexOf(String(tipo||""))>=0;}
+function venc1Padrao(f,dataV){return somaDias(String(dataV||hojeISO()).slice(0,10),diasCreditoForma(f.tipo));}
+function venc1DaForma(f,dataV){
+  if(!f||!formaComVenc1(f.tipo))return "";
+  return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(f.venc1||""))?f.venc1:venc1Padrao(f,dataV);
+}
+/* data da parcela i (1, 2, 3…) da forma; "" quando a forma não escolhe vencimento */
+function vencParcelaForma(f,dataV,i){
+  var v1=venc1DaForma(f,dataV);
+  return v1?somaDias(v1,30*(Math.max(1,i)-1)):"";
+}
+function erroVenc1(fs,dataV){
+  var d=String(dataV||hojeISO()).slice(0,10),erro="";
+  (fs||[]).forEach(function(f){
+    if(erro||!formaComVenc1(f.tipo))return;
+    var v=venc1DaForma(f,d);
+    if(v<d)erro="O vencimento da 1ª parcela ("+f.tipo+") não pode ser antes do dia da venda ("+dataBR(d)+").";
+  });
+  return erro;
+}
+/* ao gravar: a forma que escolhe vencimento fica com a data (a escolhida ou a de 30 dias);
+   a que não escolhe não leva data nenhuma (ele trocou a forma depois de mexer na data) */
+function fixarVenc1(fs,dataV){
+  (fs||[]).forEach(function(f){
+    if(formaComVenc1(f.tipo))f.venc1=venc1DaForma(f,dataV);
+    else if(f.venc1!=null)delete f.venc1;
+  });
+}
+/* texto curto para a revisão, a ficha e o PDF: "1ª parcela vence em 13/12/2026" */
+function textoVenc1(f,dataV){
+  var v=venc1DaForma(f,dataV);if(!v)return "";
+  var n=Math.max(1,+f.parc||1);
+  return (n>1?"1ª parcela vence em ":"vence em ")+dataBR(v)+(n>1?", as outras a cada 30 dias":"");
+}
 /* toda venda vira parcelas em contas a receber */
 async function gerarReceberDoPedido(p){
   var gerados=[],ccVenda=await centroFixo("Venda de produto","Receitas","entrada");
@@ -30414,7 +30475,8 @@ async function gerarReceberDoPedido(p){
         pedidoId:p.id,docRef:"Pedido "+p.numero,clienteId:p.clienteId,pessoa:p.cliente,
         descricao:f.tipo,formaTipo:f.tipo,
         centroId:ccVenda,caixaId:(cxF||{}).id||"",
-        emissao:p.data,vencimento:somaDias(p.data,30*(i-1)+dias),
+        /* v548: forma com vencimento escolhido na venda (Promissória, Boleto Loja e Cheque) */
+        emissao:p.data,vencimento:(vencParcelaForma(f,p.data,i)||somaDias(p.data,30*(i-1)+dias)),
         valor:(i===n?Math.round((v-parcela*(n-1))*100)/100:parcela),
         parcela:i,totalParcelas:n,status:"aberto",valorPago:0,criadoEm:hojeISO()};
       titulos.push(t);gerados.push(t);
@@ -41417,6 +41479,8 @@ function pedidoDaOS(o){return (o&&o.pedidoId)?(pedidos.filter(function(p){return
    e entrega — e, ao finalizar, atualiza o MESMO pedido (mesmo número, mesma data, mesma
    assinatura). Não cria pedido novo, não refaz requisição de estoque nem cartão do funil. */
 var pedEditando=null;
+/* v548: o dia da venda que está na tela (editando, o do pedido; nova, hoje) */
+function dataVendaForm(){return String((pedEditando&&pedEditando.data)||hojeISO()).slice(0,10);}
 function renderBannerEdicao(){
   var b=$("v_edBanner");if(!b)return;
   var p=pedEditando;
@@ -41522,6 +41586,7 @@ async function aplicarEdicaoPedido(cli,r,solDesc){
     de:{total:p.total,base:p.base},para:{total:r.total,base:r.base},
     motivo:"pedido editado pelas etapas, antes da aprovação do financeiro",autorizaram:[]});
   if(cli){p.clienteId=cli.id;p.cliente=cli.nome;}
+  fixarVenc1(formas,p.data);   /* v548 */
   p.itens=itens.slice();p.formas=formas.slice();
   p.total=r.total;p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
   p.modelo="base";p.totalBase=r.totalBase;p.acrescimo=r.acrescimo;
@@ -49449,14 +49514,19 @@ function renderPedDet(){
         .map(function(t){return '<option'+(t.nome===f.tipo?" selected":"")+">"+esc(t.nome)+"</option>";}).join("");
       var psF=parcelasDe(f.tipo);if(psF.indexOf(np)<0)np=psF[psF.length-1];
       var optsP=psF.map(function(n){return '<option value="'+n+'"'+(n===np?" selected":"")+">"+n+"×</option>";}).join("");
-      tf.innerHTML+='<tr><td><select data-pft="'+idx+'" aria-label="Forma de pagamento">'+optsF+"</select></td>"+
+      tf.innerHTML+='<tr><td><select data-pft="'+idx+'" aria-label="Forma de pagamento">'+optsF+"</select>"+
+        /* v548: vencimento da 1ª parcela (Promissória, Boleto Loja e Cheque) também na venda reaberta */
+        (formaComVenc1(f.tipo)?'<div class="t-sub" style="margin-top:6px">Vencimento da 1ª parcela</div>'+
+          '<input type="date" data-pfv="'+idx+'" aria-label="Vencimento da 1ª parcela" value="'+esc(venc1DaForma(f,p.data))+
+          '" min="'+esc(String(p.data||"").slice(0,10))+'">':"")+"</td>"+
         '<td class="num"><select data-pfp="'+idx+'" aria-label="Parcelas" style="max-width:90px">'+optsP+"</select>"+
         (tp?'<div class="t-sub">'+tp+"</div>":"")+"</td>"+
         '<td class="num"><input type="text" inputmode="decimal" style="max-width:140px" data-pf="'+idx+'" value="'+brMF(+f.valor||0)+'">'+
         (pedRasc.formas.length>1?' <button class="btn mut sm" type="button" data-pfrm="'+idx+'">Tirar</button>':"")+"</td></tr>";
     }else
     tf.innerHTML+="<tr><td>"+esc(f.tipo)+"</td>"+
-      '<td class="num">'+(tp||(np>1?np+"×":"à vista"))+"</td>"+
+      '<td class="num">'+(tp||(np>1?np+"×":"à vista"))+
+      (textoVenc1(f,p.data)?'<div class="t-sub">'+esc(textoVenc1(f,p.data))+"</div>":"")+"</td>"+
       '<td class="num">'+BRL(f.valor)+"</td></tr>";
   });
   if(edInline)tf.innerHTML+='<tr><td colspan="3"><button class="btn ghost sm" type="button" id="pd_addForma">+ forma de pagamento</button></td></tr>';
@@ -49708,9 +49778,16 @@ function ligarPedDet(){
     el.onchange=function(){
       pedRasc.sujo=true;
       var ix=+(el.getAttribute("data-pft")||el.getAttribute("data-pfp")),fm=pedRasc.formas[ix];
-      if(el.hasAttribute("data-pft")){fm.tipo=el.value;var psN=parcelasDe(fm.tipo);if(psN.indexOf(+fm.parc||1)<0)fm.parc=psN[psN.length-1];}
+      if(el.hasAttribute("data-pft")){fm.tipo=el.value;delete fm.venc1;var psN=parcelasDe(fm.tipo);if(psN.indexOf(+fm.parc||1)<0)fm.parc=psN[psN.length-1];}
       else fm.parc=+el.value||1;
       recomporFormasPedido(pedRasc,p);renderPedDet();};});
+  Array.prototype.forEach.call($("pd_formas").querySelectorAll("[data-pfv]"),function(el){
+    el.onchange=function(){
+      pedRasc.sujo=true;
+      var fm=pedRasc.formas[+el.getAttribute("data-pfv")];
+      fm.venc1=el.value||"";
+      if(el.value&&el.value<String(p.data||"").slice(0,10))toast("O vencimento da 1ª parcela não pode ser antes do dia da venda.");
+      renderPedDet();};});
   Array.prototype.forEach.call($("pd_formas").querySelectorAll("[data-pfrm]"),function(b){
     b.onclick=function(){pedRasc.sujo=true;pedRasc.formas.splice(+b.getAttribute("data-pfrm"),1);recomporFormasPedido(pedRasc,p);renderPedDet();};});
   var addF=$("pd_addForma");
@@ -49779,6 +49856,10 @@ function ligarPedDet(){
     var r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0,freteLojaDe(p));
     if(!pedRasc.itens.length){toast("A venda precisa de ao menos um item.");return;}
     if(r.dif!==0){toast("A soma das formas não bate com o total.");return;}
+    /* v548: vencimento da 1ª parcela nunca antes do dia da venda */
+    var eV1p=erroVenc1(pedRasc.formas,p.data);
+    if(eV1p){toast(eV1p);return;}
+    fixarVenc1(pedRasc.formas,p.data);
     /* abaixo da tabela sem autorização (ou com o desconto recusado): pede de novo, com o motivo */
     /* venda reaberta (29/10): depois de salva ela volta para a Aprovação Financeira, então
        vale a mesma conferência da venda nova (desconto abaixo da tabela pede o motivo) */
@@ -50578,9 +50659,11 @@ function docAssinatura(p){
 /* parcelas como no pedido: à vista = ENTRADA com a data; parcelado = FATURA, a 1ª leva o arredondamento */
 function parcelasDaForma(f,dataV){
   var n=Math.max(1,parseInt(f.parc,10)||1),v=+f.valor||0;
-  if(n===1)return [["ENTRADA",dataCurta(dataV),v]];
+  /* v548: Promissória, Boleto Loja e Cheque saem com a data de cada parcela */
+  var comData=formaComVenc1(f.tipo);
+  if(n===1)return [[comData?"1":"ENTRADA",dataCurta(comData?vencParcelaForma(f,dataV,1):dataV),v]];
   var cada=Math.floor(v/n*100)/100,prim=Math.round((v-cada*(n-1))*100)/100,out=[];
-  for(var k=1;k<=n;k++)out.push([String(k),"FATURA",k===1?prim:cada]);
+  for(var k=1;k<=n;k++)out.push([String(k),comData?dataCurta(vencParcelaForma(f,dataV,k)):"FATURA",k===1?prim:cada]);
   return out;
 }
 function docTabelaForma(f,ix,dataV){
@@ -53840,7 +53923,8 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
           (!ehPlano(i)&&!ehServico(i)?' <span class="t-sub">· sai do '+esc(nomeLocal(localDoItemVenda(p,i)))+"</span>":"")+
           (i.daInstalacao?' <span class="pill p-acc">incluído na instalação</span>':"");}).join("<br>")||"—")+"</div>"+
       '<div><div class="t-sub" style="margin-bottom:4px">Valores a conferir</div>'+
-        (formas.map(function(f){return esc(f.tipo)+" · "+f.parc+"× · <b>"+BRL(f.valor)+"</b>";}).join("<br>")||"—")+
+        (formas.map(function(f){return esc(f.tipo)+" · "+f.parc+"× · <b>"+BRL(f.valor)+"</b>"+
+          (textoVenc1(f,p.data)?' <span class="t-sub">· '+esc(textoVenc1(f,p.data))+"</span>":"");}).join("<br>")||"—")+   /* v548 */
         /* v517: quem pagou o frete (pedido antigo com frete = cliente) */
         (textoFretePed(p)?'<div class="t-sub" style="margin-top:6px">'+esc(textoFretePed(p))+
           (freteLojaDe(p)>0?" · na aprovação nasce a conta a pagar “Frete do pedido "+esc(p.numero)+"”":"")+"</div>":"")+
