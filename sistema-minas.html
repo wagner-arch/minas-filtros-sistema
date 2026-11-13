@@ -45711,6 +45711,7 @@ function ligarAssistenteOS(){
   $("osa_avancar").onclick=osaAvancar;
   $("osa_abrir").onclick=osaAbrirOS;
   $("osa_cliBusca").oninput=osaBuscarCliente;
+  ligarListinha("osa_cliBusca","osa_cliSug",null,"osa_cliNota",true);   /* v546: sem esconder no blur, como já era */
   $("osa_tipoOS").onchange=function(){OSA.__tipoTocado=true;OSA.tipoOS=this.value;};
   $("osa_fotoBt").onclick=function(){$("osa_fotoIn").click();};
   $("osa_fotoIn").onchange=async function(){
@@ -54259,6 +54260,150 @@ function ouvirPedidos(){
    5. Nada disto entra na entrada do sistema (LEITURAS_BOOT): começa depois que o sistema abre.
    Coleções: atendimentos (atividades e atendimentos), pedidos (com as autorizações de estoque,
    que moram nos itens), requisições, OS, orçamentos, aparelhos, produtos e clientes. */
+/* ====================================================================
+   ESCOLHA NA LISTINHA DE BUSCA E "A ATUALIZAÇÃO NA HORA ESPERA A PESSOA" (v546)
+   ----------------------------------------------------------------------------
+   O problema da loja (todo dia de manhã, quando a loja está cheia): no Novo atendimento a pessoa
+   digitava o nome, o cliente aparecia na listinha, ela clicava e o sistema NÃO puxava telefone,
+   endereço nem CPF — ficava só o nome digitado e o cliente não era vinculado.
+   Duas causas:
+   1) o campo escondia a listinha no "blur" com 180 ms. O blur acontece quando o botão do mouse é
+      APERTADO, e o clique só vale quando ele é SOLTO: segurando mais de 180 ms a lista sumia antes
+      e o clique caía no vazio;
+   2) desde a v541 a atualização na hora redesenha a tela a cada mudança de qualquer pessoa da
+      equipe, e de manhã isso é muito frequente — o redesenho atrapalhava QUALQUER ação.
+   A correção, em um lugar só para todas as listinhas:
+   - no MOUSE a escolha acontece no "pointerdown", com preventDefault: o campo nem perde o foco, a
+     lista não tem como sumir antes, e o clique seguinte é engolido (uma escolha só por ação);
+   - no TOQUE a escolha continua no clique (rolar a lista com o dedo não pode escolher ninguém),
+     mas enquanto o dedo está dentro da caixa o blur não esconde nada;
+   - o desenho da tela espera a pessoa parar de mexer (no máximo 15 s). Os DADOS continuam
+     chegando na hora: só o desenho espera.
+   ==================================================================== */
+var LIST={dedo:null,engolir:0,interno:false,aberta:null};
+var AVISO_LISTINHA="Não consegui puxar todos os dados do cliente. Escolha o cliente de novo na lista.";
+/* alguma listinha de busca aberta? (usado também pelo "pessoa mexendo") */
+function listinhaAberta(){
+  var cx=document.querySelectorAll(".auto,.sug");
+  for(var i=0;i<cx.length;i++)if(cx[i].__listinha&&!cx[i].hidden)return true;
+  return false;
+}
+function ligarListinhasGlobal(){
+  if(ligarListinhasGlobal.__ok)return;ligarListinhasGlobal.__ok=true;
+  /* gesto novo: o engole-clique de uma escolha anterior não vale mais */
+  document.addEventListener("pointerdown",function(ev){
+    LIST.engolir=0;
+    var ab=LIST.aberta;
+    if(ab&&!ab.hidden&&!ab.contains(ev.target)){LIST.aberta=null;if(ab.__fecharListinha)ab.__fecharListinha();}
+  },true);
+  /* o clique que vem depois do pointerdown já escolhido não pode escolher de novo */
+  document.addEventListener("click",function(ev){
+    if(LIST.interno)return;
+    if(LIST.engolir&&Date.now()-LIST.engolir<800){LIST.engolir=0;ev.stopPropagation();ev.preventDefault();}
+  },true);
+  ["pointerup","pointercancel"].forEach(function(t){
+    document.addEventListener(t,function(ev){
+      var box=LIST.dedo;if(!box)return;LIST.dedo=null;
+      var dentro=!!(ev.target&&box.contains(ev.target));
+      setTimeout(function(){
+        if(box.hidden){LIST.aberta=null;return;}
+        /* o dedo saiu dentro da caixa sem escolher (estava rolando a lista): deixa aberta */
+        if(dentro){LIST.aberta=box;return;}
+        if(box.__pendFechar&&box.__fecharListinha)box.__fecharListinha();
+      },260);
+    },true);
+  });
+}
+/* uma função só para todas as listinhas de busca */
+function ligarListinha(inputId,caixaId,aoFechar,avisoId,semBlur){
+  var inp=$(inputId),box=$(caixaId);
+  if(!inp||!box||box.__listinha)return;
+  ligarListinhasGlobal();
+  box.__listinha=true;
+  ["spellcheck","autocorrect","autocapitalize"].forEach(function(a){inp.setAttribute(a,a==="spellcheck"?"false":"off");});
+  inp.setAttribute("autocomplete","off");
+  inp.setAttribute("data-busca","1");   /* o módulo do celular não mexe no teclado dos campos de busca */
+  box.__fecharListinha=function(){
+    box.__pendFechar=false;
+    if(LIST.aberta===box)LIST.aberta=null;
+    box.hidden=true;
+    if(aoFechar)try{aoFechar();}catch(e){console.error("listinha "+caixaId,e);}
+  };
+  function botaoDe(ev){
+    var t=ev.target,b=t&&t.closest?t.closest("button"):null;
+    return (b&&box.contains(b)&&!b.disabled)?b:null;
+  }
+  /* uma escolha só por ação, com aviso na tela se o preenchimento falhar no meio */
+  function escolher(b){
+    if(b.__jaEscolhido)return;b.__jaEscolhido=true;
+    try{
+      LIST.interno=true;
+      if(typeof b.onclick==="function")b.onclick.call(b,{type:"escolha",target:b});
+      else b.click();
+    }catch(e){
+      console.error("listinha "+caixaId+": o preenchimento falhou",e);
+      var av=avisoId?$(avisoId):null;
+      if(av)av.innerHTML='<div class="note crit"><b>'+esc(AVISO_LISTINHA)+"</b></div>";
+      else try{toast(AVISO_LISTINHA);}catch(e2){}
+      try{box.__fecharListinha();}catch(e3){}
+    }finally{LIST.interno=false;if(LIST.aberta===box)LIST.aberta=null;}
+  }
+  box.__escolherTeste=escolher;
+  box.addEventListener("pointerdown",function(ev){
+    var b=botaoDe(ev);if(!b)return;
+    LIST.dedo=box;
+    if(ev.pointerType==="touch"||ev.pointerType==="pen")return;   /* no toque, a escolha é no clique */
+    ev.preventDefault();          /* o campo não perde o foco: a lista não some antes da escolha */
+    escolher(b);
+    LIST.dedo=null;LIST.engolir=Date.now();
+  },true);
+  box.addEventListener("click",function(ev){
+    if(LIST.interno)return;       /* clique que a própria escolha disparou (listinha por delegação) */
+    var b=botaoDe(ev);if(!b)return;
+    ev.stopPropagation();ev.preventDefault();
+    escolher(b);
+    LIST.dedo=null;
+  },true);
+  if(!semBlur)inp.addEventListener("blur",function(){
+    if(LIST.dedo===box){box.__pendFechar=true;return;}   /* o dedo está na lista: não esconder */
+    setTimeout(function(){if(LIST.dedo!==box&&LIST.aberta!==box)box.__fecharListinha();},180);
+  });
+}
+
+/* ---------- A PESSOA ESTÁ MEXENDO NA TELA? (v546) ----------
+   Vale para o sistema todo: o desenho da atualização na hora só roda quando a pessoa para. */
+var MEXE={ponteiro:false,ult:0,rolou:0,tecla:0,dentro:false};
+function marcarUso(t){if(MEXE.dentro)return;MEXE.ult=Date.now();if(t)MEXE[t]=MEXE.ult;}
+function ligarSinaisDeUso(){
+  if(ligarSinaisDeUso.__ok)return;ligarSinaisDeUso.__ok=true;
+  document.addEventListener("pointerdown",function(){if(!MEXE.dentro){MEXE.ponteiro=true;marcarUso();}},true);
+  ["pointerup","pointercancel"].forEach(function(t){
+    document.addEventListener(t,function(){MEXE.ponteiro=false;marcarUso();},true);});
+  document.addEventListener("keydown",function(){marcarUso("tecla");},true);
+  document.addEventListener("input",function(){marcarUso("tecla");},true);
+  document.addEventListener("wheel",function(){marcarUso("rolou");},true);
+  window.addEventListener("scroll",function(){marcarUso("rolou");},true);
+  window.addEventListener("blur",function(){MEXE.ponteiro=false;});
+}
+function janelaDoSistemaAberta(){
+  var ms=document.querySelectorAll(".modal");
+  for(var i=0;i<ms.length;i++)if(!ms[i].hidden)return true;
+  return false;
+}
+function pessoaMexendo(){
+  try{
+    if(MEXE.ponteiro&&Date.now()-MEXE.ult<10000)return true;        /* botão ou dedo apertado */
+    var ag=Date.now();
+    if(MEXE.tecla&&ag-MEXE.tecla<2000)return true;                  /* digitou há menos de 2 s */
+    if(MEXE.rolou&&ag-MEXE.rolou<1000)return true;                  /* rolou há menos de 1 s */
+    if(MEXE.ult&&ag-MEXE.ult<2000)return true;                      /* qualquer ação há menos de 2 s */
+    var ae=document.activeElement;
+    if(ae&&(ae.tagName==="SELECT"||ae.getAttribute&&ae.getAttribute("aria-expanded")==="true"))return true;
+    if(listinhaAberta())return true;
+    if(janelaDoSistemaAberta())return true;
+  }catch(e){}
+  return false;
+}
 var VIVA_COLS=["atendimentos","pedidos","requisicoes","ordens","orcamentos","equipamentos","produtos","clientes"];
 var VIVA_JUNTA=400,VIVA_RESERVA=30000,VIVA_T0=0;
 var VIVA={ligado:false,canal:"fora",ctl:null,carimbo:{},fila:{},timer:null,ocupado:false,denovo:false,
@@ -54330,7 +54475,7 @@ function recarregarPendViva(k){
     else if(onde==="pedido")abrirPedidoParaEditar(n);
   }catch(e){console.warn("recarregar o registro",e);}
   try{if(onde)formSujo[onde]=false;}catch(e){}
-  faixaViva();redesenharViva([p.c]);
+  faixaViva();redesenharViva([p.c],true);   /* ela tocou em "Recarregar": sem espera */
 }
 /* troca (ou acrescenta) o registro na lista da memória, no mesmo lugar */
 function aplicarViva(c,o){
@@ -54376,8 +54521,34 @@ function mesclarViva(c,docs,quem){
   return n;
 }
 /* ---- redesenha só a tela aberta (o render() já faz isso), o sino e os contadores ---- */
-function redesenharViva(cols){
-  var y=window.scrollY||0,ae=document.activeElement;
+/* v546: o DESENHO espera a pessoa parar de mexer. Os dados continuam chegando na hora (sinalViva,
+   processarViva, buscarViva e mesclarViva não mudaram) — só o redesenho é adiado, nunca descartado:
+   vários adiados viram um só, roda assim que ela fica 2 s sem mexer e, se ela não parar, roda no
+   máximo a cada 15 s, sem tirar o foco, sem apagar o que ela digitou e sem mudar a rolagem. */
+var VIVA_ESPERA=2000,VIVA_TETO=15000;
+var REDES={cols:[],timer:null,desde:0};
+function redesenharViva(cols,agora){
+  (cols||[]).forEach(function(c){if(REDES.cols.indexOf(c)<0)REDES.cols.push(c);});
+  if(!REDES.desde)REDES.desde=Date.now();
+  if(agora||!pessoaMexendo()||Date.now()-REDES.desde>=VIVA_TETO){redesenharVivaAgora();return;}
+  try{renderSino();}catch(e){}            /* o sino e os contadores não esperam */
+  if(REDES.timer)return;
+  anotaViva("desenho adiado: a pessoa está mexendo na tela");
+  REDES.timer=setInterval(function(){
+    if(!REDES.cols.length){clearInterval(REDES.timer);REDES.timer=null;REDES.desde=0;return;}
+    if(!pessoaMexendo()||Date.now()-REDES.desde>=VIVA_TETO)redesenharVivaAgora();
+  },400);
+}
+function redesenharVivaAgora(){
+  var cols=REDES.cols;REDES.cols=[];REDES.desde=0;
+  if(REDES.timer){clearInterval(REDES.timer);REDES.timer=null;}
+  if(!cols.length)return;
+  MEXE.dentro=true;
+  var y=window.scrollY||0,ae=document.activeElement,guarda=null;
+  try{
+    if(ae&&ae.id&&(ae.tagName==="INPUT"||ae.tagName==="TEXTAREA"))
+      guarda={id:ae.id,v:ae.value,a:ae.selectionStart,b:ae.selectionEnd};
+  }catch(e){}
   try{esquecerIndices();}catch(e){}
   if(cols.indexOf("clientes")>=0||cols.indexOf("equipamentos")>=0){try{esquecerManutCli();}catch(e){}}
   if(cols.indexOf("pedidos")>=0){
@@ -54389,6 +54560,18 @@ function redesenharViva(cols){
   try{renderSino();}catch(e){}
   try{if(Math.abs((window.scrollY||0)-y)>1)window.scrollTo(0,y);}catch(e){}
   try{if(ae&&ae!==document.activeElement&&document.body.contains(ae)&&ae.focus)ae.focus({preventScroll:true});}catch(e){}
+  /* reforço da v546: o campo em que ela estava digitando não perde o texto nem o lugar do cursor */
+  try{
+    if(guarda&&(!ae||!document.body.contains(ae))){
+      var novo=document.getElementById(guarda.id);
+      if(novo&&!novo.disabled&&novo.offsetParent!==null){
+        if(novo.value!==guarda.v)novo.value=guarda.v;
+        novo.focus({preventScroll:true});
+        try{novo.setSelectionRange(guarda.a,guarda.b);}catch(e2){}
+      }
+    }
+  }catch(e){}
+  MEXE.dentro=false;
 }
 /* ---- os avisos que chegam ---- */
 function sinalViva(m){
@@ -54537,7 +54720,13 @@ window.__vivaMF={iniciar:iniciarViva,sinal:sinalViva,conferir:conferirViva,tick:
   info:function(){return {ligado:VIVA.ligado,canal:VIVA.canal,leituras:VIVA.leituras,buscados:VIVA.buscados,sinais:VIVA.sinais,lotes:VIVA.lotes||0,
     pend:Object.keys(VIVA.pend),log:VIVA.log.slice(),carimbo:Object.assign({},VIVA.carimbo)};},
   mostrar:mostrarCanalViva,zerar:function(){VIVA.leituras=0;VIVA.buscados=0;VIVA.sinais=0;VIVA.log=[];},
-  soltar:soltarPendViva,faixa:faixaViva};
+  soltar:soltarPendViva,faixa:faixaViva,
+  /* v546: o desenho espera a pessoa */
+  redesenhar:redesenharViva,pendente:function(){return REDES.cols.slice();},
+  mexendo:function(){return pessoaMexendo();},teto:function(){return VIVA_TETO;}};
+window.__listinhaMF={ligar:ligarListinha,aberta:listinhaAberta,aviso:function(){return AVISO_LISTINHA;},
+  uso:function(){return {ponteiro:MEXE.ponteiro,ult:MEXE.ult,tecla:MEXE.tecla,rolou:MEXE.rolou};},
+  marcar:function(o){Object.keys(o||{}).forEach(function(k){MEXE[k]=o[k];});}};
 
 /* ===== AVISO NO SINO: ATIVIDADE CRIADA OU REAGENDADA PARA OUTRA PESSOA (v541) =================
    O responsável recebe "Nova atividade: [cliente], [data] [hora], criada por [quem]" (ou
@@ -62333,6 +62522,7 @@ function montarSelects(){
   su.value=usuarioAtual;
 }
 function ligar(){
+  ligarSinaisDeUso();   /* v546: o desenho da atualização na hora espera a pessoa parar de mexer */
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){b.onclick=function(){ir(b.dataset.s,true);};});
   /* o seletor do cabeçalho virou só leitura (23/10): trocar de empresa é sair e entrar.
      O onchange foi retirado de propósito — nem forçando pela tela a empresa muda. */
@@ -63236,11 +63426,11 @@ function ligar(){
   /* regra de 12/09: lead só nasce no Atendimento; a aba Leads é consulta, filtro e edição */
   $("ldNovo").onclick=function(){ir("atend");abrirAtend(null);};
   $("c_indicBusca").oninput=function(){$("c_indicado").value="";buscarIndicador();};
-  $("c_indicBusca").onblur=function(){setTimeout(function(){$("c_indicSug").hidden=true;},180);};
+  ligarListinha("c_indicBusca","c_indicSug",null,"c_indicAviso");
   /* mesma busca no Atendimento, quando a origem é Indicação (18/09) */
   $("at_origem").addEventListener("change",ajustarIndicadorAt);
   $("at_indicBusca").oninput=function(){$("at_indicado").value="";buscarIndicadorAt();};
-  $("at_indicBusca").onblur=function(){setTimeout(function(){$("at_indicSug").hidden=true;},180);};
+  ligarListinha("at_indicBusca","at_indicSug",null,"at_alerta");
   $("in_fechar").onclick=function(){$("indicModal").hidden=true;inCli=null;};
   $("ac_fechar").onclick=function(){$("acoesModal").hidden=true;acReg=null;};
 
@@ -63300,7 +63490,7 @@ function ligar(){
      a atividade futura (instalação) → aprovação financeira, que dá a baixa (regra do Wagner) */
   $("mpCancelar").onclick=function(){$("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;marcarEdicao("mpForm",null);};
   $("mp_nome").oninput=function(){eqCli=null;$("mp_achou").innerHTML="";buscarClienteEq();};
-  $("mp_nome").onblur=function(){setTimeout(function(){$("mp_sug").hidden=true;},180);};
+  ligarListinha("mp_nome","mp_sug",null,"mp_achou");
   $("mp_prod").onchange=function(){$("mp_dias").value="";notaEquip();};
   ["mp_dias","mp_inst","mp_ultima"].forEach(function(id){$(id).onchange=notaEquip;});
   $("mp_serie").oninput=ajustarLocalEquip;
@@ -63318,7 +63508,7 @@ function ligar(){
     $("mpForm").hidden=true;$("mpLista").hidden=false;editandoEq=null;marcarEdicao("mpForm",null);
     renderManut();toast("Equipamento desativado.");};
   $("mn_serie").oninput=buscarSerie;
-  $("mn_serie").onblur=function(){setTimeout(function(){$("mn_sug").hidden=true;},180);};
+  ligarListinha("mn_serie","mn_sug",null,"mn_alerta");
   $("mn_peca").onchange=function(){};
   $("mn_add").onclick=function(){
     var p=prodPorId($("mn_peca").value);if(!p){toast("Escolha a peça.");return;}
@@ -63404,7 +63594,7 @@ function ligar(){
   $("osImpZap").onclick=function(){if(editandoOS)enviarOSWhatsApp(editandoOS,this);};
   $("os_nome").oninput=function(){osCli=null;$("os_achou").innerHTML="";$("os_end").readOnly=false;$("os_cidade").readOnly=false;
     try{marcarLocalOS();}catch(e){}buscarClienteOS();};
-  $("os_nome").onblur=function(){setTimeout(function(){$("os_sug").hidden=true;},180);};
+  ligarListinha("os_nome","os_sug",null,"os_achou");
   $("os_prod").onchange=function(){sincronizarSerieOS();notaGarantiaOS();};
   $("os_compra").onchange=notaGarantiaOS;
   $("u_estcivil").onchange=ajustarConjuge;
@@ -63904,7 +64094,7 @@ function ligar(){
     /* mexeu no campo: o cliente escolhido sai, para não ficar um nome na tela e outro no pedido */
     if($("v_cliente").value)escolherClienteVenda(null);
     buscarClienteVenda();};
-  $("v_cliBusca").onblur=function(){setTimeout(function(){$("v_cliSug").hidden=true;opcoesClienteVenda();},200);};
+  ligarListinha("v_cliBusca","v_cliSug",function(){opcoesClienteVenda();},"v_cliNota");
   $("v_cliBusca").onfocus=function(){if(this.value.length>=2)buscarClienteVenda();};
   $("v_cliTrocar").onclick=function(){
     escolherClienteVenda(null);
@@ -64119,7 +64309,7 @@ function ligar(){
   $("orcNovo").onclick=function(){abrirOrc(null);};
   $("orcCancelar").onclick=function(){$("orcForm").hidden=true;$("orcLista").hidden=false;editandoOrc=null;marcarEdicao("orcForm",null);};
   $("or_nome").oninput=function(){orcCli=null;$("or_achou").innerHTML="";buscarClienteOrc();};
-  $("or_nome").onblur=function(){setTimeout(function(){$("or_sug").hidden=true;},180);};
+  ligarListinha("or_nome","or_sug",null,"or_achou");
   $("or_prod").onchange=function(){$("or_valor").__manual=false;sincOrcValor();};
   $("or_valor").oninput=function(){$("or_valor").__manual=true;};
   $("or_forma").onchange=orcParcelas;
@@ -64199,7 +64389,7 @@ function ligar(){
     enviarOrcWhatsApp(o,this);};
   $("na_criar").onclick=criarAtividadeRetorno;
   $("na_nome").oninput=function(){if(naCtx)naCtx.clienteId="";buscarClienteNa();naConferirCadastro();};
-  $("na_nome").onblur=function(){setTimeout(function(){$("na_sug").hidden=true;},180);};
+  ligarListinha("na_nome","na_sug",null,"na_ctx");
   $("na_pular").onclick=function(){
     $("ativModal").hidden=true;naCtx=null;
     toast("Orçamento salvo sem retorno agendado.");};
@@ -64233,7 +64423,7 @@ function ligar(){
 
   $("at_nome").oninput=function(){clienteVinc=null;$("at_achou").innerHTML="";ajustarOrigemAt();marcarTipoPessoaAt(tipoPessoaAt,false);buscarCliente();};
   $("at_leadCompleto").onclick=abrirLeadCompleto;
-  $("at_nome").onblur=function(){setTimeout(function(){$("at_sug").hidden=true;},180);};
+  ligarListinha("at_nome","at_sug",null,"at_achou");
   Array.prototype.forEach.call($("at_falou").querySelectorAll("button"),function(b){
     b.onclick=function(){
       falouSel=b.getAttribute("data-f");
@@ -65862,6 +66052,11 @@ function erro(msg){
     Array.prototype.forEach.call(document.querySelectorAll("input"),function(i){
       var id=(i.id||"").toLowerCase();
       if(!id)return;
+      /* v546: campo de busca das listinhas — sem corretor, sem maiúscula automática */
+      if(i.getAttribute("data-busca")==="1"){
+        i.setAttribute("autocapitalize","off");i.setAttribute("autocorrect","off");i.setAttribute("spellcheck","false");
+        return;
+      }
       var texto=/busca|nome|pesquis|search|obs|apelido|marca|modelo|emerg|resp|veiculo|cnh/.test(id);
 
       if(i.type==="number"){
