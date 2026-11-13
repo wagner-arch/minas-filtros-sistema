@@ -9260,7 +9260,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=543"></script>
+<script src="supabase/adapter.js?v=547"></script>
 <script>
 (function(){
 "use strict";
@@ -21388,6 +21388,18 @@ window.__achaCliMF=function(q){return achaCliente(q);};
 window.__euEstoqueMF=function(){return euNoEstoque();};
 window.__funcoesMF=function(){return funcoes;};
 window.__conferirVersaoMF=function(f){return conferirVersaoSistema(f);};window.__atualizarVersaoMF=function(){return atualizarSistemaAgora();};
+/* v547: recarregar o sistema todo, o arrastar para baixo e a sessão vencida */
+window.__recarregarTudoMF=function(){return recarregarSistemaTodo();};
+window.__tocarVersaoMF=function(){return tocarBotaoVersao();};
+window.__podeRecarregarMF=function(){return podeRecarregarTudo();};
+window.__filaEnvioMF=function(){return filaDeEnvioPendente();};
+window.__avisoRecarregarMF=function(){return MSG_RECARREGAR;};
+window.__sessaoMF={fora:function(){return SESSAO_FORA;},vencer:function(m){return tratarSessaoVencida(m||"teste");},
+  ligar:function(){return ligarVigiaSessao();},voltar:function(){return voltarTelaGuardada();},
+  guardar:function(t){try{sessionStorage.setItem(CHAVE_VOLTAR_TELA,t||"");}catch(e){}},chaveTela:function(){return CHAVE_VOLTAR_TELA;}};
+window.__puxarMF={ligar:function(){return ligarPuxarParaAtualizar();},pode:function(el){return puxarPodeComecar(el||document.body);},
+  fingirCelular:function(v){PUX_TESTE_CEL=v;},
+  estado:function(){return {ativo:PUX.ativo,d:PUX.d,solta:PUX.solta,aviso:(function(){var e=document.getElementById("puxarMF");return e&&!e.hidden?e.textContent:"";})()};}};
 window.__reabrirGuardadoMF=function(){return reabrirPedidoGuardado();};window.__andamentoMF=function(){return trabalhoEmAndamento();};
 window.__ligarVigiaMF=function(){return ligarVigiaVersao();};
 window.__enderecoAtivMF=function(a){return enderecoDaAtividade(a);};window.__rotaMapsMF=function(a){return rotaGoogleMaps(enderecoDaAtividade(a));};
@@ -62228,38 +62240,10 @@ async function atualizarAgora(botao){
   else toast("Tudo em dia — nada mudou desde a última atualização.");
   return r;
 }
-/* PUXAR A LISTA PARA BAIXO PARA ATUALIZAR, como no celular (pedido dele).
-   Só vale quando a página já está no topo e o gesto é claramente para baixo — senão
-   brigaria com o arrasto geral que rola a tela (v304). */
-function ligarPuxarParaAtualizar(){
-  if(window.__puxarLigado)return;window.__puxarLigado=true;
-  var y0=null,ativo=false,aviso=null;
-  function mostrar(txt){
-    if(!aviso){
-      aviso=document.createElement("div");
-      aviso.className="puxe-aviso";
-      document.body.appendChild(aviso);
-    }
-    aviso.textContent=txt;aviso.hidden=false;
-  }
-  function esconder(){if(aviso)aviso.hidden=true;}
-  document.addEventListener("touchstart",function(e){
-    if(!e.touches||e.touches.length!==1)return;
-    if(window.scrollY>4)return;                 /* só no topo da página */
-    if(e.target.closest&&e.target.closest("input,textarea,select,.leaflet-container,canvas"))return;
-    y0=e.touches[0].clientY;ativo=false;
-  },{passive:true});
-  document.addEventListener("touchmove",function(e){
-    if(y0==null||!e.touches||e.touches.length!==1)return;
-    var d=e.touches[0].clientY-y0;
-    if(d>70&&window.scrollY<=4){ativo=true;mostrar("Solte para atualizar");}
-    else if(ativo&&d<=70){ativo=false;esconder();}
-  },{passive:true});
-  document.addEventListener("touchend",function(){
-    if(ativo){esconder();atualizarAgora(null);}
-    y0=null;ativo=false;esconder();
-  },{passive:true});
-}
+/* PUXAR A TELA PARA BAIXO PARA ATUALIZAR (v304; refeito na v547).
+   Agora o gesto recarrega o SISTEMA INTEIRO, igual ao botão da versão, e não só relê os dados:
+   o código está junto do botão da versão (ligarPuxarParaAtualizar, mais abaixo neste arquivo),
+   com as proteções do formulário não salvo, da fila de envio e das caixas com rolagem própria. */
 /* voltar para o aplicativo depois de minimizado também confere (regra dele) */
 function ligarSincAoVoltar(){
   if(window.__sincVoltarLigado)return;window.__sincVoltarLigado=true;
@@ -65521,8 +65505,12 @@ async function conferirVersaoSistema(forcar){
   renderFaixaVersao();
 }
 /* o que está em andamento e não pode se perder ao recarregar */
+/* v547: entraram a nota fiscal e a janela de estoque (requisitar, devolver, transferir, lançar) —
+   o pedido dele diz "pedido, atendimento, cliente, orçamento, OS, nota, requisição ou qualquer
+   outro". O pedido pela metade continua tratado à parte, virando rascunho. */
 var FORMS_ANDAMENTO=[["orcForm","orçamento"],["atendForm","atendimento"],["atendFecha","atendimento"],
-  ["cliForm","cadastro de cliente"],["prodForm","cadastro de produto"],["usForm","cadastro de colaborador"],["osForm","OS"]];
+  ["cliForm","cadastro de cliente"],["prodForm","cadastro de produto"],["usForm","cadastro de colaborador"],["osForm","OS"],
+  ["nfForm","lançamento de nota fiscal"],["estModal","movimento de estoque"]];
 var formSujo={};
 function ligarFormsAndamento(){
   if(window.__formsLigados)return;window.__formsLigados=true;
@@ -65566,18 +65554,19 @@ async function guardarPedidoParaAtualizar(){
 }
 async function atualizarSistemaAgora(){
   var nova=versaoNova||(window.__VERSAO_TESTE_MF||VERSAO_ABERTA);
+  /* v547: a fila de envio e o formulário não salvo passam a ser conferidos num ponto só */
+  if(!podeRecarregarTudo())return false;
   var w=trabalhoEmAndamento();
-  if(w&&w.tipo!=="pedido"){
-    versaoMsg="Você tem "+w.rotulo+" em andamento. Salve antes de atualizar.";
-    renderFaixaVersao();toast(versaoMsg);return false;
-  }
   if(w&&w.tipo==="pedido"){
     var g=await guardarPedidoParaAtualizar();
     if(g.erro){versaoMsg=g.erro;renderFaixaVersao();toast(g.erro);return false;}
     try{sessionStorage.setItem("mf_reabrir_rascunho",g.r.id);}catch(e){}
   }
   if(window.__RECARREGAR_TESTE_MF){window.__RECARREGAR_TESTE_MF(nova);return true;}
-  location.replace("sistema-minas.html?v="+nova+location.hash);
+  /* v547: o "r" garante que recarregue de verdade mesmo já estando na última versão (endereço
+     igual com o mesmo # não recarregaria). O service worker guarda pelo caminho, sem a parte do
+     "?", então isto não atrapalha a abertura sem internet. */
+  location.replace("sistema-minas.html?v="+nova+"&r="+Date.now()+location.hash);
   return true;
 }
 /* depois de recarregar: o pedido guardado volta, na mesma etapa */
@@ -65590,6 +65579,206 @@ function reabrirPedidoGuardado(){
   retomarRascunho(r);
   toast("Sistema atualizado. O pedido de "+(r.cliente||"cliente")+" voltou de onde você parou.");
   return true;
+}
+/* ====================================================================
+   SESSÃO VENCIDA: A MENSAGEM CERTA, UMA VEZ SÓ (v547)
+   --------------------------------------------------------------------
+   Relato dele: no celular aparecia "Não deu para conferir no banco. Confira a internet e tente
+   de novo" e a internet estava boa. Medido no banco (Supabase, autenticação): o sistema aberto e
+   o aplicativo da localização renovavam a MESMA sessão quase ao mesmo tempo; o segundo pedido ia
+   com um refresh token já gasto ("refresh_token_already_used / Possible abuse attempt"), o banco
+   derrubava a sessão inteira e TODAS as leituras passavam a voltar 401 — dezenas por minuto.
+   Agora, do lado do sistema: o adaptador avisa aqui UMA VEZ, a atualização na hora e as
+   conferências PARAM (nada de repetir leitura que vai voltar 401), e a tela diz a verdade —
+   "Seu acesso expirou. Entre de novo para continuar." Entrando de novo, o sistema volta para a
+   tela em que a pessoa estava. A causa foi tratada no adaptador: o refresh token não vai mais
+   para o aplicativo, e numa aba só há uma renovação de cada vez. */
+var SESSAO_FORA=false,CHAVE_VOLTAR_TELA="mf_voltar_tela";
+function ligarVigiaSessao(){
+  if(window.__vigiaSessao||!db||!db.auth||!db.auth.aoVencer)return;
+  window.__vigiaSessao=true;
+  db.auth.aoVencer(function(motivo){tratarSessaoVencida(motivo);});
+  /* o aplicativo da localização NÃO renova nada: a cada renovação da página ele recebe o
+     token novo. Sem isto ele ficaria com o token velho até alguém entrar de novo. */
+  try{
+    if(db.auth.aoMudar)db.auth.aoMudar(function(evento){
+      if(evento==="TOKEN_REFRESHED"||evento==="SIGNED_IN")try{entregarSessaoAoApp();}catch(e){}
+    });
+  }catch(e){}
+}
+function pararTudoSemSessao(){
+  try{if(VIVA.reservaTimer){clearInterval(VIVA.reservaTimer);VIVA.reservaTimer=null;}}catch(e){}
+  try{if(VIVA.ctl&&VIVA.ctl.cancelar)VIVA.ctl.cancelar();}catch(e){}
+  try{VIVA.ligado=false;VIVA.ctl=null;VIVA.fila={};}catch(e){}
+  try{if(VIVA.timer){clearTimeout(VIVA.timer);VIVA.timer=null;}}catch(e){}
+  try{if(window.__relogioVersao){clearInterval(window.__relogioVersao);window.__relogioVersao=null;}}catch(e){}
+  /* o aplicativo do celular para de tentar gravar com uma credencial que o banco não aceita mais */
+  try{avisarAppQueSaiu();}catch(e){}
+}
+function tratarSessaoVencida(motivo){
+  if(SESSAO_FORA)return;
+  SESSAO_FORA=true;
+  try{console.warn("[sessão] acesso expirado — "+(motivo||""));}catch(e){}
+  try{sessionStorage.setItem(CHAVE_VOLTAR_TELA,telaAtual||"");}catch(e){}
+  try{pararTudoSemSessao();}catch(e){}
+  mostrarAvisoSessao();
+}
+function mostrarAvisoSessao(){
+  var el=document.getElementById("sessaoFora");
+  if(!el){
+    var st=document.createElement("style");
+    st.textContent="#sessaoFora{position:fixed;inset:0;z-index:2147483100;background:rgba(15,23,42,.72);"+
+      "display:flex;align-items:center;justify-content:center;padding:20px}"+
+      "#sessaoFora[hidden]{display:none}"+
+      "#sessaoFora .cx{background:#fff;color:#0F172A;border-radius:16px;max-width:420px;width:100%;padding:22px;"+
+      "box-shadow:0 18px 50px rgba(0,0,0,.35);text-align:center;font:inherit}"+
+      "#sessaoFora h3{margin:0 0 8px;font-size:19px}"+
+      "#sessaoFora p{margin:0 0 16px;font-size:14.5px;line-height:1.45;color:#475569}"+
+      "#sessaoFora button{width:100%;padding:12px 16px;border:0;border-radius:10px;background:#0F766E;color:#fff;"+
+      "font:inherit;font-weight:600;font-size:15px;cursor:pointer}";
+    document.head.appendChild(st);
+    el=document.createElement("div");el.id="sessaoFora";
+    el.innerHTML='<div class="cx"><h3>Seu acesso expirou.</h3>'+
+      "<p>Entre de novo para continuar. Nada do que já foi gravado se perdeu.</p>"+
+      '<button type="button" id="sessaoFora_ok">Entrar de novo</button></div>';
+    document.body.appendChild(el);
+    document.getElementById("sessaoFora_ok").onclick=function(){
+      this.disabled=true;this.textContent="Abrindo o login…";
+      if(window.__RECARREGAR_TESTE_MF){window.__RECARREGAR_TESTE_MF("sessao");return;}
+      location.replace("sistema-minas.html?v="+(versaoAbertaNum()||"")+"&r="+Date.now()+location.hash);
+    };
+  }
+  el.hidden=false;
+}
+/* entrou de novo: volta para a tela em que a pessoa estava */
+function voltarTelaGuardada(){
+  var t="";try{t=sessionStorage.getItem(CHAVE_VOLTAR_TELA)||"";}catch(e){}
+  if(!t)return false;
+  try{sessionStorage.removeItem(CHAVE_VOLTAR_TELA);}catch(e){}
+  if(t==="dash")return false;
+  try{
+    if(!veTela(t))return false;
+    ir(t,true);
+    toast("Você entrou de novo. Voltei para a tela em que você estava.");
+    return true;
+  }catch(e){}
+  return false;
+}
+
+/* ====================================================================
+   ATUALIZAR O SISTEMA TODO (v547)
+   --------------------------------------------------------------------
+   Pedido dele: o botão "Versão 5xx" do alto recarrega o sistema INTEIRO, como o F5 — busca
+   todos os dados de novo e já traz a versão mais nova publicada, se houver; e no celular,
+   arrastar a tela para baixo estando no TOPO faz a mesma coisa.
+   Antes de recarregar, duas proteções: (1) dado esperando internet para ser enviado não se
+   recarrega de jeito nenhum; (2) formulário aberto com coisa não salva pergunta primeiro
+   (pelo controle que já existe, `trabalhoEmAndamento`), e o pedido pela metade continua sendo
+   guardado como rascunho e voltando de onde parou. */
+var CHAVE_FILA_ENVIO="mf_fila_envio";
+function filaDeEnvioPendente(){
+  /* a fila de envio do "sem internet" é a etapa 3 do plano de 06/11: enquanto ela não existe,
+     isto devolve 0 — e no dia em que existir, o aviso já está no lugar */
+  try{
+    if(typeof FILA_ENVIO!=="undefined"&&FILA_ENVIO&&FILA_ENVIO.length)return FILA_ENVIO.length;
+    var g=JSON.parse(localStorage.getItem(CHAVE_FILA_ENVIO)||"[]");
+    return (g&&g.length)||0;
+  }catch(e){return 0;}
+}
+/* true = pode recarregar. Mostra o aviso ou a pergunta quando não pode. */
+var MSG_RECARREGAR="";
+function podeRecarregarTudo(){
+  MSG_RECARREGAR="";
+  var n=filaDeEnvioPendente();
+  if(n){
+    MSG_RECARREGAR="Ainda há dados esperando internet para serem enviados. Conecte-se e aguarde o envio antes de atualizar.";
+    toast(MSG_RECARREGAR);
+    return false;
+  }
+  var w=null;try{w=trabalhoEmAndamento();}catch(e){}
+  if(!w)return true;
+  /* o pedido pela metade não se perde: vira rascunho e volta de onde parou */
+  if(w.tipo==="pedido")return true;
+  MSG_RECARREGAR="Você tem dados não salvos em "+w.rotulo+". Atualizar mesmo assim? O que não foi salvo será perdido.";
+  return confirm(MSG_RECARREGAR);
+}
+/* ---------- ARRASTAR PARA BAIXO PARA ATUALIZAR (celular, navegador e aplicativo) ---------- */
+var PUX={ativo:false,y0:0,d:0,solta:false},PUX_TESTE_CEL=null;
+var PUX_SOLTAR=90,PUX_TETO=140;
+function puxarPodeComecar(alvo){
+  if(PUX.ativo||SESSAO_FORA)return false;
+  var cel=(PUX_TESTE_CEL===null)
+    ?(ehCelular()||(("ontouchstart" in window)&&(navigator.maxTouchPoints||0)>0))
+    :!!PUX_TESTE_CEL;
+  if(!cel)return false;
+  if((window.scrollY||document.documentElement.scrollTop||0)>2)return false;
+  var lg=document.getElementById("login");
+  if(lg&&lg.offsetParent!==null)return false;      /* na tela de entrada, não */
+  if(document.getElementById("carregandoApp"))return false;
+  try{if(janelaDoSistemaAberta()||listinhaAberta())return false;}catch(e){}
+  try{if(SALV.ativo)return false;}catch(e){}
+  /* lista, janela ou caixa com rolagem própria: ali o dedo está rolando conteúdo, não atualizando */
+  var el=alvo;
+  while(el&&el!==document.body&&el.nodeType===1){
+    if(el.tagName==="SELECT"||el.tagName==="TEXTAREA")return false;
+    try{
+      var st=getComputedStyle(el),ov=st.overflowY;
+      if((ov==="auto"||ov==="scroll")&&el.scrollHeight>el.clientHeight+2)return false;
+    }catch(e){}
+    el=el.parentElement;
+  }
+  return true;
+}
+function puxarEl(){
+  var e=document.getElementById("puxarMF");
+  if(e)return e;
+  var st=document.createElement("style");
+  st.textContent="#puxarMF{position:fixed;left:0;right:0;top:0;z-index:2147483000;display:flex;align-items:center;"+
+    "justify-content:center;pointer-events:none;transition:none}"+
+    "#puxarMF[hidden]{display:none}"+
+    "#puxarMF span{background:#0F766E;color:#fff;border-radius:999px;padding:7px 16px;font-size:13.5px;"+
+    "font-weight:600;box-shadow:0 6px 18px rgba(0,0,0,.25)}";
+  document.head.appendChild(st);
+  e=document.createElement("div");e.id="puxarMF";e.hidden=true;
+  e.innerHTML="<span></span>";
+  document.body.appendChild(e);
+  return e;
+}
+function puxarMostrar(texto,altura){
+  var e=puxarEl();
+  e.style.transform="translateY("+Math.round(altura)+"px)";
+  e.firstChild.textContent=texto;
+  e.hidden=false;
+}
+function puxarEsconder(){var e=document.getElementById("puxarMF");if(e)e.hidden=true;}
+function ligarPuxarParaAtualizar(){
+  if(window.__puxarLigado)return;window.__puxarLigado=true;
+  document.addEventListener("touchstart",function(ev){
+    if(!ev.touches||ev.touches.length!==1)return;
+    if(!puxarPodeComecar(ev.target))return;
+    PUX.ativo=true;PUX.y0=ev.touches[0].clientY;PUX.d=0;PUX.solta=false;
+  },{passive:true});
+  document.addEventListener("touchmove",function(ev){
+    if(!PUX.ativo||!ev.touches||ev.touches.length!==1)return;
+    var d=ev.touches[0].clientY-PUX.y0;
+    if(d<=0){PUX.d=0;puxarEsconder();return;}
+    if((window.scrollY||document.documentElement.scrollTop||0)>2){PUX.ativo=false;puxarEsconder();return;}
+    PUX.d=Math.min(d,PUX_TETO);
+    PUX.solta=PUX.d>=PUX_SOLTAR;
+    puxarMostrar(PUX.solta?"Solte para atualizar":"Arraste para atualizar",PUX.d*0.6);
+  },{passive:true});
+  ["touchend","touchcancel"].forEach(function(t){
+    document.addEventListener(t,function(){
+      if(!PUX.ativo)return;
+      var solta=PUX.solta;PUX.ativo=false;PUX.solta=false;PUX.d=0;
+      if(!solta){puxarEsconder();return;}
+      puxarMostrar("Atualizando…",60);
+      setTimeout(function(){
+        if(!podeRecarregarTudo()){puxarEsconder();return;}
+        recarregarSistemaTodo();
+      },60);
+    },{passive:true});
+  });
 }
 /* ===== BOTÃO DA VERSÃO NO ALTO (07/11, v522, pedido dele: "um botão informando a última versão
    e se clicar nele atualiza a última que tiver") =====
@@ -65616,29 +65805,40 @@ function renderBotaoVersao(){
   b.setAttribute("aria-label",b.title);
 }
 var verBtOcupado=false;
+/* v547: O BOTÃO DA VERSÃO RECARREGA O SISTEMA INTEIRO, como o F5 — antes ele só recarregava
+   quando havia versão nova e, estando na última, apenas avisava. Agora confere o versao.txt na
+   hora (para já abrir a mais nova publicada, se houver) e recarrega de qualquer jeito, buscando
+   todos os dados do banco de novo. É a mesma coisa que arrastar a tela para baixo no celular. */
+async function recarregarSistemaTodo(){
+  if(!podeRecarregarTudo())return false;
+  var atual=versaoAbertaNum(),num=0,obr=false;
+  try{
+    var r=await fetch((window.__VERSAO_URL_MF||"versao.txt")+"?nc="+Date.now(),{cache:"no-store"});
+    if(!r.ok)throw new Error("http "+r.status);
+    var t=String(await r.text()||""),n=t.match(/[0-9]+/);
+    if(!n)throw new Error("sem número");
+    num=+n[0];obr=/obrigat/i.test(t);
+  }catch(e){
+    toast("Sem internet: não deu para conferir a versão agora. Tente de novo quando tiver sinal.");
+    return false;
+  }
+  if(num>atual){
+    versaoNova=num;versaoObrig=obr;versaoConfEm=Date.now();
+    try{renderFaixaVersao();}catch(e){}
+    toast("Atualizando para a versão "+num+"…");
+  }else{
+    versaoNova=0;versaoObrig=false;
+    try{renderFaixaVersao();}catch(e){}
+    toast("Atualizando o sistema… (versão "+atual+")");
+  }
+  return await atualizarSistemaAgora();
+}
 async function tocarBotaoVersao(){
   if(verBtOcupado)return;verBtOcupado=true;
-  var b=$("verBt"),atual=versaoAbertaNum();
+  var b=$("verBt");
   if(b)b.disabled=true;
-  try{
-    var num=0,obr=false;
-    try{
-      var r=await fetch((window.__VERSAO_URL_MF||"versao.txt")+"?nc="+Date.now(),{cache:"no-store"});
-      if(!r.ok)throw new Error("http "+r.status);
-      var t=String(await r.text()||""),n=t.match(/[0-9]+/);
-      if(!n)throw new Error("sem número");
-      num=+n[0];obr=/obrigat/i.test(t);
-    }catch(e){toast("Sem internet: não deu para conferir a versão agora. Tente de novo quando tiver sinal.");return;}
-    if(num>atual){
-      versaoNova=num;versaoObrig=obr;versaoConfEm=Date.now();
-      renderFaixaVersao();
-      toast("Atualizando para a versão "+num+"…");
-      await atualizarSistemaAgora();
-    }else{
-      versaoNova=0;versaoObrig=false;renderFaixaVersao();
-      toast("Você já está na última versão ("+atual+").");
-    }
-  }finally{verBtOcupado=false;if(b)b.disabled=false;}
+  try{return await recarregarSistemaTodo();}
+  finally{verBtOcupado=false;if(b)b.disabled=false;}
 }
 function renderFaixaVersao(){
   try{renderBotaoVersao();}catch(e){}
@@ -65699,6 +65899,12 @@ function ligarVigiaVersao(){
 function arrumacaoDeFundo(){
   /* aviso de versão nova (27/10): liga o vigia e devolve o pedido guardado antes de atualizar */
   setTimeout(function(){try{ligarVigiaVersao();reabrirPedidoGuardado();}catch(e){console.warn("versão",e);}},400);
+  /* v547: o aviso certo quando o acesso expira, e o arrastar para baixo do celular */
+  setTimeout(function(){
+    try{ligarVigiaSessao();}catch(e){console.warn("vigia da sessão",e);}
+    try{ligarPuxarParaAtualizar();}catch(e){console.warn("arrastar para atualizar",e);}
+    try{voltarTelaGuardada();}catch(e){}
+  },500);
   /* as outras 44 telas são desenhadas aqui, com o sistema JÁ ABERTO. Chamada depois que a
      tela de preparo fecha (14/10): o navegador é uma linha só, e desenhá-las enquanto a tela
      ainda esperava travava a aba por quase 5 segundos — a tela não conseguia nem fechar. */

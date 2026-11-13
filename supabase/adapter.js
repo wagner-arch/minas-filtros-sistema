@@ -85,6 +85,9 @@
     }
   }
   function naFila(fn) {
+    /* v547: sessão derrubada = nada vai à rede. Sem isto o sistema repetia as leituras a cada
+       poucos segundos e o banco devolvia dezenas de 401 por minuto. */
+    if (SESSAO.invalida) return Promise.reject(erroDeSessao("sessão vencida", { code: "PGRST301" }));
     return new Promise(function (ok, err) { esperando.push({ fn: fn, ok: ok, err: err }); puxarDaFila(); });
   }
   /* quantas páginas de uma mesma coleção viajam juntas (06/10). 6 é o que o navegador abre
@@ -274,6 +277,48 @@
     return e;
   }
 
+  /* ===================== SESSÃO VENCIDA (v547) =========================
+     MEDIDO NO BANCO (Supabase, autenticação): num celular Android o sistema aberto
+     (WebView/navegador) e o aplicativo que marca a localização em segundo plano usavam a MESMA
+     sessão e renovavam o login quase ao mesmo tempo. O segundo pedido de renovação chegava com
+     um refresh token que o primeiro já tinha gasto ("refresh_token_already_used / Possible
+     abuse attempt"), o banco derrubava a sessão INTEIRA e todas as leituras passavam a voltar
+     401 — e a tela ainda culpava a internet ("Não deu para conferir no banco…").
+     Agora: (1) quem renova é só a página — `sessaoParaApp` não entrega mais o refresh token ao
+     aplicativo; (2) numa aba só, uma renovação de cada vez (`SESSAO.renovando`); entre abas, o
+     supabase-js 2.116 já usa a trava do navegador (Web Locks) no mesmo endereço; (3) reconhecida
+     a sessão inválida, o adaptador PARA de ir à rede e avisa o sistema UMA VEZ, em vez de
+     empilhar dezenas de 401 por minuto. */
+  var SESSAO = { invalida: false, motivo: "", avisar: null, renovando: null };
+  function ehErroDeSessao(erro) {
+    var cod = String((erro && (erro.code || erro.status)) || "");
+    var m = String((erro && (erro.message || erro.error_description || erro.error)) || erro || "").toLowerCase();
+    if (cod === "PGRST301" || cod === "401" || cod === "refresh_token_already_used" ||
+        cod === "refresh_token_not_found" || cod === "session_not_found") return true;
+    return m.indexOf("refresh_token_already_used") >= 0 ||
+           m.indexOf("already used") >= 0 ||
+           m.indexOf("refresh token not found") >= 0 ||
+           m.indexOf("invalid refresh token") >= 0 ||
+           m.indexOf("session not found") >= 0 ||
+           m.indexOf("session_not_found") >= 0 ||
+           m.indexOf("jwt expired") >= 0 ||
+           m.indexOf("jwt") >= 0 ||
+           m.indexOf("not authenticated") >= 0;
+  }
+  function erroDeSessao(contexto, original) {
+    var e = ErroBanco("Seu acesso expirou. Entre de novo para continuar.", contexto, original);
+    e.ehSessao = true;
+    return e;
+  }
+  function marcarSessaoInvalida(motivo) {
+    if (SESSAO.invalida) return;
+    SESSAO.invalida = true;
+    SESSAO.motivo = String(motivo || "");
+    try { console.warn("[sessão] acesso expirado: " + SESSAO.motivo); } catch (e) { }
+    try { if (SESSAO.avisar) SESSAO.avisar(SESSAO.motivo); } catch (e) { }
+  }
+  function liberarSessao() { SESSAO.invalida = false; SESSAO.motivo = ""; SESSAO.renovando = null; }
+
   /* traduz o erro do PostgREST/GoTrue/fetch para algo que o usuário entenda */
   function traduzir(erro, contexto, ehEscrita) {
     var cod = String((erro && (erro.code || erro.status)) || "");
@@ -286,11 +331,10 @@
       e.ehRLS = true;
       return e;
     }
-    if (cod === "PGRST301" || cod === "401" || baixa.indexOf("jwt") >= 0 || baixa.indexOf("not authenticated") >= 0) {
-      e = ErroBanco("A sua sessão venceu. Recarregue a página (F5) e entre de novo — "+
-        "nada do que está na tela se perdeu.", contexto, erro);
-      e.ehSessao = true;
-      return e;
+    /* v547: sessão vencida nunca mais se disfarça de falta de internet */
+    if (ehErroDeSessao(erro)) {
+      marcarSessaoInvalida(cod + " " + msg);
+      return erroDeSessao(contexto, erro);
     }
     if (cod === "23505") {
       return ErroBanco("Registro duplicado em " + (contexto || "docs") + ".", contexto, erro);
@@ -519,9 +563,7 @@
     function pareceSemSessao(erro) {
       var cod = String((erro && (erro.code || erro.status)) || "");
       var msg = String((erro && erro.message) || "").toLowerCase();
-      return cod === "42501" || cod === "PGRST301" || cod === "401" ||
-             msg.indexOf("permission denied") >= 0 || msg.indexOf("jwt") >= 0 ||
-             msg.indexOf("not authenticated") >= 0;
+      return cod === "42501" || msg.indexOf("permission denied") >= 0 || ehErroDeSessao(erro);
     }
     /* executa; recusado por credencial, renova e tenta MAIS UMA vez */
     async function comSessao(tentar) {
@@ -534,6 +576,16 @@
         return r;
       }
       return await tentar();
+    }
+    /* v547: PORTÃO DA SESSÃO. Com a sessão derrubada, nenhuma consulta nasce — nem as que não
+       passam pela fila (resumo, contagem, "só o que mudou"). Era isto que enchia o banco de 401. */
+    function tab(nome) {
+      if (SESSAO.invalida) throw erroDeSessao("ler " + nome, { code: "PGRST301" });
+      return sb.from(nome);
+    }
+    function rpc(nome, args) {
+      if (SESSAO.invalida) throw erroDeSessao(nome, { code: "PGRST301" });
+      return sb.rpc(nome, args);
     }
     function conferir(resp, contexto, ehEscrita) {
       if (resp && resp.error) {
@@ -578,7 +630,7 @@
       /* de onde ler: a tabela de sempre, ou a leitura sem anexos da entrada (14/10).
          Lista fechada de propósito — nome de tabela não se monta com texto de fora. */
       var fonte = (filtros.fonte === "docs_sem_anexo") ? "docs_sem_anexo" : TABELA;
-      var q = sb.from(fonte).select(soId ? "id" : "id,data", contar ? { count: "exact" } : undefined).eq("colecao", colecao);
+      var q = tab(fonte).select(soId ? "id" : "id,data", contar ? { count: "exact" } : undefined).eq("colecao", colecao);
 
       /* PAGINAÇÃO POR FAIXA DE CÓDIGO: a página seguinte começa logo depois do último
          código lido. Entra aqui, antes do order(), porque depois do order() o construtor
@@ -823,7 +875,7 @@
 
     async function buscarDoc(colecao, id) {
       var r = conferir(
-        await sb.from(TABELA).select("data").eq("colecao", colecao).eq("id", id).maybeSingle(),
+        await tab(TABELA).select("data").eq("colecao", colecao).eq("id", id).maybeSingle(),
         "ler " + colecao + "/" + id
       );
       /* documento inexistente: exists=false e data()===undefined (o HTML testa isso) */
@@ -881,7 +933,7 @@
 
       await garantirSessao();
       if (apenasInserir) {
-        var r = await comSessao(function () { return sb.from(TABELA).insert(linha); });
+        var r = await comSessao(function () { return tab(TABELA).insert(linha); });
         /* id repetido numa coleção append-only = o documento JÁ ESTÁ gravado.
            É o caso da foto de ponto reenviada porque o registro de "pontos"
            falhou: a foto certa já está no banco, então isto é sucesso, não erro.
@@ -895,7 +947,7 @@
       }
 
       conferir(
-        await comSessao(function () { return sb.from(TABELA).upsert(linha, { onConflict: "colecao,id" }); }),
+        await comSessao(function () { return tab(TABELA).upsert(linha, { onConflict: "colecao,id" }); }),
         contexto,
         true
       );
@@ -910,7 +962,7 @@
       }
       /* apagar id que existe no banco ou não resolve igual (o HTML conta com isso) */
       conferir(
-        await comSessao(function () { return sb.from(TABELA).delete().eq("colecao", colecao).eq("id", id); }),
+        await comSessao(function () { return tab(TABELA).delete().eq("colecao", colecao).eq("id", id); }),
         "apagar " + colecao + "/" + id,
         true
       );
@@ -1133,6 +1185,7 @@
     adapter.auth = {
       /* rejeita com mensagem genérica: não dizemos se o e-mail existe */
       entrar: async function (email, senha) {
+        liberarSessao();   /* v547: entrou de novo, o adaptador volta a falar com o banco */
         if (!ehTexto(email) || !ehTexto(senha)) {
           throw anotar(ErroBanco("Informe e-mail e senha.", "login", null));
         }
@@ -1172,16 +1225,36 @@
          Functions (que conferem o token por conta própria) recusam com 401. Aqui a sessão é
          renovada quando falta pouco para vencer — ou já venceu. */
       sessaoFresca: async function (margemSeg) {
+        if (SESSAO.invalida) return null;
         var s = await adapter.auth.sessao();
         var margem = margemSeg || 120;
         var agora = Math.floor(Date.now() / 1000);
         if (s && s.expires_at && (s.expires_at - agora) > margem) return s;
-        try {
-          var r = await sb.auth.refreshSession();
-          if (r && r.data && r.data.session) return r.data.session;
-        } catch (e) { }
-        return s;   /* não deu para renovar: vale o que há, e quem chamou trata a recusa */
+        /* v547: UMA renovação de cada vez. Antes, as leituras em paralelo chamavam isto juntas e
+           cada uma mandava o seu pedido de renovação — e o segundo já ia com o token gasto. */
+        if (SESSAO.renovando) { try { return await SESSAO.renovando; } catch (e) { return null; } }
+        SESSAO.renovando = (async function () {
+          try {
+            var r = await sb.auth.refreshSession();
+            if (r && r.error) {
+              if (ehErroDeSessao(r.error)) marcarSessaoInvalida("renovar: " + (r.error.message || ""));
+              return s;
+            }
+            if (r && r.data && r.data.session) return r.data.session;
+          } catch (e) {
+            if (ehErroDeSessao(e)) marcarSessaoInvalida("renovar: " + (e && e.message));
+          }
+          return s;   /* não deu para renovar: vale o que há, e quem chamou trata a recusa */
+        })();
+        try { return await SESSAO.renovando; } finally { SESSAO.renovando = null; }
       },
+      /* ---- v547: o sistema quer saber na hora que a sessão caiu ---- */
+      aoVencer: function (cb) { SESSAO.avisar = (typeof cb === "function") ? cb : null; },
+      vencida: function () { return !!SESSAO.invalida; },
+      motivoVencida: function () { return SESSAO.motivo; },
+      liberar: liberarSessao,
+      /* só para o teste automático: finge a derrubada que o banco faz */
+      fingirVencida: function (motivo) { marcarSessaoInvalida(motivo || "teste"); },
       /* devolve a função para cancelar a escuta */
       aoMudar: function (cb) {
         if (typeof cb !== "function") throw new Error("aoMudar(): informe a função de callback.");
@@ -1225,7 +1298,7 @@
          - consentiu_facial_em: sem ele o termo LGPD reaparece em TODA batida.
          - ultimo_acesso: a tela de usuários mostra "nunca acessou" sem ele. */
       var r = conferir(
-        await sb.from("perfis")
+        await tab("perfis")
           .select("user_id,nome,funcao,loja,ambas,ativo,jornada,ultimo_acesso,consentiu_facial_em,criado_em")
           .eq("user_id", id).maybeSingle(),
         "ler perfil"
@@ -1238,7 +1311,7 @@
     adapter.perfis = async function (somenteAtivos) {
       /* `ambas` é a marca de quem entra nas DUAS empresas (26/10): sem ela o sistema
          não sabia que o Administrador pertence às duas e o tirava da lista da WF. */
-      var q = sb.from("perfis").select("user_id,nome,funcao,loja,ambas,ativo,jornada").order("nome", { ascending: true });
+      var q = tab("perfis").select("user_id,nome,funcao,loja,ambas,ativo,jornada").order("nome", { ascending: true });
       if (somenteAtivos !== false) q = q.eq("ativo", true);
       var r = conferir(await q, "ler perfis");
       return r.data || [];
@@ -1252,7 +1325,7 @@
         throw anotar(ErroBanco("proximoNumero(loja, tipo): os dois são obrigatórios.", "numeracao", null));
       }
       var r = conferir(
-        await sb.rpc("proximo_numero", { p_loja: loja, p_tipo: tipo }),
+        await rpc("proximo_numero", { p_loja: loja, p_tipo: tipo }),
         "gerar número de " + tipo,
         true /* muda o banco: entra no controle do banner */
       );
@@ -1270,7 +1343,7 @@
       }
       var r = conferir(
         await comSessao(function () {
-          return sb.rpc("trocar_produto", { p_antigo: antigo, p_novo: novo, p_so_contar: !!soContar });
+          return rpc("trocar_produto", { p_antigo: antigo, p_novo: novo, p_so_contar: !!soContar });
         }),
         soContar ? "contar onde o produto aparece" : "trocar o produto",
         !soContar
@@ -1284,7 +1357,7 @@
        supabase/assinatura-link.sql — sem elas, estes métodos avisam. */
     adapter.criarLinkAssinatura = async function (dados) {
       var r = conferir(
-        await sb.from("assinaturas_link").insert(dados).select("token,expira_em").single(),
+        await tab("assinaturas_link").insert(dados).select("token,expira_em").single(),
         "criar o link de assinatura",
         false   /* a janela do link já explica a falha: não acende o banner de "não foi gravado" */
       );
@@ -1292,7 +1365,7 @@
     };
     /* links de um pedido (ou de todos), mais recentes primeiro */
     adapter.linksAssinatura = async function (pedidoId) {
-      var q = sb.from("assinaturas_link")
+      var q = tab("assinaturas_link")
         .select("token,pedido_id,pedido_numero,cliente,status,criado_em,criado_por,expira_em,assinatura,assinante_nome,assinante_doc,assinado_em,aplicado_em")
         .order("criado_em", { ascending: false }).limit(300);
       if (ehTexto(pedidoId)) q = q.eq("pedido_id", pedidoId);
@@ -1302,7 +1375,7 @@
     /* assinaturas que o cliente já fez e que ainda não entraram no pedido */
     adapter.assinaturasNovas = async function () {
       var r = conferir(
-        await sb.from("assinaturas_link")
+        await tab("assinaturas_link")
           .select("token,pedido_id,pedido_numero,assinatura,assinante_nome,assinante_doc,assinado_em")
           .eq("status", "assinado").is("aplicado_em", null).limit(200),
         "ler as assinaturas recebidas",
@@ -1312,7 +1385,7 @@
     };
     adapter.marcarAssinaturaAplicada = async function (token) {
       conferir(
-        await sb.from("assinaturas_link").update({ aplicado_em: new Date().toISOString() }).eq("token", token),
+        await tab("assinaturas_link").update({ aplicado_em: new Date().toISOString() }).eq("token", token),
         "marcar a assinatura como recebida",
         true
       );
@@ -1320,7 +1393,7 @@
     };
     adapter.cancelarLinkAssinatura = async function (token) {
       conferir(
-        await sb.from("assinaturas_link").update({ status: "cancelado" }).eq("token", token).eq("status", "pendente"),
+        await tab("assinaturas_link").update({ status: "cancelado" }).eq("token", token).eq("status", "pendente"),
         "cancelar o link de assinatura",
         true
       );
@@ -1336,7 +1409,7 @@
     adapter.resumo = async function (colecao, filtros) {
       filtros = filtrosDaEmpresa(colecao, filtros);
       var fonte = (filtros.fonte === "docs_sem_anexo") ? "docs_sem_anexo" : TABELA;
-      var q = sb.from(fonte).select("atualizado_em", { count: "exact" }).eq("colecao", colecao);
+      var q = tab(fonte).select("atualizado_em", { count: "exact" }).eq("colecao", colecao);
       if (ehTexto(filtros.loja)) {
         if (!lojaSegura(filtros.loja)) estourar(ErroBanco("Loja inválida no filtro.", colecao, null));
         q = filtros.lojaEstrita ? q.eq("loja", filtros.loja) : q.or("loja.eq." + filtros.loja + ",loja.is.null");
@@ -1427,7 +1500,7 @@
     /* total real no banco — para a tela dizer "mostrando 500 de 3.212" */
     adapter.contar = async function (colecao, filtros) {
       filtros = filtrosDaEmpresa(colecao, filtros);
-      var q = sb.from(TABELA).select("id", { count: "exact", head: true }).eq("colecao", colecao);
+      var q = tab(TABELA).select("id", { count: "exact", head: true }).eq("colecao", colecao);
       if (ehTexto(filtros && filtros.loja)) {
         if (!lojaSegura(filtros.loja)) estourar(ErroBanco("Loja inválida no filtro.", colecao, null));
         q = filtros.lojaEstrita ? q.eq("loja", filtros.loja) : q.or("loja.eq." + filtros.loja + ",loja.is.null");
@@ -1496,7 +1569,7 @@
         throw anotar(ErroBanco("Este colaborador está inativo — fale com o Administrador.", "testar conexão", null));
       }
       conferir(
-        await sb.from(TABELA).select("id", { count: "exact", head: true }).eq("colecao", "config"),
+        await tab(TABELA).select("id", { count: "exact", head: true }).eq("colecao", "config"),
         "testar conexão"
       );
       return true;
@@ -1521,7 +1594,7 @@
         throw anotar(ErroBanco("perfilGravar: nome e função são obrigatórios.", "gravar perfil", null));
       }
       conferir(
-        await sb.from("perfis").upsert(linha, { onConflict: "user_id" }),
+        await tab("perfis").upsert(linha, { onConflict: "user_id" }),
         "gravar perfil",
         true
       );
@@ -1531,7 +1604,7 @@
     /* HORA DO SERVIDOR (05/11): a trava do ponto usa a hora do banco, não a do aparelho
        (supabase/hora-servidor.sql). Devolve o texto do timestamptz. */
     adapter.horaServidor = async function () {
-      var r = conferir(await sb.rpc("hora_servidor"), "hora do servidor", true);
+      var r = conferir(await rpc("hora_servidor"), "hora do servidor", true);
       return r.data || null;
     };
 
@@ -1543,7 +1616,7 @@
       if (!uid) throw new Error("sem sessão para registrar o celular");
       var linha = Object.assign({}, o, { user_id: uid });
       conferir(await comSessao(function () {
-        return sb.from("dispositivos_ponto").upsert(linha, { onConflict: "user_id,aparelho" });
+        return tab("dispositivos_ponto").upsert(linha, { onConflict: "user_id,aparelho" });
       }), "registrar o celular do lembrete de ponto", true);
       return true;
     };
@@ -1551,7 +1624,7 @@
        acrescentam o pedido no ponto do próprio colaborador (supabase/pedido-ajuste-ponto.sql) */
     adapter.pedirAjustePonto = async function (loja, dia, id, solicitacoes) {
       var r = await comSessao(function () {
-        return sb.rpc("pedir_ajuste_ponto", { p_loja: loja, p_data: dia, p_id: id || null, p_solicitacoes: solicitacoes });
+        return rpc("pedir_ajuste_ponto", { p_loja: loja, p_data: dia, p_id: id || null, p_solicitacoes: solicitacoes });
       });
       /* a recusa da regra (dia futuro, pedido repetido...) já vem em português: mostra como está */
       if (r && r.error && r.error.code === "P0001") throw new Error(r.error.message);
@@ -1559,22 +1632,22 @@
       return r.data;
     };
     adapter.marcarVistasPonto = async function (loja) {
-      var r = await comSessao(function () { return sb.rpc("marcar_respostas_vistas_ponto", { p_loja: loja }); });
+      var r = await comSessao(function () { return rpc("marcar_respostas_vistas_ponto", { p_loja: loja }); });
       conferir(r, "marcar respostas do ponto como vistas", true);
       return r.data || 0;
     };
     /* USO SEM INTERNET E SEM PONTO (05/11, proposta B): o celular manda o que anotou; o Administrador le */
     adapter.registrarUsoSemPonto = async function (o) {
-      conferir(await comSessao(function () { return sb.from("uso_sem_ponto").insert(o); }), "registrar uso sem ponto", true);
+      conferir(await comSessao(function () { return tab("uso_sem_ponto").insert(o); }), "registrar uso sem ponto", true);
       return true;
     };
     adapter.usosSemPonto = async function (desde) {
-      var r = conferir(await sb.from("uso_sem_ponto").select("id,nome,loja,dia,de,ate,motivo,criado_em")
+      var r = conferir(await tab("uso_sem_ponto").select("id,nome,loja,dia,de,ate,motivo,criado_em")
         .gte("dia", desde).order("criado_em", { ascending: false }).limit(200), "usos sem ponto", false);
       return r.data || [];
     };
     adapter.celularesPonto = async function () {
-      var r = conferir(await sb.from("dispositivos_ponto")
+      var r = conferir(await tab("dispositivos_ponto")
         .select("nome,tipo,permissao,ativo,atualizado_em,modelo").limit(500), "celulares do lembrete de ponto", false);
       return r.data || [];
     };
@@ -1582,7 +1655,7 @@
     /* carimba perfis.ultimo_acesso sem abrir update de perfis para o cliente
        (que deixaria qualquer um trocar a própria função) */
     adapter.registrarAcesso = async function () {
-      var r = conferir(await sb.rpc("registrar_acesso"), "registrar acesso", true);
+      var r = conferir(await rpc("registrar_acesso"), "registrar acesso", true);
       return r.data || null;
     };
 
@@ -1590,7 +1663,7 @@
        Devolve o carimbo (timestamptz). Se isto falhar, NÃO grave a foto: guardar
        biometria sem a prova do consentimento é exatamente o que a ANPD cobra. */
     adapter.registrarConsentimentoFacial = async function () {
-      var r = conferir(await sb.rpc("registrar_consentimento_facial"), "registrar consentimento", true);
+      var r = conferir(await rpc("registrar_consentimento_facial"), "registrar consentimento", true);
       return r.data || null;
     };
 
@@ -1624,7 +1697,7 @@
         return { colecao: colecao, id: corpo.id, loja: loja, data: corpo };
       });
       conferir(
-        await comSessao(function () { return sb.from(TABELA).upsert(linhas, { onConflict: "colecao,id" }); }),
+        await comSessao(function () { return tab(TABELA).upsert(linhas, { onConflict: "colecao,id" }); }),
         "gravar " + linhas.length + " registros juntos",
         true
       );
@@ -1650,7 +1723,7 @@
       for (var i = 0; i < linhas.length; i += tam) {
         var parte = linhas.slice(i, i + tam);
         conferir(
-          await comSessao(function () { return sb.from(TABELA).upsert(parte, { onConflict: "colecao,id" }); }),
+          await comSessao(function () { return tab(TABELA).upsert(parte, { onConflict: "colecao,id" }); }),
           "gravar " + parte.length + " de " + colecao,
           true
         );
@@ -1682,7 +1755,7 @@
       var lim = Math.max(1, Math.min(typeof teto === "number" ? teto : PAGINA, PAGINA));
       var r = conferir(
         await naFila(function () {
-          return sb.from(TABELA).select("colecao,id,data,loja")
+          return tab(TABELA).select("colecao,id,data,loja")
             .in("colecao", colecoes)
             .order("colecao", { ascending: true }).order("id", { ascending: true })
             .limit(lim);
@@ -1711,7 +1784,7 @@
     adapter.configs = async function (nomes) {
       var r = conferir(
         await naFila(function () {
-          return sb.from(TABELA).select("id,data,loja").eq("colecao", "config").limit(PAGINA);
+          return tab(TABELA).select("id,data,loja").eq("colecao", "config").limit(PAGINA);
         }),
         "ler config"
       );
@@ -1747,26 +1820,33 @@
       /* a credencial que o aplicativo do celular precisa para gravar sozinho,
          com a tela desligada. Nada é inventado: sai da sessão de verdade. */
       sessaoParaApp: async function () {
-        var s = await adapter.auth.sessao();
+        /* v547: o aplicativo não renova nada, então leva o token mais novo que houver */
+        var s = await adapter.auth.sessaoFresca(300);
         if (!s) return null;
+        /* v547: O REFRESH TOKEN NÃO VAI MAIS PARA O APLICATIVO. Era daqui que nascia a queda da
+           sessão: o aplicativo da localização renovava por conta própria, com o mesmo refresh
+           token da página, e o banco derrubava a sessão inteira ("refresh_token_already_used").
+           Agora quem renova é só a página, que entrega o token novo ao aplicativo a cada
+           renovação (entregarSessaoAoApp). Sem refresh token, o `renovar()` do aplicativo sai
+           na primeira linha e não toca na sessão — vale para o aplicativo já instalado. */
         return { url: String(url || "").replace(/\/+$/, ""), chave: chaveAnon, token: s.access_token || "",
-          refresh: s.refresh_token || "", expira: s.expires_at || 0 };
+          refresh: "", expira: s.expires_at || 0 };
       },
       gravarPontos: async function (linhas) {
         if (!linhas || !linhas.length) return 0;
-        var r = await naFila(function () { return sb.from("rastro_pontos").insert(linhas); });
+        var r = await naFila(function () { return tab("rastro_pontos").insert(linhas); });
         conferir(r, "gravar o trajeto", true);
         return linhas.length;
       },
       pontos: async function (vendedor, de, ate) {
-        var q = sb.from("rastro_pontos").select("em,lat,lng,precisao,velocidade,parado,vendedor")
+        var q = tab("rastro_pontos").select("em,lat,lng,precisao,velocidade,parado,vendedor")
           .gte("em", de).lte("em", ate).order("em", { ascending: true }).limit(5000);
         if (ehTexto(vendedor)) q = q.eq("vendedor", vendedor);
         var r = await naFila(function () { return q; });
         return conferir(r, "ler o trajeto").data || [];
       },
       paradas: async function (vendedor, de, ate) {
-        var q = sb.from("rastro_paradas").select("*")
+        var q = tab("rastro_paradas").select("*")
           .gte("inicio", de).lte("inicio", ate).order("inicio", { ascending: true }).limit(1000);
         if (ehTexto(vendedor)) q = q.eq("vendedor", vendedor);
         var r = await naFila(function () { return q; });
@@ -1780,7 +1860,7 @@
       ondeEstao: async function (minutos) {
         var desde = new Date(Date.now() - (minutos || 60) * 60000).toISOString();
         var r = await naFila(function () {
-          return sb.from("rastro_pontos").select("vendedor,em,lat,lng,precisao,bateria,parado,loja")
+          return tab("rastro_pontos").select("vendedor,em,lat,lng,precisao,bateria,parado,loja")
             .gte("em", desde).order("em", { ascending: false }).limit(400);
         });
         var lista = conferir(r, "ler onde cada vendedor esta").data || [], ult = {};
@@ -1792,7 +1872,7 @@
          (celular desligado, sem internet). Usa o indice (vendedor, em DESC) que ja existe. */
       ultimoDe: async function (vendedor) {
         var r = await naFila(function () {
-          return sb.from("rastro_pontos").select("vendedor,em,lat,lng,precisao,bateria,parado")
+          return tab("rastro_pontos").select("vendedor,em,lat,lng,precisao,bateria,parado")
             .eq("vendedor", vendedor).order("em", { ascending: false }).limit(1);
         });
         var l = conferir(r, "ler o ultimo ponto").data || [];
@@ -1800,7 +1880,7 @@
       },
       ultimosPontos: async function (quantos) {
         var r = await naFila(function () {
-          return sb.from("rastro_pontos").select("vendedor,em,lat,lng")
+          return tab("rastro_pontos").select("vendedor,em,lat,lng")
             .order("em", { ascending: false }).limit(quantos || 300);
         });
         return conferir(r, "ler os últimos pontos").data || [];
@@ -1808,7 +1888,7 @@
       /* as paradas que viraram aviso e ainda estão no dia */
       avisos: async function (de) {
         var r = await naFila(function () {
-          return sb.from("rastro_paradas").select("*")
+          return tab("rastro_paradas").select("*")
             .not("avisado_em", "is", null)
             .eq("com_atendimento", false).eq("na_loja", false).eq("no_almoco", false)
             .gte("inicio", de).order("inicio", { ascending: false }).limit(100);
@@ -1818,7 +1898,7 @@
       /* as que o sistema ainda não conferiu (atendimento, loja, almoço) */
       paradasACoferir: async function (de) {
         var r = await naFila(function () {
-          return sb.from("rastro_paradas").select("*").is("conferido_em", null)
+          return tab("rastro_paradas").select("*").is("conferido_em", null)
             .gte("inicio", de).not("fim", "is", null)
             .order("inicio", { ascending: true }).limit(300);
         });
@@ -1826,7 +1906,7 @@
       },
       atualizarParada: async function (id, campos) {
         var r = await naFila(function () {
-          return sb.from("rastro_paradas").update(campos).eq("id", id);
+          return tab("rastro_paradas").update(campos).eq("id", id);
         });
         conferir(r, "atualizar a parada", true);
         return true;
@@ -1834,7 +1914,7 @@
       /* LGPD: apaga os pontos passados de N dias. As paradas ficam como histórico. */
       limpar: async function (dias) {
         var r = await naFila(function () {
-          return sb.rpc("limpar_rastro_antigo", { p_dias: dias || 90 });
+          return rpc("limpar_rastro_antigo", { p_dias: dias || 90 });
         });
         return conferir(r, "limpar o rastreio antigo").data || 0;
       }
@@ -1861,4 +1941,7 @@
   }
 
   window.criarDbSupabase = criarDbSupabase;
+  /* só para o teste automático da sessão vencida (testes/medicao/teste-sessao.js): nada aqui é
+     segredo e nada muda o funcionamento */
+  window.__adapterTesteMF = { ehErroDeSessao: ehErroDeSessao, estado: SESSAO, liberar: liberarSessao };
 })();
