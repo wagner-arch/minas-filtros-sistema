@@ -3232,6 +3232,16 @@ img{max-width:100%}
               <label for="v_obs">Observações do pedido</label>
               <textarea id="v_obs" rows="3" placeholder="Ex.: passar cartão dia 26 e recolher o purificador antigo"></textarea>
             </div>
+            <!-- v553: venda com pendência (nasce Não; com Sim, diz qual) -->
+            <div class="grid g3" style="margin-bottom:12px">
+              <div class="fld"><label for="v_pend">Venda com pendência?</label>
+                <select id="v_pend"><option value="nao" selected>Não</option><option value="sim">Sim</option></select></div>
+            </div>
+            <div class="fld" id="v_pendBox" style="margin-bottom:16px" hidden>
+              <label for="v_pendTexto">Qual é a pendência? <span class="req">*</span></label>
+              <textarea id="v_pendTexto" rows="2" placeholder="Ex.: falta o comprovante de residência; cliente vai mandar o documento"></textarea>
+              <p class="help" id="v_pendAviso">Enquanto a pendência estiver aberta, a venda fica fora do Faturado do Dashboard. Quem marca como resolvida é o Financeiro.</p>
+            </div>
             <div class="grid g3">
               <div class="fld"><label for="v_imagem">Autoriza uso de imagem?</label>
                 <select id="v_imagem"><option value="">— escolha —</option><option value="sim" selected>Sim</option><option value="nao">Não</option></select></div>
@@ -6846,7 +6856,8 @@ img{max-width:100%}
             <th class="num" data-dica="finalizadas pelo responsável">Ativ. realizadas</th>
             <th class="num" data-dica="como vendedora, pela data do pedido">Vendas</th>
             <th class="num" data-dica="instalação concluída no período">Instalações</th>
-            <th class="num" data-dica="parte da pessoa no depreciado das aprovadas">Faturado</th>
+            <th class="num" data-dica="parte da pessoa no depreciado das vendas do período (data da venda), aprovadas ou não, sem pendência">Faturado</th>
+            <th class="num" data-dica="vendas do período com pendência aberta">Com pendência</th>
             <th class="num" data-dica="conversou e vendeu em 30 dias">Conv. venda</th>
             <th class="num" data-dica="contatos · vendas como prospectora · %">Prospecção</th></tr></thead>
           <tbody id="dashEquipe"></tbody>
@@ -6858,7 +6869,8 @@ img{max-width:100%}
           <li><b>Ativ. realizadas:</b> atividades finalizadas pelo responsável, com ou sem atendimento.</li>
           <li><b>Vendas:</b> pedidos em que a pessoa é a vendedora, pela data do pedido, sem canceladas.</li>
           <li><b>Instalações:</b> pedidos em que a pessoa instalou, com a instalação concluída no período.</li>
-          <li><b>Faturado:</b> a parte da pessoa (vendedor 60 · prospector 20 · instalador 20) no valor depreciado das vendas aprovadas, pela data em que a venda conta.</li>
+          <li><b>Faturado:</b> a parte da pessoa (vendedor 60 · prospector 20 · instalador 20) no valor depreciado das vendas feitas no período, pela DATA DA VENDA, aprovadas ou não pelo financeiro, sem as canceladas e sem as que estão com pendência aberta.</li>
+          <li><b>Com pendência:</b> a mesma conta, só das vendas do período com pendência aberta (saem daqui quando o Financeiro marca a pendência como resolvida).</li>
           <li><b>Conv. venda:</b> clientes com quem conversou e que compraram dela como vendedora em até 30 dias.</li>
           <li><b>Prospecção:</b> clientes contatados (pela pessoa ou pelo WhatsApp do sistema) · os que compraram em até 30 dias com a pessoa como prospectora · %.</li>
         </ul></div>
@@ -19938,6 +19950,9 @@ function abrirRevisaoPedido(){
       "abaixo da faixa de preço dele. Ao confirmar, o sistema abre o pedido de autorização "+
       "para o Administrador, como já fazia.</div>";
   }
+  /* v553: venda com pendência */
+  if(pendVendaForm().tem)h+='<div class="note warn"><b>Venda com pendência:</b> '+esc(pendVendaForm().texto||"(escreva qual é)")+
+    "<br>Ela fica fora do Faturado do Dashboard até o Financeiro marcar a pendência como resolvida.</div>";
   /* ---- endereço de instalação de cada purificador ---- */
   h+='<div id="rv_est">'+htmlEstRevisao()+"</div>";
   h+=htmlEndRevisao(c);
@@ -20383,6 +20398,9 @@ async function salvarPedidoAgora(){
   /* v548: vencimento da 1ª parcela nunca antes do dia da venda; ao gravar, a data fica na forma */
   var eV1=erroVenc1(formas,dataVendaForm());
   if(eV1){toast(eV1);irEtapa(2);return;}
+  /* v553: com pendência, dizer qual */
+  if(pendVendaForm().tem&&!pendVendaForm().texto){toast("Venda com pendência: escreva qual é a pendência.");
+    irEtapa(6);try{$("v_pendTexto").focus();}catch(ePd){}return;}
   if(r.dif!==0){toast(vendaNova()?("O pagamento não bate com o total: "+(r.dif>0?"faltam "+BRL(r.dif):"sobram "+BRL(-r.dif))+"."):"O que está repartido nas formas não fecha com o total base da venda.");irEtapa(2);return;}
   /* v517 (tela nova): frete respondido com valor, e plano pago em purificador novo com o número de série */
   if(vendaNova()){
@@ -20523,7 +20541,10 @@ async function salvarPedidoAgora(){
     modelo:"base",totalBase:r.totalBase,acrescimo:r.acrescimo,
     frete:(r.comp?r.comp.frete:0),descontoGeral:(r.comp?r.comp.desc:0),
     descontoEspecial:(r.comp?r.comp.descFinal:0),   /* o desconto como o cliente vê (v234) */
-    obs:$("v_obs").value.trim(),usoImagem:$("v_imagem").value,/* v514: "assinado" só quando há assinatura de verdade (antes ia true sempre) */
+    obs:$("v_obs").value.trim(),usoImagem:$("v_imagem").value,
+    /* v553: venda com pendência */
+    comPendencia:pendVendaForm().tem,pendencia:pendVendaForm().texto,
+    pendenciaPor:pendVendaForm().tem?usuarioAtual:"",pendenciaEm:pendVendaForm().tem?new Date().toISOString():"",/* v514: "assinado" só quando há assinatura de verdade (antes ia true sempre) */
     anexos:anexados,arquivos:arquivos,assinaturaImg:assinaturaParaDoc(),
     /* cliente de teste: a marca é COPIADA para dentro do pedido agora, e é ela que vale
        daqui para a frente (v376) */
@@ -21485,6 +21506,7 @@ function montarRascunho(){
   r.instalacaoResp=temInstalacaoVenda();
   r.idata=$("v_idata")?$("v_idata").value:"";r.ihora=$("v_ihora")?$("v_ihora").value:"";
   r.obs=$("v_obs")?$("v_obs").value:"";r.usoImagem=$("v_imagem")?$("v_imagem").value:"";
+  r.pendSel=$("v_pend")?$("v_pend").value:"nao";r.pendTexto=$("v_pendTexto")?$("v_pendTexto").value:"";   /* v553 */
   r.origemAtiv=pedOrigemAtiv?pedOrigemAtiv.id:"";
   r.orcamentoId=pedOrigemOrc?pedOrigemOrc.id:"";
   r.osId=pedOrigemOS?pedOrigemOS.id:"";
@@ -21571,6 +21593,7 @@ function retomarRascunho(r){
     if($("v_idata"))$("v_idata").value=r.idata||"";
     if($("v_ihora"))$("v_ihora").value=r.ihora||"";
     if($("v_obs"))$("v_obs").value=r.obs||"";
+    if($("v_pend")){$("v_pend").value=r.pendSel==="sim"?"sim":"nao";$("v_pendTexto").value=r.pendTexto||"";mostrarPendVenda();}   /* v553 */
     /* o que está guardado no rascunho manda; guardado SEM resposta (rascunho antigo, de quando
        o campo nascia vazio) volta a "— escolha —" — o padrão "Sim" é da venda NOVA, e ninguém
        pode ganhar uma autorização que não deu */
@@ -21609,6 +21632,7 @@ function limparPedido(){
   try{escolherClienteVenda(null);$("v_cliBusca").value="";}catch(e){}
   /* uso de imagem começa em "Sim" na venda nova (regra dele, 17/10) — e segue trocável */
   $("v_idata").value="";$("v_ihora").value="";$("v_obs").value="";$("v_imagem").value="sim";
+  if($("v_pend")){$("v_pend").value="nao";$("v_pend").disabled=false;$("v_pendTexto").value="";mostrarPendVenda();}   /* v553 */
   ANEXOS.forEach(function(a){a.arquivo="";a.dados=null;});
   limparAssinatura();renderFormas();renderAnexos();
   /* venda nova nunca herda a edição de um pedido salvo */
@@ -30520,6 +30544,71 @@ function htmlParcelasForma(f,i,dataV){
       :'<div class="t-sub" style="margin-top:4px">A 1ª vence em 30 dias e as outras de 30 em 30. Pode trocar a data e o valor de cada uma; a última fica com o que falta.</div>')+
     "</div>";
 }
+/* ===== v553 (15/11, pedido dele): VENDA COM PENDÊNCIA =====
+   Na venda: "Venda com pendência?" nasce Não; Sim pede qual (`comPendencia`, `pendencia`, quem e
+   quando). Aberta, a venda fica fora do Faturado do Dashboard e entra na coluna "Com pendência".
+   Só quem aprova no financeiro (`aprovarFinanceiro`) marca "Pendência resolvida", com registro de
+   quem e quando (`pendenciaResolvidaPor/Em`, `pendenciaHist`); a aprovação da venda não depende disso. */
+function pendenciaAberta(p){return !!(p&&p.comPendencia&&!p.pendenciaResolvidaEm);}
+function pendVendaForm(){
+  var s=$("v_pend"),t=$("v_pendTexto");
+  return {tem:!!(s&&s.value==="sim"),texto:(s&&s.value==="sim"&&t)?String(t.value||"").trim():""};
+}
+function mostrarPendVenda(){var b=$("v_pendBox"),s=$("v_pend");if(b&&s)b.hidden=s.value!=="sim";}
+/* edição pelas etapas: abre, corrige o texto ou (ainda sem pendência) marca Sim */
+function aplicarPendVenda(p){
+  var f=pendVendaForm();
+  if(pendenciaAberta(p)){
+    if(f.texto&&f.texto!==p.pendencia){
+      (p.pendenciaHist=p.pendenciaHist||[]).push({acao:"texto corrigido",de:p.pendencia||"",para:f.texto,por:usuarioAtual,em:new Date().toISOString()});
+      p.pendencia=f.texto;}
+    return;
+  }
+  if(f.tem){
+    if(p.comPendencia&&p.pendenciaResolvidaEm)(p.pendenciaHist=p.pendenciaHist||[]).push({acao:"resolvida antes",texto:p.pendencia||"",
+      por:p.pendenciaResolvidaPor||"",em:p.pendenciaResolvidaEm});
+    p.comPendencia=true;p.pendencia=f.texto;p.pendenciaPor=usuarioAtual;p.pendenciaEm=new Date().toISOString();
+    delete p.pendenciaResolvidaPor;delete p.pendenciaResolvidaEm;
+    try{registrarEvento(p,"Venda com pendência: "+f.texto);}catch(eEv){}
+  }
+}
+function podeResolverPendencia(){return pode("aprovarFinanceiro");}
+function htmlPendenciaVenda(p,comBotao){
+  if(!p||!p.comPendencia)return "";
+  var quando=function(x){return x?dataBR(String(x).slice(0,16).replace("T"," ")):"";};
+  if(!pendenciaAberta(p))
+    return '<div class="note ok" style="margin:6px 0"><b>Pendência resolvida</b> por '+esc(p.pendenciaResolvidaPor||"—")+" em "+esc(quando(p.pendenciaResolvidaEm))+
+      ' · <span class="t-sub">era: '+esc(p.pendencia||"")+"</span></div>";
+  return '<div class="note warn" style="margin:6px 0"><b>Venda com pendência:</b> '+esc(p.pendencia||"")+
+    '<div class="t-sub">lançada por '+esc(p.pendenciaPor||"—")+(p.pendenciaEm?" em "+esc(quando(p.pendenciaEm)):"")+
+    " · fora do Faturado do Dashboard até ser resolvida</div>"+
+    (comBotao&&podeResolverPendencia()?'<button class="btn sm" type="button" data-pendok="'+esc(p.id)+'" style="margin-top:8px">Pendência resolvida</button>':"")+
+    "</div>";
+}
+function resolverPendencia(){return travaSalvar("resolverPendencia",resolverPendencia__corpo,this,arguments);}
+async function resolverPendencia__corpo(p){
+  if(!podeResolverPendencia()){toast("Só o Financeiro marca a pendência como resolvida.");return;}
+  if(!pendenciaAberta(p))return;
+  if(!confirm("Marcar como resolvida a pendência do pedido "+p.numero+"?"+QUEBRA2+(p.pendencia||"")))return;
+  var antes={por:p.pendenciaResolvidaPor,em:p.pendenciaResolvidaEm,hist:(p.pendenciaHist||[]).slice(),ev:(p.eventos||[]).slice()};
+  p.pendenciaResolvidaPor=usuarioAtual;p.pendenciaResolvidaEm=new Date().toISOString();
+  (p.pendenciaHist=p.pendenciaHist||[]).push({acao:"resolvida",texto:p.pendencia||"",por:usuarioAtual,em:p.pendenciaResolvidaEm});
+  registrarEvento(p,"Pendência resolvida: "+(p.pendencia||""));
+  try{await gravaConf("pedidos",p);}
+  catch(e){p.pendenciaResolvidaPor=antes.por;p.pendenciaResolvidaEm=antes.em;p.pendenciaHist=antes.hist;p.eventos=antes.ev;
+    if(!p.pendenciaResolvidaEm)delete p.pendenciaResolvidaEm;if(!p.pendenciaResolvidaPor)delete p.pendenciaResolvidaPor;
+    toast("Não consegui gravar. A pendência continua aberta. ("+(e&&e.message||e)+")");return;}
+  toast("Pendência do pedido "+p.numero+" resolvida.");
+  try{if(pedAberto&&pedAberto.id===p.id)renderPedDet();}catch(eR){}
+  try{render();}catch(eR2){}
+}
+/* o botão também na Aprovação Financeira (cartões redesenhados): um ouvinte só, pelo id */
+document.addEventListener("click",function(ev){
+  var b=ev.target&&ev.target.closest?ev.target.closest("[data-pendok]"):null;
+  if(!b||(b.closest&&b.closest("#pd_aviso")))return;
+  var p=pedidos.filter(function(x){return x.id===b.getAttribute("data-pendok");})[0];
+  if(p)resolverPendencia(p);
+});
 /* toda venda vira parcelas em contas a receber */
 async function gerarReceberDoPedido(p){
   var gerados=[],ccVenda=await centroFixo("Venda de produto","Receitas","entrada");
@@ -39956,6 +40045,19 @@ function dadosDash(quem){
     var dep=valorDepreciadoPedido(p);
     [[p.prospector,.2],[p.vendedor,.6],[p.instalador||p.vendedor,.2]].forEach(function(x){
       if(!x[0])semDono+=dep*x[1];else if(EQUIPE.indexOf(x[0])<0)foraLista+=dep*x[1];});});
+  /* v553 (15/11, regra dele): FATURADO do Dashboard = vendas feitas no período, pela DATA DA VENDA,
+     aprovadas ou não pelo financeiro, sem canceladas, sem teste e SEM pendência aberta; as com
+     pendência ficam na coluna "Com pendência". Só o Dashboard: comissão, folha e metas não mudam. */
+  var doPeriodo=pedidos.filter(function(p){
+    return !ehTeste(p)&&p.loja===lojaAtual&&noPeriodo(p.data,j)&&p.status!=="Cancelada"&&!p.cancelada&&
+      (!quem||p.vendedor===quem||p.prospector===quem||(p.instalador||p.vendedor)===quem);});
+  var fatPed=doPeriodo.filter(function(p){return !pendenciaAberta(p);});
+  var pendPed=doPeriodo.filter(pendenciaAberta);
+  var semDonoF=0,foraListaF=0;
+  if(!quem)fatPed.forEach(function(p){
+    var dep=valorDepreciadoPedido(p);
+    [[p.prospector,.2],[p.vendedor,.6],[p.instalador||p.vendedor,.2]].forEach(function(x){
+      if(!x[0])semDonoF+=dep*x[1];else if(EQUIPE.indexOf(x[0])<0)foraListaF+=dep*x[1];});});
   var prodVds=qtdProdutosDash(vds),prodPrev=qtdProdutosDash(prevPed);
   return {j:j,ats:ats,atsMan:atsMan,atsAuto:atsAuto,criadas:criadas,feitas:feitas,vds:vds,inst:inst,aprov:aprov,vdsVend:vdsVend,conversas:conversas,
     prevPed:prevPed,prevAprov:aprov.length,prevAssin:assinPend.length,prevDep:depDe(prevPed),prevMeta:parteDe(prevPed),
@@ -39976,10 +40078,13 @@ function dadosDash(quem){
     cAt:porCanal(ats),cFeitas:porCanal(feitas),cPass:porCanal(pass),cAtivo:porCanal(ativo),
     pass:pass,ativo:ativo,
     fat:aprov.reduce(function(a,p){return a+(+p.total||0);},0),
-    dep:depDe(aprov),
+    dep:depDe(fatPed),
+    fatPed:fatPed,pendPed:pendPed,fatAprov:fatPed.filter(function(p){return !!p.aprovado;}).length,
+    pendDep:depDe(pendPed),pendMeta:parteDe(pendPed),
+    depAprov:depDe(aprov),metaAprov:parteDe(aprov),
     /* a parte da pessoa (a equipe toda: o depreciado inteiro, cada pedido uma vez) */
-    meta:parteDe(aprov),
-    semDono:Math.round(semDono*100)/100,foraLista:Math.round(foraLista*100)/100};
+    meta:parteDe(fatPed),
+    semDono:Math.round(semDonoF*100)/100,foraLista:Math.round(foraListaF*100)/100};
 }
 /* FILTRO DO DASHBOARD (27/10, pedido dele: "clicar em cada quadro e ir direto para o filtro
    desses quadros"). A lista que abre é EXATAMENTE a que o cartão contou — os ids vêm de
@@ -40006,7 +40111,8 @@ var DASH_ALVOS={
   feitas:{tela:"atend",t:"Atividades realizadas",l:"feitas"},
   vds:{tela:"pedidos",t:"Vendas realizadas (como vendedora)",l:"vds"},
   inst:{tela:"pedidos",t:"Instalações concluídas",l:"inst"},
-  fat:{tela:"pedidos",t:"Faturamento (aprovado no financeiro)",l:"aprov"},
+  fat:{tela:"pedidos",t:"Faturado (vendas do período, sem pendência)",l:"fatPed"},
+  pend:{tela:"pedidos",t:"Vendas com pendência",l:"pendPed"},
   conv:{tela:"pedidos",t:"Conversão de venda (clientes conversados que compraram)",l:"convPed"},
   prospC:{tela:"atend",t:"Prospecção: clientes contatados (1º contato do período)",l:"prospCont"},
   prospV:{tela:"pedidos",t:"Prospecção: vendas em até "+DIAS_CONVERSAO+" dias como prospectora",l:"prospPed"},
@@ -40028,13 +40134,14 @@ function abrirFiltroDash(k,quemArg,motivo){
   if(k==="prospC"||k==="prospV"){var pc=d.prospCont.length;
     extra=" · "+d.prospPed.length+" de "+pc+" cliente"+(pc===1?"":"s")+" contatado"+(pc===1?"":"s")+" compraram em até "+DIAS_CONVERSAO+
       " dias com "+(quem||"a equipe")+" como prospector"+(quem?"a":"")+" ("+d.prosp.auto+" de contato pelo WhatsApp do sistema · "+d.prosp.man+" feito pela pessoa)";}
-  if(k==="fat")extra=" · "+BRL(d.dep)+" de depreciado das vendas aprovadas (pela data em que a venda conta)"+(quem?" · parte de "+quem+": "+BRL(d.meta):"");
+  if(k==="fat")extra=" · "+BRL(d.dep)+" de depreciado das vendas do período, pela data da venda, aprovadas ou não, sem pendência"+(quem?" · parte de "+quem+": "+BRL(d.meta):"");
+  if(k==="pend")extra=" · "+BRL(d.pendDep)+" de depreciado com pendência aberta"+(quem?" · parte de "+quem+": "+BRL(d.pendMeta):"");
   if(k==="conv"){var n=d.convTotal;
     extra=" · "+(n?Math.round(d.convCli/n*100):0)+"% de conversão: "+d.convCli+" de "+n+" cliente"+(n===1?"":"s")+" conversado"+(n===1?"":"s")+
       " no período compraram como vendedor em até "+DIAS_CONVERSAO+" dias";}
   filtroDash={k:k,tela:def.tela,ids:ids,n:lista.length,titulo:def.t,
     rot:d.j.rot+" · "+(quem||"equipe toda")+extra,de:d.j.de,ate:d.j.ate,quem:quem,
-    marca:k==="prospV"?d.prospMarca:null};
+    marca:k==="prospV"?d.prospMarca:(k==="pend"?(function(){var m={};d.pendPed.forEach(function(p){m[p.id]="Pendência: "+(p.pendencia||"");});return m;})():null)};
   if(ir(def.tela)===false){filtroDash=null;return;}
   if(def.tela==="pedidos"){
     if($("pedBusca"))$("pedBusca").value="";
@@ -40166,9 +40273,11 @@ function renderDash(){
           ? BRL(vl)+" esperando o financeiro · toque para ver"
           : "nada esperando o financeiro")+"</div></div>";
     })()+
-    kpiVai("fat",quem?"Faturado (parte, depreciado)":"Faturamento depreciado",BRL(quem?d.meta:d.dep),d.aprov.length
-      ? (quem?"parte de "+esc(quem)+" em "+BRL(d.dep)+" das vendas aprovadas em que participou":d.aprov.length+" venda"+(d.aprov.length===1?"":"s")+" aprovada"+(d.aprov.length===1?"":"s")+", cada uma uma vez")
-      : "nenhuma venda aprovada no financeiro")+
+    kpiVai("fat",quem?"Faturado (parte, depreciado)":"Faturamento depreciado",BRL(quem?d.meta:d.dep),(d.fatPed.length
+      ? (quem?"parte de "+esc(quem)+" em "+BRL(d.dep)+" das "+d.fatPed.length+" vendas do período em que participou":d.fatPed.length+" venda"+(d.fatPed.length===1?"":"s")+" do período, cada uma uma vez")+
+        " · "+d.fatAprov+" aprovada"+(d.fatAprov===1?"":"s")
+      : "nenhuma venda sem pendência no período")+
+      (d.pendPed.length?" · fora: "+d.pendPed.length+" com pendência ("+BRL(quem?d.pendMeta:d.pendDep)+")":""))+
     (function(){var pc=d.prospCont.length,pv=d.prospPed.length,pp=pc?Math.round(pv/pc*100):0;
       return kpiVai("prospV","Conversão de prospecção",pp+"%",pv+" de "+pc+" cliente"+(pc===1?"":"s")+" contatado"+(pc===1?"":"s")+" compraram em até "+DIAS_CONVERSAO+
         " dias "+(quem?"com "+esc(quem)+" como prospectora":"pela prospecção da equipe")+" · "+d.prosp.auto+" de contato pelo WhatsApp do sistema · "+d.prosp.man+" feito pela pessoa"+
@@ -40261,7 +40370,8 @@ function renderDash(){
       }).join("")+
       '<td class="num">'+lk("criadas",n,x.criadas.length)+'</td><td class="num">'+lk("feitas",n,x.feitas.length)+"</td>"+
       '<td class="num">'+lk("vds",n,x.vds.length)+'</td><td class="num">'+lk("inst",n,x.inst.length)+"</td>"+
-      '<td class="num">'+lk("fat",n,BRL(x.meta))+'<div class="t-sub">'+x.aprov.length+" aprovada"+(x.aprov.length===1?"":"s")+"</div></td>"+
+      '<td class="num">'+lk("fat",n,BRL(x.meta))+'<div class="t-sub">'+x.fatPed.length+" venda"+(x.fatPed.length===1?"":"s")+" · "+x.fatAprov+" aprovada"+(x.fatAprov===1?"":"s")+"</div></td>"+
+      '<td class="num">'+lk("pend",n,BRL(x.pendMeta))+'<div class="t-sub">'+x.pendPed.length+" venda"+(x.pendPed.length===1?"":"s")+"</div></td>"+
       '<td class="num">'+lk("conv",n,'<span class="pill '+(cv>=30?"p-ok":cv>=15?"p-acc":cv>0?"p-warn":"p-mut")+'">'+cv+"%</span>")+
         '<div class="t-sub">'+x.convCli+" de "+x.convTotal+(x.convAberto?" · "+x.convAberto+" em andamento":"")+"</div></td>"+
       '<td class="num">'+lk("prospC",n,pc)+" · "+lk("prospV",n,pv)+" · <b>"+pp+"%</b>"+
@@ -40270,7 +40380,7 @@ function renderDash(){
   var html="";
   nomes.forEach(function(n){
     var x=dadosDash(n);
-    if(!x.ats.length&&!x.criadas.length&&!x.feitas.length&&!x.vds.length&&!x.inst.length&&!x.aprov.length)return;
+    if(!x.ats.length&&!x.criadas.length&&!x.feitas.length&&!x.vds.length&&!x.inst.length&&!x.aprov.length&&!x.fatPed.length&&!x.pendPed.length)return;
     html+=linha(n,x,false);
   });
   /* linha de total: só com "equipe toda" (e só para a gestão, que vê a equipe) */
@@ -40280,13 +40390,13 @@ function renderDash(){
     var soma=Math.round((d.dep-d.semDono-d.foraLista)*100)/100,partes=0;
     nomes.forEach(function(n){partes+=dadosDash(n).meta;});partes=Math.round(partes*100)/100;
     var dif=Math.round((soma-partes)*100)/100;
-    conf='<div class="note'+(Math.abs(dif)>0.05*Math.max(1,nomes.length)?" warn":"")+'"><b>Conferência do faturado:</b> '+BRL(d.dep)+" das vendas aprovadas (cada pedido uma vez) = "+
+    conf='<div class="note'+(Math.abs(dif)>0.05*Math.max(1,nomes.length)?" warn":"")+'"><b>Conferência do faturado:</b> '+BRL(d.dep)+" das vendas do período sem pendência (cada pedido uma vez) = "+
       BRL(partes)+" das partes de quem está no quadro"+
       (d.semDono?" + "+BRL(d.semDono)+" sem dono (venda sem prospector)":"")+
       (d.foraLista?" + "+BRL(d.foraLista)+" de quem não está na lista (prestador ou ex-colaborador)":"")+
       (Math.abs(dif)>=0.01?" · diferença de arredondamento: "+BRL(dif):" · sem diferença")+".</div>";
   }
-  b.innerHTML=html||'<tr><td colspan="12"><div class="empty"><div class="big">Sem movimento no período</div></div></td></tr>';
+  b.innerHTML=html||'<tr><td colspan="13"><div class="empty"><div class="big">Sem movimento no período</div></div></td></tr>';
   $("dashConfere").innerHTML=conf;
   if(!b.__ligDk){b.__ligDk=true;
     b.addEventListener("click",function(ev){var el=ev.target&&ev.target.closest?ev.target.closest("[data-dk]"):null;
@@ -41665,6 +41775,9 @@ function abrirPedidoParaEditar(p){
     if(p.vendedor)$("v_vend").value=p.vendedor;
     if(p.instalador)$("v_inst").value=p.instalador;
     $("v_obs").value=p.obs||"";
+    /* v553: pendência aberta continua Sim (só o Financeiro resolve); o texto pode ser corrigido */
+    if($("v_pend")){$("v_pend").value=pendenciaAberta(p)?"sim":"nao";$("v_pendTexto").value=pendenciaAberta(p)?(p.pendencia||""):"";
+      $("v_pend").disabled=pendenciaAberta(p);mostrarPendVenda();}
     /* pedido JÁ GRAVADO: vale o que está nele. Pedido antigo que ficou sem resposta volta a
        "— escolha —" em vez de ganhar um "Sim" que o cliente nunca deu (17/10) */
     $("v_imagem").value=p.usoImagem||"";
@@ -41732,6 +41845,7 @@ async function aplicarEdicaoPedido(cli,r,solDesc){
   p.instalacaoAgora=(temInstalacaoVenda()==="agora"&&!$("v_idata").value);
   p.prestadorId=(ehValorPrest(valorIresp())?idDoValorPrest(valorIresp()):"");
   p.obs=$("v_obs").value.trim();p.usoImagem=$("v_imagem").value;
+  aplicarPendVenda(p);   /* v553 */
   revisarAutorizacaoDesconto(p,r,solDesc,descAut0,p.itens);
   if(solDesc)registrarEvento(p,"Autorização de desconto solicitada: "+solDesc.motivo);
   /* anexo escolhido durante a edição entra junto dos que já estavam */
@@ -49804,7 +49918,9 @@ function renderPedDet(){
       (msI.length?"<br>Incluídos na venda na instalação: "+esc(msI.map(function(m){return (m.qtd||1)+"× "+m.nome;}).join(", ")):"")+
       (p.obsInstalacao?"<br>Observações: "+esc(p.obsInstalacao):"")+"</div>";
   }
+  av=htmlPendenciaVenda(p,true)+av;   /* v553 */
   $("pd_aviso").innerHTML=avisoAjuste+av;avisoAjuste="";
+  Array.prototype.forEach.call($("pd_aviso").querySelectorAll("[data-pendok]"),function(bt){bt.onclick=function(){resolverPendencia(p);};});
   var ehOS=!!osDoPedido(p);
   $("pd_acoes").innerHTML='<button class="btn ghost" type="button" id="pd_pdf">'+(ehOS?"PDF da OS":"PDF da venda")+'</button>'+
     '<button class="btn zap" type="button" id="pd_zap">'+(ehOS?"Enviar a OS para o cliente via WhatsApp":"Enviar Pedido Venda para cliente via WhatsApp")+"</button>"+
@@ -54038,6 +54154,7 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
     '<div style="margin:0 0 8px"><button class="btn ghost sm" type="button" data-finver="'+p.id+'">Ver a venda completa</button></div>'+
     htmlRetiradasPedido(p)+
     htmlCreditoVenda(p)+
+    htmlPendenciaVenda(p,true)+   /* v553 */
     (p.voltouFinanceiro?'<div class="note warn"><b>Venda reaberta e alterada</b> por '+esc(p.voltouFinanceiro.por)+" em "+
       esc(dataBR(p.voltouFinanceiro.quando))+": de "+BRL(p.voltouFinanceiro.de)+" para "+BRL(p.voltouFinanceiro.para)+
       (p.voltouFinanceiro.motivo?" · "+esc(p.voltouFinanceiro.motivo):"")+". Aprove de novo: a baixa e a reposição são só da diferença.</div>":"")+
@@ -64214,6 +64331,7 @@ function ligar(){
   /* série digitada ou lida pela câmera: a localização passa a opcional na hora */
   $("v_serie").addEventListener("input",ajustarLocalItem);
   $("v_gar").onchange=notaGarantia;$("v_imagem").onchange=calcular;
+  if($("v_pend"))$("v_pend").onchange=mostrarPendVenda;   /* v553 */
   $("finBusca").value="";$("finBusca").oninput=renderFin;$("finQuem").onchange=renderFin;
   window.addEventListener("pageshow",function(){try{if($("finBusca").value){$("finBusca").value="";renderFin();}}catch(eP){}});
   ["v_valor","v_qtd"].forEach(function(id){$(id).oninput=calcular;$(id).onchange=calcular;});
