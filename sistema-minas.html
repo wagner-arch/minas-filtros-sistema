@@ -2424,6 +2424,7 @@ img{max-width:100%}
     <button data-s="estHist"><span class="rot-est" data-leve="Meu histórico" data-completa="Histórico">Meu histórico</span></button>
     <button data-s="estInv">Inventário</button>
     <button data-s="estRecup">Recuperações</button>
+    <button data-s="estTransicao">Transição do estoque</button>
     <button data-s="estConsumo">Uso e consumo</button>
     <button data-s="ferramentas">Ferramentas</button>
     <div class="grp">Gestão Administrativa</div>
@@ -4929,6 +4930,16 @@ img{max-width:100%}
       </div>
       <div class="card" id="enDet" hidden></div>
     </section>
+    <section class="screen" id="s-estTransicao" hidden>
+      <div class="cab">
+        <div>
+          <h2>Transição do estoque</h2>
+          <div class="sub">O que existe hoje, para o Administrador decidir item por item antes de as regras novas valerem. Esta tela só mostra: nada muda sem o seu clique.</div>
+        </div>
+      </div>
+      <div id="trxCorpo"></div>
+    </section>
+
     <section class="screen" id="s-estAfazer" hidden>
       <div class="page-head"><h1>Demandas do Estoque</h1><p id="afSub">O que depende de você nos estoques.</p></div>
       <div class="toolbar af-topo">
@@ -7882,6 +7893,27 @@ img{max-width:100%}
     <div class="actions">
       <button class="btn" type="button" id="rp_sim">Sim, recebi — adicionar ao meu estoque</button>
       <button class="btn mut" type="button" id="rp_nao">Ainda não</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="trxModal" hidden>
+  <div class="box" style="width:min(560px,100%)">
+    <h3 id="trx_titulo">Decisão</h3>
+    <div id="trx_det"></div>
+    <div class="fld" id="trx_qtdWrap" style="margin-top:12px" hidden>
+      <label for="trx_qtd">Quantidade contada <span class="req">*</span></label>
+      <input id="trx_qtd" type="number" step="1" min="0" inputmode="numeric" placeholder="0">
+      <div class="help" id="trx_qtdAjuda"></div>
+    </div>
+    <div class="fld" style="margin-top:12px">
+      <label for="trx_motivo">Motivo <span class="req">*</span></label>
+      <textarea id="trx_motivo" rows="3" placeholder="Por que esta decisão? Fica gravado com o seu nome e a data."></textarea>
+    </div>
+    <div id="trx_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="trx_ok">Confirmar</button>
+      <button class="btn mut" type="button" id="trx_cancelar">Fechar</button>
     </div>
   </div>
 </div>
@@ -25948,6 +25980,476 @@ async function gravarSeriesEstoque__corpo(){
   renderSeriesEstoque();
   try{renderEstEmpresa();renderEstColab();}catch(e){}
 }
+/* ====================================================================
+   TELA DE TRANSIÇÃO DO ESTOQUE (16/11, v563) — 1ª das 6 versões das regras novas
+   --------------------------------------------------------------------
+   Regra dele: ANTES de qualquer regra nova valer sobre dado antigo, o Administrador olha o que
+   existe hoje e decide item por item. Esta tela SÓ MOSTRA; nada muda sem o clique dele, e cada
+   decisão fica gravada com quem, quando, o motivo e o de/para. Minas Filtros e WF Filtros são
+   listas separadas, porque tudo aqui lê a empresa aberta.
+   As três listas:
+   1. Estoques negativos de hoje — com "Ajustar pela contagem" (o saldo passa a ser a contagem
+      física, por um movimento de ajuste como o da contagem que já existe), "Lançar nota de
+      entrada pendente" (vai para a Entrada de Notas de sempre, sem atalho que pule o Financeiro)
+      e "Manter por enquanto" (não mexe em nada, só registra).
+   2. Reposições automáticas ainda abertas — "Manter como requisição normal" ou "Cancelar com
+      motivo", uma a uma ou em lote.
+   3. Autorizações de estoque pendentes, em três grupos: A) o dono do estoque é o próprio
+      instalador (pela regra nova não precisariam existir) — "Cancelar todas com motivo";
+      B) o instalador usou peça de outra pessoa; C) venda sem instalação com peça de outra
+      pessoa — B e C um por um.
+   A decisão em lote guarda antes uma cópia dos registros que vai mexer (`antes`), para dar
+   para voltar atrás. A próxima versão (v565, estoque negativo proibido) só liga a trava na
+   empresa onde esta tela mostrar ZERO negativos. */
+var TRANS={lido:false,doc:null,aba:"neg",pend:null};
+function podeTransicaoEst(){return ehAdministrador();}
+window.__podeTransicaoMF=podeTransicaoEst;
+function localDeVerdadeEst(l){
+  return l===LOC_EMPRESA||String(l||"").indexOf("colab:")===0||ehLocalLoja(l);
+}
+/* ---------- o documento das decisões (um por empresa) ---------- */
+async function carregarTransicao(){
+  if(TRANS.lido)return TRANS.doc;
+  TRANS.doc={decisoes:[]};
+  if(db){
+    try{
+      var g=await db.doc("config/transicao_estoque").get();
+      if(g&&g.exists&&g.data())TRANS.doc={decisoes:g.data().decisoes||[],em:g.data().em||"",por:g.data().por||""};
+    }catch(e){console.warn("transição",e);}
+  }
+  TRANS.lido=true;
+  return TRANS.doc;
+}
+async function gravarDecisoesTransicao(novas){
+  var antes=TRANS.doc?JSON.parse(JSON.stringify(TRANS.doc)):{decisoes:[]};
+  TRANS.doc=TRANS.doc||{decisoes:[]};
+  TRANS.doc.decisoes=(TRANS.doc.decisoes||[]).concat(novas);
+  TRANS.doc.em=agoraCarimbo();TRANS.doc.por=usuarioAtual;
+  if(!db)return true;
+  try{await db.doc("config/transicao_estoque").set({decisoes:TRANS.doc.decisoes,em:TRANS.doc.em,por:TRANS.doc.por});}
+  catch(e){TRANS.doc=antes;throw e;}
+  return true;
+}
+function decisoesTransicao(tipo){
+  return ((TRANS.doc&&TRANS.doc.decisoes)||[]).filter(function(d){return !tipo||d.tipo===tipo;});
+}
+
+/* ---------- LISTA 1: estoques negativos de hoje ---------- */
+/* UMA passada nos movimentos (são 30 mil): perguntar o saldo produto a produto travaria a tela */
+function saldosDeVerdadeEst(){
+  var m={};
+  (movEst||[]).forEach(function(mo){
+    if(!mo||mo.loja!==lojaAtual||!mo.produtoId)return;
+    var q=+mo.qtd||0,kd=mo.produtoId+"|"+mo.destino,ko=mo.produtoId+"|"+mo.origem;
+    if(localDeVerdadeEst(mo.destino))m[kd]=(m[kd]||0)+q;
+    if(localDeVerdadeEst(mo.origem))m[ko]=(m[ko]||0)-q;
+  });
+  return m;
+}
+/* o pedido que deixou este estoque negativo: a última saída daqui com número de pedido no documento */
+function pedidoDoNegativo(pid,loc){
+  var ult=null;
+  (movEst||[]).forEach(function(mo){
+    if(!mo||mo.loja!==lojaAtual||mo.produtoId!==pid||mo.origem!==loc)return;
+    var n=String(mo.doc||"").match(/Pedido\s+([A-Za-z0-9-]+)/);
+    if(!n)return;
+    var quando=String(mo.em||mo.data||"");
+    if(!ult||quando>ult.quando)ult={numero:n[1],quando:quando,doc:mo.doc||""};
+  });
+  return ult;
+}
+/* já existe requisição aberta deste produto para este estoque? */
+function reposicaoPedidaDe(pid,loc){
+  var r=(requisicoes||[]).filter(function(x){
+    if(!x||x.loja!==lojaAtual||x.tipo!=="requisicao")return false;
+    if(x.status!=="pendente"&&x.status!=="separada")return false;
+    if(localDaReq(x)!==loc)return false;
+    return (x.itens||[]).some(function(i){return i.pid===pid&&!itemFechadoReq(i);});
+  })[0];
+  return r||null;
+}
+function negativosTransicao(){
+  var s=saldosDeVerdadeEst(),out=[];
+  Object.keys(s).forEach(function(k){
+    var v=s[k];if(!(v<0))return;
+    var i=k.lastIndexOf("|"),pid=k.slice(0,i),loc=k.slice(i+1);
+    var p=prodPorId(pid)||{};
+    var ped=pedidoDoNegativo(pid,loc),rq=reposicaoPedidaDe(pid,loc);
+    out.push({pid:pid,local:loc,saldo:v,falta:-v,
+      nome:codNomeItem({pid:pid,cod:p.cod,nome:p.nome}),
+      pedido:ped?ped.numero:"",pedidoDoc:ped?ped.doc:"",
+      reqId:rq?rq.id:"",reqTexto:rq?("já pedida · "+(rq.status==="separada"?"separada":"aguardando")):"não"});
+  });
+  return out.sort(function(a,b){return ordAZ(nomeLocal(a.local)+a.nome,nomeLocal(b.local)+b.nome);});
+}
+window.__negativosTransicaoMF=negativosTransicao;
+/* a trava da v565 só liga na empresa onde isto devolver 0 */
+function estoqueNegativoZerado(){return negativosTransicao().length===0;}
+window.__estoqueNegativoZeradoMF=estoqueNegativoZerado;
+
+/* ---------- LISTA 2: reposições automáticas ainda abertas ---------- */
+function reposicoesAbertasTransicao(){
+  return (requisicoes||[]).filter(function(r){
+    return !!r&&r.loja===lojaAtual&&r.tipo==="requisicao"&&r.origem==="reposicao"&&
+      (r.status==="pendente"||r.status==="separada")&&
+      !(r.itens||[]).every(function(i){return itemFechadoReq(i);});
+  }).sort(function(a,b){return String(a.data||"").localeCompare(String(b.data||""));});
+}
+window.__reposicoesTransicaoMF=reposicoesAbertasTransicao;
+
+/* ---------- LISTA 3: autorizações de estoque pendentes, em grupos ---------- */
+function autsPendentesTransicao(){
+  var out=[];
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||p.status==="Cancelada")return;
+    var lista=itensDeEstoque(p);
+    lista.forEach(function(it,ix){
+      var a=it&&it.autEstoque;
+      if(!a||a.status!=="pendente")return;
+      var inst=quemInstalaPedido(p),comInst=!!inst;
+      var grupo=comInst?(a.local===locColab(inst)?"A":"B"):"C";
+      out.push({pedidoId:p.id,numero:p.numero||"",ix:ix,grupo:grupo,local:a.local,
+        produto:codNomeItem(it),qtd:+(it.qtd||1),cliente:p.cliente||"",
+        vendedor:p.vendedor||"",instalador:inst,
+        pedidaPor:a.pedidaPor||"",pedidaEm:a.pedidaEm||""});
+    });
+  });
+  return out.sort(function(a,b){return (a.grupo+a.numero).localeCompare(b.grupo+b.numero);});
+}
+window.__autsTransicaoMF=autsPendentesTransicao;
+
+/* ---------- a janela de decisão (uma só para os três tipos) ---------- */
+function abrirDecisaoTransicao(cfg){
+  if(!podeTransicaoEst()){toast("Só o Administrador decide na tela de transição.");return;}
+  TRANS.pend=cfg;
+  $("trx_titulo").textContent=cfg.titulo||"Decisão";
+  $("trx_det").innerHTML=cfg.detalhe||"";
+  var wq=$("trx_qtdWrap");
+  wq.hidden=!cfg.pedeQtd;
+  if(cfg.pedeQtd){$("trx_qtd").value="";$("trx_qtdAjuda").textContent=cfg.ajudaQtd||"";}
+  $("trx_motivo").value="";
+  $("trx_alerta").innerHTML="";
+  $("trx_ok").textContent=cfg.botao||"Confirmar";
+  $("trxModal").hidden=false;
+  setTimeout(function(){try{(cfg.pedeQtd?$("trx_qtd"):$("trx_motivo")).focus();}catch(e){}},80);
+}
+function confirmarDecisaoTransicao(){return travaSalvar("confirmarDecisaoTransicao",confirmarDecisaoTransicao__corpo,this,arguments);}
+async function confirmarDecisaoTransicao__corpo(){
+  var c=TRANS.pend;if(!c)return false;
+  if(!podeTransicaoEst()){toast("Só o Administrador decide na tela de transição.");return false;}
+  var mot=String($("trx_motivo").value||"").trim();
+  if(!mot){$("trx_alerta").innerHTML='<div class="note crit">Escreva o motivo — ele fica gravado na decisão.</div>';return false;}
+  var qtd=null;
+  if(c.pedeQtd){
+    var t=String($("trx_qtd").value||"").trim();
+    if(t===""||isNaN(+t)||+t<0||Math.floor(+t)!==+t){
+      $("trx_alerta").innerHTML='<div class="note crit">Informe a quantidade contada (0 ou mais, sem casas).</div>';return false;}
+    qtd=+t;
+  }
+  var r;
+  try{r=await c.fazer(mot,qtd);}
+  catch(e){$("trx_alerta").innerHTML='<div class="note crit"><b>Não foi salvo.</b> '+esc((e&&e.message)||String(e))+"</div>";return false;}
+  if(r===false)return false;
+  $("trxModal").hidden=true;TRANS.pend=null;
+  renderTransicao();
+  try{render();}catch(e){}
+  return true;
+}
+
+/* ---------- as decisões ---------- */
+/* 1a) ajustar pela contagem: o saldo passa a ser o contado, por um movimento de ajuste */
+async function trAjustarContagem(x,motivo,contado){
+  var dif=contado-x.saldo;
+  if(dif===0){
+    await gravarDecisoesTransicao([{tipo:"negativo",acao:"contagem",quando:agoraCarimbo(),por:usuarioAtual,
+      motivo:motivo,pid:x.pid,produto:x.nome,local:x.local,de:x.saldo,para:contado,semMovimento:true}]);
+    toast("O saldo já era "+contado+" — nada foi movimentado, só registrei a decisão.");
+    return true;
+  }
+  var doc="Transição do estoque · ajuste pela contagem";
+  var obs="Negativo acertado por "+usuarioAtual+" · contado "+contado+" (estava "+x.saldo+") · "+motivo;
+  var mov;
+  if(dif>0)mov=await lancarMov(x.pid,dif,"ajuste",x.local,doc,obs,hojeISO(),"");
+  else mov=await lancarMov(x.pid,-dif,x.local,"ajuste",doc,obs,hojeISO(),"");
+  try{
+    await gravarDecisoesTransicao([{tipo:"negativo",acao:"contagem",quando:agoraCarimbo(),por:usuarioAtual,
+      motivo:motivo,pid:x.pid,produto:x.nome,local:x.local,de:x.saldo,para:contado,
+      movimentoId:mov?mov.id:"",pedido:x.pedido||""}]);
+  }catch(e){console.warn("registro da decisão",e);}
+  toast(nomeLocal(x.local)+" · "+x.nome+": saldo de "+x.saldo+" para "+contado+".");
+  try{renderEstEmpresa();renderEstColab();}catch(e){}
+  return true;
+}
+/* 1b) manter por enquanto: não mexe em nada */
+async function trManterNegativo(x,motivo){
+  await gravarDecisoesTransicao([{tipo:"negativo",acao:"manter",quando:agoraCarimbo(),por:usuarioAtual,
+    motivo:motivo,pid:x.pid,produto:x.nome,local:x.local,de:x.saldo,para:x.saldo,pedido:x.pedido||""}]);
+  toast("Registrado: "+x.nome+" em "+nomeLocal(x.local)+" fica como está por enquanto.");
+  return true;
+}
+/* 2) reposições: manter como requisição normal ou cancelar com motivo (uma ou em lote) */
+async function trDecidirReposicoes(lista,cancelar,motivo){
+  if(!lista.length)return false;
+  /* cópia de segurança dos registros antes da decisão em lote */
+  var antes=lista.map(function(r){
+    return {id:r.id,status:r.status,local:localDaReq(r),origem:r.origem,obs:r.obs||"",
+      pedidoNumero:r.pedidoNumero||"",motivoRecusa:r.motivoRecusa||"",
+      itens:(r.itens||[]).map(function(i){return {pid:i.pid,qtd:i.qtd,atendida:i.atendida};})};
+  });
+  var feitos=[];
+  if(cancelar){
+    for(var i=0;i<lista.length;i++){
+      var r=lista[i],ant={status:r.status,motivoRecusa:r.motivoRecusa||""};
+      r.status="cancelada";
+      r.canceladaNaTransicao=true;
+      r.motivoRecusa="Cancelada na transição do estoque por "+usuarioAtual+": "+motivo;
+      r.canceladaPor=usuarioAtual;r.canceladaEm=agoraCarimbo();
+      try{await gravaConf("requisicoes",r);feitos.push(r);}
+      catch(e){
+        r.status=ant.status;r.motivoRecusa=ant.motivoRecusa;
+        delete r.canceladaNaTransicao;delete r.canceladaPor;delete r.canceladaEm;
+        throw new Error("Cancelei "+feitos.length+" de "+lista.length+" e o banco recusou a seguinte. As que faltaram continuam abertas. ("+((e&&e.message)||e)+")");
+      }
+    }
+  }
+  await gravarDecisoesTransicao([{tipo:"reposicao",acao:cancelar?"cancelar":"manter",
+    quando:agoraCarimbo(),por:usuarioAtual,motivo:motivo,
+    quantas:lista.length,lote:lista.length>1,antes:antes,
+    ids:lista.map(function(r){return r.id;})}]);
+  toast(cancelar
+    ? lista.length+(lista.length===1?" reposição cancelada.":" reposições canceladas.")
+    : lista.length+(lista.length===1?" reposição mantida":" reposições mantidas")+" como requisição normal.");
+  try{agendarEstNovas();}catch(e){}
+  return true;
+}
+/* 3) grupo A: cancelar todas as autorizações em que o dono do estoque é o próprio instalador.
+   NÃO mexe no estoque nem na origem do item: a peça já sai da caixinha de quem instala, que é
+   exatamente o que a regra nova manda. Só a autorização, que não precisa existir, é encerrada. */
+async function trCancelarAutsGrupoA(lista,motivo){
+  if(!lista.length)return false;
+  var antes=lista.map(function(x){
+    return {pedidoId:x.pedidoId,numero:x.numero,ix:x.ix,local:x.local,produto:x.produto,
+      qtd:x.qtd,instalador:x.instalador,pedidaPor:x.pedidaPor,pedidaEm:x.pedidaEm,status:"pendente"};
+  });
+  var feitos=0;
+  for(var i=0;i<lista.length;i++){
+    var x=lista[i];
+    var p=(pedidos||[]).filter(function(y){return y.id===x.pedidoId;})[0];
+    if(!p)continue;
+    var it=itensDeEstoque(p)[x.ix];
+    var a=it&&it.autEstoque;
+    if(!a||a.status!=="pendente")continue;
+    var ant=JSON.parse(JSON.stringify(a));
+    a.status="cancelada";
+    a.motivo="Cancelada na transição do estoque: "+motivo;
+    a.decididoPor=usuarioAtual;a.decididoEm=iso(new Date());
+    a.canceladaNaTransicao=true;
+    registrarEvento(p,"Autorização de estoque cancelada na transição por "+usuarioAtual+
+      " · "+x.qtd+"× "+x.produto+" · o estoque é do próprio instalador ("+(x.instalador||"—")+") · "+motivo);
+    try{await gravaConf("pedidos",p);feitos++;}
+    catch(e){
+      it.autEstoque=ant;(p.eventos||[]).pop();
+      throw new Error("Cancelei "+feitos+" de "+lista.length+" e o banco recusou a seguinte. As que faltaram continuam pendentes. ("+((e&&e.message)||e)+")");
+    }
+  }
+  await gravarDecisoesTransicao([{tipo:"autorizacao",acao:"cancelar",grupo:"A",
+    quando:agoraCarimbo(),por:usuarioAtual,motivo:motivo,quantas:feitos,lote:true,antes:antes}]);
+  toast(feitos+(feitos===1?" autorização cancelada.":" autorizações canceladas.")+" Nenhum estoque foi movimentado.");
+  return true;
+}
+/* B e C: um por um, com o mesmo registro */
+async function trDecidirAutUma(x,motivo){
+  var p=(pedidos||[]).filter(function(y){return y.id===x.pedidoId;})[0];
+  if(!p)throw new Error("O pedido não está mais na lista.");
+  var it=itensDeEstoque(p)[x.ix],a=it&&it.autEstoque;
+  if(!a||a.status!=="pendente")throw new Error("Esta autorização já foi respondida.");
+  var ant=JSON.parse(JSON.stringify(a));
+  a.status="cancelada";
+  a.motivo="Cancelada na transição do estoque: "+motivo;
+  a.decididoPor=usuarioAtual;a.decididoEm=iso(new Date());
+  a.canceladaNaTransicao=true;
+  registrarEvento(p,"Autorização de estoque cancelada na transição por "+usuarioAtual+
+    " · "+x.qtd+"× "+x.produto+" · grupo "+x.grupo+" · "+motivo);
+  try{await gravaConf("pedidos",p);}
+  catch(e){it.autEstoque=ant;(p.eventos||[]).pop();throw e;}
+  await gravarDecisoesTransicao([{tipo:"autorizacao",acao:"cancelar",grupo:x.grupo,
+    quando:agoraCarimbo(),por:usuarioAtual,motivo:motivo,quantas:1,lote:false,
+    antes:[{pedidoId:x.pedidoId,numero:x.numero,ix:x.ix,local:x.local,produto:x.produto,qtd:x.qtd,status:"pendente"}]}]);
+  toast("Autorização do pedido "+x.numero+" cancelada. Nenhum estoque foi movimentado.");
+  return true;
+}
+window.__transicaoMF={carregar:carregarTransicao,negativos:negativosTransicao,
+  reposicoes:reposicoesAbertasTransicao,auts:autsPendentesTransicao,
+  contagem:trAjustarContagem,manter:trManterNegativo,reposicao:trDecidirReposicoes,
+  grupoA:trCancelarAutsGrupoA,autUma:trDecidirAutUma,zerado:estoqueNegativoZerado,
+  decisoes:function(t){return decisoesTransicao(t);},doc:function(){return TRANS.doc;},
+  abrir:abrirDecisaoTransicao,confirmar:function(){return confirmarDecisaoTransicao__corpo();},
+  pend:function(){return TRANS.pend;}};
+
+/* ---------- o desenho da tela ---------- */
+function renderTransicao(){
+  var b=$("trxCorpo");if(!b)return;
+  if(!podeTransicaoEst()){
+    b.innerHTML='<div class="note crit"><b>Só o Administrador abre a tela de transição.</b></div>';
+    return;
+  }
+  var neg=negativosTransicao(),rep=reposicoesAbertasTransicao(),auts=autsPendentesTransicao();
+  var gA=auts.filter(function(x){return x.grupo==="A";});
+  var gB=auts.filter(function(x){return x.grupo==="B";});
+  var gC=auts.filter(function(x){return x.grupo==="C";});
+  var h='<div class="note"><b>Esta tela só mostra.</b> Nada muda sem o seu clique, e cada decisão fica gravada '+
+    "com quem decidiu, quando e o motivo. Os números são só da <b>"+esc(nomeLoja())+"</b> — a outra empresa tem a lista dela."+
+    (estoqueNegativoZerado()?'<div class="t-sub" style="color:var(--ok)">Nenhum estoque negativo nesta empresa: a próxima versão já pode ligar a trava do negativo aqui.</div>'
+      :'<div class="t-sub" style="color:var(--warn)">Enquanto houver estoque negativo aqui, a trava do negativo (v565) não liga nesta empresa.</div>')+
+    "</div>";
+
+  /* ---- 1. negativos ---- */
+  h+='<h3 style="margin-top:22px">1. Estoques negativos de hoje <span class="pill '+(neg.length?"p-crit":"p-ok")+'">'+neg.length+"</span></h3>";
+  h+=neg.length
+    ?'<table class="tb"><thead><tr><th>Estoque</th><th>Produto</th><th class="num">Saldo</th><th class="num">Falta</th>'+
+      "<th>Pedido de origem</th><th>Reposição</th><th></th></tr></thead><tbody>"+
+      neg.map(function(x,i){
+        return "<tr><td>"+esc(nomeLocal(x.local))+"</td><td>"+esc(x.nome)+
+          '</td><td class="num" style="color:var(--crit)"><b>'+x.saldo+'</b></td><td class="num">'+x.falta+"</td>"+
+          "<td>"+(x.pedido?esc(x.pedido):"—")+"</td><td>"+esc(x.reqTexto)+"</td>"+
+          '<td style="white-space:nowrap">'+
+          '<button class="btn ghost sm" type="button" data-trneg="'+i+'" data-tra="contagem">Ajustar pela contagem</button> '+
+          '<button class="btn ghost sm" type="button" data-trneg="'+i+'" data-tra="nota">Lançar nota de entrada pendente</button> '+
+          '<button class="btn ghost sm" type="button" data-trneg="'+i+'" data-tra="manter">Manter por enquanto</button>'+
+          "</td></tr>";
+      }).join("")+"</tbody></table>"
+    :'<div class="note ok">Nenhum estoque negativo nesta empresa.</div>';
+
+  /* ---- 2. reposições automáticas abertas ---- */
+  h+='<h3 style="margin-top:26px">2. Reposições automáticas ainda abertas <span class="pill '+(rep.length?"p-acc":"p-ok")+'">'+rep.length+"</span></h3>";
+  if(rep.length){
+    h+='<div class="actions" style="justify-content:flex-start;margin:0 0 8px">'+
+      '<button class="btn ghost sm" type="button" id="trRepTudoManter">Manter todas como requisição normal</button>'+
+      '<button class="btn ghost sm" type="button" id="trRepTudoCancelar">Cancelar todas com motivo</button></div>';
+    h+='<table class="tb"><thead><tr><th>Aberta em</th><th>Estoque</th><th>Produtos</th><th>Pedido</th><th>Situação</th><th></th></tr></thead><tbody>'+
+      rep.map(function(r,i){
+        var its=(r.itens||[]).filter(function(x){return !itemFechadoReq(x);})
+          .map(function(x){return (x.atendida||x.qtd)+"× "+codNomeItem(x);}).join(", ");
+        return "<tr><td>"+esc(dataCurta(r.data||""))+"</td><td>"+esc(nomeLocal(localDaReq(r)))+
+          "</td><td>"+esc(its)+"</td><td>"+esc(r.pedidoNumero||"—")+"</td><td>"+esc(r.status)+"</td>"+
+          '<td style="white-space:nowrap">'+
+          '<button class="btn ghost sm" type="button" data-trrep="'+i+'" data-tra="manter">Manter</button> '+
+          '<button class="btn ghost sm" type="button" data-trrep="'+i+'" data-tra="cancelar">Cancelar com motivo</button>'+
+          "</td></tr>";
+      }).join("")+"</tbody></table>";
+  }else h+='<div class="note ok">Nenhuma reposição automática aberta nesta empresa.</div>';
+
+  /* ---- 3. autorizações pendentes ---- */
+  h+='<h3 style="margin-top:26px">3. Autorizações de estoque pendentes <span class="pill '+(auts.length?"p-acc":"p-ok")+'">'+auts.length+"</span></h3>";
+  function tabelaAut(lista,titulo,ajuda,botaoLote){
+    var t='<div style="margin-top:12px"><b>'+titulo+"</b> <span class=\"pill\">"+lista.length+"</span>"+
+      '<div class="t-sub">'+ajuda+"</div>";
+    if(!lista.length)return t+'<div class="note ok" style="margin-top:6px">Nenhuma.</div></div>';
+    if(botaoLote)t+='<div class="actions" style="justify-content:flex-start;margin:8px 0">'+
+      '<button class="btn ghost sm" type="button" id="trAutGrupoA">Cancelar todas com motivo</button></div>';
+    t+='<table class="tb" style="margin-top:6px"><thead><tr><th>Pedido</th><th>Cliente</th><th>Produto</th>'+
+      "<th>Estoque pedido</th><th>Vendedor</th><th>Instalador</th><th></th></tr></thead><tbody>"+
+      lista.map(function(x){
+        var ix=auts.indexOf(x);
+        return "<tr><td>"+esc(x.numero)+"</td><td>"+esc(x.cliente||"—")+"</td><td>"+x.qtd+"× "+esc(x.produto)+
+          "</td><td>"+esc(nomeLocal(x.local))+"</td><td>"+esc(x.vendedor||"—")+"</td><td>"+esc(x.instalador||"—")+"</td>"+
+          '<td style="white-space:nowrap"><button class="btn ghost sm" type="button" data-traut="'+ix+'">Cancelar com motivo</button></td></tr>';
+      }).join("")+"</tbody></table></div>";
+    return t;
+  }
+  h+=tabelaAut(gA,"A) O dono do estoque é o próprio instalador",
+    "Pela regra nova estas não precisariam existir: a peça já sai da caixinha de quem instala. Cancelar aqui não mexe em estoque nenhum.",true);
+  h+=tabelaAut(gB,"B) O instalador usou peça de outra pessoa","Decisão uma por uma.",false);
+  h+=tabelaAut(gC,"C) Venda sem instalação com peça de outra pessoa","Decisão uma por uma.",false);
+
+  /* ---- decisões já tomadas ---- */
+  var ds=decisoesTransicao("").slice().reverse();
+  h+='<h3 style="margin-top:26px">Decisões já tomadas <span class="pill">'+ds.length+"</span></h3>";
+  h+=ds.length
+    ?'<table class="tb"><thead><tr><th>Quando</th><th>Quem</th><th>Lista</th><th>Decisão</th><th>De → para</th><th>Motivo</th></tr></thead><tbody>'+
+      ds.slice(0,200).map(function(d){
+        var rot={negativo:"Negativo",reposicao:"Reposição",autorizacao:"Autorização"}[d.tipo]||d.tipo;
+        var ac={contagem:"Ajustou pela contagem",manter:"Manteve por enquanto",cancelar:"Cancelou"}[d.acao]||d.acao;
+        var dp=(d.tipo==="negativo"&&d.de!==undefined)?(d.de+" → "+d.para)
+          :(d.quantas?d.quantas+(d.quantas===1?" registro":" registros")+(d.lote?" (em lote)":""):"—");
+        return "<tr><td>"+esc(dataBR(d.quando||""))+"</td><td>"+esc(d.por||"")+"</td><td>"+esc(rot)+
+          (d.grupo?" "+esc(d.grupo):"")+"</td><td>"+esc(ac)+"</td><td>"+esc(dp)+"</td><td>"+esc(d.motivo||"")+"</td></tr>";
+      }).join("")+"</tbody></table>"
+    :'<div class="note">Nenhuma decisão tomada ainda.</div>';
+
+  b.innerHTML=h;
+
+  /* ---- os cliques ---- */
+  Array.prototype.forEach.call(b.querySelectorAll("[data-trneg]"),function(bt){
+    bt.onclick=function(){
+      var x=neg[+bt.getAttribute("data-trneg")],a=bt.getAttribute("data-tra");
+      if(!x)return;
+      var cab="<b>"+esc(nomeLocal(x.local))+"</b> · "+esc(x.nome)+
+        '<div class="t-sub">saldo '+x.saldo+" · faltam "+x.falta+
+        (x.pedido?" · pedido de origem "+esc(x.pedido):"")+"</div>";
+      if(a==="contagem")abrirDecisaoTransicao({titulo:"Ajustar pela contagem",
+        detalhe:cab+'<div class="note" style="margin-top:8px">Informe <b>quantas unidades existem de verdade</b> neste estoque. O saldo passa a ser esse número, por um movimento de ajuste — e o de/para fica registrado.</div>',
+        pedeQtd:true,ajudaQtd:"Quantidade contada na prateleira (pode ser 0).",
+        botao:"Ajustar o saldo",fazer:function(mot,q){return trAjustarContagem(x,mot,q);}});
+      else if(a==="manter")abrirDecisaoTransicao({titulo:"Manter por enquanto",
+        detalhe:cab+'<div class="note" style="margin-top:8px">Nada é movimentado. Fica só o registro da sua decisão.</div>',
+        botao:"Registrar",fazer:function(mot){return trManterNegativo(x,mot);}});
+      else{
+        /* nota de entrada: o caminho normal, sem atalho que pule o Financeiro */
+        toast("Lance a nota na Entrada de Notas Fiscais, como sempre: o estoque sobe quando o almoxarifado conferir.");
+        try{ir("notas",true);}catch(e){}
+      }
+    };
+  });
+  Array.prototype.forEach.call(b.querySelectorAll("[data-trrep]"),function(bt){
+    bt.onclick=function(){
+      var r=rep[+bt.getAttribute("data-trrep")],cancelar=bt.getAttribute("data-tra")==="cancelar";
+      if(!r)return;
+      var det="<b>Reposição de "+esc(dataCurta(r.data||""))+"</b> · "+esc(nomeLocal(localDaReq(r)))+
+        (r.pedidoNumero?" · pedido "+esc(r.pedidoNumero):"");
+      abrirDecisaoTransicao({titulo:cancelar?"Cancelar a reposição":"Manter como requisição normal",
+        detalhe:det+'<div class="note" style="margin-top:8px">'+(cancelar
+          ?"A reposição é encerrada como cancelada, com o seu motivo. Nenhum estoque é movimentado."
+          :"Ela continua aberta, como uma requisição normal ao almoxarifado. Nada muda no estoque.")+"</div>",
+        botao:cancelar?"Cancelar a reposição":"Registrar",
+        fazer:function(mot){return trDecidirReposicoes([r],cancelar,mot);}});
+    };
+  });
+  if($("trRepTudoManter"))$("trRepTudoManter").onclick=function(){
+    abrirDecisaoTransicao({titulo:"Manter todas como requisição normal",
+      detalhe:"<b>"+rep.length+" reposições</b> desta empresa continuam abertas, como requisições normais ao almoxarifado. Nenhum estoque é movimentado.",
+      botao:"Registrar",fazer:function(mot){return trDecidirReposicoes(rep,false,mot);}});
+  };
+  if($("trRepTudoCancelar"))$("trRepTudoCancelar").onclick=function(){
+    abrirDecisaoTransicao({titulo:"Cancelar todas as reposições",
+      detalhe:"<b>"+rep.length+" reposições</b> desta empresa são encerradas como canceladas, com o seu motivo. "+
+        'Nenhum estoque é movimentado.<div class="t-sub">Guardo antes uma cópia de todas, para dar para voltar atrás.</div>',
+      botao:"Cancelar as "+rep.length,fazer:function(mot){return trDecidirReposicoes(rep,true,mot);}});
+  };
+  if($("trAutGrupoA"))$("trAutGrupoA").onclick=function(){
+    abrirDecisaoTransicao({titulo:"Cancelar todas do grupo A",
+      detalhe:"<b>"+gA.length+" autorizações</b> em que o dono do estoque é o próprio instalador. "+
+        'Nenhum estoque é movimentado e a origem do item não muda: a peça continua saindo da caixinha de quem instala.<div class="t-sub">Guardo antes uma cópia de todas.</div>',
+      botao:"Cancelar as "+gA.length,fazer:function(mot){return trCancelarAutsGrupoA(gA,mot);}});
+  };
+  Array.prototype.forEach.call(b.querySelectorAll("[data-traut]"),function(bt){
+    bt.onclick=function(){
+      var x=auts[+bt.getAttribute("data-traut")];if(!x)return;
+      abrirDecisaoTransicao({titulo:"Cancelar a autorização (grupo "+x.grupo+")",
+        detalhe:"<b>Pedido "+esc(x.numero)+"</b> · "+x.qtd+"× "+esc(x.produto)+
+          '<div class="t-sub">estoque pedido: '+esc(nomeLocal(x.local))+" · instalador: "+esc(x.instalador||"—")+"</div>"+
+          '<div class="note" style="margin-top:8px">A autorização é encerrada com o seu motivo. Nenhum estoque é movimentado.</div>',
+        botao:"Cancelar a autorização",fazer:function(mot){return trDecidirAutUma(x,mot);}});
+    };
+  });
+}
+async function abrirTransicao(){
+  if(!podeTransicaoEst()){toast("Só o Administrador abre a tela de transição.");return;}
+  try{await carregarTransicao();}
+  catch(e){toast("Não deu para ler as decisões já tomadas. Confira a internet.");}
+  renderTransicao();
+}
+window.__renderTransicaoMF=renderTransicao;
 window.__seriesEstoqueMF={abrir:abrirSeriesEstoque,faltas:faltasDeSerie,gravar:gravarSeriesEstoque__corpo,
   linha:function(v){if(v!==undefined)SEREST.linha=v;return SEREST.linha;},locais:locaisComSerie};
 
@@ -57469,6 +57971,8 @@ function veTela(s,quem){
     if(s==="estInv"||s==="estRecup")return tz.indexOf("estEmpresa")>=0;
     return tz.indexOf(s)>=0;}
   var n=quem||usuarioAtual;
+  /* v563: a tela de transição do estoque é só do Administrador, sem marcação nova nenhuma */
+  if(s==="estTransicao")return perfilDe(n)==="Administrador";
   /* ESTOQUES (04/11): as telas novas usam as permissões que já existem — a visão leve é a
      tela Estoque Colaborador, a completa é a Estoque Empresa (nenhuma permissão gravada muda) */
   if(s==="estAfazer"||s==="estSaldo"||s==="estHist")return veTela("estColab",n)||veTela("estEmpresa",n);
@@ -61950,6 +62454,7 @@ function render(){
     desenhaTela("rastreio",renderRastreio);
     desenhaTela("estEmpresa",renderEstEmpresa);desenhaTela("estColab",renderEstColab);
     desenhaTela("estAfazer",renderEstAfazer);desenhaTela("estSaldo",renderEstSaldo);desenhaTela("estHist",renderEstHist);
+  desenhaTela("estTransicao",renderTransicao);
     desenhaTela("estConsumo",renderEstConsumo);desenhaTela("estEntrada",renderEntradas);
     opcoesFinanceiro();checarAgenda();
   }catch(e){console.warn("render",e);}
@@ -63407,6 +63912,7 @@ function ir(s,doMenu){
   /* a tela aparece já com o que mudou: o render() não desenha tela escondida, só marca que ela
      precisa ser refeita, e é aqui que isso acontece — no instante em que a pessoa chega nela */
   try{desenharPendentes(s);}catch(e){console.warn("desenhar "+s,e);}
+  if(s==="estTransicao")try{abrirTransicao();}catch(eTr){console.warn("transição",eTr);}
   if(s==="estAfazer")try{if(mudou||doMenu)resetarAfazer();if((mudou||doMenu)&&$("afQuem")){var afq=$("afQuem"),euA=estPadraoAdmin()?euNoEstoque():"";
       if(euA&&![].some.call(afq.options,function(o){return o.value===euA;})){var oA=document.createElement("option");oA.value=euA;oA.textContent=euA;afq.appendChild(oA);}
       afq.value=euA;}renderEstAfazer();}catch(e){console.warn(e);}
@@ -63507,6 +64013,9 @@ function montarSelects(){
 }
 function ligar(){
   ligarSinaisDeUso();   /* v546: o desenho da atualização na hora espera a pessoa parar de mexer */
+  /* v563: os botões da janela de decisão da transição do estoque */
+  if($("trx_ok"))$("trx_ok").onclick=confirmarDecisaoTransicao;
+  if($("trx_cancelar"))$("trx_cancelar").onclick=function(){$("trxModal").hidden=true;TRANS.pend=null;};
   Array.prototype.forEach.call(document.querySelectorAll(".rail button"),function(b){b.onclick=function(){ir(b.dataset.s,true);};});
   /* o seletor do cabeçalho virou só leitura (23/10): trocar de empresa é sair e entrar.
      O onchange foi retirado de propósito — nem forçando pela tela a empresa muda. */
