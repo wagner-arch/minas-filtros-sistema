@@ -5633,6 +5633,7 @@ img{max-width:100%}
             <div class="fld"><label for="nf_custo">Custo unitário</label><input id="nf_custo" type="text" inputmode="decimal" step="0.01"></div>
             <div class="fld" style="align-self:end"><button class="btn ghost" type="button" id="nf_add">Adicionar item</button></div>
           </div>
+          <div id="nf_avisoZerado"></div>
           <div class="tw" style="margin-top:14px"><table>
             <thead><tr><th>Produto</th><th class="num">Qtd</th><th class="num">Valor unit.</th><th class="num">Subtotal</th>
               <th class="num">Peso</th><th class="num">Frete rateado</th><th class="num">Impostos</th><th class="num">Custo final unit.</th><th class="num">Custo atual</th><th></th></tr></thead>
@@ -24687,7 +24688,9 @@ async function ajustarBaixa(p,docBaixa,docEstorno){
          alguém negativo, o negativo volta a zero, no limite da quantidade da venda; a reposição
          nasce como sempre. Ex.: tinha 0, vendeu 1 → −1 reservado; aprovada → 0; aceitou a
          reposição → 1. Fica um movimento com o nome do pedido, para o rastro. */
-      if(loc.indexOf("colab:")===0||ehLocalLoja(loc)){
+      /* v565: com a trava ligada não existe mais negativo para zerar nem reposição por negativo —
+         este bloco fica só para a empresa que ainda não zerou os negativos dela */
+      if(!travaNegativoLigada()&&(loc.indexOf("colab:")===0||ehLocalLoja(loc))){
         /* o que ainda vem pela requisição desta venda ("Requisitar") não se zera: fica −1 "a caminho" até o dono aceitar (03/11) */
         var aCam=((reqVendaAReceber()[p.id]||{})[pid+"|"+loc])||0;
         var sDep=saldoEm(pid,loc);
@@ -26231,6 +26234,69 @@ async function trAjustarContagem(x,motivo,contado){
   try{renderEstEmpresa();renderEstColab();}catch(e){}
   return true;
 }
+/* 1c) ZERAR TODOS OS NEGATIVOS da empresa aberta (16/11, v565, pedido dele) — só o Administrador.
+   Zera almoxarifado, caixinhas e Estoque da Loja por movimento de ajuste, o mesmo caminho do
+   "Ajustar pela contagem". Motivo obrigatório; antes de zerar, a cópia de segurança de todos os
+   saldos e registros afetados fica guardada na decisão (`antes`), e cada produto zerado fica
+   marcado como "zerado na transição", com o de/para, quem e quando — a marca é por empresa e a
+   Entrada de Notas avisa quem for lançar nota daquele produto. */
+function resumoZerarNegativos(){
+  var neg=negativosTransicao(),porLoc={},prods={},un=0;
+  neg.forEach(function(x){
+    var o=porLoc[x.local]=porLoc[x.local]||{produtos:0,unidades:0};
+    o.produtos++;o.unidades+=x.falta;prods[x.pid]=1;un+=x.falta;
+  });
+  return {itens:neg,locais:porLoc,produtos:neg.length,distintos:Object.keys(prods).length,unidades:un};
+}
+window.__resumoZerarMF=resumoZerarNegativos;
+function marcaZeradoTransicao(pid){
+  var pr=prodPorId(pid);
+  return (pr&&pr.zeradoTransicao&&pr.zeradoTransicao[lojaAtual])||null;
+}
+window.__marcaZeradoMF=marcaZeradoTransicao;
+async function trZerarTodosNegativos(motivo){
+  if(!podeTransicaoEst())throw new Error("Só o Administrador zera os negativos.");
+  var r=resumoZerarNegativos();
+  if(!r.itens.length)throw new Error("Não há estoque negativo nesta empresa.");
+  /* cópia de segurança ANTES de mexer: saldo de cada produto e estoque, e a marca que o produto
+     já tinha (para dar para voltar atrás item por item) */
+  var antes=r.itens.map(function(x){
+    var m=marcaZeradoTransicao(x.pid);
+    return {pid:x.pid,produto:x.nome,local:x.local,saldo:x.saldo,falta:x.falta,
+      pedido:x.pedido||"",marcaAntes:m?JSON.parse(JSON.stringify(m)):null};
+  });
+  var doc="Transição do estoque · zerar os negativos",feitos=[],quando=agoraCarimbo();
+  for(var i=0;i<r.itens.length;i++){
+    var x=r.itens[i];
+    var obs="Negativo zerado por "+usuarioAtual+" · saldo "+x.saldo+" → 0 · "+motivo;
+    var mov;
+    try{mov=await lancarMov(x.pid,x.falta,"ajuste",x.local,doc,obs,hojeISO(),"");}
+    catch(e){
+      throw new Error("Zerei "+feitos.length+" de "+r.itens.length+" e o banco recusou o próximo ("+
+        nomeLocal(x.local)+" · "+x.nome+"). O que faltou continua negativo. ("+((e&&e.message)||e)+")");
+    }
+    feitos.push({pid:x.pid,local:x.local,de:x.saldo,para:0,movimentoId:mov?mov.id:""});
+    /* a marca fica no produto, por empresa, para a Entrada de Notas avisar depois */
+    try{
+      var pr=prodPorId(x.pid);
+      if(pr){
+        pr.zeradoTransicao=pr.zeradoTransicao||{};
+        pr.zeradoTransicao[lojaAtual]={em:hojeISO(),quando:quando,por:usuarioAtual,motivo:motivo,
+          local:x.local,de:x.saldo,para:0};
+        await grava("produtos",pr);
+      }
+    }catch(eM){console.warn("marca do produto zerado",eM);}
+  }
+  try{
+    await gravarDecisoesTransicao([{tipo:"negativo",acao:"zerarTodos",quando:quando,por:usuarioAtual,
+      motivo:motivo,quantas:feitos.length,lote:true,unidades:r.unidades,antes:antes,feitos:feitos}]);
+  }catch(e){console.warn("registro da decisão",e);}
+  TRAVA_NEG={loja:"",n:-1,tem:true};
+  toast(feitos.length+(feitos.length===1?" estoque negativo zerado":" estoques negativos zerados")+
+    " · "+r.unidades+(r.unidades===1?" unidade":" unidades")+". Nenhum estoque desta empresa fica mais negativo.");
+  try{renderEstEmpresa();renderEstColab();agendarEstNovas();}catch(e){}
+  return true;
+}
 /* 1b) manter por enquanto: não mexe em nada */
 async function trManterNegativo(x,motivo){
   await gravarDecisoesTransicao([{tipo:"negativo",acao:"manter",quando:agoraCarimbo(),por:usuarioAtual,
@@ -26427,6 +26493,7 @@ async function trManterOrigem(x,motivo){
 window.__transicaoMF={carregar:carregarTransicao,negativos:negativosTransicao,
   reposicoes:reposicoesAbertasTransicao,auts:autsPendentesTransicao,
   contagem:trAjustarContagem,manter:trManterNegativo,reposicao:trDecidirReposicoes,
+  zerarTodos:trZerarTodosNegativos,resumoZerar:resumoZerarNegativos,marcaZerado:marcaZeradoTransicao,
   grupoA:trCancelarAutsGrupoA,autUma:trDecidirAutUma,zerado:estoqueNegativoZerado,
   origens:pedidosOrigemProibida,podeInst:podeMudarParaInstalador,
   paraInstalador:trPassarParaInstalador,manterOrigem:trManterOrigem,
@@ -26453,6 +26520,15 @@ function renderTransicao(){
 
   /* ---- 1. negativos ---- */
   h+='<h3 style="margin-top:22px">1. Estoques negativos de hoje <span class="pill '+(neg.length?"p-crit":"p-ok")+'">'+neg.length+"</span></h3>";
+  /* v565: zerar tudo de uma vez, com motivo, cópia de segurança e o resumo antes de confirmar */
+  if(neg.length){
+    var rz=resumoZerarNegativos();
+    h+='<div class="actions" style="justify-content:flex-start;margin:8px 0">'+
+      '<button class="btn" type="button" id="trZerarTudo">Zerar todos os negativos</button>'+
+      '<span class="t-sub">'+rz.produtos+(rz.produtos===1?" produto":" produtos")+" · "+rz.unidades+
+      (rz.unidades===1?" unidade":" unidades")+" em "+Object.keys(rz.locais).length+
+      (Object.keys(rz.locais).length===1?" estoque":" estoques")+"</span></div>";
+  }
   h+=neg.length
     ?'<table class="tb"><thead><tr><th>Estoque</th><th>Produto</th><th class="num">Saldo</th><th class="num">Falta</th>'+
       "<th>Pedido de origem</th><th>Reposição</th><th></th></tr></thead><tbody>"+
@@ -26540,6 +26616,7 @@ function renderTransicao(){
       ds.slice(0,200).map(function(d){
         var rot={negativo:"Negativo",reposicao:"Reposição",autorizacao:"Autorização",origem:"Origem da peça"}[d.tipo]||d.tipo;
         var ac={contagem:"Ajustou pela contagem",manter:"Manteve por enquanto",cancelar:"Cancelou",
+          zerarTodos:"Zerou todos os negativos",
           instalador:"Passou para a caixinha do instalador"}[d.acao]||d.acao;
         var dp=(d.tipo==="origem")?(String(d.de||"")+" → "+String(d.para||""))
           :(d.tipo==="negativo"&&d.de!==undefined)?(d.de+" → "+d.para)
@@ -26587,6 +26664,22 @@ function renderTransicao(){
         fazer:function(mot){return trDecidirReposicoes([r],cancelar,mot);}});
     };
   });
+  if($("trZerarTudo"))$("trZerarTudo").onclick=function(){
+    var rz=resumoZerarNegativos();
+    var det="<b>"+rz.produtos+(rz.produtos===1?" produto":" produtos")+" · "+rz.unidades+
+      (rz.unidades===1?" unidade":" unidades")+"</b> ficam com saldo <b>0</b> nesta empresa ("+esc(nomeLoja())+"):"+
+      '<table class="tb" style="margin-top:8px"><thead><tr><th>Estoque</th><th class="num">Produtos</th><th class="num">Unidades</th></tr></thead><tbody>'+
+      Object.keys(rz.locais).map(function(l){
+        return "<tr><td>"+esc(nomeLocal(l))+'</td><td class="num">'+rz.locais[l].produtos+
+          '</td><td class="num">'+rz.locais[l].unidades+"</td></tr>";
+      }).join("")+"</tbody></table>"+
+      '<div class="note" style="margin-top:8px">Cada negativo é zerado por um <b>movimento de ajuste</b>, o mesmo caminho do '+
+      '"Ajustar pela contagem". Nada é apagado: os movimentos de antes continuam lá.'+
+      '<div class="t-sub">Guardo antes a cópia de todos os saldos afetados, e cada produto fica marcado como '+
+      '"zerado na transição" — quem lançar nota dele na Entrada de Notas recebe o aviso para conferir se a nota já não estava contada.</div></div>';
+    abrirDecisaoTransicao({titulo:"Zerar todos os negativos desta empresa",detalhe:det,
+      botao:"Zerar os "+rz.produtos,fazer:function(mot){return trZerarTodosNegativos(mot);}});
+  };
   if($("trRepTudoManter"))$("trRepTudoManter").onclick=function(){
     abrirDecisaoTransicao({titulo:"Manter todas como requisição normal",
       detalhe:"<b>"+rep.length+" reposições</b> desta empresa continuam abertas, como requisições normais ao almoxarifado. Nenhum estoque é movimentado.",
@@ -34685,6 +34778,7 @@ function abrirNota(semNota){
   nfEditando=null;$("nfSalvar").textContent="Continuar: destino e pagamento";
   nfSemNota=semNota===true;nfFormaXml="";nfSnFoto=null;
   nfItens=[];nfDups=[];opcoesFinanceiro();
+  try{avisoProdZeradoNota();}catch(eAz){}   /* v565 */
   /* v536: entrada sem nota — sem XML, fornecedor opcional, item pode não ter cadastro, motivo e foto obrigatórios */
   $("nf_impSect").hidden=nfSemNota;$("nf_snBox").hidden=!nfSemNota;$("nf_descFld").hidden=!nfSemNota;
   $("nf_snMotivo").value="";$("nf_snFoto").value="";$("nf_snPrev").innerHTML="";$("nf_desc").value="";
@@ -34763,6 +34857,7 @@ function rateioNota(){
 }
 function calcNota(){
   var r=rateioNota();
+  try{avisoProdZeradoNota();}catch(eAz){}   /* v565: aviso do produto zerado na transição */
   var b=$("nf_itens");b.innerHTML="";
   if(!nfItens.length)b.innerHTML='<tr><td colspan="10"><div class="empty"><div class="big">Nenhum item</div>Importe o XML da nota ou escolha o produto acima e clique em Adicionar item.</div></td></tr>';
   r.linhas.forEach(function(l){
@@ -39198,7 +39293,96 @@ var CFG_PRECO={pctMinimo:70};
    a venda sai do estoque escolhido mesmo sem saldo e ele fica negativo; a reposição vem depois
    da aprovação financeira. Desligada, volta a regra antiga: sem saldo, o item não entra. */
 var CFG_ESTNEG={permitir:true};
-function estoqueNegativoPermitido(){return CFG_ESTNEG.permitir!==false;}
+/* v565 (16/11, regra dele): NENHUM ESTOQUE FICA NEGATIVO. A trava liga por EMPRESA, e só na
+   empresa em que não existe mais nenhum estoque negativo — exatamente o que a tela de Transição
+   mostra. Enquanto houver negativo ali, aquela empresa continua como antes (a chave do
+   Administrador ainda vale); zerados os negativos, a trava liga sozinha e a chave não liga mais
+   negativo nenhum. Exceção combinada: venda com instalação agendada pode ser gravada sem a peça
+   (o item fica "aguardando peça", com a requisição ao almoxarifado aberta) e a trava vale na
+   APROVAÇÃO e ao CONCLUIR a instalação, quando a peça tem de estar no estoque de quem instala.
+   Uma passada só nos movimentos, guardada enquanto a lista não muda, porque isto é consultado em
+   toda inclusão de item e em toda gravação. */
+var TRAVA_NEG={loja:"",n:-1,tem:true};
+function temEstoqueNegativoAgora(){
+  if(TRAVA_NEG.loja===lojaAtual&&TRAVA_NEG.n===(movEst||[]).length)return TRAVA_NEG.tem;
+  var m={},tem=false;
+  (movEst||[]).forEach(function(mo){
+    if(!mo||mo.loja!==lojaAtual||!mo.produtoId)return;
+    var q=+mo.qtd||0;
+    if(localDeVerdadeEst(mo.destino))m[mo.produtoId+"|"+mo.destino]=(m[mo.produtoId+"|"+mo.destino]||0)+q;
+    if(localDeVerdadeEst(mo.origem))m[mo.produtoId+"|"+mo.origem]=(m[mo.produtoId+"|"+mo.origem]||0)-q;
+  });
+  Object.keys(m).forEach(function(k){if(m[k]<0)tem=true;});
+  TRAVA_NEG={loja:lojaAtual,n:(movEst||[]).length,tem:tem};
+  return tem;
+}
+function travaNegativoLigada(){return regraNovaEstoque()&&!temEstoqueNegativoAgora();}
+window.__travaNegativoMF=travaNegativoLigada;
+window.__temNegativoMF=temEstoqueNegativoAgora;
+window.__estNegPermitidoMF=function(){return estoqueNegativoPermitido();};
+function estoqueNegativoPermitido(){
+  if(travaNegativoLigada())return false;   /* v565: com a trava ligada, nada fica negativo */
+  return CFG_ESTNEG.permitir!==false;
+}
+/* o que a venda ainda precisa baixar e não está no estoque: [{it,loc,falta}] — é o que a v565
+   não deixa a aprovação nem a conclusão da instalação transformarem em saldo negativo */
+function itensSemPecaNoEstoque(p){
+  var pede={},saiu={},out=[];
+  itensDeEstoque(p).forEach(function(it){
+    var loc=localDoItemVenda(p,it);
+    if(loc!==LOC_EMPRESA&&loc.indexOf("colab:")!==0&&!ehLocalLoja(loc))return;
+    var k=it.pid+"|"+loc;
+    (pede[k]=pede[k]||{it:it,loc:loc,q:0}).q+=(+(it.qtd||1));
+  });
+  saidasLiquidas(p).forEach(function(s){var k=s.pid+"|"+s.local;saiu[k]=(saiu[k]||0)+s.qtd;});
+  Object.keys(pede).forEach(function(k){
+    var o=pede[k],d=o.q-(saiu[k]||0);
+    if(d<=0)return;
+    var tem=saldoEm(o.it.pid,o.loc);
+    if(tem<d)out.push({it:o.it,loc:o.loc,precisa:d,tem:Math.max(0,tem),falta:d-Math.max(0,tem)});
+  });
+  return out;
+}
+window.__semPecaMF=itensSemPecaNoEstoque;
+/* o item da venda está esperando a peça chegar? (só com a trava ligada é que isto trava algo) */
+function pedidoAguardandoPeca(p){
+  if(!travaNegativoLigada())return [];
+  if(!vendaPendente(p)&&!p.aprovado)return [];
+  return itensSemPecaNoEstoque(p);
+}
+window.__aguardandoPecaMF=pedidoAguardandoPeca;
+/* AVISO DA ENTRADA DE NOTAS (v565, pedido dele): produto que foi zerado na transição do estoque
+   pode ter esta nota já contada na contagem que zerou. Só avisa, nunca bloqueia. */
+function avisoProdZeradoNota(){
+  var w=$("nf_avisoZerado");if(!w)return;
+  var vistos={},linhas=[];
+  function olhar(pid){
+    if(!pid||vistos[pid])return;
+    vistos[pid]=1;
+    var m=marcaZeradoTransicao(pid);if(!m)return;
+    var pr=prodPorId(pid)||{};
+    linhas.push("<b>"+esc(codNomeItem({pid:pid,cod:pr.cod,nome:pr.nome}))+"</b>: este produto foi zerado na transição do estoque em "+
+      esc(dataBR(m.em||m.quando||""))+". Confira se esta nota já não estava contada antes de lançar.");
+  }
+  try{olhar(($("nf_prod")||{}).value);}catch(e){}
+  (typeof nfItens!=="undefined"?(nfItens||[]):[]).forEach(function(i){olhar(i&&i.pid);});
+  w.innerHTML=linhas.length?'<div class="note warn" style="margin-top:8px">'+linhas.join("<br>")+"</div>":"";
+}
+window.__avisoZeradoNotaMF=avisoProdZeradoNota;
+window.__htmlAgPecaMF=function(p){return htmlAguardandoPeca(p);};
+/* a faixa "aguardando peça" do cartão da Aprovação Financeira e da tela da instalação (v565) */
+function htmlAguardandoPeca(p){
+  var l=pedidoAguardandoPeca(p);
+  if(!l.length)return "";
+  return '<div class="note crit" style="margin:6px 0"><b>Aguardando peça.</b> '+esc(textoAguardandoPeca(l))+
+    ". Nenhum estoque pode ficar negativo: a venda só é aprovada e a instalação só é concluída depois de a peça entrar "+
+    "no estoque (o dono recebe a requisição em Demandas do Estoque).</div>";
+}
+function textoAguardandoPeca(lista){
+  return lista.map(function(x){
+    return x.falta+"× "+(x.it.nome||"")+" em "+nomeLocal(x.loc)+" (tem "+x.tem+" de "+x.precisa+")";
+  }).join(" · ");
+}
 async function gravarCfgPreco(){
   if(!db)return;
   await db.doc("config/preco").set(CFG_PRECO);
@@ -51631,6 +51815,13 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm){
       return (donoDaReq(r)||nomeLocal(localDaReq(r)))+" retira e aceita "+(r.itens||[]).filter(function(i){return !itemFechadoReq(i);})
         .map(function(i){return (i.atendida||i.qtd)+"× "+codNomeItem(i);}).join(", ");}).join(" · ")+". Aprove depois do aceite.");
     return false;}
+  /* v565: a aprovação baixa o estoque, e nenhum estoque fica negativo — peça que ainda não chegou
+     não baixa. O pedido continua aberto, "aguardando peça", até o dono receber a requisição. */
+  var semPeca=pedidoAguardandoPeca(p);
+  if(semPeca.length){
+    toast("Aguardando peça: "+textoAguardandoPeca(semPeca)+
+      ". O estoque não pode ficar negativo — receba a requisição no almoxarifado (Demandas do Estoque) e aprove depois.");
+    return false;}
   if(aprovandoVenda[p.id])return false;
   aprovandoVenda[p.id]=true;
   try{
@@ -52017,6 +52208,9 @@ function renderInstalacao(){
     : !pend ? '<div class="note warn"><b>'+esc(p.status||"")+".</b> A instalação só pode ser finalizada depois dessa etapa.</div>"
     : edita ? '<div class="note">Confira a venda, inclua na venda o que foi preciso na instalação (com a forma de pagamento), escreva as observações e finalize — a venda vai para a Aprovação Financeira.</div>'
     : '<div class="note warn"><b>Só '+esc(quem||"o responsável")+", o vendedor ou a gestão finalizam esta instalação.</b></div>";
+  /* v565: a peça que ainda não está no estoque de quem instala aparece aqui, porque é ela que
+     impede concluir a instalação */
+  if(!feita&&pend)$("ins_estado").innerHTML+=htmlAguardandoPeca(p);
   if(modoVenda){
     $("ins_estado").innerHTML=p.instalacao
       ? '<div class="note'+(feita?" ok":" warn")+'"><b>Instalação</b> '+esc(String(p.instalacao))+" · "+esc(quem||"—")+
@@ -52123,6 +52317,7 @@ function renderInstalacao(){
 }
 /* toque duplo nunca grava duas vezes (30/10) */
 function finalizarInstalacao(){return travaSalvar("finalizarInstalacao",finalizarInstalacao__corpo,this,arguments);}
+window.__finalizarInstMF=function(p,obs){return finalizarInstalacao__corpo(p,obs);};
 async function finalizarInstalacao__corpo(p,obs){
   if(!podeInstalar(p)){toast("Só "+(respInstalacao(p)||"o responsável")+", o vendedor ou a gestão finalizam a instalação.");return false;}
   if((p.status||"").indexOf("instalação")<0||p.instaladoEm){toast("Esta instalação não está pendente.");return false;}
@@ -52143,6 +52338,16 @@ async function finalizarInstalacao__corpo(p,obs){
   if(r.dif!==0){
     $("ins_alerta").innerHTML='<div class="note crit"><b>'+(r.dif>0?"Falta receber "+BRL(r.dif):"As formas passam do total em "+BRL(-r.dif))+
       ".</b> "+(r.dif>0?"Inclua a forma de pagamento dos produtos incluídos na instalação.":"Remova ou ajuste o pagamento incluído.")+"</div>";
+    return false;
+  }
+  /* v565 (regra dele): a trava do negativo vale AO CONCLUIR a instalação — a peça tem de estar no
+     estoque de quem instala. Enquanto não estiver, a instalação não fecha e o item fica
+     "aguardando peça", com a requisição ao almoxarifado aberta. */
+  var semPecaI=pedidoAguardandoPeca(p);
+  if(semPecaI.length){
+    $("ins_alerta").innerHTML='<div class="note crit"><b>Aguardando peça.</b> '+
+      esc(textoAguardandoPeca(semPecaI))+". O estoque não pode ficar negativo: receba a requisição no almoxarifado "+
+      "(Demandas do Estoque) e conclua a instalação depois.</div>";
     return false;
   }
   var ms=(p.itens||[]).filter(function(i){return i.daInstalacao;}),
@@ -55514,6 +55719,7 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
     htmlRetiradasPedido(p)+
     htmlCreditoVenda(p)+
     htmlPendenciaVenda(p,true)+   /* v553 */
+    htmlAguardandoPeca(p)+        /* v565 */
     (p.voltouFinanceiro?'<div class="note warn"><b>Venda reaberta e alterada</b> por '+esc(p.voltouFinanceiro.por)+" em "+
       esc(dataBR(p.voltouFinanceiro.quando))+": de "+BRL(p.voltouFinanceiro.de)+" para "+BRL(p.voltouFinanceiro.para)+
       (p.voltouFinanceiro.motivo?" · "+esc(p.voltouFinanceiro.motivo):"")+". Aprove de novo: a baixa e a reposição são só da diferença.</div>":"")+
@@ -59142,13 +59348,17 @@ function lojasQueRespondo(quem){
 function renderEstNegCfg(){
   var c=$("en_permitir");if(!c)return;
   c.checked=estoqueNegativoPermitido();
-  var adm=ehAdministrador();c.disabled=!adm;
-  $("en_nota").innerHTML=(adm?"":'<div class="help">Só o Administrador liga e desliga.</div>')+
+  /* v565: zerados os negativos desta empresa, a trava liga sozinha e a chave não vale mais aqui */
+  var trava=travaNegativoLigada();
+  var adm=ehAdministrador()&&!trava;c.disabled=!adm;
+  $("en_nota").innerHTML=(trava?'<div class="help" style="color:var(--ok)"><b>Nenhum estoque negativo nesta empresa:</b> a trava da v565 está ligada e nenhum estoque pode ficar negativo. Esta chave não vale mais aqui.</div>'
+      :ehAdministrador()?"":'<div class="help">Só o Administrador liga e desliga.</div>')+
     (CFG_ESTNEG.por?'<div class="help">Última mudança: '+esc(CFG_ESTNEG.por)+" em "+esc(dataCurta(CFG_ESTNEG.em||""))+".</div>":"");
 }
 async function salvarEstNegCfg(){
   var c=$("en_permitir");if(!c)return;
   if(!ehAdministrador()){c.checked=estoqueNegativoPermitido();toast("Só o Administrador liga e desliga o estoque negativo.");return;}
+  if(travaNegativoLigada()){c.checked=false;toast("Esta empresa já está sem nenhum estoque negativo: a trava da v565 está ligada e nenhum estoque pode ficar negativo.");return;}
   var antes=JSON.parse(JSON.stringify(CFG_ESTNEG));
   CFG_ESTNEG={permitir:!!c.checked,por:usuarioAtual,em:hojeISO()};
   try{if(db)await db.doc("config/estoque_negativo").set(CFG_ESTNEG);}
@@ -59158,6 +59368,7 @@ async function salvarEstNegCfg(){
     :"Estoque negativo desligado: sem saldo no estoque escolhido, o item não entra no pedido.");
 }
 window.__cfgEstNegMF=function(v){if(v!==undefined)CFG_ESTNEG={permitir:!!v};return CFG_ESTNEG;};
+window.__renderEstNegMF=function(){return renderEstNegCfg();};
 function renderRespLojas(){
   try{renderEstNegCfg();}catch(eEn){}
   var box=$("em_respLojas");if(!box)return;
@@ -64991,7 +65202,7 @@ function ligar(){
   $("nf_importar").onclick=lerArquivoNota;
   $("nf_arq").onchange=lerArquivoNota;
   $("cfVoltar").onclick=function(){$("nfConf").hidden=true;$("nfLista").hidden=false;notaConf=null;};
-  $("nf_prod").onchange=sincCustoNf;
+  $("nf_prod").onchange=function(){sincCustoNf();avisoProdZeradoNota();};
   ["nf_frete","nf_desp","nf_parc","nf_seguro","nf_descTot"].forEach(function(id){$(id).oninput=calcNota;});
   $("nf_add").onclick=function(){
     var p=prodPorId($("nf_prod").value);
@@ -65005,7 +65216,7 @@ function ligar(){
     var qn=qtdInformada("nf_qtd");if(!qn)return;
     nfItens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qn,
       custo:numMF($("nf_custo").value)||0});
-    calcNota();limparInclusao("nf_prod","nf_qtd",["nf_custo"]);};
+    calcNota();limparInclusao("nf_prod","nf_qtd",["nf_custo"]);avisoProdZeradoNota();};
   $("nfSalvar").onclick=salvarNota;
 
   $("cl_arq").onchange=function(){
