@@ -4201,7 +4201,7 @@ img{max-width:100%}
         <div class="kpis" id="pedKpis"></div>
         <div class="card flush">
           <div class="tw"><table>
-            <thead><tr><th>Pedido</th><th>Cliente</th><th>Vendedor</th><th>Pagamento</th><th class="num">Total</th><th class="num">Depreciado</th><th class="num">Base</th><th>Status</th></tr></thead>
+            <thead><tr><th>Pedido</th><th>Cliente</th><th>Vendedor</th><th>Pagamento</th><th class="num">Total</th><th class="num">Depreciado</th><th class="num" id="pedThBase">Base</th><th>Status</th></tr></thead>
             <tbody id="pedBody"></tbody>
           </table></div>
         </div>
@@ -21932,10 +21932,20 @@ function renderPedidos(){
     bt.textContent=semPeriodo?"Ver todas as situações":"Vendas pendentes ("+n+")";
     bt.className="btn sm"+(semPeriodo?" mut":(n?"":" ghost"));
   })();
-  var tot=lista.reduce(function(a,p){return a+p.total;},0),bas=lista.reduce(function(a,p){return a+p.base;},0);
+  /* v556 (16/11, pedido dele): com uma PESSOA no filtro (ou "Meus pedidos", ou vindo do Dashboard com
+     a pessoa), a Base mostra só o que cai para ela em cada pedido — a mesma conta da comissão e do
+     Dashboard (posicoesNaVenda com o frete da loja fora): vendedor 60 · prospector 20 · instalador 20 */
+  var pessBase=(fdP&&fdP.quem)||vend||(soMeus()?usuarioAtual:"");
+  function partesBase(p){return pessBase?posicoesNaVenda(p,pessBase,true):[];}
+  function baseNaLista(p){
+    if(!pessBase)return +p.base||0;
+    return Math.round(partesBase(p).reduce(function(a,x){return a+x.v;},0)*100)/100;}
+  if($("pedThBase"))$("pedThBase").textContent=pessBase?"Parte de "+pessBase:"Base";
+  var tot=lista.reduce(function(a,p){return a+p.total;},0),bas=lista.reduce(function(a,p){return a+baseNaLista(p);},0);
   $("pedKpis").innerHTML='<div class="kpi"><div class="l">Pedidos</div><div class="v">'+lista.length+'</div></div>'+
     '<div class="kpi"><div class="l">Faturamento</div><div class="v">'+BRL(tot)+'</div></div>'+
-    '<div class="kpi"><div class="l">Base de comissão</div><div class="v">'+BRL(bas)+"</div></div>";
+    '<div class="kpi"><div class="l">'+(pessBase?"Base de comissão de "+esc(pessBase):"Base de comissão")+'</div><div class="v">'+BRL(bas)+"</div>"+
+    (pessBase?'<div class="l" style="margin-top:4px">a parte dela em cada pedido (vendedor 60 · prospector 20 · instalador 20), sem frete</div>':"")+"</div>";
   var b=$("pedBody");b.innerHTML="";
   /* pedidos guardados pela metade aparecem em cima, marcados Incompleto (03/10). Eles não entram
      na contagem nem nos KPIs: ainda não são venda. */
@@ -21979,7 +21989,8 @@ function renderPedidos(){
     var tr=document.createElement("tr");tr.className="clickable";
     tr.innerHTML='<td><div class="t-main">'+p.numero+'</div><div class="t-sub">'+esc(dataBR(p.data))+"</div></td>"+
       "<td>"+esc(p.cliente)+(fdP&&fdP.marca&&fdP.marca[p.id]?'<div class="t-sub"><b>'+esc(fdP.marca[p.id])+"</b></div>":"")+"</td><td>"+esc(p.vendedor||"—")+"</td><td>"+((p.formas||[]).filter(function(f){return +f.valor>0;}).map(function(f){return f.parc+"× "+f.tipo.split(" ")[0];}).join(" + ")||"—")+"</td>"+
-      '<td class="num">'+BRL(p.total)+'</td><td class="num">'+BRL(p.depreciado)+'</td><td class="num"><b>'+BRL(p.base)+"</b></td>"+
+      '<td class="num">'+BRL(p.total)+'</td><td class="num">'+BRL(p.depreciado)+'</td><td class="num"><b>'+BRL(baseNaLista(p))+"</b>"+
+        (pessBase?'<div class="t-sub">'+esc(partesBase(p).map(function(x){return x.n+" "+x.pct+"%";}).join(" + ")||"não participa")+"</div>":"")+"</td>"+
       '<td><span class="pill '+(ehTeste(p)?"p-warn":cls)+'">'+esc(p.status)+"</span>"+
       (ehTeste(p)?' <span class="pill p-warn">TESTE</span>':"")+
       (pend?' <span class="pill p-warn">autorização pendente</span>':"")+
