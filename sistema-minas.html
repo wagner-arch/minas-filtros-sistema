@@ -1943,6 +1943,17 @@ tr.nf-cancelada td.nf-ac-td{opacity:1}
 .pcl-v{font-weight:600;text-align:right}
 .pcl-v small{display:block;font-weight:400;opacity:.7}
 .pcl-ruim{color:var(--bad,#c62828)}
+/* v557: Indicadores */
+.ind-cab{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.ind-cab h2{margin:0}
+.ind-bts{display:flex;gap:8px;flex-wrap:wrap}
+.ind-tela{position:fixed;inset:0;z-index:9000;background:var(--bg,#f3f5fa);overflow:auto}
+.ind-barra{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--card,#fff);border-bottom:1px solid var(--line,#dfe3ec)}
+.ind-corpo{padding:16px;max-width:1500px;margin:0 auto}
+.ind-esc{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-bottom:12px;padding:10px 12px;border:1px solid var(--line,#dfe3ec);border-radius:10px;background:var(--card,#fff)}
+.ind-esc label{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.ind-corpo table{display:block;overflow-x:auto}
+@media (min-width:900px){.ind-corpo table{display:table}}
 </style>
 
 <!-- ============ AJUSTES DE CELULAR (estilo) — fica logo após o estilo principal
@@ -6844,7 +6855,9 @@ img{max-width:100%}
       </div>
 
       <div class="card">
-        <h2>Por colaborador</h2>
+        <div class="ind-cab"><h2>Indicadores</h2>
+          <div class="ind-bts"><button class="btn ghost sm" type="button" id="dashIndTela">Ver em tela inteira</button>
+            <button class="btn sm" type="button" id="dashIndPdf">Gerar PDF</button></div></div>
         <p class="help">Toque num número para ver exatamente os registros que ele contou.</p>
         <div class="tw" style="margin-top:16px"><table id="dashTab">
           <thead><tr><th data-dica="toque no número para ver a lista">Colaborador</th>
@@ -6855,6 +6868,7 @@ img{max-width:100%}
             <th class="num" data-dica="agendadas pela pessoa">Ativ. criadas</th>
             <th class="num" data-dica="finalizadas pelo responsável">Ativ. realizadas</th>
             <th class="num" data-dica="como vendedora, pela data do pedido">Vendas</th>
+            <th class="num" data-dica="grupos principais, das vendas como vendedora">Produtos</th>
             <th class="num" data-dica="instalação concluída no período">Instalações</th>
             <th class="num" data-dica="parte da pessoa no depreciado das vendas do período (data da venda), aprovadas ou não, sem pendência">Faturado</th>
             <th class="num" data-dica="vendas do período com pendência aberta">Com pendência</th>
@@ -6868,6 +6882,7 @@ img{max-width:100%}
           <li><b>Ativ. criadas:</b> atividades agendadas pela pessoa.</li>
           <li><b>Ativ. realizadas:</b> atividades finalizadas pelo responsável, com ou sem atendimento.</li>
           <li><b>Vendas:</b> pedidos em que a pessoa é a vendedora, pela data do pedido, sem canceladas.</li>
+          <li><b>Produtos:</b> quantidade de produtos das vendas em que a pessoa é a vendedora, com os grupos principais (purificadores, refis recorrentes, bebedouros, geradores de ozônio e planos de garantia).</li>
           <li><b>Instalações:</b> pedidos em que a pessoa instalou, com a instalação concluída no período.</li>
           <li><b>Faturado:</b> a parte da pessoa (vendedor 60 · prospector 20 · instalador 20) no valor depreciado, sem o frete pago pela loja, das vendas feitas no período, pela DATA DA VENDA, aprovadas ou não pelo financeiro, sem as canceladas e sem as que estão com pendência aberta.</li>
           <li><b>Com pendência:</b> a mesma conta, só das vendas do período com pendência aberta (saem daqui quando o Financeiro marca a pendência como resolvida).</li>
@@ -39872,6 +39887,141 @@ function grupoDashDoItem(i){
   for(var k=0;k<GRUPOS_DASH.length;k++)if(GRUPOS_DASH[k][1].test(g))return GRUPOS_DASH[k][0];
   return "";
 }
+/* ===== v557 (16/11, pedido dele): INDICADORES =====
+   O quadro "Por colaborador" virou "Indicadores": coluna Produtos (os grupos principais das vendas
+   como vendedora, a mesma conta do cartão), tela inteira com gráficos e PDF (folha deitada).
+   Tudo sai de dadosDash, então os números são os mesmos da tabela. */
+var ABREV_GRUPO={"Purificadores":"Purif.","Refis Recorrentes":"Refis","Bebedouros":"Bebed.","Geradores de Ozônio":"Ozônio","Planos de Garantia":"Planos"};
+function textoGruposInd(x){
+  var t=GRUPOS_DASH.filter(function(g){return (x.prodGrupos[g[0]]||0)>0;})
+    .map(function(g){return (ABREV_GRUPO[g[0]]||g[0])+" "+x.prodGrupos[g[0]];});
+  return t.length?t.join(" · "):"nenhum dos grupos";
+}
+/* quem entra no relatório: as mesmas linhas da tabela */
+function linhasIndicadores(){
+  var quem=($("dashQuem")||{}).value||"";
+  var nomes=ehGestor()?(quem?[quem]:EQUIPE):[usuarioAtual];
+  var out=[];
+  nomes.forEach(function(n){
+    var x=dadosDash(n);
+    if(!x.ats.length&&!x.criadas.length&&!x.feitas.length&&!x.vds.length&&!x.inst.length&&!x.aprov.length&&!x.fatPed.length&&!x.pendPed.length)return;
+    out.push({n:n,x:x});
+  });
+  return {quem:quem,linhas:out,eq:dadosDash(quem)};
+}
+function barrasInd(itens,cor,fmt){return barrasPdf(itens,cor,fmt);}
+/* duas cores na mesma barra (ativos x passivos) */
+function barrasDuplasInd(itens,corA,corB){
+  if(!itens.length)return '<div style="color:#666;padding:6px 0">Nada no período.</div>';
+  var max=Math.max.apply(null,itens.map(function(x){return x.a+x.b;}).concat([1]));
+  return itens.map(function(x){
+    return '<div style="display:flex;align-items:center;gap:6px;margin:3px 0;font-size:10.5px">'+
+      '<span style="width:92px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(x.n)+"</span>"+
+      '<span style="flex:1;height:10px;background:#eef1f7;border-radius:5px;overflow:hidden;display:flex">'+
+        '<i style="display:block;height:100%;width:'+(x.a/max*100).toFixed(1)+"%;background:"+corA+'"></i>'+
+        '<i style="display:block;height:100%;width:'+(x.b/max*100).toFixed(1)+"%;background:"+corB+'"></i></span>'+
+      '<span style="width:70px;flex:none;text-align:right;white-space:nowrap"><b>'+x.a+"</b> · "+x.b+"</span></div>";
+  }).join("");
+}
+/* gráficos que a pessoa escolhe ver (e que vão para o PDF); lembrados neste aparelho */
+var GRAF_IND=[["fat","Faturado por colaborador"],["vds","Vendas por colaborador"],["atd","Atendimentos ativos e passivos"],
+  ["grp","Produtos dos grupos principais"],["prd","Produtos vendidos por colaborador"],["cnv","Conversão de venda"]];
+function grafIndEscolhidos(){
+  try{var v=JSON.parse(localStorage.getItem("mf_graf_ind")||"null");if(Array.isArray(v))return v;}catch(e){}
+  return GRAF_IND.map(function(g){return g[0];});
+}
+function guardarGrafInd(v){try{localStorage.setItem("mf_graf_ind",JSON.stringify(v));}catch(e){}}
+function htmlIndicadores(){
+  var R=linhasIndicadores(),L=R.linhas,eq=R.eq,j=eq.j,esc0=grafIndEscolhidos();
+  function caixa(t,c,leg){return '<div style="flex:1 1 300px;min-width:0;border:1px solid #dfe3ec;border-radius:10px;padding:10px 12px;background:#fff">'+
+    '<div style="font-weight:700;font-size:12px;margin-bottom:6px">'+esc(t)+(leg?'<span style="font-weight:400;color:#666"> · '+leg+"</span>":"")+"</div>"+c+"</div>";}
+  function kpi(t,v,sub){return '<div style="flex:1 1 130px;border:1px solid #dfe3ec;border-radius:10px;padding:8px 10px;background:#fff">'+
+    '<div style="font-size:10px;color:#555">'+esc(t)+'</div><div style="font-size:18px;font-weight:700">'+v+"</div>"+(sub?'<div style="font-size:9.5px;color:#666">'+esc(sub)+"</div>":"")+"</div>";}
+  var tot=eq;
+  var fat=L.map(function(r){return {n:r.n,v:r.x.meta};}).sort(function(a,b){return b.v-a.v;});
+  var vds=L.map(function(r){return {n:r.n,v:r.x.vds.length};}).sort(function(a,b){return b.v-a.v;});
+  var atd=L.map(function(r){return {n:r.n,a:r.x.ativo.length,b:r.x.pass.length};}).sort(function(a,b){return (b.a+b.b)-(a.a+a.b);});
+  var prd=L.map(function(r){return {n:r.n,v:r.x.prodQtd,sub:textoGruposInd(r.x)==="nenhum dos grupos"?"":""};}).sort(function(a,b){return b.v-a.v;});
+  var grp=GRUPOS_DASH.map(function(g){return {n:g[0],v:tot.prodGrupos[g[0]]||0};});
+  var cnv=L.map(function(r){var c=r.x.convTotal?Math.round(r.x.convCli/r.x.convTotal*100):0;return {n:r.n,v:c,sub:r.x.convCli+" de "+r.x.convTotal};})
+    .sort(function(a,b){return b.v-a.v;});
+  var cab=["Colaborador","Atendimentos<br><small>ativos · passivos</small>","Mens.","Lig.","Abord.","Ativ. criadas","Ativ. realiz.","Vendas","Produtos","Instal.","Faturado","Com pendência","Conv. venda","Prospecção"];
+  function lin(n,x,total){
+    var cv=x.convTotal?Math.round(x.convCli/x.convTotal*100):0,pc=x.prospCont.length,pv=x.prospPed.length;
+    function ap(a,b){return '<br><small style="color:#666">'+a+" · "+b+"</small>";}
+    var c=[esc(total?"Total da equipe":n)+(total?"":'<br><small style="color:#666">'+esc(perfilDe(n))+"</small>"),
+      x.ats.length+ap(x.ativo.length,x.pass.length),
+      x.atsMens.length+ap(x.atsMensA.length,x.atsMensP.length),x.atsLig.length+ap(x.atsLigA.length,x.atsLigP.length),
+      x.atsAbord.length+ap(x.atsAbordA.length,x.atsAbordP.length),x.criadas.length,x.feitas.length,x.vds.length,
+      x.prodQtd+'<br><small style="color:#666">'+esc(textoGruposInd(x))+"</small>",x.inst.length,
+      BRL(x.meta)+'<br><small style="color:#666">'+x.fatPed.length+" vendas · "+x.fatAprov+" aprov.</small>",
+      BRL(x.pendMeta)+'<br><small style="color:#666">'+x.pendPed.length+" vendas</small>",
+      cv+'%<br><small style="color:#666">'+x.convCli+" de "+x.convTotal+"</small>",
+      pc+" · "+pv+" · "+(pc?Math.round(pv/pc*100):0)+"%"];
+    return "<tr"+(total?' style="font-weight:700;background:#f3f5fa"':"")+">"+c.map(function(v,i){
+      return '<td style="padding:5px 6px;border-bottom:1px solid #e6e9f0;'+(i?"text-align:right;":"")+'vertical-align:top">'+v+"</td>";}).join("")+"</tr>";
+  }
+  var linhas=L.map(function(r){return lin(r.n,r.x,false);}).join("")+((!R.quem&&ehGestor()&&L.length>1)?lin("",eq,true):"");
+  var tab='<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:6px"><thead><tr>'+
+    cab.map(function(h,i){return '<th style="padding:5px 6px;background:#eef1f7;'+(i?"text-align:right;":"text-align:left;")+'font-size:9.5px">'+h+"</th>";}).join("")+
+    "</tr></thead><tbody>"+(linhas||'<tr><td colspan="14" style="padding:10px;color:#666">Sem movimento no período.</td></tr>')+"</tbody></table>";
+  return '<div style="font-family:inherit;color:#16202b">'+
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;border-bottom:2px solid #2e4fd6;padding-bottom:6px;margin-bottom:10px">'+
+      '<div><div style="font-size:20px;font-weight:800">Indicadores</div><div style="font-size:11px;color:#444">'+esc(nomeLoja())+" · "+esc(j.rot)+" · "+esc(R.quem||"equipe toda")+"</div></div>"+
+      '<div style="font-size:10px;color:#666;text-align:right">gerado em '+esc(dataBR(hojeISO()))+" "+esc(agoraHM())+"<br>por "+esc(usuarioAtual)+"</div></div>"+
+    '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">'+
+      kpi("Atendimentos",tot.ats.length,tot.ativo.length+" ativos · "+tot.pass.length+" passivos")+
+      kpi("Vendas",tot.vds.length,"como vendedora, pela data do pedido")+
+      kpi("Produtos vendidos",tot.prodQtd,"dos grupos principais: "+GRUPOS_DASH.reduce(function(a,g){return a+(tot.prodGrupos[g[0]]||0);},0))+
+      kpi("Faturado",BRL(R.quem?tot.meta:tot.dep),tot.fatPed.length+" vendas sem pendência")+
+      kpi("Com pendência",BRL(R.quem?tot.pendMeta:tot.pendDep),tot.pendPed.length+" vendas")+
+      kpi("Instalações",tot.inst.length,"concluídas no período")+"</div>"+
+    (function(){
+      var g={fat:caixa("Faturado por colaborador",barrasInd(fat,"#2e4fd6",BRL),"parte no depreciado"),
+        vds:caixa("Vendas por colaborador",barrasInd(vds,"#1d8a4e")),
+        atd:caixa("Atendimentos",barrasDuplasInd(atd,"#2e4fd6","#c47a12"),'<b style="color:#2e4fd6">ativos</b> · <b style="color:#c47a12">passivos</b>'),
+        grp:caixa("Produtos dos grupos principais",barrasInd(grp,"#7a3fc4"),R.quem?esc(R.quem):"equipe"),
+        prd:caixa("Produtos vendidos por colaborador",barrasInd(prd,"#7a3fc4")),
+        cnv:caixa("Conversão de venda",barrasInd(cnv,"#0f7c86",function(v){return v+"%";}),"em até "+DIAS_CONVERSAO+" dias")};
+      var h=GRAF_IND.filter(function(x){return esc0.indexOf(x[0])>=0;}).map(function(x){return g[x[0]];});
+      return h.length?'<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">'+h.join("")+"</div>":"";
+    })()+
+    tab+"</div>";
+}
+function abrirIndicadoresTela(){
+  var box=$("dashIndBox");
+  if(!box){box=document.createElement("div");box.id="dashIndBox";box.className="ind-tela";document.body.appendChild(box);}
+  var sel=grafIndEscolhidos();
+  box.innerHTML='<div class="ind-barra"><b>Indicadores</b><span style="flex:1"></span>'+
+    '<button class="btn sm" type="button" id="dashIndPdf2">Gerar PDF</button> <button class="btn ghost sm" type="button" id="dashIndFechar">Fechar</button></div>'+
+    '<div class="ind-corpo"><div class="ind-esc"><b>Gráficos:</b> '+GRAF_IND.map(function(g){
+      return '<label><input type="checkbox" data-gind="'+g[0]+'"'+(sel.indexOf(g[0])>=0?" checked":"")+"> "+esc(g[1])+"</label>";}).join("")+
+    '<span class="t-sub">o PDF sai com os gráficos marcados</span></div><div id="dashIndConteudo">'+htmlIndicadores()+"</div></div>";
+  Array.prototype.forEach.call(box.querySelectorAll("[data-gind]"),function(c){
+    c.onchange=function(){
+      var v=[].slice.call(box.querySelectorAll("[data-gind]")).filter(function(x){return x.checked;}).map(function(x){return x.getAttribute("data-gind");});
+      guardarGrafInd(v);$("dashIndConteudo").innerHTML=htmlIndicadores();};});
+  box.hidden=false;document.body.classList.add("ind-aberta");
+  $("dashIndFechar").onclick=function(){box.hidden=true;document.body.classList.remove("ind-aberta");};
+  $("dashIndPdf2").onclick=baixarPdfIndicadores;
+}
+async function baixarPdfIndicadores(){
+  if(!podeExportar())return recusaExport();
+  var bts=[$("dashIndPdf"),$("dashIndPdf2")].filter(Boolean);
+  bts.forEach(function(b){b.disabled=true;b.__t=b.textContent;b.textContent="Gerando o PDF…";});
+  var tmp=document.createElement("div");
+  tmp.style.cssText="position:absolute;left:-10000px;top:0;width:1123px;background:#fff";
+  var folha=document.createElement("div");folha.className="pdf-captura";folha.style.cssText="width:1123px;background:#fff;padding:14px 18px;box-sizing:border-box";
+  folha.innerHTML=htmlIndicadores();tmp.appendChild(folha);document.body.appendChild(tmp);
+  try{
+    var j=dadosDash(($("dashQuem")||{}).value||"").j;
+    var arq=await pdfDoElemento(folha,"Indicadores_"+String(nomeLoja()).replace(/[^A-Za-z0-9]+/g,"_")+"_"+(j.de||"")+"_a_"+(j.ate||"")+".pdf",
+      {mode:["css"],avoid:["tr"]},[6,0,6,0],{orientation:"landscape",largura:1123});
+    baixarArquivo(arq);toast("Indicadores baixados: "+arq.name);
+  }catch(e){toast("Não deu para gerar o PDF: "+((e&&e.message)||e));}
+  finally{tmp.remove();bts.forEach(function(b){b.disabled=false;b.textContent=b.__t||"Gerar PDF";});}
+}
+window.__indicadoresMF={html:htmlIndicadores,tela:abrirIndicadoresTela,linhas:linhasIndicadores};
 function qtdProdutosDash(lista){
   var tot=0,gr={};GRUPOS_DASH.forEach(function(x){gr[x[0]]=0;});
   lista.forEach(function(p){(p.itens||[]).forEach(function(i){
@@ -40230,6 +40380,7 @@ function barras(m,total){
   }).join("")+"</div>";
 }
 function renderDash(){
+  try{var bT=$("dashIndTela"),bP=$("dashIndPdf");if(bT)bT.onclick=abrirIndicadoresTela;if(bP)bP.onclick=baixarPdfIndicadores;}catch(eB){}
   var sq=$("dashQuem");
   if(!sq.options.length){
     var o0=document.createElement("option");o0.value="";o0.textContent="Todos os atendentes";sq.appendChild(o0);
@@ -40384,7 +40535,9 @@ function renderDash(){
         return '<td class="num">'+lk(c,n,tot)+'<div class="t-sub">'+lk(c+"A",n,A)+" ativa"+(A===1?"":"s")+" · "+lk(c+"P",n,P)+" passiva"+(P===1?"":"s")+"</div></td>";
       }).join("")+
       '<td class="num">'+lk("criadas",n,x.criadas.length)+'</td><td class="num">'+lk("feitas",n,x.feitas.length)+"</td>"+
-      '<td class="num">'+lk("vds",n,x.vds.length)+'</td><td class="num">'+lk("inst",n,x.inst.length)+"</td>"+
+      '<td class="num">'+lk("vds",n,x.vds.length)+"</td>"+
+      '<td class="num">'+lk("prod",n,x.prodQtd)+'<div class="t-sub">'+esc(textoGruposInd(x))+"</div></td>"+   /* v557 */
+      '<td class="num">'+lk("inst",n,x.inst.length)+"</td>"+
       '<td class="num">'+lk("fat",n,BRL(x.meta))+'<div class="t-sub">'+x.fatPed.length+" venda"+(x.fatPed.length===1?"":"s")+" · "+x.fatAprov+" aprovada"+(x.fatAprov===1?"":"s")+"</div></td>"+
       '<td class="num">'+lk("pend",n,BRL(x.pendMeta))+'<div class="t-sub">'+x.pendPed.length+" venda"+(x.pendPed.length===1?"":"s")+"</div></td>"+
       '<td class="num">'+lk("conv",n,'<span class="pill '+(cv>=30?"p-ok":cv>=15?"p-acc":cv>0?"p-warn":"p-mut")+'">'+cv+"%</span>")+
@@ -40411,7 +40564,7 @@ function renderDash(){
       (d.foraLista?" + "+BRL(d.foraLista)+" de quem não está na lista (prestador ou ex-colaborador)":"")+
       (Math.abs(dif)>=0.01?" · diferença de arredondamento: "+BRL(dif):" · sem diferença")+".</div>";
   }
-  b.innerHTML=html||'<tr><td colspan="13"><div class="empty"><div class="big">Sem movimento no período</div></div></td></tr>';
+  b.innerHTML=html||'<tr><td colspan="14"><div class="empty"><div class="big">Sem movimento no período</div></div></td></tr>';
   $("dashConfere").innerHTML=conf;
   if(!b.__ligDk){b.__ligDk=true;
     b.addEventListener("click",function(ev){var el=ev.target&&ev.target.closest?ev.target.closest("[data-dk]"):null;
