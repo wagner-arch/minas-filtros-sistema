@@ -24650,6 +24650,7 @@ function reservasDe(local,excluirId,soEntregues){
     /* o que já saiu deste pedido NAQUELE estoque, e o que ele ainda pede dali */
     saidasLiquidas(p).forEach(function(s){if(s.local===local)saiu[s.pid]=(saiu[s.pid]||0)+s.qtd;});
     itensDeEstoque(p).forEach(function(it){
+      if(it.baixaDispensada)return;   /* v565: já está com o cliente, não reserva nada */
       if(localDoItemVenda(p,it)!==local)return;
       /* v535: esperando a decisão do dono, reserva só até o que ele tem disponível (nunca acima do saldo) */
       if(it.autEstoque&&it.autEstoque.status==="pendente"&&autUsaRegraNova(p,it.autEstoque)){
@@ -24673,6 +24674,10 @@ async function ajustarBaixa(p,docBaixa,docEstorno){
      baixado tem a saída estornada no estoque antigo e lançada no novo, sem sobra nem falta */
   var pede={},saiu={},por=saidasLiquidas(p),baixou=[],chaves={};
   itensDeEstoque(p).forEach(function(it){
+    /* v565 (proteção de 16/11): item com a baixa dispensada NUNCA baixa — a peça já está com o
+       cliente e o saldo já foi acertado pela contagem. É isto que impede baixar duas vezes, aqui
+       e em qualquer reaprovação depois. */
+    if(it.baixaDispensada)return;
     var k=it.pid+"|"+localDoItemVenda(p,it);
     pede[k]=(pede[k]||0)+(it.qtd||1);});
   por.forEach(function(s){var k=s.pid+"|"+s.local;saiu[k]=(saiu[k]||0)+s.qtd;});
@@ -39329,27 +39334,66 @@ function estoqueNegativoPermitido(){
 function itensSemPecaNoEstoque(p){
   var pede={},saiu={},out=[];
   itensDeEstoque(p).forEach(function(it){
+    /* v565 (proteção de 16/11): item cuja baixa já foi dispensada não entra mais em conta
+       nenhuma — a peça está com o cliente e o estoque nunca baixa de novo */
+    if(it.baixaDispensada)return;
     var loc=localDoItemVenda(p,it);
     if(loc!==LOC_EMPRESA&&loc.indexOf("colab:")!==0&&!ehLocalLoja(loc))return;
     var k=it.pid+"|"+loc;
-    (pede[k]=pede[k]||{it:it,loc:loc,q:0}).q+=(+(it.qtd||1));
+    (pede[k]=pede[k]||{it:it,its:[],loc:loc,q:0});
+    pede[k].its.push(it);pede[k].q+=(+(it.qtd||1));
   });
   saidasLiquidas(p).forEach(function(s){var k=s.pid+"|"+s.local;saiu[k]=(saiu[k]||0)+s.qtd;});
   Object.keys(pede).forEach(function(k){
     var o=pede[k],d=o.q-(saiu[k]||0);
     if(d<=0)return;
     var tem=saldoEm(o.it.pid,o.loc);
-    if(tem<d)out.push({it:o.it,loc:o.loc,precisa:d,tem:Math.max(0,tem),falta:d-Math.max(0,tem)});
+    if(tem<d)out.push({it:o.it,its:o.its,loc:o.loc,precisa:d,tem:Math.max(0,tem),falta:d-Math.max(0,tem)});
   });
   return out;
 }
 window.__semPecaMF=itensSemPecaNoEstoque;
-/* o item da venda está esperando a peça chegar? (só com a trava ligada é que isto trava algo) */
+/* A PEÇA JÁ ESTÁ COM O CLIENTE? (proteção de 16/11, regra dele)
+   A trava "aguardando peça" vale SÓ para pedido cuja instalação ainda não foi concluída: aí a peça
+   não saiu e não pode sair de um estoque que ficaria negativo. Pedido com a instalação JÁ CONCLUÍDA
+   e venda de balcão entregue são de antes da trava: a peça está na casa do cliente e a saída ou já
+   aconteceu pela regra antiga ou foi coberta pela contagem que zerou os negativos. Esses aprovam
+   normalmente e o estoque NÃO baixa de novo. */
+function pecaAindaNoEstoque(p){return !!(p&&p.instalacao&&!p.instaladoEm);}
 function pedidoAguardandoPeca(p){
   if(!travaNegativoLigada())return [];
   if(!vendaPendente(p)&&!p.aprovado)return [];
+  if(!pecaAindaNoEstoque(p))return [];
   return itensSemPecaNoEstoque(p);
 }
+/* dispensa a baixa do que já está com o cliente, uma vez só, com registro no histórico */
+async function dispensarBaixaAntiga(p){
+  if(!travaNegativoLigada()||pecaAindaNoEstoque(p))return 0;
+  var l=itensSemPecaNoEstoque(p),n=0;
+  if(!l.length)return 0;
+  var agora=new Date().toISOString();
+  var motivo=p.instaladoEm
+    ? "instalação concluída em "+dataCurta(p.instaladoEm)+", antes da trava do estoque negativo"
+    : "venda entregue antes da trava do estoque negativo";
+  l.forEach(function(x){
+    (x.its||[x.it]).forEach(function(it){
+      if(it.baixaDispensada)return;
+      it.baixaDispensada={quando:agora,por:usuarioAtual,local:x.loc,qtd:+(it.qtd||1),
+        tinha:x.tem,motivo:motivo};
+      n++;
+    });
+    registrarEvento(p,"Baixa de estoque dispensada na aprovação por "+usuarioAtual+": "+x.precisa+"× "+
+      codNomeItem(x.it)+" · a peça já está com o cliente ("+motivo+") e o saldo do "+nomeLocal(x.loc)+
+      " já foi acertado pela contagem — o estoque não baixa de novo, para não baixar duas vezes.");
+  });
+  if(n){try{await gravaConf("pedidos",p);}catch(e){console.warn("dispensa da baixa",e);}}
+  return n;
+}
+window.__dispensarBaixaMF=function(p){return dispensarBaixaAntiga(p);};
+function itensBaixaDispensada(p){
+  return itensDeEstoque(p).filter(function(it){return !!it.baixaDispensada;});
+}
+window.__baixaDispensadaMF=itensBaixaDispensada;
 window.__aguardandoPecaMF=pedidoAguardandoPeca;
 /* AVISO DA ENTRADA DE NOTAS (v565, pedido dele): produto que foi zerado na transição do estoque
    pode ter esta nota já contada na contagem que zerou. Só avisa, nunca bloqueia. */
@@ -39372,11 +39416,15 @@ window.__avisoZeradoNotaMF=avisoProdZeradoNota;
 window.__htmlAgPecaMF=function(p){return htmlAguardandoPeca(p);};
 /* a faixa "aguardando peça" do cartão da Aprovação Financeira e da tela da instalação (v565) */
 function htmlAguardandoPeca(p){
-  var l=pedidoAguardandoPeca(p);
-  if(!l.length)return "";
-  return '<div class="note crit" style="margin:6px 0"><b>Aguardando peça.</b> '+esc(textoAguardandoPeca(l))+
+  var h="",l=pedidoAguardandoPeca(p);
+  if(l.length)h+='<div class="note crit" style="margin:6px 0"><b>Aguardando peça.</b> '+esc(textoAguardandoPeca(l))+
     ". Nenhum estoque pode ficar negativo: a venda só é aprovada e a instalação só é concluída depois de a peça entrar "+
     "no estoque (o dono recebe a requisição em Demandas do Estoque).</div>";
+  var d=itensBaixaDispensada(p);
+  if(d.length)h+='<div class="note" style="margin:6px 0"><b>Peça já com o cliente.</b> '+
+    esc(d.map(function(it){return (it.qtd||1)+"× "+(it.nome||"");}).join(", "))+
+    " · "+esc(d[0].baixaDispensada.motivo||"")+". O estoque não baixa de novo (nem em reaprovação).</div>";
+  return h;
 }
 function textoAguardandoPeca(lista){
   return lista.map(function(x){
@@ -51822,6 +51870,9 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm){
     toast("Aguardando peça: "+textoAguardandoPeca(semPeca)+
       ". O estoque não pode ficar negativo — receba a requisição no almoxarifado (Demandas do Estoque) e aprove depois.");
     return false;}
+  /* a peça que já está com o cliente (instalação concluída ou balcão entregue antes da trava) não
+     trava e não baixa de novo — fica dispensada, uma vez só, com registro no histórico */
+  try{await dispensarBaixaAntiga(p);}catch(eDb){console.warn("dispensa",eDb);}
   if(aprovandoVenda[p.id])return false;
   aprovandoVenda[p.id]=true;
   try{
