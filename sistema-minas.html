@@ -591,6 +591,12 @@ body.tn .tv-so{display:none!important}
   .auto{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:40;background:var(--card);
     border-radius:var(--r-sm);box-shadow:var(--shadow-lg);max-height:240px;overflow:auto;padding:6px}
   .auto[hidden]{display:none}
+  .ser-p{margin-top:10px}
+  .ser-l{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .ser-n{min-width:22px;text-align:right;color:var(--ink-3);font-size:12.5px}
+  .ser-l input{flex:1;min-width:0}
+  .ser-av:empty{display:none}
+  .ser-av{margin-top:8px}
   .auto button{display:block;width:100%;text-align:left;background:none;border:0;font:inherit;
     padding:9px 11px;border-radius:7px;cursor:pointer;color:var(--ink)}
   .auto button:hover{background:var(--accent-2)}
@@ -3075,7 +3081,10 @@ img{max-width:100%}
             <div class="grid g4">
               <div class="fld"><label for="v_qtd">Qtd</label><input id="v_qtd" type="number" step="1" min="1" value="" placeholder="Qtd" inputmode="numeric"></div>
               <div class="fld"><label for="v_valor">Valor unitário</label><input id="v_valor" type="text" inputmode="decimal" step="10"></div>
-              <div class="fld" id="v_serieWrap"><label for="v_serie">Número de série</label><input id="v_serie" placeholder="—"></div>
+              <div class="fld" id="v_serieWrap"><label for="v_serie">Número de série</label>
+                <select id="v_serieSel" hidden></select>
+                <input id="v_serie" placeholder="—">
+                <div class="help" id="v_serieNota" hidden></div></div>
               <div class="fld" id="v_localWrap" hidden><label for="v_local">Localização do produto <span class="req">*</span></label>
                 <input id="v_local" placeholder="Cozinha, área gourmet, escritório…" autocomplete="off" list="dlLocais">
                 <div class="help">Onde o aparelho vai ficar <b>no cliente</b>. Sem número de série, é o que diferencia um aparelho do outro na manutenção periódica.</div></div>
@@ -4927,6 +4936,7 @@ img{max-width:100%}
         <span class="sp"></span>
         <button class="btn ghost" type="button" id="afNotas" hidden>Notas</button>
         <button class="btn" type="button" id="afRequisitar">+ Requisitar produtos</button>
+        <button class="btn ghost" type="button" id="afSeries" hidden>Informar séries do estoque</button>
       </div>
       <!-- 09/11 (pedido dele): filtros com número, data, ordem, busca, por pessoa e impressão -->
       <div class="afx-chips" id="afFiltros" role="tablist" aria-label="Tipo de demanda"></div>
@@ -7872,6 +7882,20 @@ img{max-width:100%}
     <div class="actions">
       <button class="btn" type="button" id="rp_sim">Sim, recebi — adicionar ao meu estoque</button>
       <button class="btn mut" type="button" id="rp_nao">Ainda não</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="serEstModal" hidden>
+  <div class="box" style="width:min(820px,100%)">
+    <h3>Informar séries do estoque</h3>
+    <div class="sub">Purificadores que já estão nos estoques sem número de série. O saldo não muda: a série só é ligada às unidades que já estão lá.</div>
+    <div class="fld" style="margin-top:12px"><label for="se_local">Estoque</label><select id="se_local"></select></div>
+    <div id="se_lista" style="margin-top:12px"></div>
+    <div id="se_form" style="margin-top:12px"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="se_ok" hidden>Gravar as séries</button>
+      <button class="btn mut" type="button" id="se_fechar">Fechar</button>
     </div>
   </div>
 </div>
@@ -18140,7 +18164,60 @@ function ajustarLocalItem(){
     $("v_serie").disabled=false;
     $("v_serie").placeholder=(String(p.serie)==="sim")?"leia o código ou digite":"série, se o aparelho tiver";
   }
+  try{ajustarSelecaoSerieVenda();}catch(e){console.warn("série da venda",e);}
   try{ajustarPerguntaPlano();}catch(e){console.warn("pergunta do plano",e);}
+}
+/* ---------- 2) NA VENDA A SÉRIE SE ESCOLHE, NÃO SE DIGITA (v548) ----------
+   O vendedor escolhe numa lista as séries que estão NO ESTOQUE DE ONDE A PEÇA SAI (a caixinha de
+   quem vai instalar ou o Estoque da Loja), e só as livres aparecem: série já reservada em outro
+   pedido ou já ligada ao aparelho de um cliente fica fora. Não havendo nenhuma série cadastrada
+   naquele estoque, a digitação continua como sempre — a venda nunca trava por isto — e o aviso
+   diz para pedir o cadastro ao almoxarifado. */
+function ajustarSelecaoSerieVenda(){
+  var sel=$("v_serieSel"),inp=$("v_serie"),nota=$("v_serieNota");
+  if(!sel||!inp||!nota)return;
+  var p=prodPorId($("v_prod")?$("v_prod").value:"");
+  function livre(){sel.hidden=true;inp.hidden=false;inp.readOnly=false;}
+  if(!p||!controlaSerie(p)){livre();nota.hidden=true;return;}
+  if(!seriesLidas){
+    livre();nota.hidden=true;
+    if(!ajustarSelecaoSerieVenda.__lendo&&db){
+      ajustarSelecaoSerieVenda.__lendo=true;
+      carregarSeries().then(function(){try{ajustarSelecaoSerieVenda();}catch(e){}})
+        .catch(function(){}).then(function(){ajustarSelecaoSerieVenda.__lendo=false;});
+    }
+    return;
+  }
+  var loc="";try{loc=localItemForm();}catch(e){loc="";}
+  var pedId="";try{pedId=(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"";}catch(e){}
+  var livres=loc?seriesLivresDoLocal(p.id,loc,pedId):[];
+  var faltam=loc?faltamSeriesNoLocal(p.id,loc):0;
+  var atual=String(inp.value||"").trim();
+  if(!livres.length){
+    livre();
+    nota.innerHTML=faltam
+      ? "<b>Há purificadores no seu estoque sem número de série.</b> Peça ao almoxarifado para cadastrar."
+      : "Nenhuma série deste produto no estoque escolhido — digite ou leia o número.";
+    nota.hidden=false;
+    return;
+  }
+  var tem=livres.some(function(d){return d.serie===atual;});
+  sel.innerHTML='<option value="">— escolha o aparelho —</option>'+
+    livres.map(function(d){return '<option value="'+esc(d.serie)+'">'+esc(d.serie)+"</option>";}).join("")+
+    ((atual&&!tem)?'<option value="'+esc(atual)+'">'+esc(atual)+" (digitada)</option>":"");
+  sel.value=atual;
+  sel.hidden=false;inp.hidden=true;inp.readOnly=true;
+  if(!sel.__ligado){
+    sel.__ligado=true;
+    sel.onchange=function(){
+      inp.readOnly=false;inp.value=sel.value;inp.readOnly=true;
+      try{inp.dispatchEvent(new Event("input",{bubbles:true}));}catch(e){}
+      try{ajustarLocalItem();}catch(e){}
+    };
+  }
+  nota.innerHTML=livres.length+(livres.length===1?" aparelho disponível":" aparelhos disponíveis")+" em "+esc(nomeLocal(loc))+
+    (faltam?' · <b style="color:var(--warn)">'+faltam+" sem número de série (peça ao almoxarifado para cadastrar)</b>":"");
+  nota.hidden=false;
 }
 function addItem(){
   /* forma sem juros sem valor informado trava a inclusão (regra dele, 20/09) */
@@ -20292,9 +20369,34 @@ function ligarEndRevisao(c){
    a segunda chamada espera a primeira terminar e é recusada com aviso. A trava solta sozinha no
    fim (ou em 90 s, se algo travar), e os botões ficam desligados enquanto grava. */
 var salvandoPedidoEm=0;
+/* v548: a série escolhida ainda é desta venda? O pedido feito sem internet passa por aqui ao ser
+   enviado — se outro pedido tiver usado a mesma série nesse meio tempo, ele trava com o aviso e a
+   pessoa escolhe outra. Devolve "" quando está tudo certo. */
+function conferirSeriesPedido(lista,pedidoId){
+  if(!seriesLidas)return "";
+  var ruins=[];
+  (lista||[]).forEach(function(i){
+    var n=normSerie(i&&i.serie);
+    if(!n||!controlaSeriePid(i.pid))return;
+    var r=serieOcupada(n,pedidoId||"");
+    if(r)ruins.push(i.serie+" (pedido "+(r.pedido.numero||"sem número")+")");
+    else{var eq=ivsAparelhoDaSerie(n);if(eq)ruins.push(i.serie+" (aparelho de "+(eq.cliente||"um cliente")+")");}
+  });
+  if(!ruins.length)return "";
+  return "Este número de série já está em outro lugar: "+ruins.join(", ")+
+    ". Escolha outro aparelho no item antes de fechar o pedido.";
+}
+window.__conferirSeriesPedidoMF=conferirSeriesPedido;
 async function salvarPedido(){
   if(salvandoPedidoEm&&Date.now()-salvandoPedidoEm<90000){
     toast("O pedido já está sendo gravado — aguarde um instante.");return null;}
+  var fSer=conferirSeriesPedido(itens,(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"");
+  if(fSer){
+    toast(fSer);
+    try{esquecerReservaSerie();ajustarSelecaoSerieVenda();}catch(eS){}
+    try{var av=$("rv_alerta");if(av&&$("revModal")&&!$("revModal").hidden)av.innerHTML='<div class="note crit">'+esc(fSer)+"</div>";}catch(eA){}
+    return null;
+  }
   salvandoPedidoEm=Date.now();
   var bts=[$("v_salvar"),$("rv_ok")].filter(Boolean);
   bts.forEach(function(b){b.disabled=true;});
@@ -25547,6 +25649,308 @@ function resumoSeriesInv(inv){
 }
 window.__ivsMF=function(){return IVS;};window.__ivsReceberMF=ivsReceber;window.__seriesCadMF=function(){return seriesCad;};
 window.__invPedeSerieMF=invPedeSerie;
+/* ====================================================================
+   NÚMERO DE SÉRIE DOS PURIFICADORES — ETAPAS 2 e 3 (16/11, v548)
+   --------------------------------------------------------------------
+   Etapa 1 (v477) pôs as séries no inventário do almoxarifado, na coleção `series`. Agora:
+   2) a série é OBRIGATÓRIA quando o estoque muda de mãos — ao ACEITAR a requisição, uma por
+      unidade recebida; na devolução ao almoxarifado ela volta junto;
+   3) na VENDA o vendedor não digita mais: ESCOLHE na lista das séries que estão no estoque de
+      onde a peça sai (a caixinha de quem instala ou o Estoque da Loja), e só as livres aparecem.
+   Quem controla série é a MESMA regra que já decide se o pedido pede série (`pedeSerieProduto`:
+   a marca do produto vence a regra do grupo, e hoje o grupo que pede é Purificadores) — não há
+   cadastro novo nem segunda lista de séries: tudo continua em `series`.
+   A RESERVA É CALCULADA, como o saldo (regra de 10/09): a série está presa ao pedido que a
+   escolheu enquanto ele não for cancelado. Cancelou o pedido, trocou o item ou trocou o
+   instalador, a reserva cai sozinha — nada é gravado para reservar nem para liberar.
+   Nada aqui mexe em comissão, preço, Aprovação Financeira, Plano Premium, sucata da troca,
+   permissões nem na separação entre as empresas. */
+function controlaSerie(p){return pedeSerieProduto(p);}
+function controlaSeriePid(pid){return controlaSerie(prodPorId(pid));}
+function serieDaLoja(d){return !!d&&d.loja===lojaAtual;}
+function seriesDoLocal(pid,loc){
+  return seriesCad.filter(function(d){
+    return serieDaLoja(d)&&d.produtoId===pid&&d.situacao==="estoque"&&d.local===loc;});
+}
+/* a reserva, calculada na hora a partir dos pedidos que não foram cancelados */
+var SER_RES={em:0,mapa:null};
+function esquecerReservaSerie(){SER_RES.mapa=null;SER_RES.em=0;}
+function reservasDeSerie(){
+  if(SER_RES.mapa&&Date.now()-SER_RES.em<1500)return SER_RES.mapa;
+  var m={};
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual)return;
+    if(p.status==="Cancelada"||p.cancelado||p.teste)return;
+    (p.itens||[]).forEach(function(i){
+      var n=normSerie(i&&i.serie);
+      if(n&&!m[n])m[n]={pedido:p,item:i};
+    });
+  });
+  SER_RES.mapa=m;SER_RES.em=Date.now();
+  return m;
+}
+function serieOcupada(n,pedidoId){
+  var r=reservasDeSerie()[normSerie(n)];
+  return (r&&(!pedidoId||r.pedido.id!==pedidoId))?r:null;
+}
+function seriesLivresDoLocal(pid,loc,pedidoId){
+  return seriesDoLocal(pid,loc).filter(function(d){
+    return !serieOcupada(d.serieNorm,pedidoId)&&!ivsAparelhoDaSerie(d.serieNorm);});
+}
+/* quantas unidades estão no estoque sem série cadastrada */
+function faltamSeriesNoLocal(pid,loc){
+  var saldo=+saldoEm(pid,loc)||0;
+  if(saldo<=0)return 0;
+  return Math.max(0,saldo-seriesDoLocal(pid,loc).length);
+}
+/* onde esta série já está? ("" = livre) */
+function ondeEstaSerie(n,ignorarId,pedidoId){
+  n=normSerie(n);if(!n)return "";
+  var eq=ivsAparelhoDaSerie(n);
+  if(eq)return "no aparelho de "+(eq.cliente||"um cliente")+(eq.produto?" ("+eq.produto+")":"");
+  var d=seriesCad.filter(function(x){
+    return serieDaLoja(x)&&x.serieNorm===n&&x.situacao==="estoque"&&x.id!==ignorarId;})[0];
+  if(d)return "no estoque "+nomeLocal(d.local)+(d.produto?" · "+d.produto:"");
+  var r=serieOcupada(n,pedidoId);
+  if(r)return "reservada no pedido "+(r.pedido.numero||"sem número");
+  return "";
+}
+/* põe (ou move) a série num estoque, sempre no MESMO registro da coleção `series` */
+async function porSerieNoLocal(pid,nome,s,loc,texto){
+  var n=normSerie(s);
+  if(!n)return null;
+  await carregarSeries();
+  var ja=seriesCad.filter(function(d){return serieDaLoja(d)&&d.produtoId===pid&&d.serieNorm===n;})[0];
+  var d=ja||{id:uid(),loja:lojaAtual,serieNorm:n,produtoId:pid,produto:nome||"",
+    criadoEm:new Date().toISOString(),historico:[]};
+  d.serie=String(s).trim();d.situacao="estoque";d.local=loc;
+  d.em=new Date().toISOString();d.por=usuarioAtual;
+  d.historico=(d.historico||[]).concat([{quando:hojeISO(),por:usuarioAtual,
+    texto:texto||("em estoque em "+nomeLocal(loc))}]);
+  await gravaConf("series",d);
+  if(!ja)seriesCad.push(d);
+  return d;
+}
+/* a devolução leva as séries de volta: as que estão no estoque de origem, as livres primeiro */
+async function devolverSeriesDoLocal(pid,qtd,de,para,texto){
+  if(!controlaSeriePid(pid))return 0;
+  try{await carregarSeries();}catch(e){return 0;}
+  var lista=seriesDoLocal(pid,de).sort(function(a,b){
+    return (serieOcupada(a.serieNorm)?1:0)-(serieOcupada(b.serieNorm)?1:0);});
+  var n=Math.min(lista.length,Math.max(0,+qtd||0)),p=prodPorId(pid)||{};
+  for(var i=0;i<n;i++)await porSerieNoLocal(pid,p.nome||lista[i].produto,lista[i].serie,para,texto);
+  return n;
+}
+
+/* ---------- a caixa de digitar/ler as séries (usada na aceitação e no "Informar séries") ---------- */
+var SERBOX={linhas:{}};
+function serBoxZerar(){SERBOX.linhas={};}
+function serBoxHtml(itens,id){
+  var h=(itens||[]).map(function(x){
+    var k=x.pid,qt=Math.max(0,+x.qtd||0);
+    SERBOX.linhas[k]=SERBOX.linhas[k]||[];
+    var ls="";
+    for(var i=0;i<qt;i++){
+      ls+='<div class="ser-l"><span class="ser-n">'+(i+1)+'</span>'+
+        '<input data-ser="'+esc(k)+'" data-seri="'+i+'" autocomplete="off" spellcheck="false" '+
+        'placeholder="digite ou leia" value="'+esc(SERBOX.linhas[k][i]||"")+'">'+
+        '<button class="btn ghost sm" type="button" data-serler="'+esc(k)+'|'+i+'">ler</button></div>';
+    }
+    return '<div class="ser-p"><b>'+esc(x.nome||"")+"</b> <span class=\"t-sub\">"+qt+
+      (qt===1?" número de série":" números de série")+"</span>"+ls+"</div>";
+  }).join("");
+  return '<div class="ser-box" id="'+(id||"serBox")+'">'+h+'<div class="ser-av" id="'+(id||"serBox")+'_av"></div></div>';
+}
+function serBoxLigar(box){
+  if(!box)return;
+  Array.prototype.forEach.call(box.querySelectorAll("[data-ser]"),function(c){
+    if(c.__ligado)return;c.__ligado=true;
+    c.addEventListener("input",function(){
+      var k=c.getAttribute("data-ser"),i=+c.getAttribute("data-seri");
+      SERBOX.linhas[k]=SERBOX.linhas[k]||[];SERBOX.linhas[k][i]=c.value;
+      serBoxPintar(box);
+    });
+  });
+  Array.prototype.forEach.call(box.querySelectorAll("[data-serler]"),function(b){
+    if(b.__ligado)return;b.__ligado=true;
+    b.onclick=function(){
+      var p=String(b.getAttribute("data-serler")).split("|");
+      var c=box.querySelector('[data-ser="'+p[0]+'"][data-seri="'+p[1]+'"]');
+      if(c&&window.__lerCodigoMF)window.__lerCodigoMF(c);
+    };
+  });
+  serBoxPintar(box);
+}
+/* confere tudo: vazio, repetida na mesma caixa, já em outro estoque ou em cliente */
+function serBoxConferir(itens,pedidoId){
+  var vistas={},erros=[],fora=[],mapa={};
+  (itens||[]).forEach(function(x){
+    var k=x.pid,qt=Math.max(0,+x.qtd||0),L=SERBOX.linhas[k]||[],lista=[];
+    for(var i=0;i<qt;i++){
+      var s=String(L[i]||"").trim(),n=normSerie(s);
+      if(!n){erros.push({pid:k,i:i,texto:"falta"});continue;}
+      if(vistas[n]){erros.push({pid:k,i:i,texto:"repetida nesta tela"});continue;}
+      vistas[n]=1;
+      var onde=ondeEstaSerie(n,null,pedidoId);
+      if(onde){erros.push({pid:k,i:i,texto:"já está "+onde});fora.push(s+" — já está "+onde);continue;}
+      lista.push(s);
+    }
+    mapa[k]=lista;
+  });
+  return {ok:!erros.length,erros:erros,fora:fora,mapa:mapa};
+}
+function serBoxPintar(box){
+  if(!box)return;
+  var itens=box.__itens||[],r=serBoxConferir(itens,box.__pedidoId||"");
+  Array.prototype.forEach.call(box.querySelectorAll("[data-ser]"),function(c){
+    var k=c.getAttribute("data-ser"),i=+c.getAttribute("data-seri");
+    var e=r.erros.filter(function(x){return x.pid===k&&x.i===i&&x.texto!=="falta";})[0];
+    c.style.borderColor=e?"var(--crit)":"";
+    c.title=e?e.texto:"";
+  });
+  var av=box.querySelector(".ser-av");
+  if(av)av.innerHTML=r.fora.length
+    ?'<div class="note crit"><b>Número de série já usado:</b><br>'+r.fora.map(esc).join("<br>")+"</div>":"";
+  return r;
+}
+function serBoxMontar(alvo,itens,pedidoId){
+  if(!alvo)return null;
+  alvo.innerHTML=itens.length?serBoxHtml(itens,alvo.id+"_bx"):"";
+  var box=alvo.querySelector(".ser-box");
+  if(box){box.__itens=itens;box.__pedidoId=pedidoId||"";serBoxLigar(box);}
+  return box;
+}
+/* os produtos que pedem série dentro de uma lista de itens de requisição */
+function itensComSerieReq(r,idx){
+  var out=[];
+  (idx||[]).forEach(function(i){
+    var it=r.itens[i];
+    if(!it||!controlaSeriePid(it.pid))return;
+    out.push({pid:it.pid,nome:codNomeItem(it),qtd:+(it.atendida||it.qtd)||0});
+  });
+  return out;
+}
+window.__serieMF={controla:controlaSerie,doLocal:seriesDoLocal,livres:seriesLivresDoLocal,
+  faltam:faltamSeriesNoLocal,onde:ondeEstaSerie,por:porSerieNoLocal,devolver:devolverSeriesDoLocal,
+  reservas:reservasDeSerie,esquecer:esquecerReservaSerie,caixa:SERBOX,conferir:serBoxConferir,
+  carregar:function(){return carregarSeries();},cad:function(){return seriesCad;}};
+
+/* ---------- 3) INFORMAR SÉRIES DO ESTOQUE (aparelhos que já estão nas caixinhas) ---------- */
+function podeInformarSeries(){
+  var f="";try{f=perfilDe(usuarioAtual);}catch(e){}
+  if(f==="Administrador"||f==="Gerente"||f==="Almoxarifado")return true;
+  try{return respondePeloEstoque(euNoEstoque(),LOC_EMPRESA);}catch(e){return false;}
+}
+window.__podeInformarSeriesMF=podeInformarSeries;
+function locaisComSerie(){
+  var out=[LOC_EMPRESA,locLoja(lojaAtual)];
+  (window.__usuariosMF?window.__usuariosMF():[]).forEach(function(u){
+    if(!u||u.ativo===false)return;
+    var l=locColab(u.nome);
+    if(out.indexOf(l)<0)out.push(l);
+  });
+  return out;
+}
+/* UMA passada só nos movimentos: são 30 mil, e perguntar o saldo produto a produto e estoque a
+   estoque travaria a tela (a conta é a mesma do saldoEm). */
+function faltasDeSerie(loc){
+  var quero={},nomes={};
+  (produtos||[]).forEach(function(p){
+    if(!controlaSerie(p))return;
+    quero[p.id]=1;nomes[p.id]=codNomeItem({pid:p.id,cod:p.cod,nome:p.nome});
+  });
+  var locs=locaisComSerie(),vale={};
+  locs.forEach(function(l){if(!loc||l===loc)vale[l]=1;});
+  var saldos={};
+  (movEst||[]).forEach(function(m){
+    if(!m||m.loja!==lojaAtual||!quero[m.produtoId])return;
+    var q=+m.qtd||0;
+    if(vale[m.destino])saldos[m.produtoId+"|"+m.destino]=(saldos[m.produtoId+"|"+m.destino]||0)+q;
+    if(vale[m.origem])saldos[m.produtoId+"|"+m.origem]=(saldos[m.produtoId+"|"+m.origem]||0)-q;
+  });
+  var porLocal={};
+  seriesCad.forEach(function(d){
+    if(!serieDaLoja(d)||d.situacao!=="estoque"||!quero[d.produtoId])return;
+    porLocal[d.produtoId+"|"+d.local]=(porLocal[d.produtoId+"|"+d.local]||0)+1;
+  });
+  var out=[];
+  Object.keys(saldos).forEach(function(k){
+    var saldo=saldos[k];if(saldo<=0)return;
+    var com=porLocal[k]||0;if(com>=saldo)return;
+    var pid=k.slice(0,k.lastIndexOf("|")),l=k.slice(k.lastIndexOf("|")+1);
+    out.push({pid:pid,nome:nomes[pid]||"",local:l,saldo:saldo,com:com,faltam:saldo-com});
+  });
+  return out.sort(function(a,b){return ordAZ(nomeLocal(a.local)+a.nome,nomeLocal(b.local)+b.nome);});
+}
+var SEREST={loc:"",linha:null};
+async function abrirSeriesEstoque(loc){
+  if(!podeInformarSeries()){toast("Só o almoxarifado, o Gerente e o Administrador informam as séries do estoque.");return;}
+  try{await carregarSeries();}
+  catch(e){toast("Não deu para ler as séries no banco. Confira a internet e tente de novo.");return;}
+  SEREST.loc=loc||"";SEREST.linha=null;serBoxZerar();
+  var sel=$("se_local");
+  sel.innerHTML='<option value="">Todos os estoques</option>'+locaisComSerie().map(function(l){
+    return '<option value="'+esc(l)+'">'+esc(nomeLocal(l))+"</option>";}).join("");
+  sel.value=SEREST.loc;
+  sel.onchange=function(){SEREST.loc=sel.value;SEREST.linha=null;serBoxZerar();renderSeriesEstoque();};
+  $("se_ok").onclick=gravarSeriesEstoque;
+  $("se_fechar").onclick=function(){$("serEstModal").hidden=true;SEREST.linha=null;serBoxZerar();};
+  $("serEstModal").hidden=false;
+  renderSeriesEstoque();
+}
+function renderSeriesEstoque(){
+  var L=faltasDeSerie(SEREST.loc),b=$("se_lista");
+  if(!L.length){
+    b.innerHTML='<div class="note ok"><b>Nenhum aparelho sem número de série.</b> Todo purificador com saldo nos estoques já tem a série cadastrada.</div>';
+    $("se_form").innerHTML="";$("se_ok").hidden=true;return;
+  }
+  b.innerHTML='<table class="tb"><thead><tr><th>Estoque</th><th>Produto</th><th class="num">Saldo</th>'+
+    '<th class="num">Com série</th><th class="num">Faltam</th><th></th></tr></thead><tbody>'+
+    L.map(function(x,i){
+      return "<tr><td>"+esc(nomeLocal(x.local))+"</td><td>"+esc(x.nome)+"</td><td class=\"num\">"+x.saldo+
+        '</td><td class="num">'+x.com+'</td><td class="num"><b>'+x.faltam+"</b></td>"+
+        '<td><button class="btn ghost sm" type="button" data-sei="'+i+'">Informar séries</button></td></tr>';
+    }).join("")+"</tbody></table>";
+  Array.prototype.forEach.call(b.querySelectorAll("[data-sei]"),function(bt){
+    bt.onclick=function(){
+      SEREST.linha=L[+bt.getAttribute("data-sei")];serBoxZerar();desenharFormSeries();};
+  });
+  desenharFormSeries();
+}
+function desenharFormSeries(){
+  var w=$("se_form"),x=SEREST.linha;
+  if(!x){w.innerHTML="";$("se_ok").hidden=true;return;}
+  w.innerHTML='<div class="note"><b>'+esc(nomeLocal(x.local))+" · "+esc(x.nome)+"</b>"+
+    '<div class="t-sub">saldo '+x.saldo+" · "+x.com+" com série · faltam "+x.faltam+
+    ". O saldo não muda: a série só é ligada às unidades que já estão aí.</div></div>"+
+    '<div id="se_box"></div>';
+  serBoxMontar($("se_box"),[{pid:x.pid,nome:x.nome,qtd:x.faltam}]);
+  $("se_ok").hidden=false;
+}
+function gravarSeriesEstoque(){return travaSalvar("gravarSeriesEstoque",gravarSeriesEstoque__corpo,this,arguments);}
+async function gravarSeriesEstoque__corpo(){
+  var x=SEREST.linha;if(!x)return;
+  if(!podeInformarSeries()){toast("Você não tem permissão para informar as séries do estoque.");return;}
+  var itens=[{pid:x.pid,nome:x.nome,qtd:x.faltam}];
+  var r=serBoxConferir(itens);
+  if(!r.ok){
+    serBoxPintar($("se_box").querySelector(".ser-box"));
+    toast(r.fora.length?"Número de série já usado — confira os destacados."
+      :"Informe o número de série de cada purificador.");
+    return;
+  }
+  var lista=r.mapa[x.pid]||[];
+  for(var i=0;i<lista.length;i++)
+    await porSerieNoLocal(x.pid,x.nome,lista[i],x.local,
+      "Série informada do estoque de "+nomeLocal(x.local)+" por "+usuarioAtual);
+  toast(lista.length+(lista.length===1?" série cadastrada":" séries cadastradas")+" em "+nomeLocal(x.local)+".");
+  SEREST.linha=null;serBoxZerar();
+  renderSeriesEstoque();
+  try{renderEstEmpresa();renderEstColab();}catch(e){}
+}
+window.__seriesEstoqueMF={abrir:abrirSeriesEstoque,faltas:faltasDeSerie,gravar:gravarSeriesEstoque__corpo,
+  linha:function(v){if(v!==undefined)SEREST.linha=v;return SEREST.linha;},locais:locaisComSerie};
+
 
 function renderInventarios(h,b){
   h.innerHTML="<th>Nº</th><th>Estoque</th><th>Aberto</th><th>Situação</th><th class=\"num\">Produtos contados</th><th class=\"num\">Divergências</th>";
@@ -26458,9 +26862,13 @@ async function atenderReq__corpo(id){
     toast("Separada. Agora "+donoDaReq(r)+" precisa confirmar o recebimento.");
   } else {
     if(r.status!=="pendente"){toast("Esta devolução já foi "+(r.status==="recusada"?"recusada":"recebida")+".");return;}
-    for(var i=0;i<r.itens.length;i++)
+    for(var i=0;i<r.itens.length;i++){
       await lancarMov(r.itens[i].pid,r.itens[i].atendida||r.itens[i].qtd,
         localDaReq(r),LOC_EMPRESA,"Devolução",r.obs,hojeISO(),"");
+      /* v548: a série volta junto com o aparelho */
+      try{await devolverSeriesDoLocal(r.itens[i].pid,r.itens[i].atendida||r.itens[i].qtd,
+        localDaReq(r),LOC_EMPRESA,"Devolvido ao almoxarifado por "+usuarioAtual);}catch(eS){console.warn("série da devolução",eS);}
+    }
     r.status="concluida";r.recebidaPor=usuarioAtual;r.recebidaEm=hojeISO();
     await grava("requisicoes",r);
     toast("Devolução recebida — "+(r.itens||[]).map(function(i){return (i.atendida||i.qtd)+"× "+codNomeItem(i);}).join(", ")+
@@ -26474,6 +26882,10 @@ function confirmarRecebimento(){return travaSalvar("confirmarRecebimento",confir
 async function confirmarRecebimento__corpo(id){
   var r=requisicoes.filter(function(x){return x.id===id;})[0];
   if(!r)return;
+  /* v548: pelo caminho antigo, o purificador abre a janela da reposição, que pede as séries */
+  var idxSer=r.itens.map(function(it,i){return (!itemFechadoReq(it)&&controlaSeriePid(it.pid))?i:-1;})
+    .filter(function(i){return i>=0;});
+  if(idxSer.length){abrirReposicaoItem(r.id,"todos");return;}
   for(var i=0;i<r.itens.length;i++){
     if(itemFechadoReq(r.itens[i]))continue;
     await lancarMov(r.itens[i].pid,r.itens[i].atendida||r.itens[i].qtd,
@@ -26515,6 +26927,28 @@ function abrirReposicaoItem(rid,idx){
     (ehTroca?'<br><span class="t-sub">Entra como <b>Purificador Sucata</b> — a avaliação é feita depois, no almoxarifado. Fica sob sua responsabilidade: no dia seguinte, transfira para o almoxarifado (Meu Estoque › Devolver).</span>':"")+
     "";
   $("rp_sim").textContent=ehTroca?"Sim, recebi na troca — acrescentar ao meu estoque como sucata":"Sim, recebi — adicionar ao meu estoque";
+  /* v548: o purificador só entra no estoque com o número de série de cada unidade recebida */
+  serBoxZerar();
+  var wSer=document.getElementById("rp_series");
+  if(!wSer){wSer=document.createElement("div");wSer.id="rp_series";$("rp_det").parentNode.insertBefore(wSer,$("rp_det").nextSibling);}
+  function pintarSeriesRep(){
+    var marcados=[].filter.call(document.querySelectorAll("#rp_det .rp-marca"),function(c){return c.checked;})
+      .map(function(c){return +c.getAttribute("data-i");});
+    var alvo2=marcas0?alvo.filter(function(i){return marcados.indexOf(i)>=0;}):alvo;
+    var its=ehTroca?[]:itensComSerieReq(r,alvo2);
+    if(!its.length){wSer.innerHTML="";return;}
+    wSer.innerHTML='<div class="note"><b>Número de série de cada purificador recebido</b>'+
+      '<div class="t-sub">Digite ou leia o código de cada aparelho. Sem todas as séries o recebimento não é gravado.</div></div>'+
+      '<div id="rp_serBox"></div>';
+    serBoxMontar(document.getElementById("rp_serBox"),its);
+  }
+  var marcas0=marcar;
+  repPend.pintarSeries=pintarSeriesRep;
+  Array.prototype.forEach.call(document.querySelectorAll("#rp_det .rp-marca"),function(c){
+    c.addEventListener("change",function(){serBoxZerar();pintarSeriesRep();});});
+  if(seriesLidas||!db)pintarSeriesRep();
+  else{wSer.innerHTML='<div class="note">Lendo as séries cadastradas…</div>';
+    carregarSeries().then(function(){pintarSeriesRep();}).catch(function(){wSer.innerHTML='<div class="note crit">Não deu para ler as séries no banco. Confira a internet.</div>';});}
   $("repModal").hidden=false;
 }
 /* toque duplo nunca grava duas vezes (30/10) */
@@ -26544,12 +26978,34 @@ async function confirmarReposicaoItens__corpo(){
       " (Meu Estoque › Devolver).");
     return;
   }
+  /* v548: série obrigatória, uma por unidade, antes de qualquer gravação */
+  var itsSer=ehTrocaR?[]:itensComSerieReq(r,x.idx),confSer=null;
+  if(itsSer.length){
+    confSer=serBoxConferir(itsSer);
+    if(!confSer.ok){
+      try{serBoxPintar(document.querySelector("#rp_serBox .ser-box"));}catch(eP){}
+      toast(confSer.fora.length?"Número de série já usado — confira os destacados."
+        :"Informe o número de série de cada purificador recebido.");
+      return;
+    }
+  }
   for(var k=0;k<x.idx.length;k++){
     var it=r.itens[x.idx[k]];if(!it||itemFechadoReq(it))continue;
     await lancarMov(it.pid,it.atendida||it.qtd,ehTrocaR?"troca":LOC_EMPRESA,localDaReq(r),
       ehTrocaR?"Pego na troca":"Requisição",r.obs,hojeISO(),"");
     it.recebido=true;it.recebidoEm=hojeISO();it.recebidoPor=usuarioAtual;
     nomes.push((it.atendida||it.qtd)+"× "+codNomeItem(it));
+  }
+  if(confSer){
+    var alvoSer=localDaReq(r);
+    for(var ks=0;ks<itsSer.length;ks++){
+      var xs=itsSer[ks],ls=confSer.mapa[xs.pid]||[];
+      for(var js=0;js<ls.length;js++)
+        await porSerieNoLocal(xs.pid,xs.nome,ls[js],alvoSer,
+          "Recebido pela requisição"+(r.obs?" ("+r.obs+")":"")+" · "+nomeLocal(alvoSer)+" · por "+usuarioAtual);
+      (r.series=r.series||{})[xs.pid]=((r.series||{})[xs.pid]||[]).concat(ls);
+    }
+    serBoxZerar();
   }
   if(r.itens.every(function(it){return itemFechadoReq(it);})){
     r.status="concluida";r.recebidaPor=usuarioAtual;r.recebidaEm=hojeISO();
@@ -26871,6 +27327,12 @@ function renderEstAfazer(){
     selF.value=fu;selF.onchange=function(){AF.sel={};renderEstAfazer();};}
   if($("afQuemWrap"))$("afQuemWrap").hidden=(nomesL.length<2&&!fu);
   if($("afRequisitar"))$("afRequisitar").onclick=requisitarDoFiltroAf;
+  /* v548: só o almoxarifado (e substituto), o Gerente e o Administrador informam as séries */
+  var bSer=$("afSeries");
+  if(bSer){
+    bSer.hidden=!podeInformarSeries();
+    bSer.onclick=function(){abrirSeriesEstoque("");};
+  }
   /* filtros: usuário → data → (contagens) → tipo → busca */
   var doUsu=todas.filter(function(d){return !fu||d.quem===fu||(d.cat==="suc"&&String(d.quem).indexOf(fu)>=0);});
   function naData(d){if(d.semData||(!AF.de&&!AF.ate))return true;var x=diaBrasilia(d.criado);
@@ -64493,7 +64955,7 @@ function ligar(){
   $("v_prod").onchange=sincronizarValor;$("v_add").onclick=addItem;
   if($("v_paEquip"))$("v_paEquip").onchange=function(){aoEscolherAparelhoPlano(true);};
   /* o estoque de onde o item sai (23/10): trocar refaz a nota dos saldos */
-  if($("v_estoque"))$("v_estoque").onchange=function(){try{notaEstoqueItem();}catch(e){}};
+  if($("v_estoque"))$("v_estoque").onchange=function(){try{notaEstoqueItem();}catch(e){}try{ajustarSelecaoSerieVenda();}catch(e){}};
   /* trocar o prospector (só quem pode): pede o motivo, que vai para o histórico (30/10) */
   if($("v_prosp"))$("v_prosp").addEventListener("change",function(){
     var s=$("v_prosp");s.__manual=(s.value!==(s.__base||""));
