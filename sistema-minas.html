@@ -22693,7 +22693,8 @@ function abrirTrocaInstalador(fora,inst,revisao){
       (rec?"<br><b>O produto está com "+esc(de)+": transfira para "+esc(inst)+".</b> Depois de gravar, o pedido mostra o atalho da transferência.":"")+
       (i.autEstoque||i.usoEstoque?"":"")+"</div>";
   }).join("");
-  $("ti_loja").hidden=!marcadoNaLoja(euNoEstoque());
+  /* v564: a peça sai SEMPRE da caixinha de quem instala — a opção da Loja saiu da troca */
+  $("ti_loja").hidden=true;
   $("ti_cancelar").textContent=revisao?"Voltar e corrigir":"Cancelar a troca do instalador";
   $("trInstModal").hidden=false;
 }
@@ -22702,24 +22703,31 @@ function abrirTrocaInstalador(fora,inst,revisao){
 function escolherTrocaInstalador(destino){
   var c=tiCtx;if(!c)return false;
   var agora=new Date().toISOString(),eu=euNoEstoque();
-  var loc=(destino==="loja")?locLoja(lojaAtual):locColab(c.inst);
-  if(destino==="loja"&&!marcadoNaLoja(eu)){toast("Só quem é responsável pelo Estoque da Loja escolhe a Loja.");return false;}
+  /* v564: a origem passa a ser a caixinha do NOVO instalador, e só ela */
+  var loc=locColab(c.inst),tiUsados={};
   c.fora.forEach(function(i){
     var q=+(i.qtd||1),rec=reqRecebidaDoItem(i),t0=i.trocaEst||null;
     i.trocaEst={de:t0?t0.de:i.estoque,para:loc,por:usuarioAtual,em:agora,instalador:c.inst,
       autAntiga:t0?t0.autAntiga:((i.autEstoque&&i.autEstoque.status)||""),
       reqAntiga:t0?t0.reqAntiga:((i.usoEstoque&&i.usoEstoque.reqId)||""),
       recebido:t0&&t0.recebido?t0.recebido:(rec?rec.id:"")};
+    /* v564: a série do purificador vale por estoque (v562) — a do antigo não serve na caixinha
+       do novo, então ela sai e o vendedor escolhe de novo na lista do novo instalador */
+    try{
+      if(i.serie&&controlaSeriePid(i.pid)){
+        i.trocaEst.serieAntes=i.serie;
+        i.serie="";
+      }
+    }catch(eS){}
     i.estoque=loc;
-    /* v535 (regra dele): quem decide é SEMPRE o dono do estoque. Antes a troca gravava a autorização
-       como dada, em nome de quem trocou, e reservava no estoque do novo mesmo sem saldo. */
-    if(destino==="loja"||!precisaAutorizacaoEstoque(loc,eu)){
-      delete i.autEstoque;   /* a Loja de quem responde por ela, ou o próprio estoque: como sempre */
-      i.usoEstoque={usar:q,req:0,reqId:"",por:usuarioAtual,em:agora};
-    }else{
-      i.autEstoque=novaAutEstoque(loc,eu);i.autEstoque.trocaInstalador=true;
-      delete i.usoEstoque;   /* sem saldo, vira requisição automática ao gravar (resolverAutSemSaldo) */
-    }
+    /* v564: sem autorização de estoque — o uso nasce decidido; o novo instalador usa só o que tem
+       disponível e o que falta vira requisição automática ao almoxarifado, criada ao gravar */
+    delete i.autEstoque;
+    var excP=(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"";
+    var dispN=saldoEm(i.pid,loc)-((reservasDe(loc,excP)[i.pid])||0)-(tiUsados[i.pid]||0);
+    var usarN=podeRequisitarNaVenda()?Math.max(0,Math.min(q,dispN)):q;
+    tiUsados[i.pid]=(tiUsados[i.pid]||0)+usarN;
+    i.usoEstoque={usar:usarN,req:q-usarN,reqId:"",por:usuarioAtual,em:agora,auto:(q-usarN)>0};
   });
   tiCtx=null;$("trInstModal").hidden=true;
   tiAntes=fotoInstalador();
@@ -22760,10 +22768,30 @@ window.__trocaInstMF={conferir:function(r){return conferirTrocaInstalador(r);},e
   cancelar:function(){cancelarTrocaInstalador();},foto:function(){tiAntes=fotoInstalador();return tiAntes;},
   fora:function(p){return itensForaDoInstaladorPed(p).map(function(i){return i.nome;});},
   estado:function(){return {original:tiInstOriginal,agora:instaladorForm(),editando:!!pedEditando};}};
+/* ===== ORIGEM DA PEÇA (16/11, v564) — 2ª das 6 versões das regras novas =====
+   Regra dele: COM INSTALAÇÃO a peça sai SEMPRE da caixinha de QUEM INSTALA — nunca do Estoque da
+   Loja nem da caixinha de outro colaborador, e a escolha some do pedido. SEM INSTALAÇÃO sai do
+   próprio estoque de quem vende, ou do Estoque da Loja só quando quem vende é responsável marcado
+   por ela. Ninguém usa estoque de terceiro, então NÃO nasce mais autorização de estoque em caso
+   nenhum (as já aprovadas continuam valendo).
+   Vale para pedido NOVO e para pedido aberto quando for EDITADO: nenhum pedido existente tem a
+   origem trocada sozinho. Os abertos com origem que agora é proibida ficam na 4ª lista da tela de
+   Transição do estoque, para o Administrador decidir um por um. */
+function origemPermitidaVenda(loc){
+  if(!loc||loc==="meu")return true;
+  if(!regraNovaEstoque())return true;
+  var t=temInstalacaoVenda(),comInst=(t==="sim"||t==="agora");
+  var ins=instaladorForm(),vend=quemVendeForm();
+  if(comInst)return !!ins&&loc===locColab(ins);
+  if(loc===locColab(vend))return true;
+  return ehLocalLoja(loc)&&loc===locLoja(lojaAtual)&&marcadoNaLoja(vend);
+}
+window.__origemPermitidaMF=function(l){return origemPermitidaVenda(l);};
 function estoquePadraoVenda(){
   var t=temInstalacaoVenda(),vend=quemVendeForm(),ins=instaladorForm();
   var comInst=(t==="sim"||t==="agora");
-  if(comInst&&ins&&ins!==vend)return locColab(ins);
+  /* v564: com instalação é sempre a caixinha de quem instala, mesmo sendo quem vende */
+  if(comInst&&ins)return locColab(ins);
   if(!comInst&&marcadoNaLoja(vend))return locLoja(lojaAtual);
   return locColab(vend);
 }
@@ -22905,8 +22933,11 @@ function planoEstoqueVenda(){
     if(!i||!i.estNovo||!i.pid||ehPlano(i)||ehServico(i))return;
     if(i.usoEstoque||i.autEstoque)return;
     var loc=i.estoque||padrao;
+    /* v564: item NOVO com origem que a regra nova não permite volta para a origem automática */
+    if(!origemPermitidaVenda(loc))loc=padrao;
     if(loc===LOC_EMPRESA)return;
-    var aut=precisaAutorizacaoEstoque(loc,i.estoque?eu:vend);
+    /* v564: ninguém usa estoque de terceiro, então não há mais autorização de estoque */
+    var aut=false;
     var q=+(i.qtd||1),o={i:i,ix:ix,k:i.vinculo||("ix"+ix),loc:loc,aut:aut,q:q};
     if(!aut){
       var kk=i.pid+"|"+loc;
@@ -22916,7 +22947,9 @@ function planoEstoqueVenda(){
          a venda — sai assim mesmo e fica negativo, com aviso; a reposição vem depois da aprovação.
          Desligada a chave, volta a não deixar vender sem saldo. */
       if(!podeReq){o.usar=q;o.req=0;o.fica=disp-q;o.bloqueia=o.podeUsar<q&&!estoqueNegativoPermitido();}
-      else if(!o.podeUsar){o.usar=0;o.req=q;}
+      /* sem nada disponível a requisição nasce sozinha: a marca "auto" é o que o sino e as
+         Demandas mostram como "Sem saldo no estoque" (vinha do resolverAutSemSaldo, que saiu na v564) */
+      else if(!o.podeUsar){o.usar=0;o.req=q;o.auto=true;}
       else{
         var e=revEstoque[o.k];
         o.precisaEscolha=!e;
@@ -22979,8 +23012,9 @@ function aplicarEstoqueVenda(){
   var quem=euNoEstoque(),agora=new Date().toISOString();
   planoEstoqueVenda().forEach(function(o){
     o.i.estoque=o.loc;
-    if(o.aut)o.i.autEstoque=novaAutEstoque(o.loc,quem);
-    else o.i.usoEstoque={usar:o.usar,req:o.req,reqId:"",por:usuarioAtual,em:agora};
+    /* v564: a autorização de estoque acabou — o item nasce já com o uso decidido */
+    delete o.i.autEstoque;
+    o.i.usoEstoque={usar:o.usar,req:o.req,reqId:"",por:usuarioAtual,em:agora,auto:!!o.auto};
   });
   return "";
 }
@@ -23149,11 +23183,28 @@ function opcoesEstoqueItem(){
   function add(v,txt){var o=document.createElement("option");o.value=v;o.textContent=txt;s.appendChild(o);}
   /* "meu" é o estoque de quem ENTREGA a venda (o vendedor do pedido, ou o técnico na
      instalação) — o nome que aparece é o dele, para não parecer o de quem está logado */
+  var wEst=$("v_estoqueWrap");
   if(regraNovaEstoque()){
-    /* 03/11: "Automático" decide no fim, pelo vendedor e pelo instalador (estoquePadraoVenda) */
-    add("meu","Automático · de quem vende ou de quem instala");
-    add(locColab(eu),"Meu estoque · "+eu);
-  }else{
+    /* v564: com instalação não há escolha — a peça sai da caixinha de quem instala e o campo
+       nem aparece. Sem instalação, só o próprio estoque e a Loja de quem responde por ela. */
+    var tI=temInstalacaoVenda(),comI=(tI==="sim"||tI==="agora"),insI=instaladorForm(),vendI=quemVendeForm();
+    if(comI&&insI){
+      add(locColab(insI),"Caixinha de quem instala · "+insI);
+      s.value=locColab(insI);
+      if(wEst)wEst.hidden=true;
+      return;
+    }
+    if(wEst)wEst.hidden=false;
+    add("meu","Automático · "+(marcadoNaLoja(vendI)?"Estoque da Loja":"de quem vende"));
+    add(locColab(vendI),"Estoque de quem vende · "+vendI);
+    if(marcadoNaLoja(vendI))add(locLoja(lojaAtual),"Estoque da Loja · "+nomeLoja()+
+      (respEstoqueLoja(lojaAtual)?" · "+respEstoqueLoja(lojaAtual):""));
+    if(ant){try{s.value=ant;}catch(eV){}}
+    if(!s.value||!origemPermitidaVenda(s.value))s.value="meu";
+    return;
+  }
+  if(wEst)wEst.hidden=false;
+  {
   var donoMeu=localVendaForm(),nomeMeu=(donoMeu.indexOf("colab:")===0)?donoMeu.slice(6):nomeLocal(donoMeu);
   add("meu",(nomeMeu===eu?"Meu estoque":"Estoque de quem vende")+(nomeMeu?" · "+nomeMeu:""));
   }
@@ -26278,10 +26329,107 @@ async function trDecidirAutUma(x,motivo){
   toast("Autorização do pedido "+x.numero+" cancelada. Nenhum estoque foi movimentado.");
   return true;
 }
+/* ---------- LISTA 4 (v564): pedidos abertos com origem que fica proibida ----------
+   A regra nova vale para pedido novo e para pedido aberto quando for editado. Nenhum pedido
+   existente tem a origem trocada sozinho: os que estão com a peça saindo do Estoque da Loja (de
+   quem não responde por ela) ou da caixinha de outra pessoa aparecem aqui, e o Administrador
+   decide um por um. Pedido já instalado ou já aprovado não entra e não muda. Autorização já
+   APROVADA continua valendo como está. */
+function origemPermitidaPedido(p,loc){
+  if(!loc||loc===LOC_EMPRESA)return true;
+  var inst=quemInstalaPedido(p),vend=p.vendedor||"";
+  if(inst)return loc===locColab(inst);
+  if(loc===locColab(vend))return true;
+  if(!ehLocalLoja(loc)||loc!==locLoja(p.loja||lojaAtual))return false;
+  try{return responsaveisMarcados(loc).indexOf(vend)>=0;}catch(e){return false;}
+}
+window.__origemPermitidaPedMF=function(p,l){return origemPermitidaPedido(p,l);};
+function pedidosOrigemProibida(){
+  var out=[];
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||p.teste)return;
+    if(p.status==="Cancelada"||p.cancelado)return;
+    if(p.aprovado||p.instaladoEm)return;        /* já aprovado ou já instalado: fora da lista */
+    var inst=quemInstalaPedido(p);
+    itensDeEstoque(p).forEach(function(it,ix){
+      if(!it||!it.pid||ehPlano(it)||ehServico(it))return;
+      var loc=it.estoque||"";
+      if(!loc||loc===LOC_EMPRESA)return;
+      var a=it.autEstoque;
+      if(a&&a.status==="autorizada")return;      /* autorização já aprovada continua valendo */
+      if(origemPermitidaPedido(p,loc))return;
+      var por=ehLocalLoja(loc)
+        ? (inst?"com instalação, a peça não pode sair do Estoque da Loja":"quem vende não responde pelo Estoque da Loja")
+        : (inst?"a caixinha não é de quem instala":"é a caixinha de outra pessoa");
+      out.push({pedidoId:p.id,numero:p.numero||"",ix:ix,cliente:p.cliente||"",
+        produto:codNomeItem(it),pid:it.pid,qtd:+(it.qtd||1),serie:it.serie||"",
+        origem:loc,instalador:inst,vendedor:p.vendedor||"",
+        alvo:inst?locColab(inst):"",situacao:p.status||"",porque:por,
+        aut:(a&&a.status)||""});
+    });
+  });
+  return out.sort(function(a,b){return String(a.numero).localeCompare(String(b.numero));});
+}
+window.__origemProibidaMF=pedidosOrigemProibida;
+/* a caixinha do instalador tem saldo livre para este item? (e série livre, se controlar série) */
+function podeMudarParaInstalador(x){
+  if(!x.alvo)return {pode:false,porque:"este pedido não tem instalador definido"};
+  var disp=saldoEm(x.pid,x.alvo)-((reservasDe(x.alvo,x.pedidoId)[x.pid])||0);
+  if(disp<x.qtd)return {pode:false,porque:"a caixinha de "+(x.instalador||"quem instala")+" tem "+Math.max(0,disp)+" disponível e o item precisa de "+x.qtd};
+  if(controlaSeriePid(x.pid)){
+    if(!seriesLidas)return {pode:false,porque:"as séries ainda não foram lidas — abra a tela de novo"};
+    var livres=seriesLivresDoLocal(x.pid,x.alvo,x.pedidoId);
+    if(livres.length<x.qtd)return {pode:false,porque:"faltam séries livres na caixinha de "+(x.instalador||"quem instala")+" ("+livres.length+" de "+x.qtd+")"};
+    return {pode:true,series:livres.slice(0,x.qtd).map(function(d){return d.serie;})};
+  }
+  return {pode:true,series:null};
+}
+async function trPassarParaInstalador(x,motivo){
+  var c=podeMudarParaInstalador(x);
+  if(!c.pode)throw new Error("Não dá para passar agora: "+c.porque+".");
+  var p=(pedidos||[]).filter(function(y){return y.id===x.pedidoId;})[0];
+  if(!p)throw new Error("O pedido não está mais na lista.");
+  if(p.aprovado||p.instaladoEm)throw new Error("Este pedido já foi aprovado ou instalado — ele não muda.");
+  var it=itensDeEstoque(p)[x.ix];
+  if(!it||it.pid!==x.pid)throw new Error("O item mudou de lugar no pedido. Abra a tela de novo.");
+  var antes={estoque:it.estoque||"",serie:it.serie||"",
+    usoEstoque:it.usoEstoque?JSON.parse(JSON.stringify(it.usoEstoque)):null,
+    autEstoque:it.autEstoque?JSON.parse(JSON.stringify(it.autEstoque)):null};
+  it.estoque=x.alvo;
+  delete it.autEstoque;
+  it.usoEstoque={usar:x.qtd,req:0,reqId:"",por:usuarioAtual,em:new Date().toISOString()};
+  if(c.series)it.serie=c.series[0];
+  registrarEvento(p,"Origem da peça passada para a caixinha de "+(x.instalador||"quem instala")+
+    " na transição por "+usuarioAtual+" · "+x.qtd+"× "+x.produto+" (antes: "+nomeLocal(antes.estoque)+")"+
+    (c.series?" · série "+c.series.join(", ")+(antes.serie?" (antes: "+antes.serie+")":""):"")+" · "+motivo);
+  try{await gravaConf("pedidos",p);}
+  catch(e){
+    it.estoque=antes.estoque;it.serie=antes.serie;
+    if(antes.usoEstoque)it.usoEstoque=antes.usoEstoque;else delete it.usoEstoque;
+    if(antes.autEstoque)it.autEstoque=antes.autEstoque;else delete it.autEstoque;
+    (p.eventos||[]).pop();
+    throw e;
+  }
+  await gravarDecisoesTransicao([{tipo:"origem",acao:"instalador",quando:agoraCarimbo(),por:usuarioAtual,
+    motivo:motivo,pedido:x.numero,produto:x.produto,de:nomeLocal(antes.estoque),para:nomeLocal(x.alvo),
+    serieDe:antes.serie,seriePara:c.series?c.series[0]:"",antes:[antes]}]);
+  toast("Pedido "+x.numero+": "+x.produto+" passa a sair da caixinha de "+(x.instalador||"quem instala")+".");
+  try{esquecerReservaSerie();}catch(e){}
+  return true;
+}
+async function trManterOrigem(x,motivo){
+  await gravarDecisoesTransicao([{tipo:"origem",acao:"manter",quando:agoraCarimbo(),por:usuarioAtual,
+    motivo:motivo,pedido:x.numero,produto:x.produto,de:nomeLocal(x.origem),para:nomeLocal(x.origem),
+    excecao:true}]);
+  toast("Registrado: o pedido "+x.numero+" continua saindo do "+nomeLocal(x.origem)+" (exceção).");
+  return true;
+}
 window.__transicaoMF={carregar:carregarTransicao,negativos:negativosTransicao,
   reposicoes:reposicoesAbertasTransicao,auts:autsPendentesTransicao,
   contagem:trAjustarContagem,manter:trManterNegativo,reposicao:trDecidirReposicoes,
   grupoA:trCancelarAutsGrupoA,autUma:trDecidirAutUma,zerado:estoqueNegativoZerado,
+  origens:pedidosOrigemProibida,podeInst:podeMudarParaInstalador,
+  paraInstalador:trPassarParaInstalador,manterOrigem:trManterOrigem,
   decisoes:function(t){return decisoesTransicao(t);},doc:function(){return TRANS.doc;},
   abrir:abrirDecisaoTransicao,confirmar:function(){return confirmarDecisaoTransicao__corpo();},
   pend:function(){return TRANS.pend;}};
@@ -26362,15 +26510,39 @@ function renderTransicao(){
   h+=tabelaAut(gB,"B) O instalador usou peça de outra pessoa","Decisão uma por uma.",false);
   h+=tabelaAut(gC,"C) Venda sem instalação com peça de outra pessoa","Decisão uma por uma.",false);
 
+  /* ---- 4. pedidos abertos com origem que fica proibida (v564) ---- */
+  var orig=pedidosOrigemProibida();
+  h+='<h3 style="margin-top:26px">4. Pedidos abertos com origem que fica proibida <span class="pill '+(orig.length?"p-acc":"p-ok")+'">'+orig.length+"</span></h3>";
+  h+='<div class="t-sub">A regra nova (v564) vale para pedido novo e para pedido aberto quando for editado. '+
+    "Estes continuam como estão até você decidir. Pedido já instalado ou já aprovado não entra aqui.</div>";
+  h+=orig.length
+    ?'<table class="tb" style="margin-top:8px"><thead><tr><th>Pedido</th><th>Cliente</th><th>Produto</th><th>Série</th>'+
+      "<th>Origem hoje</th><th>Instalador</th><th>Situação</th><th>Por quê</th><th></th></tr></thead><tbody>"+
+      orig.map(function(x,i){
+        var c=podeMudarParaInstalador(x);
+        return "<tr><td>"+esc(x.numero)+"</td><td>"+esc(x.cliente||"—")+"</td><td>"+x.qtd+"× "+esc(x.produto)+
+          "</td><td>"+esc(x.serie||"—")+"</td><td>"+esc(nomeLocal(x.origem))+"</td><td>"+esc(x.instalador||"—")+
+          "</td><td>"+esc(x.situacao||"—")+'</td><td class="t-sub">'+esc(x.porque)+"</td>"+
+          '<td style="white-space:nowrap">'+
+          (c.pode
+            ?'<button class="btn ghost sm" type="button" data-trori="'+i+'" data-tra="inst">Passar para a caixinha do instalador</button> '
+            :'<span class="t-sub" title="'+esc(c.porque)+'">não dá para passar agora</span> ')+
+          '<button class="btn ghost sm" type="button" data-trori="'+i+'" data-tra="manter">Manter assim (exceção)</button>'+
+          "</td></tr>";
+      }).join("")+"</tbody></table>"
+    :'<div class="note ok">Nenhum pedido aberto com origem proibida nesta empresa.</div>';
+
   /* ---- decisões já tomadas ---- */
   var ds=decisoesTransicao("").slice().reverse();
   h+='<h3 style="margin-top:26px">Decisões já tomadas <span class="pill">'+ds.length+"</span></h3>";
   h+=ds.length
     ?'<table class="tb"><thead><tr><th>Quando</th><th>Quem</th><th>Lista</th><th>Decisão</th><th>De → para</th><th>Motivo</th></tr></thead><tbody>'+
       ds.slice(0,200).map(function(d){
-        var rot={negativo:"Negativo",reposicao:"Reposição",autorizacao:"Autorização"}[d.tipo]||d.tipo;
-        var ac={contagem:"Ajustou pela contagem",manter:"Manteve por enquanto",cancelar:"Cancelou"}[d.acao]||d.acao;
-        var dp=(d.tipo==="negativo"&&d.de!==undefined)?(d.de+" → "+d.para)
+        var rot={negativo:"Negativo",reposicao:"Reposição",autorizacao:"Autorização",origem:"Origem da peça"}[d.tipo]||d.tipo;
+        var ac={contagem:"Ajustou pela contagem",manter:"Manteve por enquanto",cancelar:"Cancelou",
+          instalador:"Passou para a caixinha do instalador"}[d.acao]||d.acao;
+        var dp=(d.tipo==="origem")?(String(d.de||"")+" → "+String(d.para||""))
+          :(d.tipo==="negativo"&&d.de!==undefined)?(d.de+" → "+d.para)
           :(d.quantas?d.quantas+(d.quantas===1?" registro":" registros")+(d.lote?" (em lote)":""):"—");
         return "<tr><td>"+esc(dataBR(d.quando||""))+"</td><td>"+esc(d.por||"")+"</td><td>"+esc(rot)+
           (d.grupo?" "+esc(d.grupo):"")+"</td><td>"+esc(ac)+"</td><td>"+esc(dp)+"</td><td>"+esc(d.motivo||"")+"</td></tr>";
@@ -26432,6 +26604,27 @@ function renderTransicao(){
         'Nenhum estoque é movimentado e a origem do item não muda: a peça continua saindo da caixinha de quem instala.<div class="t-sub">Guardo antes uma cópia de todas.</div>',
       botao:"Cancelar as "+gA.length,fazer:function(mot){return trCancelarAutsGrupoA(gA,mot);}});
   };
+  Array.prototype.forEach.call(b.querySelectorAll("[data-trori]"),function(bt){
+    bt.onclick=function(){
+      var x=orig[+bt.getAttribute("data-trori")],a=bt.getAttribute("data-tra");
+      if(!x)return;
+      var cab="<b>Pedido "+esc(x.numero)+"</b> · "+esc(x.cliente||"")+"<br>"+x.qtd+"× "+esc(x.produto)+
+        (x.serie?" · série "+esc(x.serie):"")+
+        '<div class="t-sub">origem hoje: '+esc(nomeLocal(x.origem))+" · instalador: "+esc(x.instalador||"—")+
+        " · "+esc(x.porque)+"</div>";
+      if(a==="inst"){
+        var c=podeMudarParaInstalador(x);
+        abrirDecisaoTransicao({titulo:"Passar para a caixinha do instalador",
+          detalhe:cab+'<div class="note" style="margin-top:8px">A peça passa a sair da caixinha de <b>'+
+            esc(x.instalador||"quem instala")+"</b>, que tem saldo livre"+
+            (c.series?" e série livre (<b>"+esc(c.series.join(", "))+"</b>)":"")+
+            ". O saldo não é movimentado agora: só a origem e a reserva do pedido mudam.</div>",
+          botao:"Passar a origem",fazer:function(mot){return trPassarParaInstalador(x,mot);}});
+      }else abrirDecisaoTransicao({titulo:"Manter assim (exceção)",
+        detalhe:cab+'<div class="note" style="margin-top:8px">Nada muda no pedido. Fica só o registro de que você decidiu manter esta origem como exceção.</div>',
+        botao:"Registrar a exceção",fazer:function(mot){return trManterOrigem(x,mot);}});
+    };
+  });
   Array.prototype.forEach.call(b.querySelectorAll("[data-traut]"),function(bt){
     bt.onclick=function(){
       var x=auts[+bt.getAttribute("data-traut")];if(!x)return;
