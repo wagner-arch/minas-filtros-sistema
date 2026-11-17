@@ -2425,6 +2425,7 @@ img{max-width:100%}
     <button data-s="estInv">Inventário</button>
     <button data-s="estRecup">Recuperações</button>
     <button data-s="estTransicao">Transição do estoque</button>
+    <button data-s="estInstalado">Peça instalada sem venda aprovada</button>
     <button data-s="estConsumo">Uso e consumo</button>
     <button data-s="ferramentas">Ferramentas</button>
     <div class="grp">Gestão Administrativa</div>
@@ -4938,6 +4939,18 @@ img{max-width:100%}
         </div>
       </div>
       <div id="trxCorpo"></div>
+    </section>
+
+    <!-- v567: peça já instalada no cliente e a venda ainda não aprovada. O estoque só baixa no que
+         vier por último (instalação + aprovação), então entre as duas a peça fica presa aqui. -->
+    <section class="screen" id="s-estInstalado" hidden>
+      <div class="cab">
+        <div>
+          <h2>Peça instalada sem venda aprovada</h2>
+          <div class="sub">A peça já está no cliente e o estoque ainda não baixou, porque a venda não foi aprovada. Nada muda sem o seu clique.</div>
+        </div>
+      </div>
+      <div id="piaCorpo"></div>
     </section>
 
     <section class="screen" id="s-estAfazer" hidden>
@@ -24643,7 +24656,9 @@ function saidasLiquidas(p){
 function reservasDe(local,excluirId,soEntregues){
   var r={},aRec=reqVendaAReceber(),pend={};
   pedidos.forEach(function(p){
-    if(p.loja!==lojaAtual||!vendaPendente(p))return;
+    /* v567: a venda aprovada que ainda espera a instalação NÃO baixou o estoque — a peça continua
+       no saldo de quem instala e tem de continuar reservada, senão outro pedido usaria a mesma. */
+    if(p.loja!==lojaAtual||(!vendaPendente(p)&&(podeBaixarPedido(p)||p.status==="Cancelada"||p.cancelado)))return;
     if(excluirId&&p.id===excluirId)return;
     if(soEntregues&&p.instalacao&&!p.instaladoEm)return;
     var saiu={},pede={};
@@ -24723,6 +24738,92 @@ async function ajustarBaixa(p,docBaixa,docEstorno){
     }
   }
   return baixou;
+}
+/* O SALDO BAIXA NO QUE VIER POR ÚLTIMO (16/11, v567, regra dele): venda COM instalação só baixa o
+   estoque quando as DUAS coisas aconteceram — a instalação concluída e a venda aprovada no
+   financeiro. Sem instalação, baixa na aprovação, como sempre. As regras da Aprovação Financeira
+   não mudaram: só o momento da baixa. Entre a instalação e a aprovação a peça continua no saldo de
+   quem instalou, marcada como "instalado, aguardando aprovação", e reservada — ninguém usa em
+   outro pedido. */
+function podeBaixarPedido(p){return !(p&&p.instalacao&&!p.instaladoEm);}
+window.__podeBaixarMF=podeBaixarPedido;
+/* a baixa do estoque e a reposição do pedido, num lugar só: a aprovação chama quando a instalação
+   já foi feita, e a conclusão da instalação chama quando a venda já estava aprovada */
+async function baixarEstoqueDoPedido(p){
+  var baixou=await ajustarBaixa(p,"Pedido "+p.numero,"Estorno do pedido "+p.numero);
+  /* o que saiu volta pela reposição — UMA requisição por estoque que teve baixa, porque desde
+     23/10 o pedido pode tirar produto de mais de um estoque.
+     SEM DUPLICAR (30/10): a quantidade é o que saiu de cada estoque por este pedido (líquido de
+     estornos) MENOS o que já foi pedido em reposição não cancelada do mesmo pedido, produto e
+     estoque. Reaprovar uma venda reaberta só repõe a diferença. */
+  var porLocal=repoFaltandoDoPedido(p),locs=Object.keys(porLocal),falhouRepo=0;
+  for(var ilr=0;ilr<locs.length;ilr++){
+    var lr=locs[ilr];
+    var rq={id:uid(),loja:p.loja,tipo:"requisicao",local:lr,
+      colaborador:ehLocalLoja(lr)?"":lr.slice(6),
+      itens:porLocal[lr].map(function(b){
+        var pr=prodPorId(b.pid)||{};
+        return {pid:b.pid,nome:pr.nome||"",cod:pr.cod||"",qtd:b.qtd,atendida:b.qtd};}),
+      obs:"Reposição · Pedido "+p.numero+((p.itens||[]).some(function(i){return i.daInstalacao;})
+        ?" (produtos vendidos, com os incluídos na instalação)":" (produtos vendidos)"),
+      data:hojeISO(),status:"pendente",
+      criadoEm:hojeISO(),criadoPor:usuarioAtual,origem:"reposicao",pedidoId:p.id,
+      cliente:p.cliente||"",pedidoNumero:p.numero,abertaEm:new Date().toISOString()};
+    requisicoes.push(rq);
+    /* gravação conferida: recusada pelo banco, a reposição sai da memória e o aviso diz */
+    try{await gravaConf("requisicoes",rq);}
+    catch(eRq){requisicoes.splice(requisicoes.indexOf(rq),1);falhouRepo++;}
+  }
+  if(falhouRepo)setTimeout(function(){toast("Atenção: "+falhouRepo+" reposição(ões) do pedido "+p.numero+
+    " NÃO foram gravadas. Aprovar de novo não refaz a aprovação — peça a reposição pela tela do estoque.");},2500);
+  return baixou;
+}
+window.__baixarEstoquePedMF=function(p){return baixarEstoqueDoPedido(p);};
+/* o que já está instalado no cliente e ainda espera a aprovação: continua no saldo de quem
+   instalou, mas preso. {pid: qtd} daquele estoque */
+function instaladoAguardandoAprov(local){
+  var m={};
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||p.status==="Cancelada"||p.cancelado)return;
+    if(!p.instaladoEm||p.aprovado)return;
+    var saiu={};
+    saidasLiquidas(p).forEach(function(s){if(s.local===local)saiu[s.pid]=(saiu[s.pid]||0)+s.qtd;});
+    itensDeEstoque(p).forEach(function(it){
+      if(it.baixaDispensada||it.pecaRecolhida)return;
+      if(localDoItemVenda(p,it)!==local)return;
+      var q=(+(it.qtd||1))-((saiu[it.pid]||0));
+      if(q>0)m[it.pid]=(m[it.pid]||0)+q;
+    });
+  });
+  return m;
+}
+window.__instaladoAguardandoMF=instaladoAguardandoAprov;
+/* PEÇA INSTALADA SEM VENDA APROVADA (v567): a lista do Administrador */
+function pecasInstaladasSemAprovacao(){
+  var out=[];
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||p.teste)return;
+    if(p.status==="Cancelada"||p.cancelado||p.aprovado)return;
+    if(!p.instaladoEm)return;
+    var saiu={};
+    saidasLiquidas(p).forEach(function(s){saiu[s.pid+"|"+s.local]=(saiu[s.pid+"|"+s.local]||0)+s.qtd;});
+    itensDeEstoque(p).forEach(function(it,ix){
+      if(it.baixaDispensada||it.pecaRecolhida||it.baixaSemAprovacao)return;
+      var loc=localDoItemVenda(p,it),q=(+(it.qtd||1))-((saiu[it.pid+"|"+loc]||0));
+      if(q<=0)return;
+      out.push({pedidoId:p.id,numero:p.numero||"",ix:ix,cliente:p.cliente||"",
+        produto:codNomeItem(it),pid:it.pid,qtd:q,local:loc,
+        instalador:respInstalacao(p)||p.instalador||"",instaladoEm:p.instaladoEm||"",
+        instaladoPor:p.instaladoPor||"",situacao:p.status||"",dias:diasDesde(p.instaladoEm)});
+    });
+  });
+  return out.sort(function(a,b){return String(a.instaladoEm).localeCompare(String(b.instaladoEm));});
+}
+window.__pecasSemAprovacaoMF=pecasInstaladasSemAprovacao;
+function diasDesde(d){
+  var t=Date.parse(String(d||"").slice(0,10)+"T12:00:00");
+  if(isNaN(t))return 0;
+  return Math.max(0,Math.round((Date.now()-t)/86400000));
 }
 /* o que falta pedir em reposição para este pedido, por estoque: {local:[{pid,qtd}]}.
    Só estoque de colaborador e Estoque da Loja repõem — o almoxarifado é a origem. */
@@ -26211,6 +26312,7 @@ async function confirmarDecisaoTransicao__corpo(){
   if(r===false)return false;
   $("trxModal").hidden=true;TRANS.pend=null;
   renderTransicao();
+  try{renderPecaInstalada();}catch(ePi){}
   try{render();}catch(e){}
   return true;
 }
@@ -26506,6 +26608,98 @@ window.__transicaoMF={carregar:carregarTransicao,negativos:negativosTransicao,
   abrir:abrirDecisaoTransicao,confirmar:function(){return confirmarDecisaoTransicao__corpo();},
   pend:function(){return TRANS.pend;}};
 
+/* ---------- v567: PEÇA INSTALADA SEM VENDA APROVADA ----------
+   A peça já está na casa do cliente e o estoque ainda não baixou, porque a venda não foi aprovada.
+   Duas decisões, só do Administrador, as duas com motivo obrigatório e registro: RECOLHER A PEÇA
+   (ela volta para quem instalou, o estoque continua como está e nasce a pendência de buscar) ou
+   DAR BAIXA SEM A APROVAÇÃO (o estoque baixa agora, com o motivo; a venda segue como está — as
+   regras do financeiro não mudam). */
+async function piRecolherPeca(x,motivo){
+  if(!ehAdministrador())throw new Error("Só o Administrador decide nesta lista.");
+  var p=(pedidos||[]).filter(function(y){return y.id===x.pedidoId;})[0];
+  if(!p)throw new Error("O pedido não está mais na lista.");
+  if(p.aprovado)throw new Error("Esta venda já foi aprovada — o estoque baixa pela aprovação.");
+  var it=itensDeEstoque(p)[x.ix];
+  if(!it||it.pid!==x.pid)throw new Error("O item mudou de lugar no pedido. Abra a tela de novo.");
+  if(it.pecaRecolhida||it.baixaSemAprovacao)throw new Error("Este item já foi decidido.");
+  it.pecaRecolhida={quando:agoraCarimbo(),por:usuarioAtual,motivo:motivo,qtd:x.qtd,local:x.local,
+    instalador:x.instalador||""};
+  registrarEvento(p,"Peça a recolher por decisão do Administrador ("+usuarioAtual+"): "+x.qtd+"× "+
+    x.produto+" · a peça volta para "+nomeLocal(x.local)+" e o estoque não baixa agora · "+motivo+
+    " · se a venda for aprovada depois, a baixa acontece na aprovação, como sempre.");
+  try{await gravaConf("pedidos",p);}
+  catch(e){delete it.pecaRecolhida;(p.eventos||[]).pop();throw e;}
+  toast("Pedido "+x.numero+": a peça volta para "+nomeLocal(x.local)+". O estoque não baixou.");
+  try{agendarEstNovas();}catch(e){}
+  return true;
+}
+async function piBaixarSemAprovacao(x,motivo){
+  if(!ehAdministrador())throw new Error("Só o Administrador decide nesta lista.");
+  var p=(pedidos||[]).filter(function(y){return y.id===x.pedidoId;})[0];
+  if(!p)throw new Error("O pedido não está mais na lista.");
+  if(p.aprovado)throw new Error("Esta venda já foi aprovada — o estoque baixa pela aprovação.");
+  var it=itensDeEstoque(p)[x.ix];
+  if(!it||it.pid!==x.pid)throw new Error("O item mudou de lugar no pedido. Abra a tela de novo.");
+  if(it.pecaRecolhida||it.baixaSemAprovacao)throw new Error("Este item já foi decidido.");
+  var mv;
+  try{mv=await lancarMov(it.pid,x.qtd,x.local,"venda","Pedido "+p.numero,
+    "Baixa sem a aprovação da venda, por decisão do Administrador ("+usuarioAtual+"): "+motivo,hojeISO(),"");}
+  catch(e){throw new Error("O banco recusou o movimento: "+((e&&e.message)||e));}
+  it.baixaSemAprovacao={quando:agoraCarimbo(),por:usuarioAtual,motivo:motivo,qtd:x.qtd,
+    local:x.local,movimentoId:mv?mv.id:""};
+  registrarEvento(p,"Baixa do estoque sem a aprovação da venda, por decisão do Administrador ("+usuarioAtual+"): "+
+    x.qtd+"× "+x.produto+" do "+nomeLocal(x.local)+" · "+motivo+
+    " · a venda continua como está, e quando for aprovada o estoque não baixa de novo.");
+  try{await gravaConf("pedidos",p);}catch(e){console.warn("baixa sem aprovação",e);}
+  toast("Pedido "+x.numero+": "+x.qtd+"× "+x.produto+" baixado do "+nomeLocal(x.local)+".");
+  try{renderEstEmpresa();renderEstColab();agendarEstNovas();}catch(e){}
+  return true;
+}
+function renderPecaInstalada(){
+  var b=$("piaCorpo");if(!b)return;
+  if(!ehAdministrador()){
+    b.innerHTML='<div class="note crit"><b>Só o Administrador abre esta lista.</b></div>';return;}
+  var l=pecasInstaladasSemAprovacao();
+  var h='<div class="note">Desde a v567 o estoque só baixa quando a instalação está concluída <b>e</b> a venda '+
+    "aprovada — o que vier por último. Enquanto a venda não é aprovada, a peça já instalada continua no saldo de "+
+    "quem instalou, marcada como <b>instalado, aguardando aprovação</b>, e ninguém consegue usar em outro pedido. "+
+    "Os números são só da <b>"+esc(nomeLoja())+"</b>.</div>";
+  h+='<h3 style="margin-top:20px">Peças instaladas esperando a aprovação <span class="pill '+(l.length?"p-acc":"p-ok")+'">'+l.length+"</span></h3>";
+  h+=l.length
+    ?'<table class="tb"><thead><tr><th>Instalada em</th><th>Pedido</th><th>Cliente</th><th>Produto</th>'+
+      "<th>Estoque preso</th><th>Instalador</th><th>Situação da venda</th><th></th></tr></thead><tbody>"+
+      l.map(function(x,i){
+        return "<tr><td>"+esc(dataCurta(x.instaladoEm))+(x.dias>2?' <span class="pill p-crit">há '+x.dias+" dias</span>":"")+
+          "</td><td>"+esc(x.numero)+"</td><td>"+esc(x.cliente||"—")+"</td><td>"+x.qtd+"× "+esc(x.produto)+
+          "</td><td>"+esc(nomeLocal(x.local))+"</td><td>"+esc(x.instalador||"—")+"</td><td>"+esc(x.situacao||"—")+"</td>"+
+          '<td style="white-space:nowrap">'+
+          '<button class="btn ghost sm" type="button" data-pia="'+i+'" data-pa="recolher">Recolher a peça</button> '+
+          '<button class="btn ghost sm" type="button" data-pia="'+i+'" data-pa="baixar">Dar baixa com motivo</button>'+
+          "</td></tr>";
+      }).join("")+"</tbody></table>"
+    :'<div class="note ok">Nenhuma peça instalada esperando aprovação nesta empresa.</div>';
+  b.innerHTML=h;
+  Array.prototype.forEach.call(b.querySelectorAll("[data-pia]"),function(bt){
+    bt.onclick=function(){
+      var x=l[+bt.getAttribute("data-pia")],a=bt.getAttribute("data-pa");
+      if(!x)return;
+      var cab="<b>Pedido "+esc(x.numero)+"</b> · "+esc(x.cliente||"")+"<br>"+x.qtd+"× "+esc(x.produto)+
+        '<div class="t-sub">instalada em '+esc(dataCurta(x.instaladoEm))+" por "+esc(x.instaladoPor||x.instalador||"—")+
+        " · presa no "+esc(nomeLocal(x.local))+" · venda em "+esc(x.situacao||"—")+"</div>";
+      if(a==="recolher")abrirDecisaoTransicao({titulo:"Recolher a peça",
+        detalhe:cab+'<div class="note" style="margin-top:8px">A peça volta para <b>'+esc(nomeLocal(x.local))+
+          "</b>. Nenhum movimento de estoque é lançado: o saldo já conta essa peça. Fica registrado quem decidiu, quando e o motivo.</div>",
+        botao:"Registrar o recolhimento",fazer:function(mot){return piRecolherPeca(x,mot);}});
+      else abrirDecisaoTransicao({titulo:"Dar baixa sem a aprovação",
+        detalhe:cab+'<div class="note warn" style="margin-top:8px">O estoque baixa <b>agora</b>, com o seu motivo, '+
+          "mesmo sem a venda aprovada. A venda continua como está — as regras do financeiro não mudam — e, "+
+          "quando ela for aprovada, o estoque <b>não baixa de novo</b>.</div>",
+        botao:"Dar baixa",fazer:function(mot){return piBaixarSemAprovacao(x,mot);}});
+    };
+  });
+}
+window.__pecaInstaladaMF={lista:pecasInstaladasSemAprovacao,recolher:piRecolherPeca,
+  baixar:piBaixarSemAprovacao,render:renderPecaInstalada};
 /* ---------- o desenho da tela ---------- */
 function renderTransicao(){
   var b=$("trxCorpo");if(!b)return;
@@ -28508,13 +28702,15 @@ function renderEstSaldo(){
   $("sdSub").textContent=loc?(loc===LOC_EMPRESA?"Almoxarifado":nomeLocal(loc)):"";
   var q=semAcento(String($("sdBusca").value||"")).toLowerCase().trim();
   var res=loc?reservasDe(loc):{},custo=podeVerCusto();
+  /* v567: parte do reservado já está na casa do cliente, esperando a venda ser aprovada */
+  var inst=loc?instaladoAguardandoAprov(loc):{};
   var lista=produtos.filter(function(p){
     if((p.status||"ativo")!=="ativo")return false;
     var s=saldoEm(p.id,loc),r=res[p.id]||0;if(!s&&!r)return false;
     if(!q)return true;
     return semAcento(String(p.nome||"")).toLowerCase().indexOf(q)>=0||String(p.cod||"").toLowerCase().indexOf(q)>=0;
   /* o número grande é o que está LIVRE: saldo menos o reservado (ex.: 0 com 1 reservado = −1) */
-  }).map(function(p){var r0=res[p.id]||0;return {p:p,s:saldoEm(p.id,loc)-r0,r:r0,saldo:saldoEm(p.id,loc)};})
+  }).map(function(p){var r0=res[p.id]||0;return {p:p,s:saldoEm(p.id,loc)-r0,r:r0,i:inst[p.id]||0,saldo:saldoEm(p.id,loc)};})
     .sort(function(a,b){return (a.s<0?0:1)-(b.s<0?0:1)||ordAZ(a.p.nome||"",b.p.nome||"");});
   $("sdCount").textContent=lista.length+" produto(s)";
   var nNeg=lista.filter(function(x){return x.s<0;}).length;
@@ -28525,12 +28721,13 @@ function renderEstSaldo(){
     return '<div class="sd-loc">📍 '+esc(l||"sem localização")+(mudaLoc?' <button type="button" class="btn mut sm" data-sdloc="'+esc(p.id)+'" aria-label="Mudar a localização">Mudar</button>':"")+"</div>";}
   $("sdCartoes").innerHTML=lista.length?lista.map(function(x){
     return '<div class="sd-card'+(x.s<0?" neg":"")+'"'+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+'><div class="nm"><b>'+esc(x.p.nome||"")+"</b><span>"+esc(x.p.cod||"")+"</span>"+locHtml(x.p)+
-      (x.r?'<div class="sd-res">'+x.r+" reservado(s)</div>":"")+'</div><div class="sd-qtd '+cls(x.s)+'">'+x.s+"</div></div>";}).join("")
+      (x.r?'<div class="sd-res">'+x.r+" reservado(s)"+(x.i?" · "+x.i+" instalado(s), aguardando aprovação":"")+"</div>":"")+'</div><div class="sd-qtd '+cls(x.s)+'">'+x.s+"</div></div>";}).join("")
     :'<div class="empty"><div class="big">Nenhum produto</div>'+(q?"Nada com essa busca.":"Este estoque está vazio.")+"</div>";
   $("sdHead").innerHTML="<tr><th>Produto</th><th>Código</th>"+(comLoc?"<th>Localização</th>":"")+"<th class=\"num\">Quantidade</th><th class=\"num\">Reservado</th>"+(custo?'<th class="num">Valor</th>':"")+"</tr>";
   $("sdBody").innerHTML=lista.length?lista.map(function(x){
     return "<tr"+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+"><td>"+esc(x.p.nome||"")+"</td><td>"+esc(x.p.cod||"")+"</td>"+(comLoc?"<td>"+locHtml(x.p)+"</td>":"")+'<td class="num"><b class="'+cls(x.s)+'">'+x.s+"</b></td>"+
-      '<td class="num">'+(x.r?'<span class="pill p-res">'+x.r+" reservado(s)</span>":"—")+"</td>"+
+      '<td class="num">'+(x.r?'<span class="pill p-res">'+x.r+" reservado(s)</span>":"—")+
+        (x.i?'<div class="t-sub">'+x.i+" instalado(s), aguardando aprovação</div>":"")+"</td>"+
       (custo?'<td class="num">'+BRL(x.saldo*custoTotalDe(x.p))+"</td>":"")+"</tr>";}).join("")
     :'<tr><td colspan="5"><div class="empty"><div class="big">Nenhum produto</div></div></td></tr>';
   Array.prototype.forEach.call(document.querySelectorAll("#s-estSaldo [data-sdloc]"),function(b){b.onclick=function(ev){ev.stopPropagation();pedirLocalNF(b.getAttribute("data-sdloc"));};});
@@ -51877,35 +52074,12 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm){
   aprovandoVenda[p.id]=true;
   try{
     var quem=responsavelVenda(p),loc=localDaVenda(p);
-    /* 1. baixa definitiva no estoque de cada item (pode ficar negativo) */
-    var baixou=await ajustarBaixa(p,"Pedido "+p.numero,"Estorno do pedido "+p.numero);
-    /* 2. o que saiu volta pela reposição — UMA requisição por estoque que teve baixa,
-       porque desde 23/10 o pedido pode tirar produto de mais de um estoque */
-    /* SEM DUPLICAR (30/10): a quantidade da reposição é o que saiu de cada estoque por este
-       pedido (líquido de estornos) MENOS o que já foi pedido em reposição não cancelada do
-       mesmo pedido, produto e estoque. Reaprovar uma venda reaberta só repõe a diferença. */
-    var porLocal=repoFaltandoDoPedido(p);
-    var locs=Object.keys(porLocal);
-    var falhouRepo=0;
-    for(var ilr=0;ilr<locs.length;ilr++){
-      var lr=locs[ilr];
-      var rq={id:uid(),loja:p.loja,tipo:"requisicao",local:lr,
-        colaborador:ehLocalLoja(lr)?"":lr.slice(6),
-        itens:porLocal[lr].map(function(b){
-          var pr=prodPorId(b.pid)||{};
-          return {pid:b.pid,nome:pr.nome||"",cod:pr.cod||"",qtd:b.qtd,atendida:b.qtd};}),
-        obs:"Reposição · Pedido "+p.numero+((p.itens||[]).some(function(i){return i.daInstalacao;})
-          ?" (produtos vendidos, com os incluídos na instalação)":" (produtos vendidos)"),
-        data:hojeISO(),status:"pendente",
-        criadoEm:hojeISO(),criadoPor:usuarioAtual,origem:"reposicao",pedidoId:p.id,
-        cliente:p.cliente||"",pedidoNumero:p.numero,abertaEm:new Date().toISOString()};
-      requisicoes.push(rq);
-      /* gravação conferida: recusada pelo banco, a reposição sai da memória e o aviso diz */
-      try{await gravaConf("requisicoes",rq);}
-      catch(eRq){requisicoes.splice(requisicoes.indexOf(rq),1);falhouRepo++;}
-    }
-    if(falhouRepo)setTimeout(function(){toast("Atenção: "+falhouRepo+" reposição(ões) do pedido "+p.numero+
-      " NÃO foram gravadas. Aprovar de novo não refaz a aprovação — peça a reposição pela tela do estoque.");},2500);
+    /* 1 e 2. baixa no estoque e reposição — v567: só quando a instalação já foi concluída.
+       Com instalação ainda pendente a venda é aprovada normalmente e a baixa fica para a
+       conclusão da instalação (o que vier por último). */
+    var baixou=[];
+    if(podeBaixarPedido(p))baixou=await baixarEstoqueDoPedido(p);
+    else registrarEvento(p,"Recebimento aprovado antes da instalação: o estoque baixa quando a instalação for concluída.");
     /* 3. parcelas no Contas a Receber, com o caixa de destino (venda antiga já tinha) */
     var parcelas=titulos.filter(function(t){return t.pedidoId===p.id&&t.status!=="cancelado";});
     if(!parcelas.length)parcelas=await gerarReceberDoPedido(p);
@@ -52411,6 +52585,20 @@ async function finalizarInstalacao__corpo(p,obs){
   p.status=etapaVenda(p);
   registrarEvento(p,"Instalação finalizada"+(ms.length?" · incluídos na venda: "+usados+" · total "+BRL(p.total):"")+" · "+obs);
   await gravarPedido(p);
+  /* v567: a venda já estava aprovada e faltava a instalação — a baixa do estoque é AGORA, que é
+     o que veio por último. As regras do financeiro não mudam: a venda já está aprovada. */
+  if(p.aprovado){
+    try{
+      var bxI=await baixarEstoqueDoPedido(p);
+      if(bxI.length){
+        var lcI={};bxI.forEach(function(b){lcI[b.local]=1;});
+        registrarEvento(p,"Baixa no estoque na conclusão da instalação · "+
+          Object.keys(lcI).map(nomeLocal).join(", ")+" · a venda já estava aprovada.");
+        await gravarPedido(p);
+      }
+    }catch(eBx){console.warn("baixa na instalação",eBx);
+      setTimeout(function(){toast("Atenção: a baixa do estoque desta instalação NÃO foi gravada. Avise o Administrador.");},2400);}
+  }
   /* v515: com a instalação concluída, a sucata da troca entra no estoque de quem instalou */
   var errSucI="";
   if(trocaNoPedido(p)){try{errSucI=await entrarSucataDoPedido(p);}catch(eSi){errSucI=motivoBanco(eSi);}}
@@ -58423,6 +58611,8 @@ function veTela(s,quem){
   var n=quem||usuarioAtual;
   /* v563: a tela de transição do estoque é só do Administrador, sem marcação nova nenhuma */
   if(s==="estTransicao")return perfilDe(n)==="Administrador";
+  /* v567: a lista da peça instalada sem venda aprovada também é só do Administrador */
+  if(s==="estInstalado")return perfilDe(n)==="Administrador";
   /* ESTOQUES (04/11): as telas novas usam as permissões que já existem — a visão leve é a
      tela Estoque Colaborador, a completa é a Estoque Empresa (nenhuma permissão gravada muda) */
   if(s==="estAfazer"||s==="estSaldo"||s==="estHist")return veTela("estColab",n)||veTela("estEmpresa",n);
@@ -62910,6 +63100,7 @@ function render(){
     desenhaTela("estEmpresa",renderEstEmpresa);desenhaTela("estColab",renderEstColab);
     desenhaTela("estAfazer",renderEstAfazer);desenhaTela("estSaldo",renderEstSaldo);desenhaTela("estHist",renderEstHist);
   desenhaTela("estTransicao",renderTransicao);
+  desenhaTela("estInstalado",renderPecaInstalada);
     desenhaTela("estConsumo",renderEstConsumo);desenhaTela("estEntrada",renderEntradas);
     opcoesFinanceiro();checarAgenda();
   }catch(e){console.warn("render",e);}
@@ -64368,6 +64559,7 @@ function ir(s,doMenu){
      precisa ser refeita, e é aqui que isso acontece — no instante em que a pessoa chega nela */
   try{desenharPendentes(s);}catch(e){console.warn("desenhar "+s,e);}
   if(s==="estTransicao")try{abrirTransicao();}catch(eTr){console.warn("transição",eTr);}
+  if(s==="estInstalado")try{renderPecaInstalada();}catch(ePi){console.warn("peça instalada",ePi);}
   if(s==="estAfazer")try{if(mudou||doMenu)resetarAfazer();if((mudou||doMenu)&&$("afQuem")){var afq=$("afQuem"),euA=estPadraoAdmin()?euNoEstoque():"";
       if(euA&&![].some.call(afq.options,function(o){return o.value===euA;})){var oA=document.createElement("option");oA.value=euA;oA.textContent=euA;afq.appendChild(oA);}
       afq.value=euA;}renderEstAfazer();}catch(e){console.warn(e);}
