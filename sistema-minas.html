@@ -3383,6 +3383,7 @@ img{max-width:100%}
             <div id="po_jornada" style="font-size:14px;font-weight:500"></div>
           </div>
         </div>
+        <div id="po_outraEmpNota"></div>
         <div class="help" id="po_limiteNota" style="margin:0 0 8px"></div>
         <div id="po_lembreteNota"></div>
         <div id="po_status"></div>
@@ -38709,17 +38710,36 @@ var MARCACOES=[
   {k:"almocoFim",n:"Retorno do almoço",campo:"almocoFim",cobraAtraso:true},
   {k:"checkout",n:"Check-out",campo:"saida",cobraAtraso:false}
 ];
+/* 17/11 (regra dele): quem tem a marca `ambas` trabalha nas DUAS empresas, mas bate ponto SÓ na
+   empresa do próprio cadastro (a `loja` do perfil). Entrando pela outra empresa o ponto não é
+   cobrado nem gravado ali: sem lembrete, sem atraso, sem falta, e a batida não grava. Quem não
+   tem `ambas` não muda em nada. A regra é pela marca e pela empresa do cadastro, nunca por nome. */
+function lojaDoPonto(n){
+  var u=usuarioPor(n)||{};
+  if(u.ambas!==true)return "";
+  return (u.loja&&u.loja!=="ambas")?u.loja:"";
+}
+function pontoEmOutraEmpresa(n){
+  var l=lojaDoPonto(n||usuarioAtual);
+  return !!l&&l!==lojaAtual;
+}
+function msgPontoOutraEmpresa(n){
+  return "Seu ponto é batido na "+nomeLojaId(lojaDoPonto(n||usuarioAtual))+". Entre por ela para bater o ponto.";
+}
 function jornadaDe(n){
   var u=usuarioPor(n)||{};
+  var fora=pontoEmOutraEmpresa(n);
   return {entrada:u.entrada||JORNADA_PADRAO.entrada,
     almocoIni:u.almocoIni||JORNADA_PADRAO.almocoIni,
     almocoFim:u.almocoFim||JORNADA_PADRAO.almocoFim,
     saida:u.saida||JORNADA_PADRAO.saida,
     tolerancia:(u.tolerancia==null?JORNADA_PADRAO.tolerancia:+u.tolerancia),
-    bate:(u.bateponto||"sim")==="sim",
+    bate:(u.bateponto||"sim")==="sim"&&!fora,
     /* 03/11: só cobra quem tem jornada no cadastro E "Bate ponto: sim" — de qualquer função */
     temJornada:!!(u.entrada&&u.saida),
-    cobra:!!(u.entrada&&u.saida)&&u.bateponto==="sim"};
+    /* 17/11: entrou pela outra empresa — aqui o ponto dela não existe */
+    outraEmpresa:fora,lojaPonto:lojaDoPonto(n),
+    cobra:!!(u.entrada&&u.saida)&&u.bateponto==="sim"&&!fora};
 }
 function minutos(hhmm){
   if(!hhmm)return null;
@@ -39100,16 +39120,19 @@ async function assinaturaWebPush(){
 /* grava no banco o celular desta pessoa; uma vez por dia, ou quando algo muda */
 async function registrarCelularPonto(forcar){
   if(!modoBanco()||!db||!db.registrarCelularPonto||!usuarioAtual)return false;
+  /* 17/11: o celular fica registrado na empresa onde a pessoa BATE o ponto (quem tem `ambas`),
+     não na que está aberta — assim o lembrete do servidor nunca cai na empresa errada */
+  var lojaP=lojaDoPonto(usuarioAtual)||lojaAtual;
   var e=estadoLembreteCelular(),o=null;
   if(e.tipo==="android"&&e.permissao!=="atualizar"){
     var ap="",tk="",md="";
     try{ap=String(window.MFApp.lembreteAparelho()||"");tk=String(window.MFApp.lembreteToken()||"");md=window.MFApp.marcaDoCelular?String(window.MFApp.marcaDoCelular()):"";}catch(e1){}
     if(!ap)return false;
-    o={aparelho:ap,tipo:"android",token:tk||null,permissao:e.permissao,loja:lojaAtual,modelo:md,ativo:true};
+    o={aparelho:ap,tipo:"android",token:tk||null,permissao:e.permissao,loja:lojaP,modelo:md,ativo:true};
   }else if(e.tipo==="web"&&(e.permissao==="autorizado"||e.permissao==="recusado")){
     var sub=null;
     if(e.permissao==="autorizado"){sub=await assinaturaWebPush();if(!sub)return false;}
-    o={aparelho:aparelhoWebId(),tipo:"web",assinatura:sub,permissao:e.permissao,loja:lojaAtual,
+    o={aparelho:aparelhoWebId(),tipo:"web",assinatura:sub,permissao:e.permissao,loja:lojaP,
       modelo:ehIphoneNav()?"iPhone (Tela de Início)":"navegador do celular",ativo:true};
   }else return false;
   var marca=usuarioAtual+"|"+JSON.stringify(o)+"|"+agoraBrasilia().data;
@@ -39367,6 +39390,8 @@ function pendentesPorMarc(p){
   var o={};((p&&p.solicitacoes)||[]).forEach(function(s){if(s.status==="pendente")o[s.marc]=s;});return o;
 }
 function abrirSolicitarAjuste(){
+  /* 17/11: o pedido de ajuste é do ponto da empresa do cadastro — pela outra empresa não abre */
+  if(pontoEmOutraEmpresa(usuarioAtual)){toast(msgPontoOutraEmpresa(usuarioAtual));return;}
   $("ps_data").value=agoraBrasilia().data;$("ps_motivo").value="";
   $("ps_data").onchange=desenharPedidoPonto;
   desenharPedidoPonto();$("psModal").hidden=false;
@@ -39510,6 +39535,8 @@ async function marcarRespostasVistas(){
 var poAba="meu",poSel={};
 function situacaoDoDia(nome,dia){
   var j=jornadaDe(nome),p=pontoDe(nome,dia),fer=feriadoEm(dia);
+  /* 17/11: quem tem `ambas` só bate na empresa do cadastro — aqui não é falta nem "não bateu" */
+  if(j.outraEmpresa)return {t:"ponto na "+nomeLojaId(j.lojaPonto),c:"p-mut"};
   if(!j.cobra)return {t:"não bate ponto",c:"p-mut"};
   if(fer)return {t:"feriado · "+fer.nome,c:"p-mut"};
   if(p&&(p.tipo==="folga"||p.tipo==="ferias"))return {t:p.tipo==="folga"?"folga":"férias",c:"p-mut"};
@@ -39647,12 +39674,15 @@ function htmlEspelhoPonto(nome,c){
     '<div class="os-cab">'+cabecalhoEmpresaDoc()+"</div>"+
     '<h2 style="font-size:15px;margin:8px 0 2px">ESPELHO DE PONTO · '+esc(rotuloComp(c))+"</h2>"+
     "<div><b>"+esc(nome)+"</b>"+(u.funcao?" · "+esc(u.funcao):"")+" · jornada "+
-      (j.cobra?esc(j.entrada+" – "+j.almocoIni+" · "+j.almocoFim+" – "+j.saida)+" (almoço de "+hhmm(duracaoAlmoco(j))+", tolerância "+j.tolerancia+" min)":"— não bate ponto")+"</div>"+
+      (j.cobra?esc(j.entrada+" – "+j.almocoIni+" · "+j.almocoFim+" – "+j.saida)+" (almoço de "+hhmm(duracaoAlmoco(j))+", tolerância "+j.tolerancia+" min)"
+        :(j.outraEmpresa?"— o ponto é batido na "+esc(nomeLojaId(j.lojaPonto)):"— não bate ponto"))+"</div>"+
     '<table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:10px" border="1" cellpadding="3">'+
     "<thead><tr><th>Dia</th><th>Entrada</th><th>Saída almoço</th><th>Retorno</th><th>Saída</th><th>Trabalhado</th><th>Atraso</th><th>Saldo</th><th>Observação</th></tr></thead><tbody>"+L.join("")+"</tbody></table>"+
     '<div style="margin-top:8px">'+(j.cobra
       ? "<b>Total trabalhado:</b> "+hhmm(r.trabalhado)+" · <b>Atraso:</b> "+r.atraso+" min · <b>Faltas:</b> "+r.faltas+" · <b>Banco de horas:</b> "+(r.saldo>=0?"+":"")+hhmm(r.saldo)
-      : "<b>Não bate ponto:</b> sem jornada ou com \"Bate ponto: não\" no cadastro — as batidas ficam registradas, mas nada é cobrado.")+"</div>"+
+      : (j.outraEmpresa
+        ? "<b>O ponto desta pessoa é batido na "+esc(nomeLojaId(j.lojaPonto))+":</b> aqui ela não tem jornada, falta nem banco de horas."
+        : "<b>Não bate ponto:</b> sem jornada ou com \"Bate ponto: não\" no cadastro — as batidas ficam registradas, mas nada é cobrado."))+"</div>"+
     (ajs.length?'<div style="margin-top:8px"><b>Ajustes (o horário batido fica guardado):</b><br>'+ajs.map(esc).join("<br>")+"</div>":"")+
     '<div style="margin-top:4px;color:#555">* horário ajustado ou lançado pelo Administrador · (PC) batido pelo computador, sem foto.</div>'+
     '<div style="margin-top:34px;display:flex;gap:40px"><div style="flex:1;border-top:1px solid #000;padding-top:3px">'+esc(nome)+
@@ -39721,6 +39751,10 @@ window.__calcDiaMF=function(q,p){return calcDia(q,p);};
 window.__resumoPontoMF=function(q,c){return resumoPonto(q,c);};
 window.__pontosMF=function(){return pontos;};
 window.__baterPontoMF=function(k){return baterPonto(k);};
+window.__jornadaDeMF=function(n){return jornadaDe(n);};
+window.__pontoOutraEmpresaMF=function(n){return pontoEmOutraEmpresa(n);};
+window.__lojaDoPontoMF=function(n){return lojaDoPonto(n);};
+window.__situacaoDoDiaMF=function(n,d){return situacaoDoDia(n,d);};
 window.__ajustarPontoMF=function(q,d){return abrirAjustePonto(q,d);};
 window.__salvarAjustePontoMF=function(){return salvarAjustePonto();};
 window.__responderSolPontoMF=function(id,ok,m){return responderSolicitacaoPonto(id,ok,m);};
@@ -40765,6 +40799,10 @@ async function limparFotosAntigas(){
   if(mudou)console.log(mudou+" dia(s) de ponto tiveram a foto apagada pelo prazo de guarda");
 }
 async function baterPonto(k){
+  /* 17/11: entrou pela outra empresa — a batida não grava, nem pelo botão nem pelo facial */
+  if(pontoEmOutraEmpresa(usuarioAtual)){
+    $("po_status").innerHTML='<div class="note crit"><b>'+esc(msgPontoOutraEmpresa(usuarioAtual))+"</b></div>";
+    toast("Batida não registrada.");return;}
   var hb;
   try{hb=await horaOficialPonto();}
   catch(eH){$("po_status").innerHTML='<div class="note crit"><b>'+esc(MSG_HORA_PONTO)+'</b></div>';toast("Batida não registrada.");return;}
@@ -40838,6 +40876,10 @@ function comFoto(u,k,m,j,p,hoje,quem,extra){
   });
 }
 function gravarBatida(u,k,m,j,p,hoje,quem,foto,sig,extra){
+  /* a mesma trava por dentro: nenhum caminho grava a batida na empresa que não é a do cadastro */
+  if(pontoEmOutraEmpresa(quem)){
+    $("po_status").innerHTML='<div class="note crit"><b>'+esc(msgPontoOutraEmpresa(quem))+"</b></div>";
+    toast("Batida não registrada.");return;}
   extra=extra||{};
   var rfB=refFacial(quem);
   var par=foto?parecenca(rfB.sig,sig):null;
@@ -40932,9 +40974,16 @@ function renderPonto(){
   var j=jornadaDe(usuarioAtual),hoje=hojeISO(),p=pontoDe(usuarioAtual,hoje);
   $("po_relogio").textContent=(modoBanco()&&desvioServidor!=null)?agoraBrasilia().hm:agoraHM();
   $("po_dataHoje").textContent=dataBR(hoje)+(ehDiaUtil(hoje)?" · dia útil":" · fim de semana");
-  $("po_jornada").textContent=(j.cobra?j.entrada+" – "+j.almocoIni+" · "+j.almocoFim+" – "+j.saida+
-    " · almoço de "+hhmm(duracaoAlmoco(j))+" · tolerância "+j.tolerancia+" min":"não bate ponto")+
+  $("po_jornada").textContent=(j.outraEmpresa?"ponto na "+nomeLojaId(j.lojaPonto)
+    :(j.cobra?j.entrada+" – "+j.almocoIni+" · "+j.almocoFim+" – "+j.saida+
+      " · almoço de "+hhmm(duracaoAlmoco(j))+" · tolerância "+j.tolerancia+" min":"não bate ponto"))+
     (feriadoEm(hoje)?" · hoje é feriado: "+feriadoEm(hoje).nome:"");
+  /* 17/11: entrou pela outra empresa — a tela diz onde o ponto dela é batido */
+  try{var oeN=$("po_outraEmpNota");
+    if(oeN)oeN.innerHTML=j.outraEmpresa
+      ? '<div class="note warn" style="margin:0 0 10px"><b>'+esc(msgPontoOutraEmpresa(usuarioAtual))+"</b> "+
+        "Você está em "+esc(nomeLoja())+", e aqui o seu ponto não é cobrado nem registrado.</div>"
+      : "";}catch(eOe){}
   try{var lpN=$("po_limiteNota");if(lpN){lpN.textContent=TEXTO_LIMITE_PONTO;lpN.hidden=!j.cobra;}}catch(eL){}
   try{renderLembreteNota();}catch(eLn){}
   $("poSub").textContent=usuarioAtual+" — marque a entrada, o almoço e a saída. Cada batida grava a hora e a localização.";
