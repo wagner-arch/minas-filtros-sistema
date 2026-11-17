@@ -40948,6 +40948,13 @@ var META_LINHAS=[
   {k:"posvenda",n:"Atividades de pós-venda"},
   {k:"tentativas",n:"Tentativas de atendimento"},
   {k:"contatos",n:"Atendimentos contactados"},
+  /* 17/11 (regra dele): metas por canal, só dos atendimentos ATIVOS (nós procuramos o cliente).
+     Na ligação, "falou" vem da pergunta "Conseguiu falar?"; na mensagem, do retorno do cliente
+     ligado à tentativa (ver RETORNO DE MENSAGEM). */
+  {k:"ligTent",n:"Tentativas por ligação"},
+  {k:"ligFalou",n:"Falou por ligação"},
+  {k:"msgTent",n:"Tentativas por mensagem (WhatsApp)"},
+  {k:"msgRetorno",n:"Mensagens com retorno do cliente"},
   {k:"agendadas",n:"Atividades agendadas"},
   {k:"vendas",n:"Vendas fechadas"},
   {k:"faturamento",n:"Faturamento depreciado",moeda:true}
@@ -41011,6 +41018,116 @@ function houveContato(a){
   if(!a.motivos||!a.motivos.length)return true;
   return !a.motivos.every(motivoEhSemContato);
 }
+/* ===== RETORNO DE MENSAGEM (17/11, regra dele) =====
+   No canal MENSAGEM (WhatsApp) o sistema não pergunta "conseguiu falar?": o que vale é o
+   cliente ter voltado. O atendimento PASSIVO de mensagem (o cliente nos procurou) é ligado
+   à última tentativa ATIVA do mesmo cliente ainda sem resposta, dentro do prazo. Assim,
+   "das 80 mensagens enviadas, x tiveram retorno". Uma tentativa recebe UM retorno e um
+   retorno liga a UMA tentativa, para o número nunca passar o de tentativas. */
+var DIAS_RETORNO_MSG=7;
+function ehAtendMsg(a){return !!a&&a.natureza==="atendimento"&&!ehTeste(a)&&canalDoRegistro(a)==="mensagem";}
+function ehTentativaMsg(a){return ehAtendMsg(a)&&iniDash(a)==="ativo";}
+function ehRetornoMsg(a){return ehAtendMsg(a)&&iniDash(a)==="passivo";}
+function tentativaDoRetorno(a){return (a&&a.retornoDe)?atendPorId(a.retornoDe):null;}
+function retornoDaTentativa(a){return (a&&a.retornoId)?atendPorId(a.retornoId):null;}
+function diasAntesISO(d,n){var x=new Date(String(d).slice(0,10)+"T00:00:00");x.setDate(x.getDate()-n);return iso(x);}
+/* tentativas ativas do mesmo cliente, ainda sem retorno, dentro do prazo — a mais nova primeiro */
+function tentativasParaRetorno(a,prazo){
+  if(!ehRetornoMsg(a)||!a.clienteId)return [];
+  var d=diaDe(a.data),lim=diasAntesISO(d,(prazo==null?DIAS_RETORNO_MSG:prazo)),ta=instanteDoRegistro(a);
+  return atendimentos.filter(function(x){
+    if(!x||x.id===a.id||x.loja!==a.loja||x.clienteId!==a.clienteId)return false;
+    if(!ehTentativaMsg(x)||x.retornoId)return false;
+    var dx=diaDe(x.data);
+    if(dx<lim||dx>d)return false;
+    return dx<d||instanteDoRegistro(x)<=ta;
+  }).sort(function(x,y){
+    var dx=diaDe(x.data),dy=diaDe(y.data);
+    if(dx!==dy)return dy.localeCompare(dx);
+    return instanteDoRegistro(y)-instanteDoRegistro(x);});
+}
+async function ligarRetornoMsg(ret,tent,porQuem){
+  if(!ret||!tent||ret.retornoDe||tent.retornoId||ret.id===tent.id)return false;
+  var quem=porQuem||usuarioAtual,q=hojeISO();
+  tent.retornoId=ret.id;tent.retornoEm=diaDe(ret.data);tent.retornoPor=quem;
+  ret.retornoDe=tent.id;ret.retornoTentEm=diaDe(tent.data);
+  tent.acoes=tent.acoes||[];
+  tent.acoes.push({tipo:"retorno",id:ret.id,numero:"",quando:q,por:quem,
+    texto:"O cliente respondeu em "+dataBR(diaDe(ret.data))+"."});
+  ret.acoes=ret.acoes||[];
+  ret.acoes.push({tipo:"retorno",id:tent.id,numero:"",quando:q,por:quem,
+    texto:"Resposta da mensagem enviada em "+dataBR(diaDe(tent.data))+" por "+(tent.colaborador||"—")+"."});
+  try{await grava("atendimentos",tent);await grava("atendimentos",ret);}catch(e){console.warn("retorno",e);}
+  return true;
+}
+/* nada se apaga: o vínculo desfeito fica registrado nos dois */
+async function desfazerRetornoMsg(x,porQuem){
+  if(!x)return false;
+  var tent=x.retornoId?x:tentativaDoRetorno(x),ret=x.retornoId?retornoDaTentativa(x):x;
+  if(!tent||!ret)return false;
+  var quem=porQuem||usuarioAtual,q=hojeISO();
+  delete tent.retornoId;delete tent.retornoEm;delete tent.retornoPor;
+  delete ret.retornoDe;delete ret.retornoTentEm;
+  tent.acoes=tent.acoes||[];tent.acoes.push({tipo:"retorno",id:"",numero:"",quando:q,por:quem,
+    texto:"Vínculo com a resposta do cliente desfeito."});
+  ret.acoes=ret.acoes||[];ret.acoes.push({tipo:"retorno",id:"",numero:"",quando:q,por:quem,
+    texto:"Vínculo com a mensagem enviada desfeito."});
+  try{await grava("atendimentos",tent);await grava("atendimentos",ret);}catch(e){console.warn("retorno",e);}
+  return true;
+}
+/* chamado quando um atendimento é gravado: liga sozinho, sem perguntar nada */
+async function ligarRetornoAutomatico(a){
+  if(!ehRetornoMsg(a)||a.retornoDe)return null;
+  var cand=tentativasParaRetorno(a);
+  if(!cand.length)return null;
+  var ok=await ligarRetornoMsg(a,cand[0],usuarioAtual);
+  return ok?cand[0]:null;
+}
+/* o vínculo aparece nos DOIS registros, com desfazer e com a escolha à mão */
+function htmlRetornoMsg(a){
+  if(!a||!ehAtendMsg(a))return "";
+  var r,t,btDesfazer='<button class="btn ghost sm" type="button" id="rm_'+"desfazer"+'">Desfazer o vínculo</button>';
+  if(ehTentativaMsg(a)){
+    r=retornoDaTentativa(a);
+    if(r)return '<div class="note ok"><b>O cliente respondeu em '+esc(dataBR(diaDe(r.data)))+".</b> "+
+      'Esta mensagem conta na meta "Mensagens com retorno do cliente". '+btDesfazer+"</div>";
+    return '<div class="note"><b>Mensagem enviada, ainda sem resposta.</b> Quando o cliente voltar, '+
+      "registre o atendimento passivo dele: o sistema liga os dois sozinho.</div>";
+  }
+  t=tentativaDoRetorno(a);
+  if(t)return '<div class="note ok"><b>Resposta da mensagem enviada em '+esc(dataBR(diaDe(t.data)))+
+    " por "+esc(t.colaborador||"—")+".</b> "+btDesfazer+"</div>";
+  var cand=tentativasParaRetorno(a,30);
+  if(!cand.length)return '<div class="note"><b>O cliente procurou por conta própria.</b> '+
+    "Nenhuma mensagem enviada a ele nos últimos 30 dias ficou sem resposta.</div>";
+  return '<div class="note warn"><b>Ligar esta resposta a uma mensagem enviada</b>'+
+    '<div style="margin-top:6px">'+cand.slice(0,6).map(function(x){
+      var dias=Math.round((new Date(diaDe(a.data)+"T00:00:00")-new Date(diaDe(x.data)+"T00:00:00"))/864e5);
+      return '<button class="btn ghost sm" type="button" data-rmlig="'+esc(x.id)+'" style="margin:2px">'+
+        esc(dataBR(diaDe(x.data)))+" · "+esc(x.colaborador||"—")+" · há "+dias+" dia(s)"+
+        (dias>DIAS_RETORNO_MSG?" (fora do prazo)":"")+"</button>";}).join("")+"</div></div>";
+}
+function ligarBotoesRetornoMsg(a){
+  var bd=$("rm_desfazer");
+  if(bd)bd.onclick=async function(){
+    if(!confirm("Desfazer o vínculo entre a mensagem enviada e a resposta do cliente?"))return;
+    await desfazerRetornoMsg(a,usuarioAtual);toast("Vínculo desfeito.");abrirDetalhes(a);render();};
+  Array.prototype.forEach.call(document.querySelectorAll("[data-rmlig]"),function(bt){
+    bt.onclick=async function(){
+      var t=atendPorId(bt.getAttribute("data-rmlig"));
+      if(!t)return;
+      await ligarRetornoMsg(a,t,usuarioAtual);
+      toast("Resposta ligada à mensagem enviada em "+dataBR(diaDe(t.data))+".");
+      abrirDetalhes(a);render();};});
+}
+window.__retornoMsgMF={
+  prazo:function(){return DIAS_RETORNO_MSG;},
+  tentativa:ehTentativaMsg,retorno:ehRetornoMsg,
+  candidatas:function(a,p){return tentativasParaRetorno(a,p);},
+  ligar:function(r,t,q){return ligarRetornoMsg(r,t,q);},
+  desfazer:function(x,q){return desfazerRetornoMsg(x,q);},
+  automatico:function(a){return ligarRetornoAutomatico(a);}
+};
 /* dia útil na Minas Filtros é de segunda a sexta — sábado e domingo não contam.
    Serve para prorratear a meta do mês quando o filtro é menor. */
 function diasUteis(de,ate){
@@ -41036,6 +41153,12 @@ function realizadoMetas(quem,de,ate){
     posvenda:ats.filter(function(a){return temTipo(a,metaTipos.posvenda||[]);}).length,
     tentativas:ats.length,
     contatos:ats.filter(houveContato).length,
+    /* 17/11: por canal, só o que NÓS procuramos. A mensagem com retorno conta no dia da
+       TENTATIVA e para quem a fez, mesmo que outra pessoa registre a resposta do cliente. */
+    ligTent:ats.filter(function(a){return iniDash(a)==="ativo"&&canalDoRegistro(a)==="ligacao";}).length,
+    ligFalou:ats.filter(function(a){return iniDash(a)==="ativo"&&canalDoRegistro(a)==="ligacao"&&houveContato(a);}).length,
+    msgTent:ats.filter(ehTentativaMsg).length,
+    msgRetorno:ats.filter(function(a){return ehTentativaMsg(a)&&!!a.retornoId;}).length,
     agendadas:criadas.length,
     vendas:vds.length,
     /* regra do Wagner (12/09): faturamento da meta = valor depreciado pela forma de pagamento, dividido pela posição
@@ -42415,6 +42538,7 @@ function abrirDetalhes(a){
   /* atividade de contato da OS: o atendente lê o diagnóstico do técnico aqui (v198) */
   var osDiagAtiv=a.osId?ordens.filter(function(z){return z.id===a.osId;})[0]:null;
   $("dt_hist").innerHTML=(osDiagAtiv&&a.osEtapa==="contato"?htmlDiagnosticoOS(osDiagAtiv):"")+
+    htmlRetornoMsg(a)+
     (c.id?htmlPlanoCliente(c.id):"")+blocoVenda+geradas+
     '<div class="note">'+
       (vs.length?"<b>"+vs.length+" venda(s)</b> · "+BRL(vs.reduce(function(s,p){return s+(+p.total||0);},0)):"<b>Nenhuma venda ainda</b>")+
@@ -42427,6 +42551,7 @@ function abrirDetalhes(a){
             (x.motivos&&x.motivos.length?' · <span class="pill p-mut">'+esc(x.motivos.join(", "))+"</span>":"")+"</div>"+
             '<div class="txt">'+esc(x.obs||"— sem anotação —")+"</div></div>";}).join("")+"</div>"
       : '<p class="help">Nenhum atendimento anterior registrado para este cliente.</p>');
+  try{ligarBotoesRetornoMsg(a);}catch(eRm){console.warn("retorno",eRm);}
 
   /* atividade que nasceu de uma OS ainda aberta: quem encerra é o fluxo da OS (regra dele,
      20/09). Aqui só dá para abrir a OS, reagendar ou fechar — finalizar por fora deixaria a
@@ -58011,6 +58136,12 @@ async function salvarAtend__corpo(){
   }
   /* funil de vendas: cria o cartão do lead ou anda para Em atendimento */
   try{await atualizarFunilCliente(a.clienteId,"atendimento",a.colaborador||usuarioAtual);}catch(eF){console.warn("funil",eF);}
+  /* 17/11: o cliente respondeu por mensagem — liga à tentativa que o sistema achar */
+  try{
+    var tRet=await ligarRetornoAutomatico(a);
+    if(tRet)setTimeout(function(){toast("Resposta ligada à mensagem enviada em "+dataBR(diaDe(tRet.data))+
+      " por "+(tRet.colaborador||"—")+".");},600);
+  }catch(eRt){console.warn("retorno",eRt);}
   editandoAt=null;marcarEdicao("atendForm",null);atendManutEq=null;atendAniv=null;
   marcarEdicao("atendForm",null);
   if(continuou)setTimeout(function(){toast("Continuando o atendimento já aberto.");},300);
