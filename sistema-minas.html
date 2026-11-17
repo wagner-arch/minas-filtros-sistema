@@ -2425,6 +2425,7 @@ img{max-width:100%}
     <button data-s="estInv">Inventário</button>
     <button data-s="estRecup">Recuperações</button>
     <button data-s="estTransicao">Transição do estoque</button>
+    <button data-s="estAguardando">Peças aguardando aprovação</button>
     <button data-s="estInstalado">Peça instalada sem venda aprovada</button>
     <button data-s="estConsumo">Uso e consumo</button>
     <button data-s="ferramentas">Ferramentas</button>
@@ -4951,6 +4952,25 @@ img{max-width:100%}
         </div>
       </div>
       <div id="piaCorpo"></div>
+    </section>
+
+    <section class="screen" id="s-estAguardando" hidden>
+      <div class="cab">
+        <div>
+          <h2>Peças aguardando aprovação</h2>
+          <div class="sub">Cada peça de venda que ainda <b>não baixou</b> do estoque, e em que situação ela está. Esta tela só mostra: não dá baixa, não cancela e não muda nada.</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="filtros">
+          <div class="fld"><label for="paQuem">Estoque</label><select id="paQuem"></select></div>
+          <div class="fld"><label for="paSit">Situação</label><select id="paSit"></select></div>
+          <div class="fld"><label for="paDe">De</label><input type="date" id="paDe"></div>
+          <div class="fld"><label for="paAte">Até</label><input type="date" id="paAte"></div>
+          <div class="fld"><label for="paBusca">Buscar</label><input id="paBusca" placeholder="produto, cliente, pedido ou série"></div>
+        </div>
+        <div id="paCorpo"></div>
+      </div>
     </section>
 
     <section class="screen" id="s-estAfazer" hidden>
@@ -24855,6 +24875,71 @@ function pecasInstaladasSemAprovacao(){
   return out.sort(function(a,b){return String(a.instaladoEm).localeCompare(String(b.instaladoEm));});
 }
 window.__pecasSemAprovacaoMF=pecasInstaladasSemAprovacao;
+/* ===== PEÇAS AGUARDANDO APROVAÇÃO (17/11, v571, regra dele) =====
+   Cada peça de venda que ainda NÃO baixou do estoque, com a situação em que está. A tela SÓ
+   MOSTRA: não dá baixa, não cancela e não muda nada. MF e WF são listas separadas, como sempre.
+   As quatro situações:
+     Reservada                        — a peça está presa ao pedido, esperando a vez dela;
+     Aguardando peça                  — não há saldo no estoque de onde ela sai (v565);
+     Instalada, aguardando aprovação  — já está no cliente e a venda não foi aprovada (v567);
+     Instalada, venda recusada        — já está no cliente e o financeiro devolveu a venda. */
+var SIT_PECA=["Reservada","Aguardando peça","Instalada, aguardando aprovação","Instalada, venda recusada"];
+var DIAS_AVISO_PECA=3;   /* regra dele: mais de 3 dias instalada sem aprovação avisa no sino */
+function pecasAguardando(){
+  var out=[];
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||ehTeste(p)||p.rascunho)return;
+    if(p.status==="Cancelada"||p.cancelado)return;
+    var saiu={},semPeca={};
+    saidasLiquidas(p).forEach(function(s){saiu[s.pid+"|"+s.local]=(saiu[s.pid+"|"+s.local]||0)+s.qtd;});
+    try{itensSemPecaNoEstoque(p).forEach(function(x){semPeca[x.it.pid+"|"+x.loc]=1;});}catch(eS){}
+    var instalada=!!p.instaladoEm,recusada=!!(p.devolucaoFin&&!p.aprovado);
+    itensDeEstoque(p).forEach(function(it,ix){
+      if(it.baixaDispensada||it.pecaRecolhida||it.baixaSemAprovacao)return;
+      var loc=localDoItemVenda(p,it),k=it.pid+"|"+loc;
+      var q=(+(it.qtd||1))-(saiu[k]||0);
+      if(q<=0)return;
+      var sit=(instalada&&!p.aprovado)
+        ? (recusada?SIT_PECA[3]:SIT_PECA[2])
+        : (semPeca[k]?SIT_PECA[1]:SIT_PECA[0]);
+      var data=(instalada&&!p.aprovado)?diaDe(p.instaladoEm):diaDe(p.data);
+      out.push({pedidoId:p.id,numero:p.numero||"",ix:ix,cliente:p.cliente||"",
+        produto:codNomeItem(it),pid:it.pid,serie:it.serie||"",qtd:q,local:loc,
+        vendedor:p.vendedor||"",instalador:respInstalacao(p)||p.instalador||"",
+        data:data,sit:sit,dias:diasDesde(data)});
+    });
+  });
+  return out.sort(function(a,b){
+    if(a.dias!==b.dias)return b.dias-a.dias;
+    return String(a.numero).localeCompare(String(b.numero));});
+}
+/* quem enxerga TODAS: gestão, financeiro e o almoxarifado (com o substituto da v569) */
+function vePecasTodas(){
+  var pf="";try{pf=perfilDe(usuarioAtual);}catch(e){}
+  if(["Administrador","Gerente","Financeiro"].indexOf(pf)>=0)return true;
+  try{return ehAlmox();}catch(e2){return false;}
+}
+function pecasAguardandoMinhas(){
+  var L=pecasAguardando();
+  if(vePecasTodas())return L;
+  var meus=[];try{meus=meusLocaisEst();}catch(e){meus=[];}
+  return L.filter(function(x){return meus.indexOf(x.local)>=0;});
+}
+window.__pecasAguardandoMF=function(){return pecasAguardandoMinhas();};
+window.__vePecasTodasMF=vePecasTodas;
+/* o aviso dos 3 dias: um por PEDIDO, some quando a venda for aprovada ou recusada */
+function pedidosInstaladosSemAprovar(dias){
+  var lim=(dias==null?DIAS_AVISO_PECA:dias),por={};
+  pecasAguardando().forEach(function(x){
+    if(x.sit!==SIT_PECA[2]||x.dias<=lim)return;
+    var o=por[x.pedidoId]||(por[x.pedidoId]={numero:x.numero,cliente:x.cliente,dias:x.dias,
+      instalador:x.instalador,data:x.data,itens:0});
+    o.itens++;if(x.dias>o.dias)o.dias=x.dias;
+  });
+  return Object.keys(por).map(function(k){var o=por[k];o.pedidoId=k;return o;})
+    .sort(function(a,b){return b.dias-a.dias;});
+}
+window.__pecasAviso3MF=function(d){return pedidosInstaladosSemAprovar(d);};
 function diasDesde(d){
   var t=Date.parse(String(d||"").slice(0,10)+"T12:00:00");
   if(isNaN(t))return 0;
@@ -26719,6 +26804,68 @@ async function piBaixarSemAprovacao(x,motivo){
   try{renderEstEmpresa();renderEstColab();agendarEstNovas();}catch(e){}
   return true;
 }
+/* ---------- a tela "Peças aguardando aprovação" (v571): só mostra ---------- */
+function montarFiltrosPecas(){
+  var sq=$("paQuem");
+  if(sq){
+    var todas=vePecasTodas();
+    var locs=[];
+    pecasAguardando().forEach(function(x){if(locs.indexOf(x.local)<0)locs.push(x.local);});
+    if(!todas){var meus=[];try{meus=meusLocaisEst();}catch(e){}
+      locs=locs.filter(function(l){return meus.indexOf(l)>=0;});}
+    locs.sort(function(a,b){return nomeLocal(a).localeCompare(nomeLocal(b));});
+    var at=sq.value;
+    sq.innerHTML='<option value="">Todos</option>'+locs.map(function(l){
+      return '<option value="'+esc(l)+'">'+esc(nomeLocal(l))+"</option>";}).join("");
+    if(at&&locs.indexOf(at)>=0)sq.value=at;
+  }
+  var ss=$("paSit");
+  if(ss&&!ss.options.length)
+    ss.innerHTML='<option value="">Todas</option>'+SIT_PECA.map(function(s){
+      return '<option value="'+esc(s)+'">'+esc(s)+"</option>";}).join("");
+}
+function renderPecasAguardando(){
+  var b=$("paCorpo");if(!b)return;
+  montarFiltrosPecas();
+  var todas=vePecasTodas();
+  var q=semAcento(($("paBusca")||{}).value||""),loc=($("paQuem")||{}).value||"",
+      sit=($("paSit")||{}).value||"",de=($("paDe")||{}).value||"",ate=($("paAte")||{}).value||"";
+  var L=pecasAguardandoMinhas().filter(function(x){
+    if(loc&&x.local!==loc)return false;
+    if(sit&&x.sit!==sit)return false;
+    if(de&&x.data<de)return false;
+    if(ate&&x.data>ate)return false;
+    if(q&&semAcento(x.produto+" "+x.cliente+" "+x.numero+" "+x.serie).indexOf(q)<0)return false;
+    return true;});
+  var porSit={};L.forEach(function(x){porSit[x.sit]=(porSit[x.sit]||0)+1;});
+  var h='<div class="note">Esta tela <b>só mostra</b>: nada aqui dá baixa, cancela ou muda registro. '+
+    (todas?"Você vê as peças de <b>todos os estoques</b> de ":"Você vê as peças do <b>seu estoque</b> em ")+
+    "<b>"+esc(nomeLoja())+"</b>.</div>";
+  h+='<div class="kpis" style="margin:12px 0">'+SIT_PECA.map(function(s){
+    return '<div class="kpi"><div class="l">'+esc(s)+'</div><div class="v">'+(porSit[s]||0)+"</div></div>";}).join("")+"</div>";
+  h+=L.length
+    ?'<table class="tb"><thead><tr><th>Situação</th><th>Produto</th><th>Série</th><th class="num">Qtd</th>'+
+      "<th>Estoque</th><th>Pedido</th><th>Cliente</th><th>Vendedor</th><th>Instalador</th><th>Data</th><th>Dias</th></tr></thead><tbody>"+
+      L.map(function(x){
+        var cor=x.sit===SIT_PECA[3]?"p-crit":x.sit===SIT_PECA[2]?(x.dias>DIAS_AVISO_PECA?"p-crit":"p-warn")
+              :x.sit===SIT_PECA[1]?"p-warn":"p-mut";
+        return '<tr><td><span class="pill '+cor+'">'+esc(x.sit)+"</span></td>"+
+          "<td>"+esc(x.produto)+"</td><td>"+esc(x.serie||"—")+'</td><td class="num">'+x.qtd+"</td>"+
+          "<td>"+esc(nomeLocal(x.local))+"</td><td>"+esc(x.numero||"—")+"</td><td>"+esc(x.cliente||"—")+"</td>"+
+          "<td>"+esc(x.vendedor||"—")+"</td><td>"+esc(x.instalador||"—")+"</td>"+
+          "<td>"+esc(dataCurta(x.data))+"</td>"+
+          '<td>'+(x.dias>DIAS_AVISO_PECA&&x.sit===SIT_PECA[2]?'<span style="color:var(--crit)"><b>'+x.dias+"</b></span>":x.dias)+"</td></tr>";
+      }).join("")+"</tbody></table>"
+    :'<div class="note ok">Nenhuma peça esperando nesta empresa com estes filtros.</div>';
+  b.innerHTML=h;
+}
+function ligarFiltrosPecas(){
+  ["paQuem","paSit","paDe","paAte"].forEach(function(id){
+    var e=$(id);if(!e||e.__ligado)return;e.__ligado=true;e.onchange=renderPecasAguardando;});
+  var bq=$("paBusca");
+  if(bq&&!bq.__ligado){bq.__ligado=true;bq.oninput=renderPecasAguardando;}
+}
+window.__renderPecasAguardandoMF=function(){return renderPecasAguardando();};
 function renderPecaInstalada(){
   var b=$("piaCorpo");if(!b)return;
   if(!ehAdministrador()){
@@ -58848,7 +58995,9 @@ function veTela(s,quem){
   if(ehSubstitutoAlmox(n)&&TELAS_ALMOX.indexOf(s)>=0)return true;
   /* ESTOQUES (04/11): as telas novas usam as permissões que já existem — a visão leve é a
      tela Estoque Colaborador, a completa é a Estoque Empresa (nenhuma permissão gravada muda) */
-  if(s==="estAfazer"||s==="estSaldo"||s==="estHist")return veTela("estColab",n)||veTela("estEmpresa",n);
+  /* v571: "Peças aguardando aprovação" é de todos — cada um vê as suas, e a gestão, o
+     almoxarifado e o financeiro veem todas (a conta está dentro da tela, não aqui) */
+  if(s==="estAfazer"||s==="estSaldo"||s==="estHist"||s==="estAguardando")return veTela("estColab",n)||veTela("estEmpresa",n);
   if(s==="estInv"||s==="estRecup")return veTela("estEmpresa",n);
   /* o link antigo de "Minhas ferramentas" cai no Estoque Colaborador; quem tem a visão completa usa Ferramentas */
   if(s==="minhasferr")return veTela("estColab",n)&&!veTela("estEmpresa",n);
@@ -62177,6 +62326,20 @@ function avisosDoTrabalho(){
         if(t)t.click();
       }});
   }
+  /* v571 (regra dele): peça já instalada esperando a aprovação há mais de 3 dias. Um aviso por
+     PEDIDO, só para o financeiro e o Administrador; some sozinho quando a venda for aprovada ou
+     recusada, porque a lista é feita na hora e não fica gravada em lugar nenhum. */
+  var pfPeca="";try{pfPeca=perfilDe(usuarioAtual);}catch(ePf){}
+  if(pfPeca==="Financeiro"||pfPeca==="Administrador"){
+    try{pedidosInstaladosSemAprovar().forEach(function(x){
+      L.push({chave:"pecaaprov:"+x.pedidoId,icone:"⏳",
+        titulo:"Pedido "+x.numero+": peça instalada há "+x.dias+" dias sem aprovação",
+        texto:(x.cliente||"")+(x.instalador?" · instalou "+x.instalador:"")+
+          " — o estoque só baixa quando a venda for aprovada",
+        quando:x.data,
+        ir:function(){ir("estAguardando");}});
+    });}catch(ePa2){console.warn("aviso das peças",ePa2);}
+  }
   /* o meu orçamento que vence hoje ou amanhã */
   var am=somaDias(hj,1);
   orcamentos.filter(function(o){
@@ -63343,6 +63506,7 @@ function render(){
     desenhaTela("estAfazer",renderEstAfazer);desenhaTela("estSaldo",renderEstSaldo);desenhaTela("estHist",renderEstHist);
   desenhaTela("estTransicao",renderTransicao);
   desenhaTela("estInstalado",renderPecaInstalada);
+  desenhaTela("estAguardando",renderPecasAguardando);
     desenhaTela("estConsumo",renderEstConsumo);desenhaTela("estEntrada",renderEntradas);
     opcoesFinanceiro();checarAgenda();
   }catch(e){console.warn("render",e);}
@@ -64802,6 +64966,7 @@ function ir(s,doMenu){
   try{desenharPendentes(s);}catch(e){console.warn("desenhar "+s,e);}
   if(s==="estTransicao")try{abrirTransicao();}catch(eTr){console.warn("transição",eTr);}
   if(s==="estInstalado")try{renderPecaInstalada();}catch(ePi){console.warn("peça instalada",ePi);}
+  if(s==="estAguardando")try{ligarFiltrosPecas();renderPecasAguardando();}catch(ePa){console.warn("peças aguardando",ePa);}
   if(s==="estAfazer")try{if(mudou||doMenu)resetarAfazer();if((mudou||doMenu)&&$("afQuem")){var afq=$("afQuem"),euA=estPadraoAdmin()?euNoEstoque():"";
       if(euA&&![].some.call(afq.options,function(o){return o.value===euA;})){var oA=document.createElement("option");oA.value=euA;oA.textContent=euA;afq.appendChild(oA);}
       afq.value=euA;}renderEstAfazer();}catch(e){console.warn(e);}
