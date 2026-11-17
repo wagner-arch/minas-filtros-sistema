@@ -25941,13 +25941,20 @@ function faltamSeriesNoLocal(pid,loc){
   if(saldo<=0)return 0;
   return Math.max(0,saldo-seriesDoLocal(pid,loc).length);
 }
-/* onde esta série já está? ("" = livre) */
-function ondeEstaSerie(n,ignorarId,pedidoId){
+/* onde esta série já está? ("" = livre)
+   v570 (correção urgente de 17/11): quando a peça está SAINDO de um estoque para outro — a
+   requisição aceita pelo técnico, a devolução ao almoxarifado, uma transferência —, a série que
+   já está no estoque de ORIGEM e é do MESMO produto NÃO é "já usada": é o mesmo aparelho
+   mudando de lugar. Sem isto, ler a série verdadeira ao aceitar o purificador era recusado com
+   "já está no estoque Almoxarifado", e o técnico não conseguia receber. Continua barrando a
+   série que está em OUTRO estoque, a que está em cliente, a de outro produto e a repetida. */
+function ondeEstaSerie(n,ignorarId,pedidoId,opc){
   n=normSerie(n);if(!n)return "";
   var eq=ivsAparelhoDaSerie(n);
   if(eq)return "no aparelho de "+(eq.cliente||"um cliente")+(eq.produto?" ("+eq.produto+")":"");
   var d=seriesCad.filter(function(x){
     return serieDaLoja(x)&&x.serieNorm===n&&x.situacao==="estoque"&&x.id!==ignorarId;})[0];
+  if(d&&opc&&opc.origem&&d.local===opc.origem&&(!opc.pid||d.produtoId===opc.pid))d=null;
   if(d)return "no estoque "+nomeLocal(d.local)+(d.produto?" · "+d.produto:"");
   var r=serieOcupada(n,pedidoId);
   if(r)return "reservada no pedido "+(r.pedido.numero||"sem número");
@@ -26020,7 +26027,7 @@ function serBoxLigar(box){
   serBoxPintar(box);
 }
 /* confere tudo: vazio, repetida na mesma caixa, já em outro estoque ou em cliente */
-function serBoxConferir(itens,pedidoId){
+function serBoxConferir(itens,pedidoId,origem){
   var vistas={},erros=[],fora=[],mapa={};
   (itens||[]).forEach(function(x){
     var k=x.pid,qt=Math.max(0,+x.qtd||0),L=SERBOX.linhas[k]||[],lista=[];
@@ -26029,7 +26036,8 @@ function serBoxConferir(itens,pedidoId){
       if(!n){erros.push({pid:k,i:i,texto:"falta"});continue;}
       if(vistas[n]){erros.push({pid:k,i:i,texto:"repetida nesta tela"});continue;}
       vistas[n]=1;
-      var onde=ondeEstaSerie(n,null,pedidoId);
+      /* v570: a série que vem do estoque de origem, do mesmo produto, é a mesma peça mudando de lugar */
+      var onde=ondeEstaSerie(n,null,pedidoId,origem?{origem:origem,pid:k}:null);
       if(onde){erros.push({pid:k,i:i,texto:"já está "+onde});fora.push(s+" — já está "+onde);continue;}
       lista.push(s);
     }
@@ -26039,7 +26047,7 @@ function serBoxConferir(itens,pedidoId){
 }
 function serBoxPintar(box){
   if(!box)return;
-  var itens=box.__itens||[],r=serBoxConferir(itens,box.__pedidoId||"");
+  var itens=box.__itens||[],r=serBoxConferir(itens,box.__pedidoId||"",box.__origem||"");
   Array.prototype.forEach.call(box.querySelectorAll("[data-ser]"),function(c){
     var k=c.getAttribute("data-ser"),i=+c.getAttribute("data-seri");
     var e=r.erros.filter(function(x){return x.pid===k&&x.i===i&&x.texto!=="falta";})[0];
@@ -26051,13 +26059,22 @@ function serBoxPintar(box){
     ?'<div class="note crit"><b>Número de série já usado:</b><br>'+r.fora.map(esc).join("<br>")+"</div>":"";
   return r;
 }
-function serBoxMontar(alvo,itens,pedidoId){
+function serBoxMontar(alvo,itens,pedidoId,origem){
   if(!alvo)return null;
   alvo.innerHTML=itens.length?serBoxHtml(itens,alvo.id+"_bx"):"";
   var box=alvo.querySelector(".ser-box");
-  if(box){box.__itens=itens;box.__pedidoId=pedidoId||"";serBoxLigar(box);}
+  if(box){box.__itens=itens;box.__pedidoId=pedidoId||"";box.__origem=origem||"";serBoxLigar(box);}
   return box;
 }
+/* v570: de qual estoque a peça está saindo nesta requisição ou devolução. Na requisição ela sai
+   do almoxarifado; na devolução, da caixinha de quem devolve; na troca não sai de estoque nenhum
+   (o aparelho vem do cliente), então não há origem e a série é conferida como antes. */
+function origemSerieReq(r){
+  if(!r||r.origem==="troca"||r.tipo==="usado")return "";
+  if(r.tipo==="devolucao")return localDaReq(r);
+  return LOC_EMPRESA;
+}
+window.__origemSerieReqMF=function(r){return origemSerieReq(r);};
 /* os produtos que pedem série dentro de uma lista de itens de requisição */
 function itensComSerieReq(r,idx){
   var out=[];
@@ -26071,6 +26088,7 @@ function itensComSerieReq(r,idx){
 window.__serieMF={controla:controlaSerie,doLocal:seriesDoLocal,livres:seriesLivresDoLocal,
   faltam:faltamSeriesNoLocal,onde:ondeEstaSerie,por:porSerieNoLocal,devolver:devolverSeriesDoLocal,
   reservas:reservasDeSerie,esquecer:esquecerReservaSerie,caixa:SERBOX,conferir:serBoxConferir,
+  origemReq:origemSerieReq,
   carregar:function(){return carregarSeries();},cad:function(){return seriesCad;}};
 
 /* ---------- 3) INFORMAR SÉRIES DO ESTOQUE (aparelhos que já estão nas caixinhas) ---------- */
@@ -27973,7 +27991,8 @@ function abrirReposicaoItem(rid,idx){
     wSer.innerHTML='<div class="note"><b>Número de série de cada purificador recebido</b>'+
       '<div class="t-sub">Digite ou leia o código de cada aparelho. Sem todas as séries o recebimento não é gravado.</div></div>'+
       '<div id="rp_serBox"></div>';
-    serBoxMontar(document.getElementById("rp_serBox"),its);
+    /* v570: a peça está saindo do estoque de origem (o almoxarifado, na requisição) */
+    serBoxMontar(document.getElementById("rp_serBox"),its,"",origemSerieReq(r));
   }
   var marcas0=marcar;
   repPend.pintarSeries=pintarSeriesRep;
@@ -28014,7 +28033,7 @@ async function confirmarReposicaoItens__corpo(){
   /* v548: série obrigatória, uma por unidade, antes de qualquer gravação */
   var itsSer=ehTrocaR?[]:itensComSerieReq(r,x.idx),confSer=null;
   if(itsSer.length){
-    confSer=serBoxConferir(itsSer);
+    confSer=serBoxConferir(itsSer,"",origemSerieReq(r));
     if(!confSer.ok){
       try{serBoxPintar(document.querySelector("#rp_serBox .ser-box"));}catch(eP){}
       toast(confSer.fora.length?"Número de série já usado — confira os destacados."
