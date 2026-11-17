@@ -1911,6 +1911,34 @@
         conferir(r, "atualizar a parada", true);
         return true;
       },
+      /* ---- CHAVE PRÓPRIA DO APARELHO (17/11, v573) ----
+         A página cria a chave quando a pessoa entra; o aplicativo grava a localização com
+         ela, sem sessão e sem renovar nada (era daí que vinham os 401 com a tela apagada).
+         A chave sai do banco UMA vez, em texto: depois lá fica só a impressão digital. */
+      criarChaveAparelho: async function (aparelho, modelo) {
+        var r = await naFila(function () {
+          return rpc("rastro_chave_criar", { p_aparelho: aparelho, p_modelo: modelo || null });
+        });
+        return conferir(r, "criar a chave do aparelho", true).data || null;
+      },
+      revogarChaveAparelho: async function (id, aparelho, motivo) {
+        var r = await naFila(function () {
+          return rpc("rastro_chave_revogar", { p_id: id || null, p_aparelho: aparelho || null, p_motivo: motivo || null });
+        });
+        return conferir(r, "revogar a chave do aparelho", true).data || null;
+      },
+      chavesAtivas: async function () {
+        var r = await naFila(function () { return rpc("rastro_chaves_ativas"); });
+        return conferir(r, "ler os aparelhos com chave").data || [];
+      },
+      /* os pontos que a função recusou, com o motivo: nada some calado */
+      recusados: async function (quantos) {
+        var r = await naFila(function () {
+          return tab("rastro_recusados").select("recebido_em,vendedor,loja,aparelho,em,lat,lng,motivo")
+            .order("recebido_em", { ascending: false }).limit(quantos || 300);
+        });
+        return conferir(r, "ler os pontos recusados").data || [];
+      },
       /* LGPD: apaga os pontos passados de N dias. As paradas ficam como histórico. */
       limpar: async function (dias) {
         var r = await naFila(function () {

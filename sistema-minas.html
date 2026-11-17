@@ -4826,6 +4826,7 @@ img{max-width:100%}
           <span class="count" id="rs_agoraHora"></span>
           <span class="sp"></span>
           <button class="btn ghost" type="button" id="rs_verTodos" hidden>Ver todos</button>
+          <button class="btn ghost" type="button" id="rs_aparelhos" hidden>Aparelhos e recusas</button>
           <button class="btn ghost" type="button" id="rs_agoraJa">Atualizar agora</button>
         </div>
         <div style="padding:0 16px 16px">
@@ -7979,6 +7980,22 @@ img{max-width:100%}
      que NÃO gera estoque nenhum: a baixa é definitiva e o aparelho acaba ali. -->
 <!-- TERMO DE CIENCIA DO RASTREIO: o vendedor assina com o dedo na primeira entrada.
      Antes de assinar, o rastreio NAO liga (regra dele, 14/10). -->
+<!-- APARELHOS COM CHAVE E PONTOS RECUSADOS (17/11, v573) — só o Administrador revoga -->
+<div class="modal" id="aparModal" hidden>
+  <div class="box" style="width:min(900px,100%)">
+    <h3>Aparelhos que gravam a localização</h3>
+    <div class="sub">Cada celular tem uma chave própria, ligada ao colaborador. Celular perdido ou roubado: revogue aqui — ele para de gravar na hora.</div>
+    <div id="ap_corpo" style="max-height:44vh;overflow:auto;margin:12px 0"></div>
+    <p class="sect-t" style="margin:16px 0 6px">Pontos recusados</p>
+    <div class="help" style="margin:0 0 8px">O que o banco não aceitou, com o motivo. Nada some calado.</div>
+    <div id="ap_recusados" style="max-height:30vh;overflow:auto"></div>
+    <div class="actions" style="margin-top:16px">
+      <button class="btn ghost" type="button" id="ap_atualizar">Atualizar</button>
+      <span class="sp"></span>
+      <button class="btn" type="button" id="ap_fechar">Fechar</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="termoModal" hidden>
   <div class="box" style="width:min(640px,100%)">
     <h3>Antes de começar: leia e assine</h3>
@@ -9396,7 +9413,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=547"></script>
+<script src="supabase/adapter.js?v=573"></script>
 <script>
 (function(){
 "use strict";
@@ -60274,6 +60291,49 @@ async function enderecoDoPonto(lat,lng){
 
 /* ---------- a ponte com o aplicativo do celular ---------- */
 function temAppMF(){return !!(window.MFApp&&typeof window.MFApp.sessao==="function");}
+/* ---- A CHAVE PRÓPRIA DO APARELHO (17/11, v573) ----
+   O aplicativo gravava a localização com a sessão da página. Desde a v547 ele não renova
+   nada (e não pode voltar a renovar: era daí que a sessão caía); com a tela do celular
+   apagada ninguém renovava, o acesso vencia em uma hora e metade do trajeto se perdia.
+   Agora a página cria uma CHAVE deste aparelho, ligada a esta pessoa, que não vence. Ela
+   só serve para GRAVAR LOCALIZAÇÃO: a função do banco lê o nome e a empresa do CADASTRO
+   e grava. A chave morre sozinha no "Sair", com o colaborador desativado, quando o
+   Administrador revoga, ou depois de 30 dias sem nenhum ponto. */
+function codigoAparelhoApp(){
+  try{if(window.MFApp&&window.MFApp.lembreteAparelho)return String(window.MFApp.lembreteAparelho()||"");}catch(e){}
+  return "";
+}
+function modeloAparelhoApp(){
+  try{if(window.MFApp&&window.MFApp.marcaDoCelular)return String(window.MFApp.marcaDoCelular()||"");}catch(e){}
+  return "";
+}
+function chaveRastroLocal(ap){
+  try{return localStorage.getItem("mf_chave_rastro:"+usuarioAtual+":"+ap)||"";}catch(e){return "";}
+}
+function guardarChaveRastroLocal(ap,ch){
+  try{if(ch)localStorage.setItem("mf_chave_rastro:"+usuarioAtual+":"+ap,ch);
+    else localStorage.removeItem("mf_chave_rastro:"+usuarioAtual+":"+ap);}catch(e){}
+}
+async function garantirChaveRastro(forcar){
+  if(!db||!modoBanco()||!db.rastro||!db.rastro.criarChaveAparelho)return "";
+  var ap=codigoAparelhoApp();
+  if(!ap)return "";
+  var ja=forcar?"":chaveRastroLocal(ap);
+  if(ja)return ja;
+  try{
+    var r=await db.rastro.criarChaveAparelho(ap,modeloAparelhoApp());
+    if(r&&r.ok&&r.chave){guardarChaveRastroLocal(ap,r.chave);return r.chave;}
+    console.warn("chave do aparelho",r&&r.erro);
+  }catch(e){console.warn("chave do aparelho",e);}
+  return "";
+}
+async function revogarChaveRastroDaqui(motivo){
+  var ap=codigoAparelhoApp();
+  if(!ap)return;
+  guardarChaveRastroLocal(ap,"");
+  try{if(db&&modoBanco()&&db.rastro&&db.rastro.revogarChaveAparelho)
+    await db.rastro.revogarChaveAparelho(null,ap,motivo||"saiu do sistema");}catch(e){}
+}
 async function entregarSessaoAoApp(){
   if(!temAppMF()||!db||!modoBanco()||!db.rastro)return;
   try{
@@ -60283,9 +60343,20 @@ async function entregarSessaoAoApp(){
     s.funcao=perfilDe(usuarioAtual);
     s.loja=lojaAtual;
     s.assinou=!!termoRastreioAssinado(usuarioAtual);
+    /* o aplicativo 2.1 não conhece este campo e simplesmente o ignora */
+    try{s.chaveRastro=await garantirChaveRastro(false);}catch(eC){s.chaveRastro="";}
     window.MFApp.sessao(JSON.stringify(s));
   }catch(e){console.warn("sessão para o aplicativo",e);}
 }
+window.__chaveRastroMF={garantir:function(f){return garantirChaveRastro(f);},
+  revogar:function(m){return revogarChaveRastroDaqui(m);},
+  guardada:function(){return chaveRastroLocal(codigoAparelhoApp());}};
+window.__entregarSessaoAppMF=function(){return entregarSessaoAoApp();};
+window.__termoRastreioMF={assinado:function(n){return termoRastreioAssinado(n);},
+  versao:function(){return TERMO_RASTREIO_VERSAO;},doc:function(n){return facialDoc(n);},
+  /* só para os roteiros: marca o termo na memória, sem gravar nada no banco */
+  marcarNaMemoria:function(n){var d=facialDoc(n);if(!d){d={nome:n};faciais.push(d);}
+    d.termoRastreio={assinadoEm:new Date().toISOString(),versao:TERMO_RASTREIO_VERSAO};return d;}};
 function avisarAppQueSaiu(){
   try{if(temAppMF()&&window.MFApp.saiu)window.MFApp.saiu();}catch(e){}
 }
@@ -60999,6 +61070,9 @@ function renderAgora(){
   }
   var bt=$("rs_verTodos");
   if(bt)bt.hidden=!rsSeguindo;
+  /* v573: a lista de aparelhos com chave é de quem vê o rastreio; revogar, só o Adm */
+  var ba=$("rs_aparelhos");
+  if(ba)ba.hidden=!recebeAvisoRastreio();
   /* falha passageira NÃO apaga o que já estava na tela: o aviso fica no topo e os
      cartões continuam, com a hora de cada um dizendo o quanto já envelheceram */
   if(rastroAgoraErro&&!rastroAgora.length){
@@ -61853,9 +61927,9 @@ async function conferirRastreioDesligado(){
   if(!db||!modoBanco()||!db.rastro)return;
   if(!ehAdministrador())return;                  /* este aviso é do Administrador */
   if(!diaUtil(hojeISO()))return;
+  if(feriadoEm(hojeISO()))return;                /* feriado não avisa */
   var co=cfgOS();                                /* o horário útil já é cadastrado em Dados da Empresa */
   var agora=horaAgoraHM();
-  if(agora<co.horaIni||agora>co.horaFim)return;  /* fora do expediente não avisa */
   var ult={};
   try{
     (await db.rastro.ultimosPontos(300)).forEach(function(p){
@@ -61873,17 +61947,97 @@ async function conferirRastreioDesligado(){
        nunca assinou continua de fora, porque aí nunca houve rastreio para parar. */
     var velho=termoRastreioDesatualizado(u.nome);
     if(!termoRastreioAssinado(u.nome)&&!velho)return;
+    /* 17/11 (v573): o horário é o DA PESSOA — a jornada do cadastro, quando ela tem uma;
+       sem jornada, o horário útil da empresa. Fora dele, e no almoço, não se cobra nada. */
+    var j=jornadaDe(u.nome),ini=co.horaIni,fim=co.horaFim;
+    if(j.temJornada&&!j.outraEmpresa){ini=j.entrada;fim=j.saida;}
+    if(agora<ini||agora>fim)return;
+    if(j.temJornada&&agora>=j.almocoIni&&agora<=j.almocoFim)return;
+    var p=pontoDe(u.nome,hojeISO());
+    if(p&&["folga","ferias","justificada"].indexOf(p.tipo)>=0)return;
     var q=ult[u.nome];
-    if(!q)return;                                /* nunca registrou: não dá para dizer que desligou */
-    var mins=Math.round((Date.now()-new Date(q).getTime())/60000);
+    /* 17/11 (v573): quem não mandou NENHUM ponto hoje também entra. Antes o sistema pulava
+       essa pessoa, e era justamente o caso pior: o aplicativo que nem chegou a ligar. */
+    var desde=q&&String(q).slice(0,10)===hojeISO()?new Date(q).getTime():null;
+    var mins=desde!=null
+      ? Math.round((Date.now()-desde)/60000)
+      : Math.max(0,minutos(agora)-minutos(ini));
     if(mins>=RASTRO_SILENCIO)
-      rastroDesligados[u.nome]={dia:hojeISO(),hora:horaDoISO(q),minutos:mins,termoVelho:velho};
+      rastroDesligados[u.nome]={dia:hojeISO(),hora:desde!=null?horaDoISO(q):ini,minutos:mins,
+        termoVelho:velho,semNenhum:desde==null};
   });
 }
 function diaUtil(iso){
   var d=new Date(iso+"T12:00:00").getDay();
   return d>=1&&d<=5;
 }
+
+/* ===== APARELHOS COM CHAVE E PONTOS RECUSADOS (17/11, v573) =====
+   Celular perdido ou roubado: o Administrador revoga a chave aqui e aquele aparelho
+   para de gravar na hora. A lista mostra o colaborador, o aparelho, quando a chave
+   nasceu e qual foi o último ponto recebido. Só o Administrador revoga. */
+var apChaves=[],apRecusados=[],apLendo=false;
+function abrirAparelhosRastro(){
+  if(!recebeAvisoRastreio()){toast("Esta lista é de quem vê o rastreio.");return;}
+  $("aparModal").hidden=false;
+  renderAparelhosRastro();
+}
+async function renderAparelhosRastro(){
+  var c=$("ap_corpo"),r=$("ap_recusados");
+  if(!c||!r)return;
+  if(apLendo)return;
+  apLendo=true;
+  c.innerHTML='<div class="note">Lendo…</div>';r.innerHTML="";
+  try{
+    apChaves=await db.rastro.chavesAtivas();
+    apRecusados=await db.rastro.recusados(200);
+  }catch(e){
+    apLendo=false;
+    c.innerHTML='<div class="note crit"><b>Não deu para ler.</b> '+esc((e&&e.message)||String(e))+"</div>";
+    return;
+  }
+  apLendo=false;
+  c.innerHTML=apChaves.length
+    ? '<table class="tb"><thead><tr><th>Colaborador</th><th>Aparelho</th><th>Chave criada</th><th>Último ponto</th><th>Pontos</th><th></th></tr></thead><tbody>'+
+      apChaves.map(function(k){
+        var ult=k.ultimo_ponto_em?(dataBR(String(k.ultimo_ponto_em).slice(0,10))+" "+horaDoISO(k.ultimo_ponto_em)):"nenhum ainda";
+        return "<tr><td><b>"+esc(k.colaborador||"—")+"</b>"+(k.loja?'<div class="t-sub">'+esc(nomeLojaId(k.loja))+"</div>":"")+"</td>"+
+          "<td>"+esc(k.modelo||"—")+'<div class="t-sub">'+esc(k.aparelho||"")+"</div></td>"+
+          "<td>"+esc(dataBR(String(k.criada_em).slice(0,10)))+"</td>"+
+          "<td>"+esc(ult)+"</td>"+
+          '<td style="text-align:right">'+(k.pontos_gravados||0)+"</td>"+
+          '<td style="text-align:right">'+(ehAdministrador()
+            ? '<button class="btn sm ghost" type="button" data-rev="'+esc(k.id)+'" data-quem="'+esc(k.colaborador||"")+'">Revogar</button>'
+            : "")+"</td></tr>";
+      }).join("")+"</tbody></table>"
+    : '<div class="note">Nenhum aparelho com chave ativa. A chave nasce quando a pessoa entra no sistema pelo aplicativo.</div>';
+  Array.prototype.forEach.call(c.querySelectorAll("[data-rev]"),function(b){
+    b.onclick=function(){revogarAparelhoRastro(b.getAttribute("data-rev"),b.getAttribute("data-quem"));};
+  });
+  r.innerHTML=apRecusados.length
+    ? '<table class="tb"><thead><tr><th>Chegou</th><th>Colaborador</th><th>Hora do ponto</th><th>Motivo</th></tr></thead><tbody>'+
+      apRecusados.map(function(x){
+        return "<tr><td>"+esc(dataBR(String(x.recebido_em).slice(0,10))+" "+horaDoISO(x.recebido_em))+"</td>"+
+          "<td>"+esc(x.vendedor||"—")+"</td>"+
+          "<td>"+esc(x.em?(dataBR(String(x.em).slice(0,10))+" "+horaDoISO(x.em)):"—")+"</td>"+
+          "<td>"+esc(x.motivo||"")+"</td></tr>";
+      }).join("")+"</tbody></table>"
+    : '<div class="note ok">Nenhum ponto recusado.</div>';
+}
+async function revogarAparelhoRastro(id,quem){
+  if(!ehAdministrador()){toast("Só o Administrador revoga.");return;}
+  if(!confirm("Revogar a chave deste aparelho"+(quem?" de "+quem:"")+"?\n\n"+
+    "Ele para de gravar a localização na hora. Para voltar a gravar, a pessoa precisa entrar no sistema de novo por esse celular."))return;
+  try{
+    await db.rastro.revogarChaveAparelho(id,null,"revogada pelo Administrador");
+    toast("Chave revogada.");
+    renderAparelhosRastro();
+  }catch(e){toast("Não deu para revogar. Confira a internet.");}
+}
+window.__conferirRastreioDesligadoMF=function(){return conferirRastreioDesligado();};
+window.__aparelhosRastroMF={abrir:function(){return abrirAparelhosRastro();},
+  render:function(){return renderAparelhosRastro();},
+  chaves:function(){return apChaves;},recusados:function(){return apRecusados;}};
 
 /* ---------- resumo do fim do dia (18h30) ---------- */
 function horaAgoraHM(){
@@ -62277,7 +62431,9 @@ function pendenciasMF(){
         var hs=Math.floor((d.minutos||0)/60);
         var fa=hs>=24?("há "+Math.floor(hs/24)+" dia(s)"):(hs>=1?("há "+hs+" h"):("há "+(d.minutos||0)+" min"));
         põe({chave:"rastrooff:"+nome+":"+d.dia,icone:"⚠️",
-          titulo:"Rastreio de "+nome+" desligado às "+d.hora+" · "+fa,
+          titulo:d.semNenhum
+            ?("Nenhuma localização de "+nome+" hoje · "+fa+" de expediente")
+            :("Rastreio de "+nome+" desligado às "+d.hora+" · "+fa),
           texto:d.termoVelho
             ?("O texto do termo de rastreio mudou e "+nome+" ainda não assinou a versão nova. "+
               "Até a assinatura, o celular não registra a localização: peça para abrir o aplicativo e assinar.")
@@ -66799,6 +66955,9 @@ function ligar(){
       (r.novos?(r.novos+(r.novos===1?" com ponto novo":" com ponto novo")):"sem novidades desde a última vez"));
   };
   if($("rs_verTodos"))$("rs_verTodos").onclick=function(){verTodosNoMapa();};
+  if($("rs_aparelhos"))$("rs_aparelhos").onclick=function(){abrirAparelhosRastro();};
+  if($("ap_fechar"))$("ap_fechar").onclick=function(){$("aparModal").hidden=true;};
+  if($("ap_atualizar"))$("ap_atualizar").onclick=function(){renderAparelhosRastro();};
   $("rs_conferir").onclick=async function(){
     var b=$("rs_conferir");b.disabled=true;b.textContent="Conferindo…";
     var n=0,erro="";
@@ -67730,6 +67889,8 @@ function sairSistema(){
   /* o aplicativo para de registrar a localização na hora: sem usuário logado,
      nada é gravado (regra dele, 14/10) */
   try{avisarAppQueSaiu();}catch(e){}
+  /* v573: a chave deste aparelho morre aqui — quem sair não deixa o celular gravando */
+  try{revogarChaveRastroDaqui("saiu do sistema");}catch(e){}
   /* com banco: encerra a sessão no aparelho e volta à tela de entrada.
      E APAGA O GUARDADO NO APARELHO (v349): são 22 mil cadastros de clientes gravados
      no celular — quem sai do sistema não deixa a base da loja no aparelho. */
