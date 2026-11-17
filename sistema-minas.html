@@ -2426,6 +2426,7 @@ img{max-width:100%}
     <button data-s="estRecup">Recuperações</button>
     <button data-s="estTransicao">Transição do estoque</button>
     <button data-s="estAguardando">Peças aguardando aprovação</button>
+    <button data-s="estContagem">Contagem do estoque</button>
     <button data-s="estInstalado">Peça instalada sem venda aprovada</button>
     <button data-s="estConsumo">Uso e consumo</button>
     <button data-s="ferramentas">Ferramentas</button>
@@ -4975,6 +4976,23 @@ img{max-width:100%}
       </div>
     </section>
 
+    <!-- CONTAGEM DO ESTOQUE (18/11, v574): o rodízio semanal das caixinhas, a recontagem
+         diária do almoxarifado e a separação da véspera. A contagem em si é o Inventário. -->
+    <section class="screen" id="s-estContagem" hidden>
+      <div class="cab">
+        <div>
+          <h2>Contagem do estoque</h2>
+          <div class="sub">A semana das caixinhas, a recontagem de hoje no almoxarifado e a separação das instalações de amanhã. <b>Quem conta é o Inventário</b> — aqui ficam a agenda e a escolha.</div>
+        </div>
+      </div>
+      <div class="tabs" id="ctAbas">
+        <button class="tab" type="button" data-ct="semana" aria-pressed="true">Semana</button>
+        <button class="tab" type="button" data-ct="hoje">Hoje no almoxarifado</button>
+        <button class="tab" type="button" data-ct="vespera">Véspera</button>
+      </div>
+      <div class="card" id="ctCorpo"></div>
+    </section>
+
     <section class="screen" id="s-estAfazer" hidden>
       <div class="page-head"><h1>Demandas do Estoque</h1><p id="afSub">O que depende de você nos estoques.</p></div>
       <div class="toolbar af-topo">
@@ -6597,6 +6615,18 @@ img{max-width:100%}
             <select id="em_subAlmox"></select></div>
           <p class="help">Vale para tudo o que o almoxarifado faz nesta empresa: separar e entregar requisição, conferir devolução, lançar e ajustar estoque, contar inventário e ver todos os estoques. Pode ficar vazio. Só o Administrador escolhe.</p>
           <div id="em_subAlmoxInfo"></div>
+        </div>
+        <!-- CONTAGEM DO ESTOQUE (v574): quantos produtos por dia e a hora da véspera -->
+        <div class="card" id="em_contagemCard">
+          <p class="sect-t">Contagem do estoque</p>
+          <div class="g2">
+            <div class="fld"><label for="em_minRecont">Produtos por dia na recontagem do almoxarifado</label>
+              <input id="em_minRecont" type="number" min="1" step="1"></div>
+            <div class="fld"><label for="em_horaVespera">Hora da separação da véspera</label>
+              <input id="em_horaVespera" type="time"></div>
+          </div>
+          <p class="help">A recontagem diária sorteia pelo menos este número de produtos do almoxarifado, todo dia útil. A separação da véspera roda a partir desta hora e pede ao almoxarifado o que falta para as instalações do próximo dia útil. Só o Administrador muda; vale só nesta empresa.</p>
+          <div id="em_contagemInfo"></div>
         </div>
       </div>
     </section>
@@ -11031,6 +11061,12 @@ async function carregar(){
     acertarHoraServidor().then(function(){try{if(usuarioAtual)checarTravaPonto();}catch(eHs){}});
     try{var gsa=await jaPedido("cfg:substituto_almox",function(){return db.doc("config/substituto_almox").get();});
       if(gsa&&gsa.exists&&gsa.data())CFG_SUB_ALMOX={nome:gsa.data().nome||"",por:gsa.data().por||"",em:gsa.data().em||""};}catch(eSa){}
+    /* v574: a contagem do estoque (rodízio, recontagem diária e a véspera), por empresa */
+    try{var gct=await jaPedido("cfg:contagem_estoque",function(){return db.doc("config/contagem_estoque").get();});
+      if(gct&&gct.exists&&gct.data()){var dct=gct.data();
+        CFG_CONTAGEM={rodizio:dct.rodizio||{},minRecontagem:+dct.minRecontagem||MIN_RECONTAGEM_PADRAO,
+          horaVespera:dct.horaVespera||HORA_VESPERA_PADRAO,marcadas:dct.marcadas||[],
+          diarias:dct.diarias||{},vespera:dct.vespera||{},por:dct.por||"",em:dct.em||""};}}catch(eCt){}
     try{var gen=await jaPedido("cfg:estoque_negativo",function(){return db.doc("config/estoque_negativo").get();});
       if(gen.exists&&gen.data())CFG_ESTNEG={permitir:gen.data().permitir!==false,por:gen.data().por||"",em:gen.data().em||""};}catch(eEn){}
     var gpc=await jaPedido("cfg:preco",function(){return db.doc("config/preco").get();});
@@ -16278,6 +16314,8 @@ window.__editandoAtMF=function(){return editandoAt;};
 window.__respInstalacaoMF=function(p){return respInstalacao(p);};
 window.__abrirNovaAtivMF=function(ctx){return abrirNovaAtividade(ctx||{});};
 window.__conflitoAgendaMF=function(q,d,h,f,ig){return conflitoDeAgenda(q,d,h,f,ig);};
+window.__compromissosMF=function(q,d,ig){return compromissosDoDia(q,d,ig);};
+window.__bloqueioAgendaMF=function(q,d,h,f,ig){return conflitoQueBloqueia(q,d,h,f,ig);};
 window.__horariosLivresMF=function(q,d,ig,dur){return horariosLivresDoDia(q,d,ig,dur);};
 window.__compromissosDiaMF=function(q,d,ig){return compromissosDoDia(q,d,ig);};
 window.__textoConflitoMF=function(cf,q,d,ig){return textoConflito(cf,q,d,ig);};
@@ -20645,6 +20683,14 @@ async function salvarPedidoAgora(){
   if(!temInstalacaoVenda()){toast("Responda se a venda precisa de instalação.");irEtapa(5);return;}
   if(temInstalacaoVenda()==="sim"&&(!$("v_idata").value||!$("v_ihora").value||!($("v_iresp").value||$("v_inst").value))){
     toast("Para instalar, informe data, horário e o técnico.");irEtapa(5);return;}
+  /* v574: a contagem do estoque marcada bloqueia a agenda de quem instala */
+  if(temInstalacaoVenda()==="sim"){
+    var quemI=$("v_inst").value||$("v_vend").value;
+    var cfI=conflitoQueBloqueia(quemI,$("v_idata").value,$("v_ihora").value,"",null);
+    if(cfI){$("v_alerta").innerHTML='<div class="note crit"><b>Horário bloqueado.</b> '+esc(textoBloqueio(cfI,quemI,$("v_idata").value))+"</div>";
+      try{$("v_alerta").scrollIntoView({block:"center"});}catch(eSc){}
+      toast("Escolha outro horário para a instalação.");irEtapa(5);return;}
+  }
   /* REGRA 9.2 (dele, 08/10): peça ou refil de manutenção não fecha o pedido sem dizer EM QUAL
      aparelho é, quando o cliente tem mais de um igual. O sistema não escolhe por ele — o plano e
      a próxima troca iriam para o aparelho errado. */
@@ -25404,6 +25450,8 @@ async function carregarInventarios(forcar){
    prestador, Gerente e Financeiro não contam nem lançam. A trava vale também em salvarInv. */
 function podeContarInv(){
   try{if(prestadorLogado())return false;}catch(e){}
+  /* v569: o substituto do estoquista faz tudo o que o almoxarifado faz */
+  try{if(ehAlmox(usuarioAtual))return true;}catch(e){}
   var f=perfilDe(usuarioAtual);return f==="Almoxarifado"||f==="Administrador";
 }
 /* "Estoque de Fulano" para o estoque de pessoa; os outros pelo nome de sempre */
@@ -27606,6 +27654,13 @@ async function aprovarInv__corpo(){
   if(Array.isArray(inv.pids)){var foraL=its.filter(function(it){return inv.pids.indexOf(it.pid)<0;});
     if(foraL.length){$("iv_alerta").innerHTML='<div class="note crit"><b>Produto fora da lista deste inventário:</b> '+
       foraL.map(function(it){return esc(it.nome);}).join(" · ")+". Nada foi lançado.</div>";return;}}
+  /* v574 (regra dele): NENHUM ajuste de contagem pode deixar o estoque negativo */
+  var negs=its.filter(function(it){return saldoEm(it.pid,inv.local)+difInv(it)<0;});
+  if(negs.length){
+    $("iv_alerta").innerHTML='<div class="note crit"><b>Estes ajustes deixariam o estoque negativo:</b> '+
+      negs.map(function(it){return esc(it.nome)+" ("+saldoEm(it.pid,inv.local)+" "+(difInv(it)>0?"+":"")+difInv(it)+")";}).join(" · ")+
+      ". Confira a contagem desses produtos — nada foi lançado.</div>";
+    return;}
   if(!confirm("Lançar "+its.length+" ajuste(s) de inventário no "+nomeEstoqueInv(inv.local)+"?"))return;
   var feitos=[],doc="Inventário nº "+inv.numero;
   try{
@@ -27687,6 +27742,8 @@ async function criarInv__corpo(){
     inv.historico.push({quando:inv.abertoEm,por:usuarioAtual,texto:"Inventário aberto · "+nomeEstoqueInv(inv.local)+" · "+tipoInvTxt(inv)});
     inventarios.push(inv);
     if(!(await salvarInv(inv,null))){if(feitos.length)toast(feitos.length+" inventário(s) abertos antes da falha.");return;}
+    /* v574: o inventário aberto fecha a contagem marcada daquele estoque (e a do dia) */
+    try{ligarInvNaContagem(inv);}catch(eLc){}
     feitos.push(inv);
   }
   $("iv_alerta").innerHTML="";
@@ -38985,6 +39042,7 @@ function renderTravaPontoCfg(){
   var adm=ehAdministrador();c.hidden=!adm;if(!adm)return;
   try{renderLembretePontoCfg();}catch(eLc){}
   try{renderSubAlmoxCfg();}catch(eSa){}
+  try{renderContagemCfg();}catch(eCc){}
   $("em_travaPonto").checked=travaPontoLigada();
   var h=(CFG_TRAVA_PONTO.historico||[]).slice(-5).reverse();
   $("em_travaInfo").innerHTML='<div class="t-sub">Vale a partir de '+dataBR(TRAVA_PONTO_INICIO)+", de segunda a sexta.</div>"+
@@ -51518,6 +51576,9 @@ async function criarAtividadeRetorno__corpo(){
     $("na_obs").value=$("na_obs").value.replace(/^OS nova/,"OS "+osNovaAberta.numero);
   }
   /* já tem compromisso nesse horário? avisa e mostra os horários livres (24/10) */
+  /* v574: contagem do estoque marcada bloqueia o horário — não dá para marcar por cima */
+  var cfB=conflitoQueBloqueia($("na_resp").value,$("na_data").value,$("na_hora").value,$("na_hora").value?$("na_fim").value:"",null);
+  if(cfB){$("na_alerta").innerHTML='<div class="note crit"><b>Horário bloqueado.</b> '+esc(textoBloqueio(cfB,$("na_resp").value,$("na_data").value))+"</div>";return;}
   var cfN=conflitoDeAgenda($("na_resp").value,$("na_data").value,$("na_hora").value,$("na_hora").value?$("na_fim").value:"",null);
   if(cfN&&!confirm(textoConflito(cfN,$("na_resp").value,$("na_data").value)+"\n\nMarcar assim mesmo?"))return;
   var vinc=clientes.filter(function(c){return c.id===naCtx.clienteId;})[0]||{};
@@ -58300,6 +58361,8 @@ async function salvarAtend__corpo(){
     /* mudou só o início: o término anda junto, com a mesma duração (v525) */
     if(ini2&&editandoAt.inicio&&ini2!==editandoAt.inicio&&fim2&&fim2===(editandoAt.fim||""))fim2=fimReagendado(editandoAt,ini2)||fim2;
     if(fim2&&ini2&&fim2<ini2){$("at_alerta").innerHTML='<div class="note crit"><b>O fim não pode ser antes do início.</b></div>';return;}
+    var cfBl=conflitoQueBloqueia(editandoAt.colaborador,editandoAt.data,ini2,fim2,editandoAt.id);
+    if(cfBl){$("at_alerta").innerHTML='<div class="note crit"><b>Horário bloqueado.</b> '+esc(textoBloqueio(cfBl,editandoAt.colaborador,editandoAt.data))+"</div>";return;}
     var cf=conflitoDeAgenda(editandoAt.colaborador,editandoAt.data,ini2,fim2,editandoAt.id);
     if(cf&&!confirm(textoConflito(cf,editandoAt.colaborador,editandoAt.data)+"\n\nMarcar assim mesmo?"))return;
     editandoAt.inicio=ini2;editandoAt.fim=fim2;
@@ -58593,6 +58656,9 @@ async function fecharAtend__corpo(comFutura){
   }
   /* a atividade futura também confere a agenda de quem vai executar (24/10) */
   if(comFutura){
+    var cfFB=conflitoQueBloqueia($("af_resp").value,$("af_data").value,$("af_ini").value,$("af_ini").value?$("af_fim").value:"",null);
+    if(cfFB){$("at_fechaAlerta").innerHTML='<div class="note crit"><b>Horário bloqueado.</b> '+esc(textoBloqueio(cfFB,$("af_resp").value,$("af_data").value))+"</div>";
+      $("at_futuraBloco").hidden=false;return;}
     var cfF=conflitoDeAgenda($("af_resp").value,$("af_data").value,$("af_ini").value,$("af_ini").value?$("af_fim").value:"",null);
     if(cfF&&!confirm(textoConflito(cfF,$("af_resp").value,$("af_data").value)+"\n\nMarcar assim mesmo?")){
       $("at_futuraBloco").hidden=false;return;}
@@ -59065,6 +59131,8 @@ function veTela(s,quem){
      almoxarifado e o financeiro veem todas (a conta está dentro da tela, não aqui) */
   if(s==="estAfazer"||s==="estSaldo"||s==="estHist"||s==="estAguardando")return veTela("estColab",n)||veTela("estEmpresa",n);
   if(s==="estInv"||s==="estRecup")return veTela("estEmpresa",n);
+  /* v574: a Contagem do estoque é do almoxarifado (com o substituto), do Gerente e do Adm */
+  if(s==="estContagem")return podeContagemEstoque(n);
   /* o link antigo de "Minhas ferramentas" cai no Estoque Colaborador; quem tem a visão completa usa Ferramentas */
   if(s==="minhasferr")return veTela("estColab",n)&&!veTela("estEmpresa",n);
   /* enquanto as funções não carregaram, as duas telas sensíveis seguem a regra antiga */
@@ -59332,6 +59400,527 @@ function ehGestor(){
    fica fora de Permissões, como as outras regras fixas. */
 var CFG_SUB_ALMOX={nome:"",por:"",em:""};
 function substitutoAlmox(){return (CFG_SUB_ALMOX&&CFG_SUB_ALMOX.nome)||"";}
+
+/* ================= CONTAGEM DO ESTOQUE — ETAPA 4 (18/11, v574) =================
+   Três rotinas, cada uma POR EMPRESA (o que roda na Minas Filtros fica na Minas Filtros):
+   (1) CONTAGEM SEMANAL das caixinhas e do Estoque da Loja, um estoque por dia útil, por um
+       rodízio que o almoxarife pode trocar. A contagem marcada entra na AGENDA dos dois (quem
+       é contado e o almoxarife) e BLOQUEIA o horário — nada se marca por cima.
+   (2) RECONTAGEM DIÁRIA do almoxarifado: pelo menos 5 produtos por dia útil, na ordem
+       zerados na transição → mais movimento nos últimos 30 dias → rodízio de quem está há
+       mais tempo sem contagem. Produto INATIVO nunca entra.
+   (3) SEPARAÇÃO NA VÉSPERA: no fim da tarde o sistema olha as instalações de amanhã e pede
+       ao almoxarifado o que falta na caixinha de quem vai instalar.
+   A CONTAGEM EM SI É O INVENTÁRIO QUE JÁ EXISTE (contagem cega, recontagem, aprovação do
+   Administrador, ajuste só depois dela): aqui está só a agenda, a escolha e o acompanhamento.
+   Tudo mora num documento por empresa (`config/contagem_estoque`), como os outros ajustes
+   da casa — sem coleção nova para a entrada do sistema carregar. */
+var CFG_CONTAGEM={rodizio:{},minRecontagem:5,horaVespera:"16:00",marcadas:[],diarias:{},vespera:{},por:"",em:""};
+var MIN_RECONTAGEM_PADRAO=5,HORA_VESPERA_PADRAO="16:00";
+var DIAS_GUARDA_CONTAGEM=90;
+function cfgContagem(){
+  CFG_CONTAGEM=CFG_CONTAGEM||{};
+  if(!CFG_CONTAGEM.rodizio||typeof CFG_CONTAGEM.rodizio!=="object")CFG_CONTAGEM.rodizio={};
+  if(!Array.isArray(CFG_CONTAGEM.marcadas))CFG_CONTAGEM.marcadas=[];
+  if(!CFG_CONTAGEM.diarias||typeof CFG_CONTAGEM.diarias!=="object")CFG_CONTAGEM.diarias={};
+  if(!CFG_CONTAGEM.vespera||typeof CFG_CONTAGEM.vespera!=="object")CFG_CONTAGEM.vespera={};
+  return CFG_CONTAGEM;
+}
+function minRecontagem(){var n=+cfgContagem().minRecontagem;return n>0?n:MIN_RECONTAGEM_PADRAO;}
+function horaVespera(){return cfgContagem().horaVespera||HORA_VESPERA_PADRAO;}
+/* quem mexe na contagem: o almoxarifado (com o substituto da v569), o Gerente e o Administrador */
+function podeContagemEstoque(n){
+  n=n||usuarioAtual;
+  var f=perfilDe(n);
+  return ehAlmox(n)||f==="Gerente"||f==="Administrador";
+}
+function diaDaSemanaISO(iso){try{return new Date(iso+"T12:00:00").getDay();}catch(e){return 0;}}
+/* `somaDias` já existe no arquivo (linha ~29664) — não redefinir aqui, senão a última
+   sobrescreve a primeira em silêncio */
+/* o próximo dia útil que não é feriado — é dele que a véspera cuida */
+function proximoDiaUtil(iso){
+  var d=iso||hojeISO();
+  for(var i=0;i<10;i++){
+    d=somaDias(d,1);
+    if(diaUtil(d)&&!feriadoEm(d))return d;
+  }
+  return somaDias(iso||hojeISO(),1);
+}
+async function gravarCfgContagem(antes){
+  podarContagem();
+  CFG_CONTAGEM.por=usuarioAtual;CFG_CONTAGEM.em=new Date().toISOString();
+  try{if(db&&modoBanco())await db.doc(idCfgContagem()).set(CFG_CONTAGEM);return true;}
+  catch(e){
+    if(antes)CFG_CONTAGEM=antes;
+    console.warn("contagem do estoque",e);
+    toast("Não foi salvo. Confira a internet e tente de novo.");
+    return false;}
+}
+function idCfgContagem(){return "config/contagem_estoque";}
+/* o documento não cresce para sempre: o que passou do prazo de guarda sai */
+function podarContagem(){
+  var c=cfgContagem(),corte=somaDias(hojeISO(),-DIAS_GUARDA_CONTAGEM);
+  c.marcadas=(c.marcadas||[]).filter(function(m){return String(m.data||"")>=corte;});
+  [["diarias",30],["vespera",30]].forEach(function(par){
+    var alvo=c[par[0]]||{},lim=somaDias(hojeISO(),-par[1]);
+    Object.keys(alvo).forEach(function(d){if(d<lim)delete alvo[d];});
+  });
+}
+
+/* ---------- (1) o rodízio semanal ---------- */
+/* todos os estoques desta empresa que são contados: o Estoque da Loja e a caixinha de cada
+   colaborador ativo que tem estoque. O almoxarifado tem a recontagem diária, não entra aqui. */
+function estoquesParaContagem(){
+  var out=[locLoja(lojaAtual)];
+  /* UMA passada só pelos movimentos (são dezenas de milhares): perguntar o saldo produto
+     por produto e pessoa por pessoa travaria a tela. Aqui só interessa quem tem ALGUMA
+     coisa na caixinha, e o saldo por produto fica para o inventário. */
+  var saldoCaixinha={};
+  (movEst||[]).forEach(function(m){
+    if(m.loja!==lojaAtual)return;
+    var q=+m.qtd||0;
+    if(String(m.destino||"").indexOf("colab:")===0)saldoCaixinha[m.destino+"|"+m.produtoId]=(saldoCaixinha[m.destino+"|"+m.produtoId]||0)+q;
+    if(String(m.origem||"").indexOf("colab:")===0)saldoCaixinha[m.origem+"|"+m.produtoId]=(saldoCaixinha[m.origem+"|"+m.produtoId]||0)-q;
+  });
+  var comSaldo={};
+  Object.keys(saldoCaixinha).forEach(function(k){
+    if(saldoCaixinha[k]!==0)comSaldo[k.split("|")[0]]=1;});
+  (USUARIOS||[]).forEach(function(u){
+    if(!u||u.ativo===false)return;
+    if(u.loja&&u.loja!==lojaAtual&&u.ambas!==true)return;
+    var l=locColab(u.nome);
+    /* quem tem a caixinha marcada na ficha entra mesmo com saldo zero */
+    var marcado=!!(u.estoques&&u.estoques.indexOf(l)>=0);
+    if(comSaldo[l]||marcado)out.push(l);
+  });
+  return out.filter(function(l,i,a){return a.indexOf(l)===i;});
+}
+/* o rodízio nasce sozinho na primeira vez: um estoque por dia útil, na ordem do nome */
+function rodizioContagem(){
+  var c=cfgContagem(),r=c.rodizio||{},tem=Object.keys(r).some(function(k){return !!r[k];});
+  if(tem)return r;
+  var ests=estoquesParaContagem(),novo={};
+  for(var i=0;i<ests.length;i++){
+    var dia=(i%5)+1;                       /* 1 = segunda … 5 = sexta */
+    if(!novo[dia])novo[dia]=[];
+    novo[dia].push(ests[i]);
+  }
+  Object.keys(novo).forEach(function(d){novo[d]=novo[d].join("|");});
+  return novo;
+}
+function estoquesDoDiaRodizio(dia){
+  var v=rodizioContagem()[String(dia)]||"";
+  return String(v).split("|").filter(Boolean);
+}
+async function mudarRodizioContagem(dia,locais){
+  if(!podeContagemEstoque()){toast("Quem monta o rodízio é o almoxarifado, o Gerente ou o Administrador.");return false;}
+  var antes=JSON.parse(JSON.stringify(CFG_CONTAGEM));
+  var c=cfgContagem();
+  c.rodizio=JSON.parse(JSON.stringify(rodizioContagem()));
+  c.rodizio[String(dia)]=(locais||[]).join("|");
+  return await gravarCfgContagem(antes);
+}
+/* as contagens marcadas que ainda valem naquele dia */
+function contagensMarcadas(data){
+  return (cfgContagem().marcadas||[]).filter(function(m){
+    return m.status!=="cancelada"&&(!data||m.data===data);});
+}
+function contagemPorId(id){return (cfgContagem().marcadas||[]).filter(function(m){return m.id===id;})[0]||null;}
+async function marcarContagemSemanal(local,data,inicio,fim){
+  if(!podeContagemEstoque()){toast("Quem marca a contagem é o almoxarifado, o Gerente ou o Administrador.");return null;}
+  if(!local||!data||!inicio){toast("Faltou o estoque, o dia ou a hora.");return null;}
+  if(fim&&fim<=inicio){toast("O fim tem de ser depois do início.");return null;}
+  var quem=ehLocalLoja(local)?"":String(local).slice(6);
+  var almox=usuarioAtual;
+  var antes=JSON.parse(JSON.stringify(CFG_CONTAGEM));
+  var c=cfgContagem();
+  var ja=contagensMarcadas(data).filter(function(m){return m.local===local&&m.status==="marcada";})[0];
+  if(ja){toast("Este estoque já tem contagem marcada neste dia.");return ja;}
+  var m={id:uid(),local:local,colaborador:quem,almoxarife:almox,data:data,inicio:inicio,
+    fim:fim||hmDeMinutos(minutosHM(inicio)+60),status:"marcada",invId:"",
+    historico:[{quando:new Date().toISOString(),por:usuarioAtual,texto:"Contagem marcada"}]};
+  c.marcadas.push(m);
+  if(!(await gravarCfgContagem(antes)))return null;
+  toast("Contagem marcada para "+dataBR(data)+" às "+inicio+".");
+  return m;
+}
+async function mudarContagemMarcada(id,campos,motivo){
+  if(!podeContagemEstoque()){toast("Só o almoxarifado, o Gerente ou o Administrador mudam a contagem.");return false;}
+  var m=contagemPorId(id);if(!m)return false;
+  if(!motivo){toast("Escreva o motivo.");return false;}
+  var antes=JSON.parse(JSON.stringify(CFG_CONTAGEM));
+  Object.keys(campos||{}).forEach(function(k){m[k]=campos[k];});
+  m.motivo=motivo;
+  m.historico=(m.historico||[]).concat([{quando:new Date().toISOString(),por:usuarioAtual,
+    texto:(campos&&campos.status==="cancelada")?("Desmarcada · "+motivo):("Mudada · "+motivo)}]);
+  return await gravarCfgContagem(antes);
+}
+
+/* ---------- (2) a recontagem diária do almoxarifado ---------- */
+/* a última vez que cada produto foi contado, por inventário fechado neste estoque */
+function ultimaContagemProduto(local){
+  var ult={};
+  (inventarios||[]).forEach(function(v){
+    if(v.loja!==lojaAtual||v.local!==local||v.status!=="fechado")return;
+    var q=String(v.fechadoEm||v.abertoEm||"");
+    Object.keys(v.itens||{}).forEach(function(pid){
+      if(!ult[pid]||q>ult[pid])ult[pid]=q;});
+  });
+  return ult;
+}
+/* quanto cada produto se mexeu no almoxarifado nos últimos 30 dias */
+function movimentoRecente(local,dias){
+  var corte=somaDias(hojeISO(),-(dias||30)),m={};
+  (movEst||[]).forEach(function(x){
+    if(x.loja!==lojaAtual||String(x.data||"")<corte)return;
+    if(x.origem!==local&&x.destino!==local)return;
+    m[x.produtoId]=(m[x.produtoId]||0)+Math.abs(+x.qtd||0);
+  });
+  return m;
+}
+/* a lista do dia: zerados na transição primeiro, depois os de mais movimento, depois o rodízio */
+function produtosRecontagemHoje(quantos){
+  var n=quantos||minRecontagem(),local=LOC_EMPRESA;
+  var ativos=produtos.filter(function(p){
+    if((p.status||"ativo")!=="ativo")return false;      /* produto inativo NUNCA entra */
+    try{if(ehProdSistemaInv(p))return false;}catch(e){}
+    return true;});
+  var ult=ultimaContagemProduto(local),mov=movimentoRecente(local,30);
+  var jaContado={};
+  (cfgContagem().diarias||{})[hojeISO()];
+  Object.keys(cfgContagem().diarias||{}).forEach(function(d){
+    ((cfgContagem().diarias[d]||{}).pids||[]).forEach(function(pid){
+      if(!jaContado[pid]||d>jaContado[pid])jaContado[pid]=d;});
+  });
+  var escolhidos=[],vistos={};
+  function põe(lista){
+    lista.forEach(function(p){
+      if(escolhidos.length>=n||vistos[p.id])return;
+      vistos[p.id]=1;escolhidos.push(p.id);});
+  }
+  /* 1º: os que foram zerados na transição e ainda não foram recontados */
+  põe(ativos.filter(function(p){
+    var z=p.zeradoTransicao&&p.zeradoTransicao[lojaAtual];
+    return !!z&&!jaContado[p.id];}));
+  /* 2º: os de maior movimento nos últimos 30 dias */
+  põe(ativos.filter(function(p){return (mov[p.id]||0)>0;})
+    .sort(function(a,b){return (mov[b.id]||0)-(mov[a.id]||0);}));
+  /* 3º: rodízio — quem está há mais tempo sem contagem vem primeiro */
+  põe(ativos.slice().sort(function(a,b){
+    var ua=jaContado[a.id]||ult[a.id]||"",ub=jaContado[b.id]||ult[b.id]||"";
+    if(ua===ub)return String(a.nome||"").localeCompare(String(b.nome||""));
+    return ua<ub?-1:1;}));
+  return escolhidos;
+}
+function recontagemDoDia(dia){
+  var d=dia||hojeISO();
+  return (cfgContagem().diarias||{})[d]||null;
+}
+async function montarRecontagemDoDia(){
+  var d=hojeISO();
+  if(!diaUtil(d)||feriadoEm(d))return null;
+  var c=cfgContagem();
+  if(c.diarias[d])return c.diarias[d];
+  var antes=JSON.parse(JSON.stringify(CFG_CONTAGEM));
+  c.diarias[d]={pids:produtosRecontagemHoje(),feita:false,invId:"",montadaEm:new Date().toISOString()};
+  if(!(await gravarCfgContagem(antes)))return null;
+  return c.diarias[d];
+}
+
+/* ---------- (3) a separação na véspera ---------- */
+/* o que cada instalador precisa para as instalações do próximo dia útil */
+function instalacoesDoDia(data){
+  return (pedidos||[]).filter(function(p){
+    if(p.loja!==lojaAtual||!p.instalacao||p.status==="Cancelada"||p.teste)return false;
+    if(p.instaladoEm)return false;
+    return String(p.instalacao).slice(0,10)===data;});
+}
+/* já existe requisição aberta daquela peça para aquele pedido? então não nasce outra */
+function jaTemReqAberta(pedidoId,pid,loc){
+  return (requisicoes||[]).some(function(r){
+    if(r.loja!==lojaAtual||r.tipo!=="requisicao")return false;
+    if(r.status==="cancelada"||r.status==="concluida")return false;
+    if(r.pedidoId!==pedidoId)return false;
+    if(loc&&localDaReq(r)!==loc)return false;
+    return (r.itens||[]).some(function(i){return i.pid===pid&&!itemFechadoReq(i);});
+  });
+}
+function novaReqVespera(p,loc,linhas,dia){
+  return {id:uid(),loja:p.loja||lojaAtual,tipo:"requisicao",local:loc,
+    colaborador:ehLocalLoja(loc)?"":String(loc).slice(6),
+    itens:linhas.map(function(x){return {pid:x.pid,nome:x.nome||"",cod:x.cod||"",qtd:x.q,atendida:x.q};}),
+    obs:"Separação da véspera · instalação de "+dataBR(dia)+" · pedido "+p.numero+" · "+(p.cliente||""),
+    data:hojeISO(),status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual,
+    origem:"vespera",vespera:true,vesperaDia:dia,pedidoId:p.id,pedidoNumero:p.numero,
+    cliente:p.cliente||"",abertaEm:new Date().toISOString()};
+}
+/* a rotina do fim da tarde: uma vez por dia e por empresa */
+async function separarVespera(forcar){
+  if(!podeContagemEstoque())return null;
+  var hoje=hojeISO();
+  if(!diaUtil(hoje)||feriadoEm(hoje))return null;
+  var c=cfgContagem();
+  if(c.vespera[hoje]&&!forcar)return c.vespera[hoje];
+  if(!forcar&&horaAgoraHM()<horaVespera())return null;
+  var dia=proximoDiaUtil(hoje);
+  var peds=instalacoesDoDia(dia),criadas=[],faltas=[],disp=contaDispAlmox();
+  for(var i=0;i<peds.length;i++){
+    var p=peds[i],quem=respInstalacao(p);
+    if(!quem)continue;
+    var loc=locColab(quem),linhas=[],res=null;
+    try{res=reservasDe(loc,p.id)||{};}catch(e){res={};}
+    itensDeEstoque(p).forEach(function(it){
+      if(it.baixaDispensada||it.pecaRecolhida)return;
+      var q=+(it.qtd||1);
+      var temNoColab=Math.max(0,saldoEm(it.pid,loc)-(res[it.pid]||0));
+      var falta=q-temNoColab;
+      if(falta<=0)return;
+      if(jaTemReqAberta(p.id,it.pid,loc))return;
+      var podeAlmox=disp(it.pid);
+      if(podeAlmox<=0){
+        faltas.push({pid:it.pid,nome:it.nome||"",qtd:falta,pedido:p.numero,cliente:p.cliente||"",quem:quem});
+        return;}
+      linhas.push({pid:it.pid,nome:it.nome||"",cod:it.cod||"",q:Math.min(falta,podeAlmox)});
+      if(podeAlmox<falta)faltas.push({pid:it.pid,nome:it.nome||"",qtd:falta-podeAlmox,pedido:p.numero,cliente:p.cliente||"",quem:quem});
+    });
+    if(!linhas.length)continue;
+    var rq=novaReqVespera(p,loc,linhas,dia);
+    requisicoes.push(rq);
+    try{await grava("requisicoes",rq);criadas.push(rq.id);}
+    catch(e){requisicoes.splice(requisicoes.indexOf(rq),1);console.warn("requisição da véspera",e);}
+  }
+  var antes=JSON.parse(JSON.stringify(CFG_CONTAGEM));
+  c.vespera[hoje]={dia:dia,em:new Date().toISOString(),por:usuarioAtual,criadas:criadas,faltas:faltas,pedidos:peds.length};
+  await gravarCfgContagem(antes);
+  try{agendarEstNovas();}catch(e){}
+  return c.vespera[hoje];
+}
+/* instalação que mudou de dia (ou saiu) depois da requisição da véspera */
+function vesperaFuraDeOrdem(){
+  var fora=[];
+  (requisicoes||[]).forEach(function(r){
+    if(r.loja!==lojaAtual||r.origem!=="vespera")return;
+    if(r.status==="cancelada"||r.status==="concluida")return;
+    var p=(pedidos||[]).filter(function(x){return x.id===r.pedidoId;})[0];
+    if(!p)return;
+    var dia=String(p.instalacao||"").slice(0,10);
+    if(p.status==="Cancelada")fora.push({req:r,pedido:p,motivo:"o pedido foi cancelado"});
+    else if(!dia)fora.push({req:r,pedido:p,motivo:"a instalação foi desmarcada"});
+    else if(dia!==r.vesperaDia)fora.push({req:r,pedido:p,motivo:"a instalação passou para "+dataBR(dia)});
+  });
+  return fora;
+}
+/* ---- as duas opções em Dados da Empresa (só o Administrador) ---- */
+function renderContagemCfg(){
+  var c=$("em_contagemCard");if(!c)return;
+  var adm=ehAdministrador();c.hidden=!adm;if(!adm)return;
+  var mi=$("em_minRecont"),hv=$("em_horaVespera");
+  if(mi&&document.activeElement!==mi)mi.value=minRecontagem();
+  if(hv&&document.activeElement!==hv)hv.value=horaVespera();
+  if(mi&&!mi.__ligado){mi.__ligado=true;mi.onchange=function(){mudarCfgContagem({minRecontagem:+mi.value||MIN_RECONTAGEM_PADRAO});};}
+  if(hv&&!hv.__ligado){hv.__ligado=true;hv.onchange=function(){mudarCfgContagem({horaVespera:hv.value||HORA_VESPERA_PADRAO});};}
+  var i=$("em_contagemInfo");
+  if(i)i.innerHTML='<div class="t-sub">'+esc(nomeLoja())+" · "+minRecontagem()+" produto(s) por dia · véspera às "+esc(horaVespera())+
+    (CFG_CONTAGEM.por?" · mudado por "+esc(CFG_CONTAGEM.por)+(CFG_CONTAGEM.em?" em "+esc(dataBR(String(CFG_CONTAGEM.em).slice(0,10))):""):"")+"</div>";
+}
+async function mudarCfgContagem(campos){
+  if(!ehAdministrador()){toast("Só o Administrador muda a contagem do estoque.");renderContagemCfg();return false;}
+  var antes=JSON.parse(JSON.stringify(CFG_CONTAGEM));
+  var c=cfgContagem();
+  Object.keys(campos||{}).forEach(function(k){c[k]=campos[k];});
+  if(!(await gravarCfgContagem(antes))){renderContagemCfg();return false;}
+  toast("Contagem do estoque atualizada.");renderContagemCfg();return true;
+}
+/* as duas rotinas do dia, sem atrapalhar ninguém: nada aqui grava sem ter o que gravar */
+async function rotinasDaContagem(){
+  if(!db||!modoBanco()||!podeContagemEstoque())return;
+  var hoje=hojeISO();
+  if(!diaUtil(hoje)||feriadoEm(hoje))return;
+  try{if(!recontagemDoDia())await montarRecontagemDoDia();}catch(e){console.warn("recontagem do dia",e);}
+  try{if(horaAgoraHM()>=horaVespera())await separarVespera(false);}catch(e){console.warn("separação da véspera",e);}
+  try{if(telaAtual==="estContagem")renderContagemEstoque();}catch(e){}
+}
+/* a contagem marcada que virou inventário: é assim que o aviso de "não feita" some */
+function ligarInvNaContagem(inv){
+  try{
+    if(!inv||inv.loja!==lojaAtual)return;
+    var hoje=hojeISO(),mudou=false;
+    contagensMarcadas().forEach(function(m){
+      if(m.invId||m.local!==inv.local||m.status!=="marcada")return;
+      if(String(m.data)>hoje)return;
+      m.invId=inv.id;mudou=true;
+      m.historico=(m.historico||[]).concat([{quando:new Date().toISOString(),por:usuarioAtual,
+        texto:"Contagem aberta no inventário nº "+inv.numero}]);
+    });
+    var d=recontagemDoDia();
+    if(d&&!d.invId&&inv.local===LOC_EMPRESA&&Array.isArray(inv.pids)){d.invId=inv.id;mudou=true;}
+    if(mudou)gravarCfgContagem(null);
+  }catch(e){console.warn("ligar o inventário à contagem",e);}
+}
+/* ---------- a tela ---------- */
+var ctAba="semana";
+var DIAS_SEM_CT={1:"Segunda",2:"Terça",3:"Quarta",4:"Quinta",5:"Sexta"};
+function ligarAbasContagem(){
+  var w=$("ctAbas");if(!w||w.__ligado)return;
+  w.__ligado=true;
+  Array.prototype.forEach.call(w.querySelectorAll("[data-ct]"),function(b){
+    b.onclick=function(){ctAba=b.getAttribute("data-ct");renderContagemEstoque();};
+  });
+}
+function dataDoDiaDaSemana(dia){
+  /* o dia desta semana (segunda a sexta) a partir de hoje */
+  var h=hojeISO(),hw=diaDaSemanaISO(h);
+  return somaDias(h,(+dia)-(hw===0?7:hw));
+}
+function renderContagemEstoque(){
+  var w=$("ctCorpo");if(!w)return;
+  try{var ab=$("ctAbas");if(ab)Array.prototype.forEach.call(ab.querySelectorAll("[data-ct]"),function(b){
+    b.setAttribute("aria-pressed",String(b.getAttribute("data-ct")===ctAba));});}catch(e){}
+  if(!podeContagemEstoque()){w.innerHTML='<div class="note">Esta tela é do almoxarifado, do Gerente e do Administrador.</div>';return;}
+  if(ctAba==="semana")renderContagemSemana(w);
+  else if(ctAba==="hoje")renderContagemHoje(w);
+  else renderContagemVespera(w);
+}
+function renderContagemSemana(w){
+  var rod=rodizioContagem(),ests=estoquesParaContagem();
+  var linhas=[1,2,3,4,5].map(function(d){
+    var data=dataDoDiaDaSemana(d),locs=estoquesDoDiaRodizio(d);
+    var marc=contagensMarcadas(data);
+    return "<tr><td><b>"+DIAS_SEM_CT[d]+"</b><div class=\"t-sub\">"+esc(dataBR(data))+"</div></td>"+
+      "<td>"+(locs.length?locs.map(function(l){
+        var m=marc.filter(function(x){return x.local===l;})[0];
+        return '<div style="margin:2px 0">'+esc(nomeEstoqueInv(l))+
+          (m?' <span class="pill ok">marcada '+esc(m.inicio)+(m.fim?"–"+esc(m.fim):"")+"</span>":
+             ' <button class="btn sm ghost" type="button" data-ctm="'+esc(l)+'" data-ctd="'+esc(data)+'">Marcar</button>')+
+          (m&&m.invId?' <span class="t-sub">inventário aberto</span>':"")+
+          (m?' <button class="btn sm ghost" type="button" data-ctx="'+esc(m.id)+'">Desmarcar</button>':"")+
+          "</div>";
+      }).join(""):'<span class="t-sub">— ninguém neste dia —</span>')+"</td>"+
+      '<td style="text-align:right"><button class="btn sm ghost" type="button" data-cte="'+d+'">Trocar o dia</button></td></tr>';
+  }).join("");
+  w.innerHTML='<p class="sect-t" style="margin:0 0 6px">Rodízio da semana</p>'+
+    '<div class="help" style="margin:0 0 10px">Um estoque por dia útil. O almoxarifado pode trocar os dias e a ordem. '+
+    "A contagem marcada entra na agenda de quem é contado e na do almoxarife, e <b>bloqueia o horário</b>.</div>"+
+    '<table class="tb"><thead><tr><th>Dia</th><th>Estoques</th><th></th></tr></thead><tbody>'+linhas+"</tbody></table>"+
+    '<div class="help" style="margin-top:10px">Estoques desta empresa: '+ests.length+" · a contagem em si é feita no <b>Inventário</b>.</div>";
+  Array.prototype.forEach.call(w.querySelectorAll("[data-ctm]"),function(b){
+    b.onclick=function(){abrirMarcarContagem(b.getAttribute("data-ctm"),b.getAttribute("data-ctd"));};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-ctx]"),function(b){
+    b.onclick=function(){desmarcarContagem(b.getAttribute("data-ctx"));};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-cte]"),function(b){
+    b.onclick=function(){trocarDiaRodizio(b.getAttribute("data-cte"));};});
+}
+async function abrirMarcarContagem(local,data){
+  var hora=prompt("Hora da contagem de "+nomeEstoqueInv(local)+" em "+dataBR(data)+" (hh:mm):","09:00");
+  if(hora===null)return;
+  hora=String(hora).trim();
+  if(!/^[0-9]{2}:[0-9]{2}$/.test(hora)){toast("Escreva a hora como 09:00.");return;}
+  var dur=prompt("Quanto tempo vai levar, em minutos?","60");
+  if(dur===null)return;
+  var d=+dur||60;
+  var fim=hmDeMinutos(minutosHM(hora)+d);
+  var m=await marcarContagemSemanal(local,data,hora,fim);
+  if(m)renderContagemEstoque();
+}
+async function desmarcarContagem(id){
+  var mot=prompt("Por que desmarcar esta contagem?","");
+  if(mot===null)return;
+  mot=String(mot).trim();
+  if(!mot){toast("Escreva o motivo.");return;}
+  if(await mudarContagemMarcada(id,{status:"cancelada"},mot)){toast("Contagem desmarcada.");renderContagemEstoque();}
+}
+async function trocarDiaRodizio(dia){
+  var atuais=estoquesDoDiaRodizio(dia),ests=estoquesParaContagem();
+  var lista=ests.map(function(l,i){return (i+1)+") "+nomeEstoqueInv(l)+(atuais.indexOf(l)>=0?" [hoje neste dia]":"");}).join("\n");
+  var r=prompt("Quais estoques ficam na "+DIAS_SEM_CT[dia]+"?\nEscreva os números separados por vírgula (vazio = nenhum).\n\n"+lista,
+    atuais.map(function(l){return ests.indexOf(l)+1;}).filter(function(n){return n>0;}).join(","));
+  if(r===null)return;
+  var escolhidos=String(r).split(",").map(function(x){return ests[(+x.trim())-1];}).filter(Boolean);
+  if(await mudarRodizioContagem(dia,escolhidos)){toast("Rodízio atualizado.");renderContagemEstoque();}
+}
+function renderContagemHoje(w){
+  var d=recontagemDoDia(),inv=null;
+  try{inv=invAbertoDe(LOC_EMPRESA);}catch(e){}
+  var pids=(d&&d.pids)||produtosRecontagemHoje();
+  var nomes=pids.map(function(pid){var p=prodPorId(pid)||{};
+    var z=p.zeradoTransicao&&p.zeradoTransicao[lojaAtual];
+    return "<tr><td>"+esc((p.cod?p.cod+" · ":"")+(p.nome||""))+"</td>"+
+      "<td>"+(z?'<span class="pill warn">zerado na transição</span>':"")+"</td>"+
+      '<td style="text-align:right">'+saldoEm(pid,LOC_EMPRESA)+"</td></tr>";}).join("");
+  w.innerHTML='<p class="sect-t" style="margin:0 0 6px">Recontagem de hoje no almoxarifado</p>'+
+    '<div class="help" style="margin:0 0 10px">'+minRecontagem()+" produto(s) por dia útil. Primeiro os <b>zerados na transição</b> que ainda não foram recontados, "+
+    "depois os de maior movimento nos últimos 30 dias, depois o rodízio de quem está há mais tempo sem contagem. Produto inativo nunca entra.</div>"+
+    (!diaUtil(hojeISO())||feriadoEm(hojeISO())
+      ? '<div class="note">Hoje não é dia útil: a recontagem volta no próximo.</div>'
+      : '<table class="tb"><thead><tr><th>Produto</th><th></th><th>Saldo do sistema</th></tr></thead><tbody>'+nomes+"</tbody></table>"+
+        '<div class="actions" style="margin-top:12px">'+
+        (inv?'<div class="note ok" style="margin:0">Já existe inventário aberto no almoxarifado (nº '+inv.numero+"). Conte por ele.</div>"
+            :'<button class="btn" type="button" id="ct_abrirInv">Abrir a contagem no Inventário</button>')+
+        "</div>");
+  var b=$("ct_abrirInv");
+  if(b)b.onclick=function(){abrirContagemDoDia(pids);};
+}
+async function abrirContagemDoDia(pids){
+  if(!podeContarInv()){toast("Quem conta é o almoxarifado ou o Administrador.");return;}
+  var d=await montarRecontagemDoDia();
+  var lista=(d&&d.pids&&d.pids.length)?d.pids:pids;
+  if(!lista||!lista.length){toast("Nada para contar hoje.");return;}
+  ir("estInv");
+  try{
+    if($("iv_estoque"))$("iv_estoque").value="almox";
+    if($("iv_grupo"))$("iv_grupo").value="__alguns";
+    ivAlg=lista.slice();
+    toast("Os "+lista.length+" produtos de hoje já estão escolhidos: confirme para abrir o inventário.");
+    if($("invModal"))$("invModal").hidden=false;
+    if(typeof desenharColabsInv==="function")desenharColabsInv();
+  }catch(e){console.warn("abrir a contagem do dia",e);}
+}
+function renderContagemVespera(w){
+  var hoje=hojeISO(),v=(cfgContagem().vespera||{})[hoje]||null;
+  var dia=proximoDiaUtil(hoje),peds=instalacoesDoDia(dia);
+  var fora=vesperaFuraDeOrdem();
+  var reqs=(requisicoes||[]).filter(function(r){return r.loja===lojaAtual&&r.origem==="vespera"&&r.vesperaDia===dia;});
+  w.innerHTML='<p class="sect-t" style="margin:0 0 6px">Separação para '+esc(dataBR(dia))+"</p>"+
+    '<div class="help" style="margin:0 0 10px">Todo dia útil, a partir das <b>'+esc(horaVespera())+
+    "</b>, o sistema olha as instalações do próximo dia útil e pede ao almoxarifado o que falta na caixinha de quem instala. "+
+    "Não pede o que o almoxarifado não tem (v569) e não repete pedido que já existe.</div>"+
+    '<div class="kpis" style="margin-bottom:12px">'+
+      '<div class="kpi"><div class="l">Instalações amanhã</div><div class="v">'+peds.length+"</div></div>"+
+      '<div class="kpi"><div class="l">Requisições da véspera</div><div class="v">'+reqs.length+"</div></div>"+
+      '<div class="kpi"><div class="l">Faltando no almoxarifado</div><div class="v'+((v&&v.faltas&&v.faltas.length)?" crit":"")+'">'+
+        ((v&&v.faltas&&v.faltas.length)||0)+"</div></div>"+
+    "</div>"+
+    (reqs.length?'<table class="tb"><thead><tr><th>Para</th><th>Pedido</th><th>Cliente</th><th>Itens</th><th>Situação</th></tr></thead><tbody>'+
+      reqs.map(function(r){return "<tr><td>"+esc(nomeEstoqueInv(localDaReq(r)))+"</td><td>"+esc(r.pedidoNumero||"")+"</td>"+
+        "<td>"+esc(r.cliente||"")+"</td><td>"+esc((r.itens||[]).map(function(i){return i.qtd+"× "+(i.nome||"");}).join(" · "))+"</td>"+
+        "<td>"+esc(r.status||"")+"</td></tr>";}).join("")+"</tbody></table>"
+      :'<div class="note">Nenhuma requisição da véspera para amanhã.</div>')+
+    ((v&&v.faltas&&v.faltas.length)?'<p class="sect-t" style="margin:16px 0 6px">Falta no almoxarifado</p>'+
+      '<table class="tb"><thead><tr><th>Produto</th><th>Quantidade</th><th>Pedido</th><th>Para</th></tr></thead><tbody>'+
+      v.faltas.map(function(f){return "<tr><td>"+esc(f.nome)+"</td><td>"+f.qtd+"</td><td>"+esc(f.pedido||"")+"</td><td>"+esc(f.quem||"")+"</td></tr>";}).join("")+
+      "</tbody></table>":"")+
+    (fora.length?'<p class="sect-t" style="margin:16px 0 6px">Instalação mudou depois do pedido</p>'+
+      '<table class="tb"><thead><tr><th>Pedido</th><th>Cliente</th><th>O que houve</th></tr></thead><tbody>'+
+      fora.map(function(x){return "<tr><td>"+esc(x.pedido.numero||"")+"</td><td>"+esc(x.pedido.cliente||"")+"</td><td>"+esc(x.motivo)+"</td></tr>";}).join("")+
+      "</tbody></table>":"")+
+    '<div class="actions" style="margin-top:14px"><button class="btn ghost" type="button" id="ct_vesperaJa">Separar agora</button>'+
+    (v?'<span class="t-sub" style="margin-left:10px">Rodou hoje às '+esc(String(v.em).slice(11,16))+"</span>":"")+"</div>";
+  var b=$("ct_vesperaJa");
+  if(b)b.onclick=async function(){
+    b.disabled=true;b.textContent="Separando…";
+    try{await separarVespera(true);toast("Separação da véspera refeita.");}
+    catch(e){toast("Não deu para separar agora.");}
+    b.disabled=false;b.textContent="Separar agora";renderContagemEstoque();
+  };
+}
+window.__contagemMF={cfg:function(){return cfgContagem();},rodizio:rodizioContagem,
+  render:function(){return renderContagemEstoque();},aba:function(a){ctAba=a||"semana";return renderContagemEstoque();},
+  estoques:estoquesParaContagem,marcar:marcarContagemSemanal,mudar:mudarContagemMarcada,
+  marcadas:contagensMarcadas,recontagemHoje:produtosRecontagemHoje,montarDia:montarRecontagemDoDia,
+  doDia:recontagemDoDia,vespera:separarVespera,foraDeOrdem:vesperaFuraDeOrdem,
+  idDoc:function(){return idCfgContagem();},instalacoes:instalacoesDoDia,
+  mudarRodizio:mudarRodizioContagem,pode:podeContagemEstoque,minimo:minRecontagem,hora:horaVespera,
+  gravar:gravarCfgContagem};
 function ehSubstitutoAlmox(quem){var n=quem||usuarioAtual;return !!n&&n===substitutoAlmox();}
 window.__subAlmoxMF=function(){return substitutoAlmox();};
 function ehAlmox(quem){return podeAcao("almoxarifado",quem)||ehSubstitutoAlmox(quem);}
@@ -62095,6 +62684,12 @@ function ligarRastreio(){
     }
   }
   limparRastroAntigo();
+  /* v574: a contagem do estoque — monta a recontagem do dia e, depois da hora marcada,
+     separa a véspera. Uma vez por dia e por empresa, quando o almoxarifado, o Gerente ou
+     o Administrador está no sistema. */
+  rotinasDaContagem();
+  if(!window.__contagemTimer)
+    window.__contagemTimer=setInterval(function(){if(!document.hidden)rotinasDaContagem();},10*60000);
 }
 
 /* ---------- LGPD: apagar os pontos passados de 90 dias ----------
@@ -62544,6 +63139,40 @@ function avisosDoTrabalho(){
         quando:x.data,
         ir:function(){ir("estAguardando");}});
     });}catch(ePa2){console.warn("aviso das peças",ePa2);}
+  }
+  /* v574: contagem do estoque — o que não foi feito e o que falta para amanhã */
+  if(podeContagemEstoque()){
+    var hojeCt=hojeISO();
+    contagensMarcadas().forEach(function(m){
+      if(m.status!=="marcada"||m.invId)return;
+      if(m.data>=hojeCt)return;                     /* só o que já passou do dia */
+      L.push({chave:"contnaofeita:"+m.id,icone:"📋",
+        titulo:"Contagem não feita · "+nomeEstoqueInv(m.local)+" · "+dataBR(m.data),
+        texto:"A contagem estava marcada para "+dataBR(m.data)+" às "+m.inicio+
+          " e nenhum inventário foi aberto. Marque outro dia ou abra a contagem agora.",
+        quando:m.data+" "+(m.inicio||""),
+        ir:function(){ir("estContagem");}});
+    });
+    var dHoje=recontagemDoDia();
+    if(diaUtil(hojeCt)&&!feriadoEm(hojeCt)&&dHoje&&!dHoje.invId&&horaAgoraHM()>="15:00")
+      L.push({chave:"recontagem:"+hojeCt,icone:"📋",
+        titulo:"Recontagem de hoje no almoxarifado ainda não foi feita",
+        texto:(dHoje.pids||[]).length+" produto(s) para conferir hoje.",
+        quando:hojeCt+" 15:00",ir:function(){ir("estContagem");}});
+    var vHoje=(cfgContagem().vespera||{})[hojeCt];
+    ((vHoje&&vHoje.faltas)||[]).forEach(function(f,ix){
+      if(ix>8)return;
+      L.push({chave:"vesperafalta:"+hojeCt+":"+f.pid+":"+(f.pedido||""),icone:"⚠️",
+        titulo:"Falta "+(f.nome||"produto")+" no almoxarifado para as instalações de amanhã",
+        texto:f.qtd+" unidade(s) · pedido "+(f.pedido||"—")+" · "+(f.cliente||"")+" · instalação de "+(f.quem||""),
+        quando:hojeCt+" "+horaVespera(),ir:function(){ir("estContagem");}});
+    });
+    vesperaFuraDeOrdem().forEach(function(x){
+      L.push({chave:"vesperamudou:"+x.req.id,icone:"⚠️",
+        titulo:"Separação da véspera: "+x.motivo+" · pedido "+(x.pedido.numero||""),
+        texto:"A requisição da véspera continua aberta. Cancele ou mantenha, conforme o combinado com quem vai instalar.",
+        quando:hojeISO()+" "+horaVespera(),ir:function(){ir("estAfazer");}});
+    });
   }
   /* o meu orçamento que vence hoje ou amanhã */
   var am=somaDias(hj,1);
@@ -63103,7 +63732,29 @@ function compromissosDoDia(quem,data,ignoraId){
     if(pr[0]!==data||respInstalacao(p)!==quem||!pr[1])return;
     out.push({id:"ped:"+p.id,hora:pr[1],fim:"",cliente:p.cliente||"—",tipo:"Instalação"});
   });
+  /* v574: a contagem do estoque entra na agenda dos DOIS — de quem é contado e do
+     almoxarife — e BLOQUEIA o horário: nada se marca por cima dela. */
+  try{
+    contagensMarcadas(data).forEach(function(m){
+      if(m.status!=="marcada")return;
+      if(m.colaborador!==quem&&m.almoxarife!==quem)return;
+      if(ignoraId&&("cont:"+m.id)===ignoraId)return;
+      out.push({id:"cont:"+m.id,hora:m.inicio,fim:m.fim||"",
+        cliente:nomeEstoqueInv(m.local),tipo:"Contagem do estoque",bloqueia:true});
+    });
+  }catch(eC){}
   return out.sort(function(a,b){return a.hora.localeCompare(b.hora);});
+}
+/* v574: o compromisso que BLOQUEIA (hoje só a contagem do estoque). Os outros continuam
+   como sempre: o sistema avisa e deixa marcar assim mesmo. */
+function conflitoQueBloqueia(quem,data,hora,fim,ignoraId){
+  var cf=conflitoDeAgenda(quem,data,hora,fim,ignoraId);
+  return (cf&&cf.bloqueia)?cf:null;
+}
+function textoBloqueio(cf,quem,data){
+  return primeiroNome(quem)+" tem "+cf.tipo.toLowerCase()+" marcada das "+cf.hora+
+    (cf.fim?" às "+cf.fim:"")+" ("+cf.cliente+"). Esse horário fica bloqueado: "+
+    "escolha outro, ou peça ao almoxarifado para mudar a contagem.";
 }
 /* devolve o compromisso que se sobrepõe ao horário pedido, ou null */
 function conflitoDeAgenda(quem,data,hora,fim,ignoraId){
@@ -63712,6 +64363,7 @@ function render(){
   desenhaTela("estTransicao",renderTransicao);
   desenhaTela("estInstalado",renderPecaInstalada);
   desenhaTela("estAguardando",renderPecasAguardando);
+  desenhaTela("estContagem",renderContagemEstoque);
     desenhaTela("estConsumo",renderEstConsumo);desenhaTela("estEntrada",renderEntradas);
     opcoesFinanceiro();checarAgenda();
   }catch(e){console.warn("render",e);}
@@ -65172,6 +65824,7 @@ function ir(s,doMenu){
   if(s==="estTransicao")try{abrirTransicao();}catch(eTr){console.warn("transição",eTr);}
   if(s==="estInstalado")try{renderPecaInstalada();}catch(ePi){console.warn("peça instalada",ePi);}
   if(s==="estAguardando")try{ligarFiltrosPecas();renderPecasAguardando();}catch(ePa){console.warn("peças aguardando",ePa);}
+  if(s==="estContagem")try{ligarAbasContagem();renderContagemEstoque();}catch(eCt){console.warn("contagem do estoque",eCt);}
   if(s==="estAfazer")try{if(mudou||doMenu)resetarAfazer();if((mudou||doMenu)&&$("afQuem")){var afq=$("afQuem"),euA=estPadraoAdmin()?euNoEstoque():"";
       if(euA&&![].some.call(afq.options,function(o){return o.value===euA;})){var oA=document.createElement("option");oA.value=euA;oA.textContent=euA;afq.appendChild(oA);}
       afq.value=euA;}renderEstAfazer();}catch(e){console.warn(e);}
