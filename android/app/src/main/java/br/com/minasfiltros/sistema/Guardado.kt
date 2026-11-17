@@ -15,6 +15,11 @@ object Guardado {
       .putString("chave", o.optString("chave"))
       .putString("token", o.optString("token"))
       .putString("refresh", o.optString("refresh"))
+      /* 17/11 (2.2): a CHAVE DESTE APARELHO para gravar a localizacao. Ela nao vence e nao
+         renova nada — e por isso que a tela apagada deixou de derrubar o rastreio. O sistema
+         entrega a chave ao entrar; vindo vazia (versao antiga do site), a de antes continua. */
+      .putString("chaveRastro", if (o.optString("chaveRastro").isEmpty())
+        (p(ctx).getString("chaveRastro", "") ?: "") else o.optString("chaveRastro"))
       .putString("nome", o.optString("nome"))
       .putString("funcao", o.optString("funcao"))
       .putString("loja", o.optString("loja"))
@@ -35,8 +40,19 @@ object Guardado {
   fun marcarPerguntouAvisos(ctx: Context) { p(ctx).edit().putBoolean("perguntouAvisos", true).apply() }
 
   fun limparSessao(ctx: Context) {
-    p(ctx).edit().remove("token").remove("refresh").remove("nome").apply()
+    p(ctx).edit().remove("token").remove("refresh").remove("nome").remove("chaveRastro").apply()
   }
+
+  /* a chave deste aparelho (2.2). Vazia = aparelho ainda sem chave: vale o caminho antigo. */
+  fun chaveRastro(ctx: Context) = p(ctx).getString("chaveRastro", "") ?: ""
+  fun apagarChaveRastro(ctx: Context) { p(ctx).edit().remove("chaveRastro").apply() }
+
+  /* quantos pontos o banco RECUSOU neste aparelho: o aviso fixo mostra, e o sistema
+     tem a lista com o motivo de cada um. Nada some calado. */
+  fun contarRecusado(ctx: Context, quantos: Int) {
+    p(ctx).edit().putInt("recusados", p(ctx).getInt("recusados", 0) + quantos).apply()
+  }
+  fun recusados(ctx: Context): Int = p(ctx).getInt("recusados", 0)
 
   /* CONTA O QUE FOI ENVIADO HOJE (19/10): e o que o aviso fixo mostra e o que o sistema
      pergunta na tela. Vira o dia, zera. Serve para conferir no celular, sem abrir o banco. */

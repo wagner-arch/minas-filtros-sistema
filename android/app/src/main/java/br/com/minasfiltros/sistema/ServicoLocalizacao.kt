@@ -448,8 +448,10 @@ class ServicoLocalizacao : Service() {
          Agora ele mostra a hora do ultimo ponto e quantos sairam hoje — da para conferir
          no celular, sem abrir nada e sem olhar o banco. */
       Guardado.contarEnvio(ctx, agora)
+      val rec = Guardado.recusados(ctx)
       atualizarAviso("Último registro às " + hora(agora) + " · " +
-        Guardado.enviadosHoje(ctx) + " hoje" + (if (parado) " · parado" else " · em deslocamento"))
+        Guardado.enviadosHoje(ctx) + " hoje" + (if (parado) " · parado" else " · em deslocamento") +
+        (if (rec > 0) " · " + rec + " recusado(s)" else ""))
     }
   }
 

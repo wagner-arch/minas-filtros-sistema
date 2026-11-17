@@ -13,9 +13,50 @@ import java.net.URL
 
 object Banco {
 
-  /* grava um lote de pontos. Devolve true so quando o banco confirmou. */
-  fun gravarPontos(ctx: Context, linhas: JSONArray): Boolean =
-    enviar(ctx, "/rest/v1/rastro_pontos", linhas.toString(), "POST") != null
+  /* grava um lote de pontos. Devolve true so quando o banco confirmou.
+     COM A CHAVE DO APARELHO (2.2): vai pela funcao `rastro_gravar`, que descobre quem e
+     pela chave e grava com o NOME e a EMPRESA do cadastro. Nao usa a sessao, nao renova
+     nada e nao disputa nada com a pagina — a tela apagada deixou de derrubar o rastreio.
+     Sem chave (aparelho ainda nao atualizado no sistema), segue o caminho de sempre. */
+  fun gravarPontos(ctx: Context, linhas: JSONArray): Boolean {
+    val chave = Guardado.chaveRastro(ctx)
+    if (chave.isEmpty()) return enviar(ctx, "/rest/v1/rastro_pontos", linhas.toString(), "POST") != null
+    val corpo = JSONObject().put("p_chave", chave).put("p_pontos", linhas).toString()
+    val r = chamar(ctx, "/rest/v1/rpc/rastro_gravar", corpo, "POST", emptyMap(), "") ?: return false
+    return try {
+      val o = JSONObject(r)
+      if (o.optBoolean("ok", false)) {
+        val rec = o.optInt("recusados", 0)
+        if (rec > 0) Guardado.contarRecusado(ctx, rec)
+        ultimoErro = ""
+        true
+      } else {
+        val erro = o.optString("erro")
+        ultimoErro = "o banco disse: $erro"
+        /* chave morta: o aparelho para de gravar e avisa. O mesmo caminho do celular
+           desconectado a distancia — nada mais e registrado aqui. */
+        if (erro == "chave revogada" || erro == "chave desconhecida" ||
+            erro == "chave vencida" || erro == "cadastro inativo") {
+          Guardado.apagarChaveRastro(ctx)
+          desconectado(ctx)
+        }
+        false
+      }
+    } catch (e: Exception) { ultimoErro = "resposta estranha do banco"; false }
+  }
+
+  /* um ponto so, pelo caminho antigo: e assim que a fila descobre QUAL ponto o banco
+     recusa, em vez de o lote inteiro ficar preso para sempre (defeito de 16/11). */
+  fun gravarUmPonto(ctx: Context, linha: JSONObject): Boolean =
+    enviar(ctx, "/rest/v1/rastro_pontos", JSONArray().put(linha).toString(), "POST") != null
+
+  /* A ultima resposta foi o banco RECUSANDO o conteudo (e nao falta de internet nem
+     acesso vencido)? So isso tira um ponto da fila. O 401 fica de fora de proposito: ele
+     quer dizer "a credencial venceu", e o ponto tem de esperar a credencial nova. */
+  fun recusaDoBanco(): Boolean {
+    if (ultimoErro.startsWith("o banco respondeu 401")) return false
+    return ultimoErro.startsWith("o banco respondeu 4")
+  }
 
   /* abre a parada e devolve o id que o banco deu */
   fun abrirParada(ctx: Context, o: JSONObject): Long? {
@@ -52,7 +93,11 @@ object Banco {
   private fun chamar(ctx: Context, caminho: String, corpo: String?, metodo: String,
                      extras: Map<String, String>, token: String): String? {
     val base = Guardado.url(ctx)
-    if (base.isEmpty() || token.isEmpty()) return null
+    if (base.isEmpty()) return null
+    /* token vazio = chamada SEM sessao (a funcao da chave do aparelho): vale a chave
+       publica do projeto, que e a mesma que todo navegador usa para falar com o banco */
+    val cred = if (token.isEmpty()) Guardado.chave(ctx) else token
+    if (cred.isEmpty()) return null
     var c: HttpURLConnection? = null
     return try {
       c = (URL(base + caminho).openConnection() as HttpURLConnection)
@@ -60,7 +105,7 @@ object Banco {
       c.connectTimeout = 20000
       c.readTimeout = 25000
       c.setRequestProperty("apikey", Guardado.chave(ctx))
-      c.setRequestProperty("Authorization", "Bearer $token")
+      c.setRequestProperty("Authorization", "Bearer $cred")
       c.setRequestProperty("Content-Type", "application/json")
       extras.forEach { (k, v) -> c!!.setRequestProperty(k, v) }
       if (corpo != null) {

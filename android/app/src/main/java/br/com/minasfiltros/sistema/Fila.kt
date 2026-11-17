@@ -29,7 +29,13 @@ object Fila {
     return try { f.readLines().count { it.isNotBlank() } } catch (e: Exception) { 0 }
   }
 
-  /* manda o que esta guardado, de 200 em 200; o que nao passou continua guardado */
+  /* manda o que esta guardado, de 200 em 200; o que nao passou continua guardado.
+     17/11 (2.2) — O DEFEITO QUE CUSTOU METADE DO TRAJETO: bastava UM ponto ruim dentro do
+     lote para o banco recusar o LOTE INTEIRO, e como o que nao passa volta para a fila, o
+     mesmo lote saia e era recusado para sempre, sem nunca esvaziar. Agora, quando a recusa
+     vem do BANCO (e nao da falta de internet), a fila manda um a um: passa o que presta, e
+     o que o banco recusar sozinho e contado e sai da fila — some da frente dos outros, mas
+     nao some calado: o sistema mostra a lista com o motivo. */
   @Synchronized
   fun enviarTudo(ctx: Context) {
     val f = arq(ctx)
@@ -43,7 +49,24 @@ object Fila {
       val arr = JSONArray()
       lote.forEach { l -> try { arr.put(JSONObject(l)) } catch (e: Exception) { } }
       val ok = if (arr.length() == 0) true else Banco.gravarPontos(ctx, arr)
-      if (!ok) sobrou.addAll(lote)
+      if (!ok) {
+        /* COM A CHAVE do aparelho a funcao do banco nunca recusa o lote por causa de um
+           ponto: ela grava o que presta e guarda o resto na lista de recusados, com o
+           motivo. Entao aqui so ha um caminho: o lote espera e sai depois. O um a um e
+           para o caminho ANTIGO, que e onde o lote travava. */
+        if (Guardado.chaveRastro(ctx).isEmpty() && Banco.recusaDoBanco()) {
+          var recusados = 0
+          lote.forEach { l ->
+            val o = try { JSONObject(l) } catch (e: Exception) { null }
+            if (o == null) recusados++                       /* linha estragada: nao volta para a fila */
+            else if (!Banco.gravarUmPonto(ctx, o)) {
+              if (Banco.recusaDoBanco()) recusados++         /* o banco recusou ESTE: sai da fila */
+              else sobrou.add(l)                             /* foi a internet: fica para depois */
+            }
+          }
+          if (recusados > 0) Guardado.contarRecusado(ctx, recusados)
+        } else sobrou.addAll(lote)                           /* sem internet: fica tudo para depois */
+      }
       i += 200
     }
     try {
