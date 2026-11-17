@@ -6569,6 +6569,13 @@ img{max-width:100%}
           <p class="help">Ligado: de segunda a sexta, 3 minutos antes de cada horário da jornada o celular toca um aviso; passado o horário, toca de novo a cada 2 minutos até a pessoa bater o ponto. Vale só para esta empresa.</p>
           <div id="em_lembreteInfo"></div>
         </div>
+        <div class="sect">
+          <p class="sect-t">Substituto do estoquista</p>
+          <div class="fld"><label for="em_subAlmox">Quem substitui o almoxarifado</label>
+            <select id="em_subAlmox"></select></div>
+          <p class="help">Vale para tudo o que o almoxarifado faz nesta empresa: separar e entregar requisição, conferir devolução, lançar e ajustar estoque, contar inventário e ver todos os estoques. Pode ficar vazio. Só o Administrador escolhe.</p>
+          <div id="em_subAlmoxInfo"></div>
+        </div>
       </div>
     </section>
 
@@ -10984,6 +10991,8 @@ async function carregar(){
     try{var gtp=await jaPedido("cfg:trava_ponto",function(){return db.doc("config/trava_ponto").get();});
       if(gtp.exists&&gtp.data())CFG_TRAVA_PONTO={ligado:gtp.data().ligado!==false,historico:gtp.data().historico||[]};}catch(eTp){}
     acertarHoraServidor().then(function(){try{if(usuarioAtual)checarTravaPonto();}catch(eHs){}});
+    try{var gsa=await jaPedido("cfg:substituto_almox",function(){return db.doc("config/substituto_almox").get();});
+      if(gsa&&gsa.exists&&gsa.data())CFG_SUB_ALMOX={nome:gsa.data().nome||"",por:gsa.data().por||"",em:gsa.data().em||""};}catch(eSa){}
     try{var gen=await jaPedido("cfg:estoque_negativo",function(){return db.doc("config/estoque_negativo").get();});
       if(gen.exists&&gen.data())CFG_ESTNEG={permitir:gen.data().permitir!==false,por:gen.data().por||"",em:gen.data().em||""};}catch(eEn){}
     var gpc=await jaPedido("cfg:preco",function(){return db.doc("config/preco").get();});
@@ -23467,6 +23476,32 @@ async function lancarMov(pid,qtd,origem,destino,doc,obs,data,centroId){
    p.estoque (o catálogo importado trazia um número solto, que quebrava toda
    movimentação) vira UM movimento de "Estoque inicial" e deixa de existir. */
 function estEmpresaDe(p){return (p&&p.id)?saldoEm(p.id,LOC_EMPRESA):0;}
+/* ===== O QUE O ALMOXARIFADO TEM PARA ENTREGAR (17/11, regra dele) =====
+   "Não deixar pedir produto que o almoxarifado não tem (disponível = saldo − reservado/separado).
+   Mostrar quanto tem." Prometido = o que já está em requisição aberta (a separar ou separada) e
+   ainda não foi recebido; reservado = o que os pedidos tiram do almoxarifado. A requisição que
+   nasce SOZINHA de uma venda sem saldo continua nascendo: é ela que avisa o almoxarifado do que
+   falta comprar — a trava é para quem PEDE à mão. */
+function prometidoAlmox(excluirId){
+  var o={};
+  (requisicoes||[]).forEach(function(r){
+    if(!r||r.loja!==lojaAtual||r.tipo!=="requisicao")return;
+    if(excluirId&&r.id===excluirId)return;
+    if(r.status!=="pendente"&&r.status!=="separada")return;
+    (r.itens||[]).forEach(function(i){
+      if(!i||i.recebido)return;
+      var q=+(i.atendida!=null?i.atendida:i.qtd)||0;
+      if(q>0)o[i.pid]=(o[i.pid]||0)+q;});
+  });
+  return o;
+}
+function contaDispAlmox(){
+  var res={},pr=prometidoAlmox();
+  try{res=reservasDe(LOC_EMPRESA)||{};}catch(e){res={};}
+  return function(pid){return saldoEm(pid,LOC_EMPRESA)-(res[pid]||0)-(pr[pid]||0);};
+}
+function dispAlmox(pid){return contaDispAlmox()(pid);}
+window.__dispAlmoxMF=function(pid){return dispAlmox(pid);};
 async function migrarEstoqueInicial(){
   var criados=0;
   for(var i=0;i<produtos.length;i++){
@@ -25034,12 +25069,15 @@ function renderEsItens(){
   var b=$("es_itens");b.innerHTML="";
   var org=$("es_origem").value;
   if(!esItens.length)b.innerHTML='<tr><td colspan="4"><div class="empty"><div class="big">Nenhum item</div></div></td></tr>';
+  /* v569: na requisição a coluna mostra o DISPONÍVEL do almoxarifado, não mais um traço */
+  var dispReq=(esModo==="req")?contaDispAlmox():null;
   esItens.forEach(function(i,idx){
-    var disp=(org===LOC_EMPRESA)?estEmpresaDe(produtos.filter(function(p){return p.id===i.pid;})[0]||{}):saldoEm(i.pid,org);
-    var falta=(esModo!=="req")&&(i.qtd>disp)&&(org!=="fornecedor"&&org!=="ajuste");
+    var disp=(esModo==="req")?dispReq(i.pid)
+      :((org===LOC_EMPRESA)?estEmpresaDe(produtos.filter(function(p){return p.id===i.pid;})[0]||{}):saldoEm(i.pid,org));
+    var falta=(i.qtd>disp)&&(esModo==="req"||(org!=="fornecedor"&&org!=="ajuste"));
     b.innerHTML+="<tr><td>"+esc(i.nome)+'</td><td class="num">'+i.qtd+"</td>"+
-      '<td class="num">'+(esModo==="req"?"—":
-        '<span class="pill '+(falta?"p-crit":"p-ok")+'">'+disp+"</span>")+"</td>"+
+      '<td class="num">'+
+        '<span class="pill '+(falta?"p-crit":"p-ok")+'">'+disp+"</span>"+"</td>"+
       '<td class="num"><button class="btn mut sm" type="button" data-esrm="'+idx+'">Remover</button></td></tr>';
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-esrm]"),function(bt){
@@ -25052,6 +25090,14 @@ async function confirmarEstoque__corpo(){
   var data=$("es_data").value||hojeISO(),obs=$("es_obs").value.trim();
   if(esModo==="dev"&&!$("es_motivoDev").value){
     $("es_alerta").innerHTML='<div class="note crit"><b>Escolha o motivo da devolução:</b> Sobra ou Com defeito / quebrado.</div>';return;}
+  /* v569: a trava do disponível vale POR DENTRO, não só no botão de acrescentar */
+  if(esModo==="req"){
+    var dsp2=contaDispAlmox(),faltando=esItens.filter(function(i){return i.qtd>dsp2(i.pid);});
+    if(faltando.length){
+      $("es_alerta").innerHTML='<div class="note crit"><b>O almoxarifado não tem tudo isso para entregar.</b><br>'+
+        faltando.map(function(i){return esc(i.nome)+": pedido "+i.qtd+", disponível "+Math.max(0,dsp2(i.pid));}).join("<br>")+
+        "<br>Acerte as quantidades ou avise o Administrador para comprar.</div>";return;}
+  }
   if(esModo==="req"||esModo==="dev"){
     var lcl=esLocal||locColab(esColab||usuarioAtual);
     var r={id:uid(),loja:lojaAtual,tipo:(esModo==="req"?"requisicao":"devolucao"),
@@ -38696,11 +38742,46 @@ function checarTravaPonto(){
 setInterval(function(){try{if(usuarioAtual)checarTravaPonto();}catch(e){}},20000);
 setInterval(function(){acertarHoraServidor();},600000);
 function ligarChaveLembrete(){var c=$("em_lembretePonto");if(c&&!c.__ligado){c.__ligado=true;c.onchange=function(){mudarLembretePonto(c.checked);};}}
+/* ===== SUBSTITUTO DO ESTOQUISTA: a escolha do Administrador, em Dados da Empresa (17/11) ===== */
+function renderSubAlmoxCfg(){
+  var s=$("em_subAlmox");if(!s)return;
+  var atual=substitutoAlmox();
+  var nomes=USUARIOS.filter(function(u){return u.ativo&&(!u.loja||u.loja===lojaAtual||u.loja==="ambas");})
+    .map(function(u){return u.nome;}).sort(ordAZ);
+  if(atual&&nomes.indexOf(atual)<0)nomes.unshift(atual);
+  s.innerHTML='<option value="">— ninguém —</option>'+
+    nomes.map(function(n){return '<option value="'+esc(n)+'">'+esc(n)+"</option>";}).join("");
+  s.value=atual;
+  s.disabled=!ehAdministrador();
+  if(!s.__ligado){s.__ligado=true;s.onchange=function(){mudarSubstitutoAlmox(s.value);};}
+  var i=$("em_subAlmoxInfo");
+  if(i)i.innerHTML=atual
+    ? '<div class="t-sub"><b>'+esc(atual)+"</b> substitui o almoxarifado em "+esc(nomeLoja())+
+      (CFG_SUB_ALMOX.por?" · escolhido por "+esc(CFG_SUB_ALMOX.por)+(CFG_SUB_ALMOX.em?" em "+esc(dataBR(CFG_SUB_ALMOX.em)):""):"")+"</div>"
+    : '<div class="t-sub">Ninguém escolhido: só quem tem a função Almoxarifado faz o trabalho dele.</div>';
+}
+async function mudarSubstitutoAlmox(nome){
+  if(!ehAdministrador()){toast("Só o Administrador escolhe o substituto do estoquista.");renderSubAlmoxCfg();return false;}
+  var antes=JSON.parse(JSON.stringify(CFG_SUB_ALMOX));
+  if((nome||"")===(antes.nome||""))return false;
+  if(!confirm(nome
+    ? "Deixar "+nome+" como substituto do estoquista em "+nomeLoja()+"?\n\nEle passa a poder fazer tudo o que o almoxarifado faz nesta empresa."
+    : "Tirar o substituto do estoquista de "+nomeLoja()+"?")){renderSubAlmoxCfg();return false;}
+  CFG_SUB_ALMOX={nome:nome||"",por:usuarioAtual,em:hojeISO()};
+  try{if(db)await db.doc("config/substituto_almox").set(CFG_SUB_ALMOX);}
+  catch(e){CFG_SUB_ALMOX=antes;renderSubAlmoxCfg();toast("Não foi salvo. Confira a internet e tente de novo.");return false;}
+  renderSubAlmoxCfg();
+  try{aplicarPerfil();}catch(eM){}
+  toast(nome?nome+" é o substituto do estoquista em "+nomeLoja()+".":"Substituto do estoquista retirado.");
+  return true;
+}
+window.__mudarSubAlmoxMF=function(n){return mudarSubstitutoAlmox(n);};
 function renderTravaPontoCfg(){
   try{ligarChaveLembrete();}catch(eLk){}
   var c=$("em_travaCard");if(!c)return;
   var adm=ehAdministrador();c.hidden=!adm;if(!adm)return;
   try{renderLembretePontoCfg();}catch(eLc){}
+  try{renderSubAlmoxCfg();}catch(eSa){}
   $("em_travaPonto").checked=travaPontoLigada();
   var h=(CFG_TRAVA_PONTO.historico||[]).slice(-5).reverse();
   $("em_travaInfo").innerHTML='<div class="t-sub">Vale a partir de '+dataBR(TRAVA_PONTO_INICIO)+", de segunda a sexta.</div>"+
@@ -58744,6 +58825,8 @@ function veTela(s,quem){
   if(s==="estTransicao")return perfilDe(n)==="Administrador";
   /* v567: a lista da peça instalada sem venda aprovada também é só do Administrador */
   if(s==="estInstalado")return perfilDe(n)==="Administrador";
+  /* v569: o substituto do estoquista enxerga as mesmas telas do almoxarifado */
+  if(ehSubstitutoAlmox(n)&&TELAS_ALMOX.indexOf(s)>=0)return true;
   /* ESTOQUES (04/11): as telas novas usam as permissões que já existem — a visão leve é a
      tela Estoque Colaborador, a completa é a Estoque Empresa (nenhuma permissão gravada muda) */
   if(s==="estAfazer"||s==="estSaldo"||s==="estHist")return veTela("estColab",n)||veTela("estEmpresa",n);
@@ -59008,7 +59091,16 @@ function ehGestor(){
    vê os relatórios de estoque. NÃO dá "ver tudo": vendas, financeiro e configurações seguem
    pela marcação de cada tela. A conta é por AÇÃO, então dá para dar ou tirar na tela de
    Permissões, por função ou por usuário. */
-function ehAlmox(quem){return podeAcao("almoxarifado",quem);}
+/* ===== SUBSTITUTO DO ESTOQUISTA (17/11, regra dele) =====
+   "O Administrador escolhe nas configurações (pode ficar vazio). Vale para tudo que o estoquista
+   faz." Por isso ele entra no ÚNICO ponto por onde essa conta passa (ehAlmox) e nas telas do
+   almoxarifado, em vez de ser repetido em cada botão. É por empresa (config/substituto_almox) e
+   fica fora de Permissões, como as outras regras fixas. */
+var CFG_SUB_ALMOX={nome:"",por:"",em:""};
+function substitutoAlmox(){return (CFG_SUB_ALMOX&&CFG_SUB_ALMOX.nome)||"";}
+function ehSubstitutoAlmox(quem){var n=quem||usuarioAtual;return !!n&&n===substitutoAlmox();}
+window.__subAlmoxMF=function(){return substitutoAlmox();};
+function ehAlmox(quem){return podeAcao("almoxarifado",quem)||ehSubstitutoAlmox(quem);}
 /* mover, transferir e ajustar estoque */
 function podeMoverEstoque(quem){return pode("moverEstoque",quem)||ehAlmox(quem)||ehGestor();}
 /* quem não é da gestão só VÊ o que é dele (v200, soMeus); aqui é quem pode ALTERAR */
@@ -64948,6 +65040,18 @@ function ligar(){
     var p=prodPorId($("es_prod").value);if(!p){toast("Escolha o produto.");return;}
     var q=qtdInformada("es_qtd");if(!q)return;
     var ja=esItens.filter(function(i){return i.pid===p.id;})[0];
+    /* v569: não dá para pedir o que o almoxarifado não tem para entregar */
+    if(esModo==="req"){
+      var dsp=dispAlmox(p.id),pede=(ja?ja.qtd:0)+q;
+      if(dsp<=0){
+        $("es_alerta").innerHTML='<div class="note crit"><b>O almoxarifado não tem '+esc(codNomeItem({cod:p.cod,nome:p.nome}))+
+          " para entregar.</b> O disponível é <b>0</b> (saldo menos o que já está reservado em venda e o que já foi pedido por outros). "+
+          "Avise o Administrador para comprar.</div>";return;}
+      if(pede>dsp){
+        $("es_alerta").innerHTML='<div class="note crit"><b>O almoxarifado tem '+dsp+" disponível de "+
+          esc(codNomeItem({cod:p.cod,nome:p.nome}))+".</b> Peça no máximo essa quantidade.</div>";return;}
+      $("es_alerta").innerHTML="";
+    }
     if(ja)ja.qtd+=q;else esItens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:q});
     renderEsItens();limparInclusao("es_prod","es_qtd");};
   $("es_origem").onchange=renderEsItens;
