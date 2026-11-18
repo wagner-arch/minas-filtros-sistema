@@ -5135,6 +5135,18 @@ img{max-width:100%}
         <p class="help" style="margin:0 0 12px">Desconto a autorizar e instalação a fazer. Quando a etapa termina, a venda sobe para a fila de aprovação.</p>
         <div id="finAntes"></div>
       </div>
+      <!-- v577: vendas aprovadas sem o número da nota fiscal (Financeiro e Administrador) -->
+      <div class="card" style="margin-top:20px" id="finSemNFCard" hidden>
+        <h2 style="margin:0 0 4px">Vendas aprovadas sem nota fiscal</h2>
+        <p class="help" style="margin:0 0 12px">A nota é emitida depois da aprovação. Digite o número aqui mesmo e toque em Salvar — cada alteração fica no histórico do pedido.</p>
+        <div class="toolbar" style="padding:0 0 12px">
+          <div class="fld" style="margin:0"><label for="snf_de">De</label><input id="snf_de" type="date"></div>
+          <div class="fld" style="margin:0"><label for="snf_ate">Até</label><input id="snf_ate" type="date"></div>
+          <input id="snf_busca" placeholder="Buscar por pedido, cliente ou vendedor" style="max-width:280px" autocomplete="off">
+          <span class="sp"></span><span class="count" id="snf_count"></span>
+        </div>
+        <div id="finSemNF"></div>
+      </div>
       <div class="card" style="margin-top:20px">
         <h2 style="margin:0 0 12px">Aprovadas nos últimos 30 dias</h2>
         <div id="finFeitas"></div>
@@ -5314,7 +5326,7 @@ img{max-width:100%}
           <button class="btn ghost" type="button" id="cmTransf">Transferir entre caixas</button>
         </div>
         <div class="tw"><table>
-          <thead><tr><th>Data</th><th>Caixa</th><th>Descrição</th><th>Centro de custo</th><th class="num">Entrada</th><th class="num">Saída</th><th class="num">Saldo</th></tr></thead>
+          <thead><tr><th>Data</th><th>Caixa</th><th>Nota fiscal</th><th>Descrição</th><th>Centro de custo</th><th class="num">Entrada</th><th class="num">Saída</th><th class="num">Saldo</th></tr></thead>
           <tbody id="cmBody"></tbody>
         </table></div>
       </div>
@@ -5706,6 +5718,7 @@ img{max-width:100%}
         </div>
         <div class="kpis" id="nf_kpis"></div>
         <div id="nf_alerta"></div>
+        <div class="note warn" id="nf_avisoConsumo" hidden><b>Nota de uso e consumo — só despesa.</b> Os itens ficam exatamente como estão na nota (descrição, quantidade, unidade e valor): não precisam ser produtos cadastrados e não se ligam a nenhum produto. Esta nota <b>não vai para a conferência do almoxarifado</b> e <b>não mexe em nenhum estoque</b>. Você escolhe o centro de custo e o pagamento, e as parcelas vão para o Contas a Pagar.</div>
         <div class="note" id="nf_fluxoNota"><b>Próximo passo: o destino e o pagamento.</b> Você escolhe o destino de cada item (Revenda, Uso e consumo ou Só despesa), o centro de custo e o pagamento; as parcelas vão para Contas a Pagar.
         Itens de Revenda e de Uso e consumo vão para a <b>conferência do almoxarifado</b>, que sobe o estoque; nota só de despesa fecha direto.</div>
         <div class="actions">
@@ -5771,9 +5784,13 @@ img{max-width:100%}
             <option value="aguardando">Aguardando conferência</option><option value="falta">Falta receber</option><option value="divergencia">Divergência</option>
             <option value="fechada">Fechadas</option><option value="cancelada">Canceladas</option></select>
           <span class="count" id="nfCount"></span><span class="sp"></span>
+          <button class="btn ghost" type="button" id="nfLigacoesBt">Ligacoes fornecedor &rarr; produto</button>
+          <button class="btn ghost" type="button" id="nfConsumo">Nota de uso e consumo</button>
           <button class="btn ghost" type="button" id="nfSemNota">Entrada sem nota</button>
           <button class="btn" type="button" id="nfNovo">Nova entrada</button>
         </div>
+        <!-- v577: as ligacoes fornecedor -> produto guardadas, com desfazer -->
+        <div id="nfLigacoes" hidden style="padding:0 18px 18px"></div>
         <div class="tw"><table>
           <thead><tr id="nfHead"><th>Nota</th><th>Fornecedor</th><th>Emissão</th><th class="num">Itens</th><th class="num">Valor</th><th>Situação</th><th class="nf-ac-th">Ações</th></tr></thead>
           <tbody id="nfBody"></tbody>
@@ -10890,6 +10907,7 @@ async function carregar(){
   try{migrarVerCustos(funcoes);}catch(e){console.warn(e);}
   try{migrarPlanosInf(funcoes);}catch(e){console.warn(e);}
   try{migrarAlterarProspector(funcoes);}catch(e){console.warn(e);}
+  try{migrarExportarFin(funcoes);}catch(e){console.warn(e);}
   normalizarNomeAlmox();
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
@@ -11061,6 +11079,9 @@ async function carregar(){
     acertarHoraServidor().then(function(){try{if(usuarioAtual)checarTravaPonto();}catch(eHs){}});
     try{var gsa=await jaPedido("cfg:substituto_almox",function(){return db.doc("config/substituto_almox").get();});
       if(gsa&&gsa.exists&&gsa.data())CFG_SUB_ALMOX={nome:gsa.data().nome||"",por:gsa.data().por||"",em:gsa.data().em||""};}catch(eSa){}
+    /* v577: o último caixa usado para PIX nesta empresa, só como sugestão na aprovação */
+    try{var gcp=await jaPedido("cfg:caixa_pix",function(){return db.doc("config/caixa_pix").get();});
+      if(gcp&&gcp.exists&&gcp.data())CFG_CAIXA_PIX=gcp.data().caixaId||"";}catch(eCp){}
     /* v574: a contagem do estoque (rodízio, recontagem diária e a véspera), por empresa */
     try{var gct=await jaPedido("cfg:contagem_estoque",function(){return db.doc("config/contagem_estoque").get();});
       if(gct&&gct.exists&&gct.data()){var dct=gct.data();
@@ -11157,6 +11178,7 @@ async function carregar(){
     try{custoMigradas=migrarVerCustos(funcoes);}catch(eCu){console.warn("custo interno",eCu);}
     try{planoInfMigradas=migrarPlanosInf(funcoes);}catch(ePi){console.warn("planos informados",ePi);}
     try{prospMigradas=migrarAlterarProspector(funcoes);}catch(ePs){console.warn("alterar prospector",ePs);}
+    try{expFinMigradas=migrarExportarFin(funcoes);}catch(eEf){console.warn("exportar do financeiro",eEf);}
     normalizarNomeAlmox();
     await migrarTelasNovas();
     try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
@@ -13619,7 +13641,7 @@ window.__faltaEstMF=function(p,q,l){return faltaEstoqueVenda(p,q,l);};
 window.__esItensMF=function(l){if(l){esItens=l;try{renderEsItens();}catch(e){}}return esItens;};
 window.__confirmarRepMF=function(r,idx){repPend={r:r,idx:idx};return confirmarReposicaoItens();};
 window.__itensDeEstoqueMF=function(p){return itensDeEstoque(p);};
-window.__aprovarVendaMF=function(p,cx,pg){return aprovarVenda(p,cx,pg||sugestaoPagoEm(p));};
+window.__aprovarVendaMF=function(p,cx,pg,cf){return aprovarVenda(p,cx,pg||sugestaoPagoEm(p),cf);};
 window.__pedeCreditoMF=vendaPedeCredito;
 window.__htmlCreditoMF=htmlCreditoVenda;
 window.__etapaVendaMF=function(p){return etapaVenda(p);};
@@ -25052,6 +25074,10 @@ async function cancelarPedido__corpo(p,motivo){
     p.status="Cancelada";p.encerrada=false;p.reabertura=null;
     p.canceladaPor=usuarioAtual;p.canceladaEm=hojeISO();p.motivoCancelamento=motivo.trim();
     await gravarPedido(p);
+    /* v577: o PIX e o dinheiro que entraram no caixa na aprovação são ESTORNADOS (nada se apaga) */
+    var nEst=0;
+    try{nEst=await estornarRecebimentoAprovacao(p,"pedido "+p.numero+" cancelado: "+motivo.trim());}
+    catch(eEs){console.warn("estorno do recebimento",eEs);}
     var abertos=titulos.filter(function(t){return t.pedidoId===p.id&&t.status==="aberto";});
     for(var i=0;i<abertos.length;i++){abertos[i].status="cancelado";await grava("titulos",abertos[i]);}
     /* estorno: só o que de fato saiu (líquido de estornos anteriores) volta para onde saiu.
@@ -25102,6 +25128,7 @@ async function cancelarPedido__corpo(p,motivo){
     }catch(eFc){console.warn("frete da loja no cancelamento",eFc);}
     registrarEvento(p,"Cancelada: "+motivo.trim());await gravarPedido(p);
     toast("Pedido "+p.numero+" cancelado · "+abertos.length+" título(s) cancelado(s)"+
+      (nEst?" · "+nEst+" recebimento(s) estornado(s) no caixa":"")+
       (devolvidas?" · "+devolvidas+" unidade(s) de volta ao estoque":" · reserva de estoque liberada")+
       (reps.length?(" · "+reps.length+" requisição(ões) cancelada(s)"):"")+
       (nDevol?(" · "+nDevol+" devolução(ões) ao almoxarifado criada(s) da reposição já aceita"):"")+
@@ -32042,7 +32069,10 @@ function linhaTitulo(t,especie){
     ? "<td>"+esc(t.pessoa||"—")+"</td><td>"+esc(descricaoTitulo(t)||"—")+
       /* antecipada: um crédito só, líquido, no dia da venda (regra do Wagner, 18/09) */
       (t.antecipada?'<div class="t-sub"><span class="pill p-acc">antecipado</span> cai '+BRL(liquidoEsperado(t))+
-        " em "+esc((caixas.filter(function(z){return z.id===t.caixaId;})[0]||{}).nome||"conta não informada")+"</div>":"")+"</td>"+
+        " em "+esc((caixas.filter(function(z){return z.id===t.caixaId;})[0]||{}).nome||"conta não informada")+"</div>":"")+
+      /* v577: a nota fiscal da venda aparece na parcela */
+      (t.pedidoId?'<div class="t-sub">nota fiscal '+esc(nfDoTitulo(t)||"— ainda sem número")+"</div>":"")+
+      (t.recebidoNaAprovacao?' <span class="pill p-ok">recebido na aprovação</span>':"")+"</td>"+
       "<td>"+(t.antecipada?(t.totalParcelas>1?t.totalParcelas+"× no cartão":"única"):(t.totalParcelas>1?(t.parcela+"/"+t.totalParcelas):"única"))+"</td>"
     : "<td>"+esc(t.pessoa||"—")+"</td><td>"+esc(descricaoTitulo(t)||"—")+
       (t.totalParcelas>1&&t.origem!=="nota"?' <span class="pill p-mut">'+t.parcela+"/"+t.totalParcelas+"</span>":"")+
@@ -32856,13 +32886,17 @@ function renderCaixasMov(){
       BRL(ativos.reduce(function(a,c){return a+saldoCaixa(c.id);},0))+"</div></div>";
   $("cmCount").textContent=lista.length+(lista.length===1?" lançamento":" lançamentos");
   var b=$("cmBody");b.innerHTML="";
-  if(!lista.length){b.innerHTML='<tr><td colspan="7"><div class="empty"><div class="big">Sem movimento</div>Baixas de títulos e lançamentos manuais aparecem aqui.</div></td></tr>';return;}
+  if(!lista.length){b.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Sem movimento</div>Baixas de títulos e lançamentos manuais aparecem aqui.</div></td></tr>';return;}
   var acc=cx?( (caixaPor(cx)||{}).saldo||0 ):ativos.reduce(function(a,c){return a+(+c.saldo||0);},0);
   if(de)acc=cx?saldoCaixa(cx,somaDias(de,-1)):ativos.reduce(function(a,c){return a+saldoCaixa(c.id,somaDias(de,-1));},0);
   lista.forEach(function(m){
     var ent=(m.tipo==="entrada");
     acc+=(ent?1:-1)*(+m.valor||0);
+    /* v577: a coluna da nota fiscal — o número quando o lançamento nasceu de uma venda */
+    var titM=m.tituloId?tituloPorId(m.tituloId):null;
+    var nfM=(m.pedidoId||(titM&&titM.pedidoId))?(nfDoTitulo(titM||m)||"—"):"—";
     b.innerHTML+="<tr><td>"+esc(dataBR(m.data))+"</td><td>"+esc((caixaPor(m.caixaId)||{}).nome||"—")+"</td>"+
+      "<td>"+esc(nfM)+"</td>"+
       "<td>"+esc(m.descricao||"—")+"</td><td>"+esc(nomeCentrosLanc(m))+"</td>"+
       '<td class="num">'+(ent?'<span style="color:var(--ok)">'+BRL(m.valor)+"</span>":"—")+"</td>"+
       '<td class="num">'+(!ent?'<span style="color:var(--crit)">'+BRL(m.valor)+"</span>":"—")+"</td>"+
@@ -34541,7 +34575,8 @@ function linhasFechamento(P){
     if(vmin!=null&&v<vmin)return;
     if(vmax!=null&&v>vmax)return;
     var tit=m.tituloId?titulos.filter(function(t){return t.id===m.tituloId;})[0]:null;
-    var doc=m.doc||(tit&&tit.docRef)||"";
+    /* v577: lançamento nascido de pedido mostra a NOTA FISCAL, nunca o número do pedido */
+    var doc=(m.pedidoId||(tit&&tit.pedidoId))?(nfDoTitulo(tit||m)||"—"):(m.doc||(tit&&tit.docRef)||"");
     var desc=m.descricao||"";
     if(busca&&semAcento(desc+" "+doc+" "+(tit?tit.pessoa||"":"")).indexOf(busca)<0)return;
     out.push({m:m,conta:cx[ic-1].codigo||String(ic).padStart(3,"0"),contaNome:cx[ic-1].nome||"",data:m.data,hora:horaMov(m),doc:doc,desc:desc,
@@ -34605,7 +34640,7 @@ function relFechamento(P){
   }else{
     /* colunas com a mesma largura em todas as contas, como no modelo */
     var cab='<colgroup><col style="width:7%"><col style="width:11%"><col style="width:8%"><col style="width:13%"><col><col style="width:14%"></colgroup>'+
-      '<thead><tr><th>Conta</th><th>Data</th><th>Hora</th><th>Documento</th><th>Descrição</th><th class="n">Valor</th></tr></thead>';
+      '<thead><tr><th>Conta</th><th>Data</th><th>Hora</th><th>Nota fiscal</th><th>Descrição</th><th class="n">Valor</th></tr></thead>';
     E.forEach(function(N){
       h+='<div class="rel-nivel"><span class="rel-cod">'+N.cod+"</span>- "+esc(N.nome)+"</div>";
       N.grupos.forEach(function(G){
@@ -34636,7 +34671,7 @@ function relFechamento(P){
     }
   }
   h+=rodapeRel(L.linhas.length);
-  var csv=[["Código","Centro de custo","Conta","Caixa","Data","Hora","Documento","Descrição","Valor","C/D"]];
+  var csv=[["Código","Centro de custo","Conta","Caixa","Data","Hora","Nota fiscal","Descrição","Valor","C/D"]];
   E.forEach(function(N){N.grupos.forEach(function(G){G.lista.forEach(function(K){K.linhas.forEach(function(l){
     csv.push([K.cod,(G.nome===K.nome?K.nome:G.nome+" › "+K.nome),l.conta,l.contaNome,dataCurta(l.data),l.hora,l.doc,l.desc,numRel(l.valor),l.cd]);});});});});
   return {cab:cabRel,html:h,csv:csv,nome:"Fechamento_"+P.de+"_a_"+P.ate};
@@ -34843,13 +34878,13 @@ function relVendas(P){
   }else{
     var cols='<colgroup><col style="width:6%"><col style="width:8%"><col style="width:14%"><col style="width:8%"><col style="width:9%"><col style="width:16%">'+
       '<col style="width:14%"><col style="width:8%"><col style="width:8%"><col style="width:9%"></colgroup>';
-    var cab='<thead><tr><th>Pedido</th><th>Data</th><th>Cliente</th><th>Cidade</th><th>Vendedor</th><th>Produtos</th><th>Pagamento</th><th class="n">'+
+    var cab='<thead><tr><th>Nota fiscal</th><th>Data</th><th>Cliente</th><th>Cidade</th><th>Vendedor</th><th>Produtos</th><th>Pagamento</th><th class="n">'+
       (agrupa==="forma"||eProd?"Valor":"Total")+'</th><th class="n">Depreciado</th><th>Situação</th></tr></thead>';
     (agrupa?ordemG:[""]).forEach(function(g){
       var xs=agrupa?grupos[g]:partes;
       if(agrupa)h+='<div class="rel-grupo">'+esc(g)+"</div>";
       h+='<table class="rel-tab fixa larga">'+cols+cab+"<tbody>"+xs.map(function(x){var l=x.l;
-        return "<tr><td>"+l.num+"</td><td>"+esc(dataCurta(l.data))+'</td><td class="d">'+esc(l.cliente)+'</td><td class="d">'+esc(l.cidade)+'</td><td class="d">'+esc(l.vend)+
+        return "<tr><td>"+esc(nfDoPedido(l.p)||"—")+"</td><td>"+esc(dataCurta(l.data))+'</td><td class="d">'+esc(l.cliente)+'</td><td class="d">'+esc(l.cidade)+'</td><td class="d">'+esc(l.vend)+
           '</td><td class="d">'+esc(x.it?(x.qtd+"× "+x.it.nome):l.itens)+'</td><td class="d">'+esc(l.formas)+'</td><td class="n">'+numRel(x.v)+'</td><td class="n">'+numRel(x.dep)+'</td><td class="d">'+esc(l.sit)+"</td></tr>";}).join("")+
         "</tbody></table>";
       if(agrupa)h+=totRel([{n:"Total do grupo:",v:somaV(xs)},{n:"Depreciado:",v:xs.reduce(function(a,x){return a+x.dep;},0)}],"grupo");
@@ -34859,8 +34894,8 @@ function relVendas(P){
       {n:"Ticket médio:",v:totV/(L.length||1),s:1}],"geral");
   }
   h+=rodapeRel(L.length,L.length===1?"venda":"vendas");
-  var csv=[["Pedido","Data","Cliente","Cidade","Origem","Prospector","Vendedor","Instalador","Produtos","Pagamento","Total","Depreciado","Situação"]];
-  L.forEach(function(l){var p=l.p;csv.push([l.num,dataCurta(l.data),l.cliente,l.cidade,l.origem,p.prospector||"",l.vend,p.instalador||p.vendedor||"",l.itens,l.formas,numRel(l.total),numRel(l.dep),l.sit]);});
+  var csv=[["Nota fiscal","Data","Cliente","Cidade","Origem","Prospector","Vendedor","Instalador","Produtos","Pagamento","Total","Depreciado","Situação"]];
+  L.forEach(function(l){var p=l.p;csv.push([nfDoPedido(p)||"—",dataCurta(l.data),l.cliente,l.cidade,l.origem,p.prospector||"",l.vend,p.instalador||p.vendedor||"",l.itens,l.formas,numRel(l.total),numRel(l.dep),l.sit]);});
   return {cab:cabRel,html:h,csv:csv,nome:"Vendas_"+P.de+"_a_"+P.ate};
 }
 
@@ -34930,14 +34965,14 @@ function relTitulos(esp,P){
   }else{
     var cols='<colgroup><col style="width:9%"><col style="width:8%"><col style="width:13%"><col style="width:13%"><col style="width:8%"><col style="width:7%">'+
       '<col style="width:12%"><col style="width:8%"><col style="width:8%"><col style="width:7%"><col style="width:7%"></colgroup>';
-    var cab="<thead><tr><th>Vencimento</th><th>Emissão</th><th>"+rotP+'</th><th>Descrição</th><th>Documento</th><th>Parcela</th><th>Centro de custo</th><th class="n">Valor</th><th>'+
+    var cab="<thead><tr><th>Vencimento</th><th>Emissão</th><th>"+rotP+'</th><th>Descrição</th><th>'+(rec?"Nota fiscal":"Documento")+'</th><th>Parcela</th><th>Centro de custo</th><th class="n">Valor</th><th>'+
       rotPago+' em</th><th class="n">Valor '+rotPago.toLowerCase()+"</th><th>Situação</th></tr></thead>";
     (agrupa?ordemG:[""]).forEach(function(g){
       var xs=agrupa?grupos[g]:ls;
       if(agrupa)h+='<div class="rel-grupo">'+esc(g)+"</div>";
       h+='<table class="rel-tab fixa larga">'+cols+cab+"<tbody>"+xs.map(function(t){var c=centroPor(t.centroId);
         return "<tr><td>"+esc(dataCurta(t.vencimento))+"</td><td>"+esc(dataCurta(t.emissao||""))+'</td><td class="d">'+esc(t.pessoa||"—")+'</td><td class="d">'+esc(t.origem==="nota"?descricaoTitulo(t):(t.nomePadrao||t.descricao||""))+
-          '</td><td class="d">'+esc(t.docRef||"")+"</td><td>"+(t.totalParcelas>1?t.parcela+"/"+t.totalParcelas:"única")+'</td><td class="d">'+esc(c?nomeCentro(c):"—")+
+          '</td><td class="d">'+esc(rec?colunaNF(t):(t.docRef||""))+"</td><td>"+(t.totalParcelas>1?t.parcela+"/"+t.totalParcelas:"única")+'</td><td class="d">'+esc(c?nomeCentro(c):"—")+
           '</td><td class="n">'+numRel(t.valor)+"</td><td>"+esc(t.pagoEm?dataCurta(t.pagoEm):"")+'</td><td class="n">'+(t.status==="pago"?numRel(t.valorPago||t.valor):"")+
           '</td><td class="d">'+esc(sitTitulo(t).n)+"</td></tr>";}).join("")+"</tbody></table>";
       if(agrupa){var s=somas(xs);h+=totRel([{n:"Total do grupo:",v:s.total},{n:rotPago+":",v:s.pago},{n:"Em aberto:",v:s.aberto,s:1}],"grupo");}
@@ -34946,9 +34981,9 @@ function relTitulos(esp,P){
       {n:"Saldo a "+(rec?"receber":"pagar")+":",v:tot.aberto,s:1}],"geral");
   }
   h+=rodapeRel(ls.length,ls.length===1?"título":"títulos");
-  var csv=[["Vencimento","Emissão",rotP,"Descrição","Documento","Parcela","Centro de custo","Origem","Valor",rotPago+" em","Valor "+rotPago.toLowerCase(),"Caixa","Situação"]];
+  var csv=[["Vencimento","Emissão",rotP,"Descrição",(rec?"Nota fiscal":"Documento"),"Parcela","Centro de custo","Origem","Valor",rotPago+" em","Valor "+rotPago.toLowerCase(),"Caixa","Situação"]];
   ls.forEach(function(t){var c=centroPor(t.centroId),cx=caixaPor(t.caixaId);
-    csv.push([dataCurta(t.vencimento),dataCurta(t.emissao||""),t.pessoa||"",t.origem==="nota"?descricaoTitulo(t):(t.nomePadrao||t.descricao||""),t.docRef||"",(t.totalParcelas>1?t.parcela+"/"+t.totalParcelas:"única"),
+    csv.push([dataCurta(t.vencimento),dataCurta(t.emissao||""),t.pessoa||"",t.origem==="nota"?descricaoTitulo(t):(t.nomePadrao||t.descricao||""),(rec?colunaNF(t):(t.docRef||"")),(t.totalParcelas>1?t.parcela+"/"+t.totalParcelas:"única"),
       c?caminhoCentro(c):"",t.origem||"manual",numRel(t.valor),t.pagoEm?dataCurta(t.pagoEm):"",t.status==="pago"?numRel(t.valorPago||t.valor):"",cx?cx.nome:"",sitTitulo(t).n]);});
   return {cab:cabRel,html:h,csv:csv,nome:(rec?"Contas_a_Receber_":"Contas_a_Pagar_")+P.de+"_a_"+P.ate};
 }
@@ -35263,22 +35298,34 @@ function renderFaturamento(){
 /* ---------- ENTRADA DE NOTA FISCAL ---------- */
 var nfItens=[];
 var nfSemNota=false,nfFormaXml="",nfSnFoto=null,nfChave="",nfDupOk=false;
+/* v577: "" = nota normal · "semnota" = entrada sem nota · "consumo" = nota de uso e consumo */
+var nfTipoNota="";
 function abrirNota(semNota){
   nfEditando=null;$("nfSalvar").textContent="Continuar: destino e pagamento";
+  nfTipoNota=(semNota===true?"semnota":(semNota==="consumo"?"consumo":""));
   nfSemNota=semNota===true;nfFormaXml="";nfSnFoto=null;
   nfItens=[];nfDups=[];opcoesFinanceiro();
   try{avisoProdZeradoNota();}catch(eAz){}   /* v565 */
   /* v536: entrada sem nota — sem XML, fornecedor opcional, item pode não ter cadastro, motivo e foto obrigatórios */
-  $("nf_impSect").hidden=nfSemNota;$("nf_snBox").hidden=!nfSemNota;$("nf_descFld").hidden=!nfSemNota;
+  /* v577: a nota de uso e consumo importa o XML como a normal e também aceita item escrito à mão */
+  $("nf_impSect").hidden=nfSemNota;$("nf_snBox").hidden=!nfSemNota;
+  $("nf_descFld").hidden=!(nfSemNota||nfTipoNota==="consumo");
   $("nf_snMotivo").value="";$("nf_snFoto").value="";$("nf_snPrev").innerHTML="";$("nf_desc").value="";
   if(nfSemNota){
     var sf=$("nf_forn"),o0=document.createElement("option");o0.value="";o0.textContent="— sem fornecedor —";sf.insertBefore(o0,sf.firstChild);sf.value="";
     var sp=$("nf_prod"),o1=document.createElement("option");o1.value="";o1.textContent="— item sem cadastro (só despesa) —";sp.insertBefore(o1,sp.firstChild);sp.value="";
   }
   $("nfConf").hidden=true;$("nf_import").innerHTML="";$("nf_cola").value="";$("nf_arq").value="";
+  /* v577: nota de uso e consumo — só despesa, item como está na nota, sem produto e sem estoque */
+  if(nfTipoNota==="consumo"){
+    var spc=$("nf_prod"),oc=document.createElement("option");
+    oc.value="";oc.textContent="— item da nota, sem produto do cadastro —";
+    spc.insertBefore(oc,spc.firstChild);spc.value="";
+  }
   $("nfLista").hidden=true;$("nfForm").hidden=false;
-  $("nfTitulo").textContent=nfSemNota?"Entrada sem nota fiscal":"Nova entrada";
-  $("nfSalvar").textContent="Enviar para conferência";
+  $("nfTitulo").textContent=nfTipoNota==="consumo"?"Nota de uso e consumo":(nfSemNota?"Entrada sem nota fiscal":"Nova entrada");
+  $("nfSalvar").textContent=nfTipoNota==="consumo"?"Continuar: centro de custo e pagamento":"Enviar para conferência";
+  if($("nf_avisoConsumo"))$("nf_avisoConsumo").hidden=(nfTipoNota!=="consumo");
   $("nf_num").value="";$("nf_serie").value="";
   $("nf_emissao").value=hojeISO();$("nf_entrada").value=hojeISO();
   $("nf_frete").value=0;$("nf_desp").value=0;$("nf_seguro").value=0;$("nf_descTot").value=0;
@@ -35442,6 +35489,113 @@ function lerXmlNFe(str){
   };
 }
 function soDigitos(s){return String(s||"").replace(/\D/g,"");}
+/* ======== v577 (18/11): O ITEM DA NOTA SÓ SE LIGA SOZINHO QUANDO A LIGAÇÃO É SEGURA ========
+   O ERRO QUE ELE ACHOU: o `cEAN` da NF-e vem muitas vezes como "SEM GTIN" (8 letras). A conta
+   antiga aceitava qualquer `ean` com mais de 7 caracteres e comparava só os DÍGITOS — e
+   soDigitos("SEM GTIN") é vazio, igual ao código de barras vazio de 623 dos nossos produtos.
+   Resultado: todo item sem GTIN casava com o PRIMEIRO produto sem código de barras do cadastro
+   (um purificador inativo), e por isso o refil aparecia como purificador.
+   Também saíram duas regras fracas: "o nosso código igual ao código do fornecedor" e "o nome
+   igual", que ligavam sozinhas. Agora:
+   · liga sozinho SÓ com código de barras de verdade (8 dígitos ou mais, dos dois lados) ou com
+     uma ligação fornecedor+código JÁ CONFIRMADA antes pelo Financeiro (p.ligacoesForn);
+   · fora disso vem uma SUGESTÃO, que o Financeiro confirma ou troca — e a confirmação fica
+     guardada, então na próxima nota do mesmo fornecedor a ligação já é segura;
+   · produto inativo e produto de sistema nunca entram. */
+function prodsLigaveisNF(){
+  return produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&p.ativo!==false&&!p.sistema;});
+}
+function ligacoesFornDe(p){return (p&&p.ligacoesForn)||[];}
+function temLigacaoForn(p,fornId,codForn){
+  if(!codForn)return false;
+  var c=String(codForn).trim().toUpperCase();
+  return ligacoesFornDe(p).some(function(l){
+    return String(l.cod||"").trim().toUpperCase()===c&&String(l.forn||"")===String(fornId||"")&&!l.desfeita;});
+}
+/* parecença de nome, só para SUGERIR: pedaços iguais de 4 letras ou mais */
+function parecencaNome(a,b){
+  var x=semAcento(String(a||"")).toUpperCase().replace(/[^A-Z0-9 ]/g," ").split(/\s+/).filter(function(t){return t.length>=4;});
+  var y=semAcento(String(b||"")).toUpperCase().replace(/[^A-Z0-9 ]/g," ").split(/\s+/).filter(function(t){return t.length>=4;});
+  if(!x.length||!y.length)return 0;
+  var n=0;x.forEach(function(t){if(y.indexOf(t)>=0)n++;});
+  return n/Math.max(x.length,y.length);
+}
+function sugestaoProdutoNF(it){
+  var ls=prodsLigaveisNF(),alvo=String(it&&(it.nome||it.nomeNota)||"");
+  if(!alvo.trim())return null;
+  var ig=ls.filter(function(x){return semAcento(x.nome||"").toUpperCase()===semAcento(alvo).toUpperCase();})[0];
+  if(ig)return ig;
+  var melhor=null,nota=0;
+  ls.forEach(function(x){var v=parecencaNome(alvo,x.nome);if(v>nota){nota=v;melhor=x;}});
+  return nota>=0.6?melhor:null;
+}
+function ligacaoSeguraNF(it,fornId){
+  var ls=prodsLigaveisNF(),d=soDigitos(it&&it.ean);
+  if(d.length>=8){
+    var pb=ls.filter(function(x){return soDigitos(x.barras).length>=8&&soDigitos(x.barras)===d;})[0];
+    if(pb)return {p:pb,sug:null,por:"código de barras"};
+  }
+  if(it&&it.codForn){
+    var pc=ls.filter(function(x){return temLigacaoForn(x,fornId,it.codForn);})[0];
+    if(pc)return {p:pc,sug:null,por:"ligação já confirmada deste fornecedor"};
+  }
+  return {p:null,sug:sugestaoProdutoNF(it),por:""};
+}
+/* a confirmação do Financeiro fica guardada no produto: fornecedor + código do fornecedor */
+async function guardarLigacaoForn(p,fornId,codForn){
+  if(!p||!codForn)return false;
+  var c=String(codForn).trim();
+  if(temLigacaoForn(p,fornId,c))return false;
+  p.ligacoesForn=(p.ligacoesForn||[]).filter(function(l){
+    return !(String(l.cod||"").trim().toUpperCase()===c.toUpperCase()&&String(l.forn||"")===String(fornId||""));});
+  p.ligacoesForn.push({forn:String(fornId||""),cod:c,por:usuarioAtual,quando:agoraCarimbo()});
+  if(p.ligacoesForn.length>60)p.ligacoesForn=p.ligacoesForn.slice(-60);
+  if(!p.codForn)p.codForn=c;
+  try{await grava("produtos",p);}catch(e){console.warn("ligação do fornecedor",e);return false;}
+  return true;
+}
+/* todas as ligações fornecedor → produto, para a tela do Financeiro */
+function todasLigacoesForn(){
+  var out=[];
+  produtos.forEach(function(p){
+    ligacoesFornDe(p).forEach(function(l,k){
+      if(l.desfeita)return;
+      out.push({p:p,l:l,k:k,forn:(fornecPor(l.forn)||{}).nome||"— sem fornecedor —"});});});
+  return out.sort(function(a,b){return String(b.l.quando||"").localeCompare(String(a.l.quando||""));});
+}
+/* a tela das ligações guardadas: o Financeiro vê e desfaz (v577) */
+function renderLigacoesNF(){
+  var c=$("nfLigacoes");if(!c)return;
+  if(!podeGerirNota()){c.innerHTML="";c.hidden=true;return;}
+  var ls=todasLigacoesForn();
+  c.innerHTML='<div class="sect"><p class="sect-t">Ligações fornecedor → produto</p>'+
+    '<p class="help">Quando o Financeiro confirma a qual produto um item da nota pertence, a ligação do <b>código do fornecedor</b> fica guardada: '+
+    'na próxima nota do mesmo fornecedor o item entra ligado sozinho. Desfazendo, o sistema volta a pedir a confirmação.</p>'+
+    (ls.length
+      ? '<div class="tw"><table><thead><tr><th>Fornecedor</th><th>Código do fornecedor</th><th>Produto do cadastro</th><th>Quem confirmou</th><th></th></tr></thead><tbody>'+
+        ls.map(function(x){
+          return "<tr><td>"+esc(x.forn)+"</td><td><b>"+esc(x.l.cod||"")+"</b></td><td>"+esc((x.p.cod?x.p.cod+" · ":"")+x.p.nome)+"</td>"+
+            "<td>"+esc(x.l.por||"—")+(x.l.quando?' <span class="t-sub">'+esc(x.l.quando)+"</span>":"")+"</td>"+
+            '<td><button class="btn mut sm" type="button" data-nflgdes="'+esc(x.p.id)+'" data-nflgk="'+x.k+'">Desfazer</button></td></tr>';
+        }).join("")+"</tbody></table></div>"
+      : '<div class="empty"><div class="big">Nenhuma ligação guardada</div>Elas nascem quando você confirma a qual produto um item da nota pertence.</div>')+
+    "</div>";
+  Array.prototype.forEach.call(c.querySelectorAll("[data-nflgdes]"),function(b){
+    b.onclick=function(){desfazerLigacaoForn(b.getAttribute("data-nflgdes"),+b.getAttribute("data-nflgk"));};});
+}
+function desfazerLigacaoForn(){return travaSalvar("desfazerLigacaoForn",desfazerLigacaoForn__corpo,this,arguments);}
+async function desfazerLigacaoForn__corpo(pid,k){
+  if(!podeGerirNota()){toast("Só o Financeiro ou o Administrador desfazem a ligação.");return false;}
+  var p=prodPorId(pid),l=p&&(p.ligacoesForn||[])[k];
+  if(!p||!l){toast("Esta ligação já não existe.");return false;}
+  if(!confirm("Desfazer a ligação do código "+(l.cod||"")+" ("+((fornecPor(l.forn)||{}).nome||"sem fornecedor")+") com "+p.nome+
+    "? Da próxima vez o sistema vai pedir a confirmação."))return false;
+  l.desfeita={por:usuarioAtual,quando:agoraCarimbo()};
+  try{await gravaConf("produtos",p);}
+  catch(e){delete l.desfeita;toast("A ligação não foi desfeita: "+motivoBanco(e));return false;}
+  toast("Ligação desfeita.");try{renderLigacoesNF();}catch(e2){}
+  return true;
+}
 async function aplicarNFe(nf){
   if(!nf){$("nf_import").innerHTML='<div class="note crit"><b>Não consegui ler este arquivo como NF-e.</b> '+
     "Envie o <b>XML</b> da nota — é ele que carrega os dados. O PDF (DANFE) é só a representação impressa do XML.</div>";return;}
@@ -35467,25 +35621,22 @@ async function aplicarNFe(nf){
   nfPorItem={frete:nf.itens.some(function(x){return x.temFrete;}),seguro:nf.itens.some(function(x){return x.temSeg;}),
     outras:nf.itens.some(function(x){return x.temOutro;}),desconto:nf.itens.some(function(x){return x.temDesc;})};
 
-  /* casa os itens do XML com o cadastro: código de barras, depois código do fornecedor, depois nome */
+  /* v577: o item do XML só se liga sozinho quando a ligação é SEGURA (ver ligacaoSeguraNF).
+     Fora disso vem uma SUGESTÃO, que o Financeiro confirma ou troca no lançamento. */
   nfItens=[];var naoAchados=[];
+  var fornAtual=$("nf_forn").value||"";
   nf.itens.forEach(function(it){
-    var p=null;
-    if(it.ean&&it.ean.length>7)
-      p=produtos.filter(function(x){return soDigitos(x.barras)===soDigitos(it.ean);})[0]||null;
-    if(!p&&it.codForn)
-      p=produtos.filter(function(x){return (x.codForn&&x.codForn===it.codForn)||x.cod===it.codForn;})[0]||null;
-    if(!p){
-      var alvo=(it.nome||"").toLowerCase();
-      p=produtos.filter(function(x){return (x.nome||"").toLowerCase()===alvo;})[0]||null;
-    }
+    var lg=(nfTipoNota==="consumo")?{p:null,sug:null,por:""}:ligacaoSeguraNF(it,fornAtual);
+    var p=lg.p;
     if(p){
-      nfItens.push({pid:p.id,nome:p.nome,cod:p.cod,codForn:it.codForn,
+      nfItens.push({pid:p.id,nome:p.nome,cod:p.cod,codForn:it.codForn,nomeNota:String(it.nome||"").toUpperCase(),
+        ean:it.ean||"",un:it.unidade||"",ligPor:lg.por,
         qtd:it.qtd,custo:it.valor,freteItem:it.freteItem||0,seguroItem:it.seguroItem||0,outroItem:it.outroItem||0,descItem:it.descItem||0,
         ipi:it.ipi,st:it.st,federais:(it.pis||0)+(it.cofins||0),icms:it.icms||0});
     } else {
       naoAchados.push(it);
       nfItens.push({pid:"",nome:String(it.nome||"").toUpperCase(),nomeNota:String(it.nome||"").toUpperCase(),cod:"",codForn:it.codForn||"",ean:it.ean||"",
+        un:it.unidade||"",sugPid:(lg.sug?lg.sug.id:""),
         qtd:it.qtd,custo:it.valor,freteItem:it.freteItem||0,seguroItem:it.seguroItem||0,outroItem:it.outroItem||0,descItem:it.descItem||0,
         ipi:it.ipi,st:it.st,federais:(it.pis||0)+(it.cofins||0),icms:it.icms||0});
     }
@@ -35566,7 +35717,10 @@ async function salvarNota__corpo(){
       ipi:l.i.ipi||0,st:l.i.st||0,federais:l.i.federais||0,icms:l.i.icms||0,
       qtdConf:l.i.qtd,obsConf:""};
     /* v543: o item fora do cadastro guarda o que veio no XML (é ligado a um produto no lançamento) */
-    ["ean","nomeNota","destino","centroId"].forEach(function(k){if(l.i[k]!=null)o[k]=l.i[k];});
+    /* v577: `un` (unidade da nota) e `sugPid` (a sugestão a confirmar) também viajam */
+    ["ean","nomeNota","destino","centroId","un","sugPid","ligPor"].forEach(function(k){if(l.i[k]!=null)o[k]=l.i[k];});
+    /* v577: na nota de uso e consumo o item fica exatamente como está na nota */
+    if(nfTipoNota==="consumo"){o.pid="";o.cod="";o.destino="despesa";if(!o.nomeNota)o.nomeNota=o.nome;}
     delete o.qtdConf;delete o.obsConf;
     CAMPOS_RATEIO_NF.forEach(function(c){if(nfPorItem[c[0]])o[c[1]]=arred(+l.i[c[1]]||0);});
     return o;});
@@ -35579,14 +35733,17 @@ async function salvarNota__corpo(){
     status:"lancar",fluxo2:true,criadoEm:hojeISO(),criadoPor:usuarioAtual};
   if(nfSemNota){nota.semNota=true;nota.motivoSemNota=$("nf_snMotivo").value.trim();
     nota.fotoRecibo={nome:nfSnFoto.nome,tipo:nfSnFoto.tipo,dados:nfSnFoto.dados,quando:agoraCarimbo(),por:usuarioAtual};}
+  /* v577: nota de uso e consumo — só despesa, sem conferência e sem estoque */
+  if(nfTipoNota==="consumo")nota.usoConsumo=true;
   if(ed)return await gravarEdicaoNota(ed,nota);
-  histNotaNF(nota,"Nota registrada"+(nfSemNota?" (entrada sem nota)":"")+" · falta o destino e o pagamento",[]);
+  histNotaNF(nota,"Nota registrada"+(nfSemNota?" (entrada sem nota)":(nota.usoConsumo?" (uso e consumo)":""))+" · falta o centro de custo e o pagamento",[]);
   try{await gravaConf("notas",nota);}
   catch(e){avisarRecusaBanco("nf_alerta",e,"A entrada não foi registrada.");return false;}
   notas.push(nota);
   $("nfForm").hidden=true;
-  toast((nfSemNota?"Entrada sem nota":"NF "+num)+" registrada. Agora o destino de cada item e o pagamento.");
-  nfSemNota=false;
+  toast((nfSemNota?"Entrada sem nota":"NF "+num)+" registrada. Agora "+
+    (nota.usoConsumo?"o centro de custo e o pagamento.":"o destino de cada item e o pagamento."));
+  nfSemNota=false;nfTipoNota="";
   return abrirLancarNota(nota);
 }
 
@@ -35902,12 +36059,18 @@ function renderDarEntrada(){
     var dest=it.__dest,ops=DESTINOS_NF.filter(function(d){return it.pid||d[0]==="despesa";});
     return '<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px">'+
       '<div class="t-main">'+esc((it.cod?it.cod+" · ":"")+it.nome)+"</div>"+htmlLigarNF(it,k)+
-      '<div class="t-sub">'+(it.pid?(dest==="despesa"?"não entra em estoque":"entram "+q+(q!==it.qtd?" (nota "+it.qtd+")":"")):"item sem cadastro · "+it.qtd+" un.")+
+      '<div class="t-sub">'+(it.pid?(dest==="despesa"?"não entra em estoque":"entram "+q+(q!==it.qtd?" (nota "+it.qtd+")":"")):
+        (n.usoConsumo?"como está na nota · "+it.qtd+" "+(it.un||"un.")
+                     :"item sem cadastro · "+it.qtd+" un."))+
         " · produto "+BRL(lcs[k].custoUnit)+" + frete "+BRL(lcs[k].freteUnit)+" por unidade · valor na nota <b>"+BRL(vals[k])+"</b></div>"+
       '<div class="grid g2" style="margin-top:8px">'+
-        '<div class="fld"><label>Destino <span class="req">*</span></label><select data-dfdest="'+k+'">'+(!dest?'<option value="" selected>— escolha —</option>':"")+
+        /* v577: nota de uso e consumo — o destino é sempre Só despesa e não se escolhe */
+        (n.usoConsumo
+          ?'<div class="fld"><label>Destino</label><select disabled><option>Só despesa (uso e consumo)</option></select>'+
+            '<div class="help">nota de uso e consumo: não entra em estoque e não vai para o almoxarifado</div></div>'
+          :'<div class="fld"><label>Destino <span class="req">*</span></label><select data-dfdest="'+k+'">'+(!dest?'<option value="" selected>— escolha —</option>':"")+
           ops.map(function(d){return '<option value="'+d[0]+'"'+(d[0]===dest?" selected":"")+">"+d[1]+"</option>";}).join("")+"</select>"+
-          (it.pid&&destinoSugeridoNF(it)===dest&&!it.destino?'<div class="help">sugerido pelo grupo do produto</div>':"")+"</div>"+
+          (it.pid&&destinoSugeridoNF(it)===dest&&!it.destino?'<div class="help">sugerido pelo grupo do produto</div>':"")+"</div>")+
         '<div class="fld"><label>Centro de custo <span class="req">*</span></label>'+
           (dest==="revenda"
             ?'<select disabled><option>Mercadorias › Compra de mercadoria</option></select>'
@@ -35966,17 +36129,33 @@ function centrosDaNotaNF(n,rascunho){
 function listaAtualNF(chave){return chave==="pg"?dfPg.cx:dfPg.entCx;}
 function htmlLigarNF(it,k){
   if(nfModoFin!=="lancar")return "";
-  if(!it.pid)return '<div class="nf-ligar"><div class="t-sub"><b>Item fora do cadastro</b>'+(it.codForn?" · código do fornecedor "+esc(it.codForn):"")+
-    ". Ligue a um produto ou cadastre um novo (ou escolha Só despesa).</div>"+
-    '<div class="nf-ligar-l"><input list="nfDlProd" data-dflig="'+k+'" placeholder="Código ou nome do produto do cadastro" aria-label="Ligar a um produto">'+
-    '<button class="btn ghost sm" type="button" data-dfnovo="'+k+'">Cadastrar novo</button></div></div>';
-  if(it.nomeNota)return '<div class="t-sub">Na nota: '+esc(it.nomeNota)+' · <button class="btn mut sm" type="button" data-dfdesl="'+k+'">Ligar a outro</button></div>';
+  /* nota de uso e consumo: o item fica como está na nota, sem produto (v577) */
+  if(notaFin&&notaFin.usoConsumo)return "";
+  if(!it.pid){
+    /* v577: a sugestão aparece e PEDE confirmação — o sistema não liga por parecença */
+    var sg=it.sugPid?prodPorId(it.sugPid):sugestaoProdutoNF(it);
+    return '<div class="nf-ligar"><div class="t-sub"><b>Item fora do cadastro</b>'+(it.codForn?" · código do fornecedor "+esc(it.codForn):"")+
+      ". Ligue a um produto ou cadastre um novo (ou escolha Só despesa).</div>"+
+      (sg?'<div class="t-sub" style="margin-top:4px">Sugestão: <b>'+esc((sg.cod?sg.cod+" · ":"")+sg.nome)+
+        '</b> <button class="btn sm" type="button" data-dfsug="'+k+'" data-dfsugp="'+esc(sg.id)+'">Confirmar esta</button>'+
+        ' <span class="t-sub">— confira antes: o sistema não liga sozinho por parecença de nome.</span></div>':"")+
+      '<div class="nf-ligar-l"><input list="nfDlProd" data-dflig="'+k+'" placeholder="Código ou nome do produto do cadastro" aria-label="Ligar a um produto">'+
+      '<button class="btn ghost sm" type="button" data-dfnovo="'+k+'">Cadastrar novo</button></div></div>';
+  }
+  if(it.nomeNota)return '<div class="t-sub">Na nota: '+esc(it.nomeNota)+
+    (it.ligPor?" · ligado pelo "+esc(it.ligPor):"")+
+    ' · <button class="btn mut sm" type="button" data-dfdesl="'+k+'">Ligar a outro</button></div>';
   return "";
 }
 function ligarDarEntrada(){
   var raiz=$("nfFin");
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dflig]"),function(i){i.onchange=function(){ligarItemNF(+i.getAttribute("data-dflig"),i.value);};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfnovo]"),function(b){b.onclick=function(){pedirProdutoNovoNF(+b.getAttribute("data-dfnovo"));};});
+  /* v577: confirmar a sugestão é um clique — e a confirmação fica guardada para a próxima nota */
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfsug]"),function(b){b.onclick=function(){
+    var pp=prodPorId(b.getAttribute("data-dfsugp"));
+    if(!pp){toast("Este produto já não está no cadastro.");return;}
+    ligarItemNF(+b.getAttribute("data-dfsug"),(pp.cod?pp.cod+" · ":"")+pp.nome);};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfdesl]"),function(b){b.onclick=function(){desligarItemNF(+b.getAttribute("data-dfdesl"));};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfdest]"),function(s){s.onchange=function(){
     var it=notaFin.itens[+s.getAttribute("data-dfdest")];it.__dest=s.value;if(s.value==="revenda")it.__centro="";renderDarEntrada();};});
@@ -36408,6 +36587,7 @@ function pillsNotaNF(n){
   }
   else if(s==="fechada")h='<span class="pill p-ok">fechada</span>'+(ehFluxoNovoNF(n)&&!itensEstoqueNF(n).length?' <span class="pill p-mut">só despesa</span>':"");
   else h='<span class="pill p-mut">cancelada</span>'+(n.motivoCancel?'<div class="t-sub">'+esc(n.motivoCancel)+"</div>":"");
+  if(n.usoConsumo)h+=' <span class="pill p-mut">uso e consumo</span>';
   if(ab&&s!=="cancelada")h+=' <span class="pill p-acc">'+ab+" a pagar</span>";
   return '<div class="nf-pills">'+h+"</div>";
 }
@@ -36417,6 +36597,10 @@ function renderNotas(){
   var g=podeGerirNota();
   if($("nfNovo"))$("nfNovo").hidden=!g;
   if($("nfSemNota"))$("nfSemNota").hidden=!g;
+  if($("nfConsumo"))$("nfConsumo").hidden=!g;
+  if($("nfLigacoesBt"))$("nfLigacoesBt").hidden=!g;
+  if($("nfLigacoes")&&!g)$("nfLigacoes").hidden=true;
+  if($("nfLigacoes")&&!$("nfLigacoes").hidden)renderLigacoesNF();
   var daLojaN=notas.filter(function(n){return n.loja===lojaAtual;});
   if(fs){Array.prototype.forEach.call(fs.options,function(o){
     var c=daLojaN.filter(function(n){return passaFiltroNF(n,o.value);}).length;
@@ -36484,7 +36668,7 @@ function abrirEdicaoNota(n){
   if(movsAtivosNF(n).length){toast("Já entrou estoque desta nota: use Reabrir ou Estornar entrada.");return;}
   if(s!=="lancar"&&s!=="aguardando"&&s!=="conferida"){toast(s==="cancelada"?"Nota cancelada não se edita.":"Esta nota não pode ser editada agora.");return;}
   $("nfConf").hidden=true;$("nfFin").hidden=true;
-  abrirNota(!!n.semNota);
+  abrirNota(n.usoConsumo?"consumo":!!n.semNota);
   nfEditando=n;
   $("nf_forn").value=n.fornecedorId||"";
   $("nf_num").value=n.semNota?"":(n.numero||"");$("nf_serie").value=n.serie||"";
@@ -36498,7 +36682,7 @@ function abrirEdicaoNota(n){
   $("nf_seguro").value=brMF(+n.seguro||0);$("nf_descTot").value=brMF(+n.desconto||0);
   nfItens=(n.itens||[]).map(function(i){
     var o={pid:i.pid||"",nome:i.nome,cod:i.cod||"",codForn:i.codForn||"",qtd:+i.qtd||0,custo:+i.custo||0};
-    ["ipi","st","federais","icms","ean","nomeNota","destino","centroId"].forEach(function(k){if(i[k]!=null)o[k]=i[k];});
+    ["ipi","st","federais","icms","ean","nomeNota","destino","centroId","un","ligPor"].forEach(function(k){if(i[k]!=null)o[k]=i[k];});
     CAMPOS_RATEIO_NF.forEach(function(c){if(i[c[1]]!=null)o[c[1]]=i[c[1]];});
     return o;});
   nfChave=n.chave||"";nfDups=(n.duplicatas||[]).slice();nfFormaXml=n.formaXml||"";nfDupOk=false;
@@ -36579,7 +36763,8 @@ async function abrirLancarNota(n,op){
   notaFin=n;nfModoFin="lancar";opcoesFinanceiro();
   try{dfCentroCompra=await centroFixo("Compra de mercadoria","Mercadorias","saida");}catch(e){dfCentroCompra="";}
   (n.itens||[]).forEach(function(it){
-    it.__dest=it.destino||(it.pid?destinoSugeridoNF(it):"");
+    /* v577: nota de uso e consumo é só despesa, sempre */
+    it.__dest=n.usoConsumo?"despesa":(it.destino||(it.pid?destinoSugeridoNF(it):""));
     it.__centro=it.centroId&&it.destino!=="revenda"?it.centroId:"";
   });
   var pg=n.pagamento,cx0=caixaValidoNF(n.caixaId);
@@ -36615,6 +36800,13 @@ function ligarItemNF(k,txt){
   if(!it.nomeNota)it.nomeNota=it.nome;
   it.pid=p.id;it.cod=p.cod||"";it.nome=p.nome;it.ligadoPor=usuarioAtual;
   it.__dest=destinoSugeridoNF(it);
+  delete it.sugPid;
+  /* v577: o Financeiro confirmou — fornecedor + código do fornecedor ficam guardados no produto,
+     e na próxima nota do mesmo fornecedor a ligação já é segura (não pergunta de novo) */
+  if(it.codForn&&notaFin){
+    guardarLigacaoForn(p,notaFin.fornecedorId||"",it.codForn).then(function(ok){
+      if(ok)toast("Ligação guardada: "+it.codForn+" ("+nomeFornNF(notaFin)+") → "+p.nome+".");});
+  }
   renderDarEntrada();
 }
 function desligarItemNF(k){
@@ -37335,7 +37527,10 @@ window.__notaAcMF={acoes:acoesNotaNF,fazer:fazerAcaoNotaNF,editar:abrirEdicaoNot
   dif:difNotaNF,ligar:ligarItemNF,novoProd:pedirProdutoNovoNF,confirmar:function(n){return confirmarConfNF2__corpo(n);},rascunho:function(n){return rascunhoConfNF2__corpo(n);},
   ok:function(){return nfAcAtual&&nfAcAtual.onOk?nfAcAtual.onOk():null;},fechar:fecharModalNF,menu:abrirMenuNotaNF,avisos:avisosNotasNF,
   paraConferir:contaParaConferirNF,local:pedirLocalNF,podeCorrigir:podeCorrigirConfNF,resolver:pedirResolverDivNF,
-  falta:faltaNotaNF,div:divNotaNF,rotulo:rotuloSitNF,veValores:veValoresNF,semRastro:estoqueSemRastroNF,movs:movsAtivosNF};
+  falta:faltaNotaNF,div:divNotaNF,rotulo:rotuloSitNF,veValores:veValoresNF,semRastro:estoqueSemRastroNF,movs:movsAtivosNF,
+  /* v577 */
+  segura:ligacaoSeguraNF,sugestao:sugestaoProdutoNF,ligacoes:todasLigacoesForn,desfazerLig:function(a,b){return desfazerLigacaoForn__corpo(a,b);},
+  guardarLig:guardarLigacaoForn,tipo:function(t){nfTipoNota=t||"";},itensEstoque:itensEstoqueNF};
 
 window.__notaFinMF={abrir:abrirDarEntrada,concluir:function(){return concluirEntradaNota__corpo();},clique:concluirEntradaNota,
   estado:function(){return dfPg;},nota:function(){return notaFin;},problemas:problemasDarEntrada,render:renderDarEntrada,
@@ -52231,6 +52426,12 @@ function renderPedDet(){
   else if(p.encerrada){
     av+='<div class="note"><b>'+(p.aprovado?"Recebimento aprovado"+(p.aprovadoPor?" por "+esc(p.aprovadoPor):"")+
       (p.aprovadoEm?" em "+esc(dataBR(p.aprovadoEm)):"")+".":"Venda encerrada.")+'</b> Só o Administrador e o Financeiro podem reabrir — e a alteração de produtos e valores ainda depende da autorização do vendedor e do instalador.</div>';
+    /* v577: o número da nota fiscal da venda — só o Financeiro e o Administrador informam */
+    if(p.aprovado)av+='<div class="note'+(nfDoPedido(p)?" ok":"")+'"><b>Nota fiscal:</b> '+
+      (nfDoPedido(p)?esc(nfDoPedido(p)):'<span class="pill p-warn">ainda sem número</span>')+
+      (podeNotaFiscalVenda()
+        ?' <button class="btn ghost sm" type="button" id="pd_nfiscal">'+(nfDoPedido(p)?"Alterar":"Informar o número")+"</button>"
+        :'<div class="t-sub">Quem informa é o Financeiro.</div>')+"</div>";
     if(ehGestor())ac+='<button class="btn" type="button" id="pd_reabrir">Reabrir venda</button>';
   }
   else if(p.status==="Cancelada"){
@@ -52454,6 +52655,7 @@ function ligarPedDet(){
     pedAberto=null;$("pedDet").hidden=true;$("pedLista").hidden=false;
     finFoco=p.id;ir("fin");renderFin();});
   on("pd_reabrir",function(){abrirReabertura(p);});
+  on("pd_nfiscal",function(){abrirNotaFiscalPedido(p);});
   on("pd_cancelar",async function(){
     var motivo=prompt("Cancelar o pedido "+p.numero+".\n\nPor quê? (fica registrado)");
     if(motivo===null)return;
@@ -52526,7 +52728,7 @@ function ligarPedDet(){
       if(novaSol)registrarEvento(p,"Autorização de desconto solicitada: "+novaSol.motivo);
       if(/^Aguardando|desconto/.test(p.status||""))p.status=etapaVenda(p);
     }
-    var ajEst=0,titCanc=0,titPagos=0;
+    var ajEst=0,titCanc=0,titPagos=0,titEst=0;
     if(eraReaberta){
       /* VOLTA PARA A APROVAÇÃO FINANCEIRA (29/10, regra dele): a venda deixa de estar aprovada; a
          reserva passa a valer pelos itens novos e, quando o financeiro aprovar de novo, a baixa é só
@@ -52537,6 +52739,10 @@ function ligarPedDet(){
         precisa:p.reabertura.precisa,salvaPor:usuarioAtual,salvaEm:iso(new Date()),de:antes.total,para:r.total}]);
       p.reabertura=null;p.aprovado=false;p.encerrada=false;
       p.voltouFinanceiro={quando:agoraCarimbo(),por:usuarioAtual,motivo:motivo,de:antes.total,para:r.total};
+      /* v577: venda reaberta → o PIX e o dinheiro que entraram no caixa na aprovação são estornados,
+         e na reaprovação o Financeiro escolhe o caixa de novo */
+      try{titEst=await estornarRecebimentoAprovacao(p,"pedido "+p.numero+" reaberto: "+motivo);}
+      catch(eEr){console.warn("estorno do recebimento",eEr);}
       var tits=titulos.filter(function(t){return t.pedidoId===p.id&&t.status!=="cancelado";});
       for(var it2=0;it2<tits.length;it2++){
         var tt=tits[it2];
@@ -52573,6 +52779,7 @@ function ligarPedDet(){
       toast(eraReaberta
         ? ("Pedido "+p.numero+" alterado: "+BRL(antes.total)+" → "+BRL(r.total)+". Voltou para "+p.status.toLowerCase()+
            (titCanc?" · "+titCanc+" parcela(s) em aberto cancelada(s), refeitas na nova aprovação":"")+
+           (titEst?" · "+titEst+" recebimento(s) de PIX/dinheiro estornado(s) no caixa":"")+
            (titPagos?" · "+titPagos+" parcela(s) já recebida(s) continuam — confira o Contas a Receber":"")+".")
         : ("Pedido "+p.numero+" atualizado · faturamento recalculado"+
         (ajEst?" · estoque ajustado ("+ajEst+" movimento(s)). Confira as parcelas no Contas a Receber.":
@@ -52613,7 +52820,7 @@ function htmlCaixasDaVenda(fs){
 }
 /* trava contra toque duplo (04/11): gravação em lote, um toque só por vez */
 function aprovarVenda(){return travaSalvar("aprovarVenda",aprovarVenda__corpo,this,arguments);}
-async function aprovarVenda__corpo(p,caixaId,pagoEm){
+async function aprovarVenda__corpo(p,caixaId,pagoEm,cxFormas){
   if(!pode("aprovarFinanceiro")){toast("Só quem tem a permissão de aprovar no financeiro aprova o recebimento.");return false;}
   /* 09/11: a data em que o cliente pagou é obrigatória na aprovação; reaberto, a primeira fica */
   if(!p.pagoEm){
@@ -52681,6 +52888,10 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm){
       if(caixaId&&parcelas[i].status==="aberto"&&!parcelas[i].caixaId){
         parcelas[i].caixaId=caixaId;await grava("titulos",parcelas[i]);}
     }
+    /* v577: PIX e dinheiro já nascem recebidos, no caixa que o Financeiro escolheu */
+    var nRec=0;
+    try{nRec=await receberFormasNaAprovacao(p,cxFormas,pagoEm||p.pagoEm||hojeISO());}
+    catch(eRc){console.warn("recebimento no caixa",eRc);}
     /* 4. comissão: entra no mês da primeira aprovação */
     p.aprovado=true;if(!p.aprovadoEm)p.aprovadoEm=hojeISO();
     /* o mês em que a venda conta: o do pagamento, ou o primeiro aberto se aquele já fechou (09/11) */
@@ -52717,6 +52928,7 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm){
         .filter(function(v,i,l){return l.indexOf(v)===i;}).join(", "))):"";
     toast("Pedido "+p.numero+" aprovado · estoque de "+nomeLocal(loc)+" baixado · "+
       parcelas.length+" parcela(s) no Contas a Receber"+txtAnt+
+      (nRec?" · "+nRec+" recebimento(s) de PIX/dinheiro já no caixa":"")+
       (rman.trocas?" · manutenção periódica baixada em "+rman.trocas+" aparelho"+(rman.trocas===1?"":"s"):"")+
       /* resultado da troca de aparelho com plano (regra do Wagner, 16/09) */
       (rman.plano&&rman.plano.para?" · plano "+rman.plano.para.plano+" migrado de "+(rman.plano.de.serie||rman.plano.de.produto||"")+
@@ -52741,6 +52953,9 @@ async function devolverVenda(p,opc){
   p.devolucaoFin={motivo:(opc.credito?"Crédito recusado: ":"")+m.trim(),por:usuarioAtual,quando:iso(new Date())};
   if(opc.credito){p.devolucaoFin.credito=true;p.creditoRecusadoPor=usuarioAtual;p.creditoRecusadoEm=hojeISO();p.creditoRecusadoHora=agoraHM();}
   registrarEvento(p,(opc.credito?"Crédito recusado pelo financeiro ("+formasCreditoDaVenda(p).join(" e ")+"): ":"Devolvido pelo financeiro: ")+m.trim());
+  /* v577: venda reprovada depois de ter entrado no caixa → estorna o recebimento (nada se apaga) */
+  try{await estornarRecebimentoAprovacao(p,"pedido "+p.numero+" devolvido pelo financeiro: "+m.trim());}
+  catch(eEd){console.warn("estorno do recebimento",eEd);}
   await gravarPedido(p);
   toast("Pedido "+p.numero+" devolvido para "+(responsavelVenda(p)||"o responsável")+".");
   render();return true;
@@ -56643,6 +56858,217 @@ function cartaoFin(p,podeAprovar,cxs,cxPadrao){
       : '<div class="help" style="margin-top:8px">Só o Financeiro aprova o recebimento.</div>')+
   "</div>";
 }
+/* ============ v577 (18/11, regra dele): O NÚMERO DA NOTA FISCAL DA VENDA ============
+   O Financeiro emite a nota DEPOIS de aprovar a venda, então o número não cabe no pedido antes
+   disso. Campo "Nº da nota fiscal" no pedido aprovado, que só o Financeiro e o Administrador
+   preenchem e editam, a qualquer momento (inclusive nas vendas de PIX e dinheiro que já entraram
+   no caixa). Cada alteração fica no histórico do pedido (de → para, quem, quando). Número repetido
+   em outro pedido da mesma empresa AVISA, mas não impede. Nos relatórios a coluna do documento
+   passa a ser a nota fiscal. */
+function podeNotaFiscalVenda(quem){
+  var pf=perfilDe(quem||usuarioAtual);
+  return pf==="Financeiro"||pf==="Administrador";
+}
+function nfDoPedido(p){return String((p&&p.notaFiscal)||"").trim();}
+/* a nota fiscal que vale para um título (ou lançamento de caixa) nascido de pedido */
+function nfDoTitulo(t){
+  if(!t||!t.pedidoId)return "";
+  var p=pedPorId(t.pedidoId);
+  return p?nfDoPedido(p):"";
+}
+/* a coluna "Nota fiscal" dos relatórios: o número, ou "—" quando a nota ainda não saiu */
+function colunaNF(t){return nfDoTitulo(t)||"—";}
+function pedidosComMesmaNF(p,num){
+  var n=String(num||"").trim().toUpperCase();
+  if(!n)return [];
+  return pedidos.filter(function(x){
+    return x.loja===(p?p.loja:lojaAtual)&&(!p||x.id!==p.id)&&!ehTeste(x)&&
+      String(x.notaFiscal||"").trim().toUpperCase()===n;});
+}
+/* vendas aprovadas sem o número da nota fiscal, da empresa aberta */
+function vendasSemNotaFiscal(de,ate,busca){
+  var b=semAcento(String(busca||"")).toLowerCase();
+  return pedidos.filter(function(p){
+    if(p.loja!==lojaAtual||ehTeste(p)||!pedidoAprovado(p))return false;
+    if(nfDoPedido(p))return false;
+    var d=String(dataContaVenda(p)||p.aprovadoEm||p.data||"").slice(0,10);
+    if(de&&d<de)return false;
+    if(ate&&d>ate)return false;
+    if(b&&semAcento(String(p.numero)+" "+(p.cliente||"")+" "+(p.vendedor||"")).toLowerCase().indexOf(b)<0)return false;
+    return true;
+  }).sort(function(a,b2){return String(a.aprovadoEm||"").localeCompare(String(b2.aprovadoEm||""))||a.numero-b2.numero;});
+}
+function salvarNotaFiscalPedido(){return travaSalvar("salvarNotaFiscalPedido",salvarNotaFiscalPedido__corpo,this,arguments);}
+async function salvarNotaFiscalPedido__corpo(p,num){
+  if(!p)return false;
+  if(!podeNotaFiscalVenda()){toast("Só o Financeiro e o Administrador informam o número da nota fiscal.");return false;}
+  if(p.loja!==lojaAtual){toast("Este pedido é de outra empresa.");return false;}
+  if(!pedidoAprovado(p)){toast("O número da nota fiscal se informa depois de a venda ser aprovada.");return false;}
+  var novo=String(num||"").trim(),antes=nfDoPedido(p);
+  if(novo===antes)return true;
+  var guarda=copiaReg(p);
+  p.notaFiscal=novo;
+  p.notaFiscalHist=(p.notaFiscalHist||[]).concat([{de:antes,para:novo,por:usuarioAtual,quando:agoraCarimbo()}]);
+  if(p.notaFiscalHist.length>40)p.notaFiscalHist=p.notaFiscalHist.slice(-40);
+  registrarEvento(p,antes?("Nota fiscal alterada de "+antes+" para "+(novo||"— sem número —"))
+                        :("Nota fiscal informada: "+novo));
+  try{await gravaConf("pedidos",p);}
+  catch(e){voltarReg(p,guarda);toast("O número da nota fiscal não foi salvo: "+motivoBanco(e));return false;}
+  var rep=pedidosComMesmaNF(p,novo);
+  toast("Nota fiscal "+(novo||"apagada")+" no pedido "+p.numero+"."+
+    (rep.length?" Atenção: este número também está no pedido "+rep.map(function(x){return x.numero;}).join(", ")+".":""));
+  try{renderPedDet();renderPedidos();renderFin();}catch(e2){}
+  return true;
+}
+function abrirNotaFiscalPedido(p){
+  if(!podeNotaFiscalVenda()){toast("Só o Financeiro e o Administrador informam o número da nota fiscal.");return false;}
+  var m=$("nfvModal");
+  if(!m){m=document.createElement("div");m.className="modal";m.id="nfvModal";document.body.appendChild(m);}
+  var h=(p.notaFiscalHist||[]).slice().reverse();
+  m.innerHTML='<div class="box" style="width:min(520px,100%)"><h3>Nota fiscal · pedido '+esc(p.numero)+"</h3>"+
+    '<div class="sub">'+esc(p.cliente||"")+" · "+BRL(p.total)+"</div>"+
+    '<div class="fld" style="margin-top:14px"><label for="nfv_num">Nº da nota fiscal</label>'+
+      '<input id="nfv_num" value="'+esc(nfDoPedido(p))+'" placeholder="Ex.: 12345"></div>'+
+    '<div id="nfv_aviso"></div>'+
+    (h.length?'<div class="sect"><p class="sect-t">Histórico</p>'+h.map(function(x){
+      return '<div class="t-sub">'+esc(x.de||"— sem número —")+" → "+esc(x.para||"— sem número —")+" · "+esc(x.por||"")+" em "+esc(x.quando||"")+"</div>";}).join("")+"</div>":"")+
+    '<div class="actions"><button class="btn" type="button" id="nfv_ok">Salvar</button>'+
+    '<button class="btn mut" type="button" id="nfv_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  function aviso(){
+    var rep=pedidosComMesmaNF(p,$("nfv_num").value);
+    $("nfv_aviso").innerHTML=rep.length?'<div class="note warn"><b>Este número já está em outro pedido:</b> '+
+      esc(rep.map(function(x){return x.numero+" · "+(x.cliente||"");}).join(" · "))+". Confira — o sistema deixa salvar.</div>":"";
+  }
+  $("nfv_num").oninput=aviso;aviso();
+  $("nfv_nao").onclick=function(){m.hidden=true;};
+  $("nfv_ok").onclick=async function(){
+    var ok=await salvarNotaFiscalPedido(p,$("nfv_num").value);
+    if(ok)m.hidden=true;};
+  return true;
+}
+window.__nfVendaMF={pode:podeNotaFiscalVenda,num:nfDoPedido,repetida:pedidosComMesmaNF,
+  semNota:vendasSemNotaFiscal,salvar:function(p,n){return salvarNotaFiscalPedido__corpo(p,n);},abrir:abrirNotaFiscalPedido};
+/* ============ v577 (18/11, regra dele): PIX E DINHEIRO JÁ ENTRAM NO CAIXA NA APROVAÇÃO ============
+   Antes, aprovar só criava a parcela no Contas a Receber e o Financeiro tinha de "receber" de novo.
+   Agora, para cada forma de pagamento do pedido que seja PIX ou Dinheiro, a janela da aprovação
+   pergunta EM QUAL CAIXA o dinheiro entrou (obrigatório; lista dos caixas ativos da empresa).
+   Sugestão: Dinheiro → Caixa da Loja · PIX → o último caixa usado para PIX nesta empresa.
+   Ao aprovar, o título dessa forma NASCE RECEBIDO (na data informada, no caixa escolhido) e sai um
+   lançamento de entrada no caixa. Cartão, débito, boleto, cheque e promissória continuam indo para
+   o Contas a Receber como sempre. Venda reaberta, reprovada ou cancelada: o recebimento é
+   ESTORNADO (lançamento de estorno, com quem/quando/motivo) — nada se apaga. Pedido aprovado antes
+   desta versão não muda em nada. */
+function ehFormaCaixaNaAprovacao(tipo){
+  var t=semAcento(String(tipo||"")).toLowerCase();
+  if(/^dinheiro$/.test(t))return "dinheiro";
+  if(/(^|[^a-z])pix([^a-z]|$)/.test(t))return "pix";
+  return "";
+}
+function formasCaixaDaVenda(p){
+  return ((p&&p.formas)||[]).filter(function(f){return (+f.valor||0)>0&&!!ehFormaCaixaNaAprovacao(f.tipo);});
+}
+function caixasAtivosDaLoja(){
+  return daLoja(caixas).filter(function(c){return c.status!=="inativo"&&c.ativo!==false;});
+}
+var CFG_CAIXA_PIX="";
+function sugestaoCaixaFormaAprov(tipo){
+  var ls=caixasAtivosDaLoja(),esp=ehFormaCaixaNaAprovacao(tipo);
+  function tem(id){return ls.filter(function(c){return c.id===id;})[0];}
+  if(esp==="dinheiro"){
+    var loja=ls.filter(function(c){return /caixadaloja|caixaloja/.test(chaveNomeCaixa(c.nome));})[0];
+    if(loja)return loja.id;
+  }
+  if(esp==="pix"&&CFG_CAIXA_PIX&&tem(CFG_CAIXA_PIX))return CFG_CAIXA_PIX;
+  var cf=caixaDaForma(tipo);
+  if(cf&&tem(cf.id))return cf.id;
+  var pd=ls.filter(function(c){return c.padrao==="sim";})[0]||ls[0];
+  return (pd||{}).id||"";
+}
+async function guardarCaixaPix(id){
+  if(!id||id===CFG_CAIXA_PIX)return;
+  CFG_CAIXA_PIX=id;
+  try{if(db)await db.doc("config/caixa_pix").set({caixaId:id,por:usuarioAtual,em:hojeISO()});}catch(e){console.warn("caixa do PIX",e);}
+}
+/* a parte da janela da aprovação que pergunta o caixa de cada forma PIX/Dinheiro */
+function htmlCaixaAprovacao(p){
+  var fs=formasCaixaDaVenda(p);
+  if(!fs.length)return "";
+  var ls=caixasAtivosDaLoja();
+  if(!ls.length)return '<div class="note crit" style="margin-top:12px"><b>Nenhum caixa ativo cadastrado.</b> '+
+    "Cadastre o caixa em Configurações › Cadastro de Caixas para o PIX e o dinheiro entrarem na aprovação.</div>";
+  return '<div class="note" style="margin-top:12px" id="pg_caixaBox"><b>Em qual caixa entrou?</b>'+
+    '<div class="help">O PIX e o dinheiro já entram no caixa agora: a parcela nasce recebida e sai o lançamento de entrada. '+
+    "As outras formas continuam indo para o Contas a Receber.</div>"+
+    fs.map(function(f,k){
+      var sug=sugestaoCaixaFormaAprov(f.tipo);
+      return '<div class="fld" style="margin-top:8px"><label for="pg_cx'+k+'">'+esc(f.tipo)+" · "+BRL(+f.valor||0)+
+        ' <span class="req">*</span></label><select id="pg_cx'+k+'" data-pgcx="'+esc(f.tipo)+'">'+
+        '<option value="">— escolha o caixa —</option>'+
+        ls.map(function(c){return '<option value="'+esc(c.id)+'"'+(c.id===sug?" selected":"")+">"+
+          esc(c.nome)+(c.banco?" · "+esc(c.banco):"")+"</option>";}).join("")+"</select></div>";
+    }).join("")+"</div>";
+}
+function caixasEscolhidosAprovacao(){
+  var out={},falta=[];
+  Array.prototype.forEach.call(document.querySelectorAll("#pgDataModal [data-pgcx]"),function(s){
+    var t=s.getAttribute("data-pgcx");
+    if(!s.value)falta.push(t);else out[t]=s.value;});
+  return {caixas:out,falta:falta};
+}
+/* o recebimento de cada forma PIX/Dinheiro: um título recebido e uma entrada no caixa, uma vez só */
+async function receberFormasNaAprovacao(p,cxForm,data){
+  if(!cxForm)return 0;
+  var n=0,parcelas=titulos.filter(function(t){return t.pedidoId===p.id&&t.status!=="cancelado";});
+  for(var i=0;i<parcelas.length;i++){
+    var t=parcelas[i],cx=cxForm[t.formaTipo];
+    if(!cx||!ehFormaCaixaNaAprovacao(t.formaTipo))continue;
+    if(t.status!=="aberto"||+t.valorPago>0)continue;            /* já recebido: nunca duplica */
+    /* o id leva o número de estornos: nunca duplica no mesmo ciclo e a REaprovação entra de novo */
+    var mvid="pva-"+p.id+"-"+t.id+"-"+((t.estornos||[]).length);
+    if(movs.some(function(m){return m.id===mvid;}))continue;
+    var antes=copiaReg(t),quando=agoraCarimbo();
+    t.status="pago";t.pagoEm=data;t.valorPago=arred(+t.valor||0);t.caixaId=cx;
+    t.baixadoPor=usuarioAtual;t.baixadoEm=quando;t.recebidoNaAprovacao=true;
+    var mv={id:mvid,loja:p.loja,caixaId:cx,data:data,tipo:"entrada",valor:arred(+t.valor||0),hora:agoraHM(),
+      descricao:"Recebimento · "+(p.cliente||"")+" · pedido "+p.numero+" · "+t.formaTipo,
+      centroId:t.centroId||"",tituloId:t.id,pedidoId:p.id,recebidoNaAprovacao:true,por:usuarioAtual};
+    try{await gravaConf("titulos",t);movs.push(mv);await gravaConf("movs",mv);n++;}
+    catch(e){voltarReg(t,antes);
+      var k=movs.indexOf(mv);if(k>=0)movs.splice(k,1);
+      toast("Atenção: o recebimento do "+t.formaTipo+" do pedido "+p.numero+" NÃO entrou no caixa ("+motivoBanco(e)+"). Receba em Contas a Receber.");}
+    if(ehFormaCaixaNaAprovacao(t.formaTipo)==="pix")await guardarCaixaPix(cx);
+  }
+  if(n)registrarEvento(p,n+" recebimento(s) de PIX/dinheiro lançado(s) no caixa na aprovação");
+  return n;
+}
+/* ESTORNO (nada se apaga): a entrada fica e sai um lançamento contrário, com quem, quando e o motivo */
+async function estornarRecebimentoAprovacao(p,motivo){
+  var n=0,ts=titulos.filter(function(t){return t.pedidoId===p.id&&t.recebidoNaAprovacao&&t.status==="pago";});
+  for(var i=0;i<ts.length;i++){
+    var t=ts[i],quando=agoraCarimbo();
+    var mvid="pve-"+p.id+"-"+t.id+"-"+((t.estornos||[]).length+1);
+    if(movs.some(function(m){return m.id===mvid;}))continue;
+    var orig=movs.filter(function(m){return m.tituloId===t.id&&m.recebidoNaAprovacao;})[0];
+    var mv={id:mvid,loja:p.loja,caixaId:t.caixaId||(orig||{}).caixaId||"",data:hojeISO(),tipo:"saida",
+      valor:arred(+t.valorPago||+t.valor||0),hora:agoraHM(),
+      descricao:"Estorno do recebimento · "+(p.cliente||"")+" · pedido "+p.numero+" · "+(t.formaTipo||""),
+      centroId:t.centroId||"",tituloId:t.id,pedidoId:p.id,estornoRecebimento:true,
+      motivo:String(motivo||""),por:usuarioAtual,em:quando};
+    var antes=copiaReg(t);
+    t.status="aberto";t.pagoEm="";t.valorPago=0;t.caixaId="";t.conciliado=false;
+    delete t.recebidoNaAprovacao;delete t.baixadoPor;delete t.baixadoEm;
+    t.estornos=(t.estornos||[]).concat([{por:usuarioAtual,quando:quando,motivo:String(motivo||""),naAprovacao:true}]);
+    try{movs.push(mv);await gravaConf("movs",mv);await gravaConf("titulos",t);n++;}
+    catch(e){var k=movs.indexOf(mv);if(k>=0)movs.splice(k,1);voltarReg(t,antes);
+      toast("Atenção: o estorno do "+(t.formaTipo||"")+" do pedido "+p.numero+" NÃO foi lançado ("+motivoBanco(e)+"). Estorne em Contas a Receber.");}
+  }
+  if(n)registrarEvento(p,n+" recebimento(s) de PIX/dinheiro estornado(s) no caixa · "+String(motivo||""));
+  return n;
+}
+window.__caixaAprovMF={forma:ehFormaCaixaNaAprovacao,formas:formasCaixaDaVenda,sugestao:sugestaoCaixaFormaAprov,
+  receber:receberFormasNaAprovacao,estornar:estornarRecebimentoAprovacao,escolhidos:caixasEscolhidosAprovacao,
+  ativos:caixasAtivosDaLoja};
 /* ===== APROVAÇÃO: "DATA EM QUE O CLIENTE PAGOU" (09/11, regra dele) ===== */
 function pedirDataPagamento(p){
   return new Promise(function(fim){
@@ -56657,6 +57083,7 @@ function pedirDataPagamento(p){
       (fixa?'<div class="note">Venda reaberta: fica a data do primeiro pagamento, como a aprovação.</div>':
         '<div class="note"><b>Qual data informar:</b><br>'+regraDataPagamento(p).map(esc).join("<br>")+
         (vendaPedeCredito(p)&&p.creditoAprovadoEm?"<br>O crédito desta venda foi aprovado em "+esc(dataCurta(p.creditoAprovadoEm))+".":"")+"</div>")+
+      htmlCaixaAprovacao(p)+
       '<div class="help" style="margin-top:10px">Ao aprovar: baixa do estoque de '+esc(textoLocaisBaixa(p))+" · parcelas no Contas a Receber · comissão, faturamento e metas no mês acima.</div>"+
       '<div id="pg_alerta"></div>'+
       '<div class="actions"><button class="btn" type="button" id="pg_ok">Aprovar</button>'+
@@ -56670,7 +57097,12 @@ function pedirDataPagamento(p){
     $("pg_ok").onclick=function(){
       var d=$("pg_data").value,e=fixa?"":erroPagoEm(p,d);
       if(e){$("pg_alerta").innerHTML='<div class="note crit">'+esc(e)+"</div>";return;}
-      m.hidden=true;fim(fixa?p.pagoEm:d);};
+      /* v577: o caixa do PIX e do dinheiro é obrigatório */
+      var cx=caixasEscolhidosAprovacao();
+      if(cx.falta.length){
+        $("pg_alerta").innerHTML='<div class="note crit"><b>Escolha em qual caixa entrou o dinheiro de '+
+          esc(cx.falta.join(" e "))+".</b></div>";return;}
+      m.hidden=true;fim({data:(fixa?p.pagoEm:d),caixas:cx.caixas});};
   });
 }
 /* ===== CONFERIR MÊS DAS VENDAS (09/11, regra dele) — só Financeiro e Administrador =====
@@ -56888,7 +57320,7 @@ function renderFin(){
       var pg=await pedirDataPagamento(p);
       if(!pg)return;
       bt.disabled=true;
-      await aprovarVenda(p,cxRes,pg);
+      await aprovarVenda(p,cxRes,pg.data,pg.caixas);
       render();try{renderEstEmpresa();renderEstColab();}catch(e){}
     };});
   Array.prototype.forEach.call(tela.querySelectorAll("[data-fincfg]"),function(bt){
@@ -56937,6 +57369,46 @@ function renderFin(){
   Array.prototype.forEach.call($("finFeitas").querySelectorAll("[data-finabre]"),function(tr){
     tr.onclick=function(){var p=porId(tr.getAttribute("data-finabre"));
       if(p){if(veTela("pedidos")){ir("pedidos");abrirPedido(p);}else abrirInstalacao(p,"venda");}};});
+  try{renderVendasSemNF();}catch(eNf){console.warn("vendas sem nota fiscal",eNf);}
+}
+/* v577: a lista das vendas aprovadas sem o número da nota fiscal, com o campo na própria linha */
+function renderVendasSemNF(){
+  var cd=$("finSemNFCard");if(!cd)return;
+  cd.hidden=!podeNotaFiscalVenda();
+  if(cd.hidden)return;
+  if(!$("snf_de").__lig){
+    $("snf_de").__lig=1;
+    ["snf_de","snf_ate","snf_busca"].forEach(function(id){
+      var el=$(id);el.oninput=function(){renderVendasSemNF();};el.onchange=function(){renderVendasSemNF();};});
+    if(!$("snf_de").value)$("snf_de").value=somaDias(hojeISO(),-90);
+  }
+  var ls=vendasSemNotaFiscal($("snf_de").value,$("snf_ate").value,$("snf_busca").value);
+  $("snf_count").textContent=ls.length+(ls.length===1?" venda":" vendas");
+  $("finSemNF").innerHTML=ls.length
+    ? '<div class="tw"><table><thead><tr><th>Pedido</th><th>Cliente</th><th>Aprovada</th><th class="num">Total</th><th>Nº da nota fiscal</th><th></th></tr></thead><tbody>'+
+      ls.slice(0,200).map(function(p){
+        return "<tr><td><b>"+p.numero+"</b></td><td>"+esc(p.cliente||"")+"</td>"+
+          "<td>"+esc(p.aprovadoEm?dataBR(p.aprovadoEm):"—")+"</td>"+
+          '<td class="num">'+BRL(p.total)+"</td>"+
+          '<td><input data-snfnum="'+esc(p.id)+'" placeholder="Ex.: 12345" style="max-width:140px" autocomplete="off"></td>'+
+          '<td><button class="btn sm" type="button" data-snfok="'+esc(p.id)+'">Salvar</button></td></tr>';
+      }).join("")+"</tbody></table></div>"+
+      (ls.length>200?'<p class="help">Mostrando as 200 primeiras — use o período e a busca para afinar.</p>':"")
+    : '<div class="empty"><div class="big">Nenhuma venda aprovada sem nota fiscal</div>Com estes filtros, todas as aprovadas já têm número.</div>';
+  Array.prototype.forEach.call($("finSemNF").querySelectorAll("[data-snfok]"),function(bt){
+    bt.onclick=async function(){
+      var id=bt.getAttribute("data-snfok"),p=pedPorId(id);
+      var el=$("finSemNF").querySelector('[data-snfnum="'+id+'"]');
+      var v=el?el.value.trim():"";
+      if(!p){toast("Este pedido já não está na lista.");return;}
+      if(!v){toast("Escreva o número da nota fiscal.");if(el)el.focus();return;}
+      bt.disabled=true;
+      var ok=await salvarNotaFiscalPedido(p,v);
+      bt.disabled=false;
+      if(ok)renderVendasSemNF();};});
+  Array.prototype.forEach.call($("finSemNF").querySelectorAll("[data-snfnum]"),function(el){
+    el.onkeydown=function(ev){if(ev.key==="Enter"){ev.preventDefault();
+      var b=$("finSemNF").querySelector('[data-snfok="'+el.getAttribute("data-snfnum")+'"]');if(b)b.click();}};});
 }
 function abrirReabertura(p){
   var lst=precisaAutorizar(p);
@@ -59148,6 +59620,30 @@ function migrarAlterarProspector(lista){
   return feitas;
 }
 var prospMigradas=[];
+/* v577 (18/11, pedido dele): a função Financeiro não tinha "Imprimir e exportar relatórios e
+   listas" em nenhuma das duas empresas — a migração de 27/10 deu essa ação só ao Administrador,
+   que era quem a tinha antes. Por isso ela não achava onde imprimir. Entra na função Financeiro,
+   nas duas empresas, e NADA MAIS muda. */
+var EXPFIN_VERSAO="2026-11-18";
+function migrarExportarFin(lista){
+  var feitas=[];
+  (lista||[]).forEach(function(f){
+    if(!f||f.expFinV)return;
+    if(f.nome==="Financeiro"&&(f.acoes||[]).indexOf("exportar")<0)
+      {f.acoes=(f.acoes||[]).concat(["exportar"]);feitas.push(f.nome);}
+    f.expFinV=EXPFIN_VERSAO;
+  });
+  return feitas;
+}
+var expFinMigradas=[];
+async function gravarMigracaoExpFin(){
+  if(!db||!expFinMigradas.length||!ehAdministrador())return 0;
+  try{await gravarFuncoesConf();}catch(e){console.warn("exportar do financeiro",e);return 0;}
+  expFinMigradas=[];
+  try{await registrarLogPerm({alvo:"migracao",nome:"Financeiro",
+    texto:"Financeiro (18/11): \"Imprimir e exportar relatórios e listas\" foi ligada na função Financeiro."});}catch(e){}
+  return 1;
+}
 async function gravarMigracaoProspector(){
   if(!db||!prospMigradas.length||!ehAdministrador())return 0;
   try{await gravarFuncoesConf();}catch(e){console.warn("alterar prospector",e);return 0;}
@@ -66848,6 +67344,10 @@ function ligar(){
   if($("afNotas"))$("afNotas").onclick=function(){ir("notas");$("nfFiltro").value="conferir";$("nfConf").hidden=true;$("nfForm").hidden=true;$("nfFin").hidden=true;$("nfLista").hidden=false;renderNotas();};
   $("nfNovo").onclick=function(){abrirNota(false);};
   $("nfSemNota").onclick=function(){abrirNota(true);};
+  /* v577: nota de uso e consumo e a lista das ligacoes fornecedor -> produto */
+  if($("nfConsumo"))$("nfConsumo").onclick=function(){abrirNota("consumo");};
+  if($("nfLigacoesBt"))$("nfLigacoesBt").onclick=function(){
+    var c=$("nfLigacoes");if(!c)return;c.hidden=!c.hidden;if(!c.hidden)renderLigacoesNF();};
   $("dfVoltar").onclick=fecharDarEntrada;
   $("df_ok").onclick=function(){return nfModoFin==="lancar"?salvarLancamentoNota():concluirEntradaNota();};
   $("nf_snFoto").onchange=function(){
@@ -66864,6 +67364,14 @@ function ligar(){
   ["nf_frete","nf_desp","nf_parc","nf_seguro","nf_descTot"].forEach(function(id){$(id).oninput=calcNota;});
   $("nf_add").onclick=function(){
     var p=prodPorId($("nf_prod").value);
+    /* v577: na nota de uso e consumo o item é SEMPRE o da nota, sem produto do cadastro */
+    if(nfTipoNota==="consumo"&&(!p||$("nf_desc").value.trim())){
+      var dc=$("nf_desc").value.trim()||(p?p.nome:"");
+      if(!dc){toast("Escreva a descrição do item como está na nota.");return;}
+      var qc=qtdInformada("nf_qtd");if(!qc)return;
+      nfItens.push({pid:"",nome:dc.toUpperCase(),nomeNota:dc.toUpperCase(),cod:"",qtd:qc,
+        un:($("nf_un")?$("nf_un").value.trim():"")||"UN",custo:numMF($("nf_custo").value)||0});
+      $("nf_desc").value="";calcNota();limparInclusao("nf_prod","nf_qtd",["nf_custo"]);return;}
     if(!p&&nfSemNota){
       /* v536: item sem cadastro (só despesa), só na entrada sem nota */
       var ds=$("nf_desc").value.trim();if(!ds){toast("Escolha o produto ou escreva a descrição do item.");return;}
@@ -69020,6 +69528,7 @@ async function continuarBoot(){
   await passoBoot("custo interno",gravarMigracaoCustos);
   await passoBoot("planos informados",gravarMigracaoPlanosInf);
   await passoBoot("alterar prospector",gravarMigracaoProspector);
+  await passoBoot("exportar do financeiro",gravarMigracaoExpFin);
   /* os 12 status novos passaram a conduzir a tela: as OS já gravadas ganham o status certo, uma
      vez só, deduzido da lista antiga (pedido dele, 09/10) */
   await passoBoot("acerto do status das OS",ajustarSitOS);
