@@ -41592,6 +41592,21 @@ function blocoMetas(quem,de,ate){
 
 /* ---------- parabéns por meta batida ---------- */
 var celebracoes={},celebracoesSalvas="";
+/* ===== A CONTA DA COMEMORAÇÃO NÃO SE REFAZ A CADA REDESENHO (18/11, v575) =====
+   A conta das metas é CARA: para saber se a meta foi batida, varre os atendimentos e os pedidos
+   três vezes — do dia, da semana e do mês. Ela estava sendo refeita em TODO redesenho geral, e o
+   redesenho geral acontece a cada item acrescentado ao pedido, porque o resultado só ficava
+   guardado quando a meta TINHA SIDO batida; quando não tinha (o dia inteiro, quase sempre), não
+   guardava nada e refazia tudo na vez seguinte. Medido em 18/11, na base de 3 meses (781 pedidos,
+   5.000 atendimentos): 372 ms no computador e 2.018 ms no celular a cada item acrescentado.
+   Agora a conta só se repete quando o dia, a semana ou o mês vira, ou quando algum registro é
+   gravado (anotarMudancaDados, no único ponto por onde passa toda escrita) ou chega do banco pelo
+   "na hora". Nada do que a comemoração mostra mudou, e a hora em que ela aparece também não:
+   quando a meta é batida, o parabéns aparece no mesmo momento de antes. Experimentei adiar a
+   conferência para fora do toque e descartei: o parabéns caía no meio de uma gravação alheia e
+   o teste do toque duplo (rot-dobro) passou a oscilar. */
+var MUDOU_DADOS=0,PARABENS_SELO={};
+function anotarMudancaDados(){MUDOU_DADOS++;}
 /* Guardar quais parabéns já apareceram é enfeite, não registro de trabalho. Por isso:
    (1) só vai ao banco quando MUDA — antes o boot gastava uma gravação toda vez;
    (2) fica sempre guardado neste aparelho; e
@@ -41666,6 +41681,10 @@ async function checarParabens(quem){
     {k:"semana",rot:"da semana",chave:chaveSemana(h),de:iso(s),ate:iso(f),icone:"🎯",titulo:"Meta da semana batida"},
     {k:"dia",rot:"do dia",chave:h,de:h,ate:h,icone:"✅",titulo:"Meta do dia batida"}
   ];
+  /* v575: nada mudou desde a última conta e o dia/semana/mês é o mesmo → não refaz nada */
+  var selo=quem+"|"+MUDOU_DADOS+"|"+escopos.map(function(e){return e.chave;}).join("|");
+  if(PARABENS_SELO[quem]===selo)return;
+  PARABENS_SELO[quem]=selo;
   celebracoes[quem]=celebracoes[quem]||{usadas:[],vistos:{}};
   celebracoes[quem].vistos=celebracoes[quem].vistos||{};
   for(var i=0;i<escopos.length;i++){
@@ -57162,6 +57181,7 @@ function mesclarViva(c,docs,quem){
     if(i!==undefined)L[i]=o;else{L.push(o);mapa[o.id]=L.length-1;}
     n++;
   });
+  if(n)anotarMudancaDados();   /* v575: chegou coisa do banco — a conta das metas pode mudar */
   return n;
 }
 /* ---- redesenha só a tela aberta (o render() já faz isso), o sino e os contadores ---- */
@@ -57291,6 +57311,7 @@ async function relerViva(c){
   docs.forEach(function(o){ids[o.id]=1;});
   var L=listaViva(c),tirou=0;
   for(var i=L.length-1;i>=0;i--){var x=L[i];if(x&&daEmpresaViva(c,x)&&!ids[x.id]&&!registroAbertoViva(c,x.id)){L.splice(i,1);tirou++;}}
+  if(tirou)anotarMudancaDados();   /* v575 */
   var n=mesclarViva(c,docs,{});
   VIVA.buscados+=docs.length;
   anotaViva(c+": relida inteira (a contagem não fechou) · "+docs.length+" registros, "+tirou+" saíram");
@@ -59194,6 +59215,7 @@ function protegerDbConfig(d){
         ref[k]=function(){
           if(escritaCfgBloqueada(colecao))return Promise.reject(erro());
           var a=arguments;
+          anotarMudancaDados();   /* v575: algo mudou — a conta das metas pode mudar */
           return comAvisoGravando(function(){return f.apply(ref,a);});
         };
       });
@@ -59216,6 +59238,7 @@ function protegerDbConfig(d){
       d.gravarVarios=function(colecao){
         if(escritaCfgBloqueada(colecao))return Promise.reject(erro());
         var a=arguments;
+        anotarMudancaDados();   /* v575 */
         return comAvisoGravando(function(){return gv.apply(d,a);});
       };
     }
@@ -59224,6 +59247,7 @@ function protegerDbConfig(d){
       d.gravarJuntos=function(lista){
         if((lista||[]).some(function(x){return escritaCfgBloqueada(x&&x.colecao);}))return Promise.reject(erro());
         var a=arguments;
+        anotarMudancaDados();   /* v575 */
         return comAvisoGravando(function(){return gj.apply(d,a);});
       };
     }
@@ -63561,6 +63585,7 @@ function checarAgenda(){
   });
   marcarTravadas();
   try{checarPendencias();}catch(e){}
+  /* v575: a conta da comemoração só se refaz quando algo mudou (ver PARABENS_SELO) */
   try{checarParabens(usuarioAtual);}catch(e){}
 }
 function abrirAlerta(a,min){
