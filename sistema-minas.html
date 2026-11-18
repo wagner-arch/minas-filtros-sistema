@@ -1548,6 +1548,8 @@ body.tn .tv-so{display:none!important}
   .rel-folha{background:#fff;color:#111;font:12px/1.35 Arial,Helvetica,sans-serif;padding:26px 30px;border-radius:10px;
     box-shadow:0 1px 4px rgba(0,0,0,.14);max-width:1000px;margin:0 auto 24px;overflow-x:auto}
   .rel-folha *{color:#111}
+  /* v578: venda ainda sem nota fiscal — fica em cinza, no papel também */
+  .rel-folha .rel-semnf,#relImpressao .rel-semnf{color:#777;print-color-adjust:exact;-webkit-print-color-adjust:exact}
   .rel-cab{text-align:center;margin-bottom:12px}
   .rel-emp{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;padding-left:30%}
   .rel-emp b{font-size:21px;letter-spacing:.2px;margin-bottom:3px}
@@ -10908,6 +10910,7 @@ async function carregar(){
   try{migrarPlanosInf(funcoes);}catch(e){console.warn(e);}
   try{migrarAlterarProspector(funcoes);}catch(e){console.warn(e);}
   try{migrarExportarFin(funcoes);}catch(e){console.warn(e);}
+  try{migrarNotasFin(funcoes);}catch(e){console.warn(e);}
   normalizarNomeAlmox();
   formasPgto=JSON.parse(JSON.stringify(SEED_FORMAS));
   tipos=SEED_TIPOS.slice();
@@ -11179,6 +11182,7 @@ async function carregar(){
     try{planoInfMigradas=migrarPlanosInf(funcoes);}catch(ePi){console.warn("planos informados",ePi);}
     try{prospMigradas=migrarAlterarProspector(funcoes);}catch(ePs){console.warn("alterar prospector",ePs);}
     try{expFinMigradas=migrarExportarFin(funcoes);}catch(eEf){console.warn("exportar do financeiro",eEf);}
+    try{notasFinMigradas=migrarNotasFin(funcoes);}catch(eNf){console.warn("notas do financeiro",eNf);}
     normalizarNomeAlmox();
     await migrarTelasNovas();
     try{await migrarAcoesNovas();}catch(eMa){console.warn("ações novas",eMa);}
@@ -34884,7 +34888,7 @@ function relVendas(P){
       var xs=agrupa?grupos[g]:partes;
       if(agrupa)h+='<div class="rel-grupo">'+esc(g)+"</div>";
       h+='<table class="rel-tab fixa larga">'+cols+cab+"<tbody>"+xs.map(function(x){var l=x.l;
-        return "<tr><td>"+esc(nfDoPedido(l.p)||"—")+"</td><td>"+esc(dataCurta(l.data))+'</td><td class="d">'+esc(l.cliente)+'</td><td class="d">'+esc(l.cidade)+'</td><td class="d">'+esc(l.vend)+
+        return "<tr><td>"+htmlNFVenda(l.p)+"</td><td>"+esc(dataCurta(l.data))+'</td><td class="d">'+esc(l.cliente)+'</td><td class="d">'+esc(l.cidade)+'</td><td class="d">'+esc(l.vend)+
           '</td><td class="d">'+esc(x.it?(x.qtd+"× "+x.it.nome):l.itens)+'</td><td class="d">'+esc(l.formas)+'</td><td class="n">'+numRel(x.v)+'</td><td class="n">'+numRel(x.dep)+'</td><td class="d">'+esc(l.sit)+"</td></tr>";}).join("")+
         "</tbody></table>";
       if(agrupa)h+=totRel([{n:"Total do grupo:",v:somaV(xs)},{n:"Depreciado:",v:xs.reduce(function(a,x){return a+x.dep;},0)}],"grupo");
@@ -34895,7 +34899,7 @@ function relVendas(P){
   }
   h+=rodapeRel(L.length,L.length===1?"venda":"vendas");
   var csv=[["Nota fiscal","Data","Cliente","Cidade","Origem","Prospector","Vendedor","Instalador","Produtos","Pagamento","Total","Depreciado","Situação"]];
-  L.forEach(function(l){var p=l.p;csv.push([nfDoPedido(p)||"—",dataCurta(l.data),l.cliente,l.cidade,l.origem,p.prospector||"",l.vend,p.instalador||p.vendedor||"",l.itens,l.formas,numRel(l.total),numRel(l.dep),l.sit]);});
+  L.forEach(function(l){var p=l.p;csv.push([textoNFVenda(p),dataCurta(l.data),l.cliente,l.cidade,l.origem,p.prospector||"",l.vend,p.instalador||p.vendedor||"",l.itens,l.formas,numRel(l.total),numRel(l.dep),l.sit]);});
   return {cab:cabRel,html:h,csv:csv,nome:"Vendas_"+P.de+"_a_"+P.ate};
 }
 
@@ -56878,6 +56882,17 @@ function nfDoTitulo(t){
 }
 /* a coluna "Nota fiscal" dos relatórios: o número, ou "—" quando a nota ainda não saiu */
 function colunaNF(t){return nfDoTitulo(t)||"—";}
+/* v578 (18/11, pedido dele): no Relatório de Vendas a coluna continua "Nota fiscal", mas a venda
+   que ainda NÃO tem nota mostra, em cinza, "sem nota · pedido N" — na tela, no PDF e na planilha.
+   Com nota, só o número. */
+function textoNFVenda(p){
+  var n=nfDoPedido(p);
+  return n||("sem nota · pedido "+((p&&p.numero)||""));
+}
+function htmlNFVenda(p){
+  var n=nfDoPedido(p);
+  return n?esc(n):'<span class="rel-semnf">'+esc(textoNFVenda(p))+"</span>";
+}
 function pedidosComMesmaNF(p,num){
   var n=String(num||"").trim().toUpperCase();
   if(!n)return [];
@@ -56948,7 +56963,9 @@ function abrirNotaFiscalPedido(p){
   return true;
 }
 window.__nfVendaMF={pode:podeNotaFiscalVenda,num:nfDoPedido,repetida:pedidosComMesmaNF,
-  semNota:vendasSemNotaFiscal,salvar:function(p,n){return salvarNotaFiscalPedido__corpo(p,n);},abrir:abrirNotaFiscalPedido};
+  semNota:vendasSemNotaFiscal,salvar:function(p,n){return salvarNotaFiscalPedido__corpo(p,n);},abrir:abrirNotaFiscalPedido,
+  /* v578 */
+  texto:textoNFVenda,html:htmlNFVenda,migrarNotas:migrarNotasFin};
 /* ============ v577 (18/11, regra dele): PIX E DINHEIRO JÁ ENTRAM NO CAIXA NA APROVAÇÃO ============
    Antes, aprovar só criava a parcela no Contas a Receber e o Financeiro tinha de "receber" de novo.
    Agora, para cada forma de pagamento do pedido que seja PIX ou Dinheiro, a janela da aprovação
@@ -59634,6 +59651,29 @@ function migrarExportarFin(lista){
     f.expFinV=EXPFIN_VERSAO;
   });
   return feitas;
+}
+/* v578 (18/11, pedido dele): a função Financeiro tinha a tela "Notas" na WF e NÃO tinha na Minas
+   Filtros — sem ela, o atalho da nota de uso e consumo não aparecia para ela na MF. A tela entra
+   na função Financeiro (na WF já está, então ali não muda nada) e NADA MAIS muda. */
+var NOTASFIN_VERSAO="2026-11-18b";
+function migrarNotasFin(lista){
+  var feitas=[];
+  (lista||[]).forEach(function(f){
+    if(!f||f.notasFinV)return;
+    if(f.nome==="Financeiro"&&(f.telas||[]).indexOf("notas")<0)
+      {f.telas=(f.telas||[]).concat(["notas"]);feitas.push(f.nome);}
+    f.notasFinV=NOTASFIN_VERSAO;
+  });
+  return feitas;
+}
+var notasFinMigradas=[];
+async function gravarMigracaoNotasFin(){
+  if(!db||!notasFinMigradas.length||!ehAdministrador())return 0;
+  try{await gravarFuncoesConf();}catch(e){console.warn("notas do financeiro",e);return 0;}
+  notasFinMigradas=[];
+  try{await registrarLogPerm({alvo:"migracao",nome:"Financeiro",
+    texto:"Financeiro (18/11): a tela \"Entrada de Notas\" foi liberada na função Financeiro."});}catch(e){}
+  return 1;
 }
 var expFinMigradas=[];
 async function gravarMigracaoExpFin(){
@@ -69529,6 +69569,7 @@ async function continuarBoot(){
   await passoBoot("planos informados",gravarMigracaoPlanosInf);
   await passoBoot("alterar prospector",gravarMigracaoProspector);
   await passoBoot("exportar do financeiro",gravarMigracaoExpFin);
+  await passoBoot("notas do financeiro",gravarMigracaoNotasFin);
   /* os 12 status novos passaram a conduzir a tela: as OS já gravadas ganham o status certo, uma
      vez só, deduzido da lista antiga (pedido dele, 09/10) */
   await passoBoot("acerto do status das OS",ajustarSitOS);
