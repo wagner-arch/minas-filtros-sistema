@@ -42851,8 +42851,10 @@ function abrirCompromisso(a){
 }
 function abrirCompromissoPed(p){
   var pr=String(p.instalacao||"").split(" ");
+  /* v576: a cidade é a do endereço de instalação */
+  var ei=enderecoDaInstalacao(p);
   mostrarCompromisso({data:pr[0],hora:pr[1],tipo:"Instalação",cliente:p.cliente,
-    cidade:cidadeDoEvento(p,p.clienteId),resp:respInstalacao(p)});
+    cidade:(ei&&ei.partes&&ei.partes.cidade)||cidadeDoEvento(p,p.clienteId),resp:respInstalacao(p)});
 }
 window.__soCompromissoMF=function(a){return soCompromisso(a);};
 function abrirDetalhes(a){
@@ -44808,7 +44810,8 @@ function renderPedOS(){
     ? '<div class="note ok"><b>OS finalizada</b>'+(o.retiradoPor?" · "+esc(o.retiradoPor):"")+(o.entrega?" · "+esc(dataCurta(o.entrega)):"")+"</div>"
     : (instPend
       ? '<div class="note"><b>Instalação futura do pedido '+ped.numero+":</b> "+esc(respInstalacao(ped)||"—")+" · "+esc(dataCurta(String(ped.instalacao).slice(0,10)))+
-        (String(ped.instalacao).slice(11).trim()?" às "+esc(String(ped.instalacao).slice(11).trim()):"")+". A OS é finalizada quando a instalação for finalizada.</div>"
+        (String(ped.instalacao).slice(11).trim()?" às "+esc(String(ped.instalacao).slice(11).trim()):"")+". A OS é finalizada quando a instalação for finalizada.</div>"+
+        htmlEndInstPedido(ped,"nota")   /* v576: o endereço de instalação informado na venda */
       : "");
   var atS=ativTecDaOS(o),servicoPend=!!(o.autorizadoEm&&atS&&atS.status!=="finalizado");
   var bt="";
@@ -48953,6 +48956,42 @@ function enderecoDoAparelho(e,c){
   return {proprio:false,texto:enderecoCadastroCli(c),geo:(c&&c.geo)||"",
     ref:(c&&c.ref)||"",contatoNome:"",contatoTel:"",horario:""};
 }
+/* ===== O ENDEREÇO DE INSTALAÇÃO INFORMADO NO PEDIDO (18/11, v576) =====
+   Regra dele: "a agenda da instalação tem de mostrar o endereço que a vendedora informou no
+   pedido, não o do cadastro". Na instalação o APARELHO AINDA NÃO EXISTE — ele nasce na aprovação
+   financeira —, então o endereço escolhido na revisão da venda viaja no ITEM (`i.endInst`, 21/10)
+   e era justamente ele que a tela ignorava: o `enderecoDaAtividade` só olhava o aparelho
+   (`a.equipId`), não achava nenhum e caía no cadastro. O técnico ia ao lugar errado.
+   Ordem que vale em toda tela: endereço do APARELHO (quando ele já existe e tem endereço
+   próprio) → `endInst` do item do PEDIDO → endereço do CADASTRO.
+   Itens do mesmo pedido em endereços diferentes aparecem cada um com os seus itens. */
+function endsDaInstalacao(p){
+  if(!p||!p.itens)return [];
+  var grupos=[],onde={};
+  p.itens.forEach(function(i){
+    if(!i||ehPlano(i))return;
+    var x=(i.endInst&&(i.endInst.rua||i.endInst.cidade||i.endInst.geo))?i.endInst:null;
+    var ch=x?[x.cep,x.rua,x.num,x.comp,x.cidade].join("|").toLowerCase():"__cadastro";
+    if(onde[ch]===undefined){onde[ch]=grupos.length;grupos.push({end:x,itens:[]});}
+    grupos[onde[ch]].itens.push(codNomeItem?codNomeItem(i):((i.cod?i.cod+" · ":"")+(i.nome||"")));
+  });
+  return grupos;
+}
+/* o pedido informou algum endereço de instalação? */
+function temEndInstPedido(p){return endsDaInstalacao(p).some(function(g){return !!g.end;});}
+/* o 1º endereço de instalação do pedido, já resolvido como os dos aparelhos (ou null) */
+function enderecoDaInstalacao(p){
+  var g=endsDaInstalacao(p).filter(function(x){return !!x.end;})[0];
+  if(!g)return null;
+  var e=enderecoDoAparelho({endInst:g.end},cliPorId(p&&p.clienteId));
+  e.partes=g.end;e.doPedido=true;e.pedido=p;e.itens=g.itens;e.equip=null;
+  return e;
+}
+/* o texto curto de um endereço de instalação, para cartão e tabela */
+function textoEndInst(x){return enderecoDoAparelho({endInst:x}).texto;}
+/* a marca que o técnico vê: este NÃO é o endereço do cadastro */
+var MARCA_END_INST="endereço de instalação";
+window.__endInstMF={grupos:endsDaInstalacao,um:enderecoDaInstalacao,tem:temEndInstPedido,texto:textoEndInst};
 /* ===== ATIVIDADE PELO APARELHO E BOTÃO DO MAPS (27/10, regra dele) =====
    Troca de refil ou manutenção = tipo com "refil" ou "manutenção" no nome (o tipo criado em
    27/10 é "Troca de refil / Manutenção"). Quem marca escolhe o PURIFICADOR, e a atividade usa o
@@ -48975,8 +49014,17 @@ function purificadoresDoCliente(cid){
 function enderecoDaAtividade(a){
   var c=cliPorId(a&&a.clienteId)||{};
   var e=(a&&a.equipId)?equipPorId(a.equipId):null;
-  if(e){var x=enderecoDoAparelho(e,c);x.equip=e;x.partes=temEndProprio(e)?e.endInst:c;return x;}
-  return {proprio:false,texto:enderecoCadastroCli(c),geo:c.geo||"",partes:c,equip:null};
+  /* 1º: o aparelho, quando ele já existe E tem endereço próprio */
+  if(e&&temEndProprio(e)){var x=enderecoDoAparelho(e,c);x.equip=e;x.partes=e.endInst;return x;}
+  /* 2º (v576): o endereço de instalação informado no pedido desta instalação */
+  var pd=(a&&a.__pedInst)||null;
+  if(!pd)try{pd=pedidoDaInstalacaoAtiv(a);}catch(ePd){pd=null;}
+  var ei=pd?enderecoDaInstalacao(pd):null;
+  if(ei)return ei;
+  /* 3º: o cadastro (o aparelho sem endereço próprio também cai aqui, como antes) */
+  if(e){var x2=enderecoDoAparelho(e,c);x2.equip=e;x2.partes=c;return x2;}
+  return {proprio:false,texto:enderecoCadastroCli(c),geo:c.geo||"",partes:c,equip:null,
+    ref:c.ref||"",contatoNome:"",contatoTel:"",horario:""};
 }
 /* a rota: o ponto do mapa quando existe (mais preciso), senão o endereço escrito */
 function rotaGoogleMaps(end){
@@ -48993,9 +49041,12 @@ function rotaGoogleMaps(end){
    do celular já com o número. Um botão por número do cadastro (telefone, segundo telefone,
    celular e o do responsável, na PJ), sem repetir. O aparelho ainda pede o toque em "ligar" —
    nenhum celular deixa um site completar a ligação sozinho. */
-function telefonesDaAtividade(a){
+function telefonesDaAtividade(a,end){
   var c=cliPorId(a&&a.clienteId)||{},vistos={},L=[];
-  [[c.tel,""],[c.tel2,"2º telefone"],[c.cel,"celular"],[c.respTel,c.respNome?"responsável: "+c.respNome:"responsável"],[a&&a.tel,""]]
+  /* v576: quem recebe no endereço de instalação vem PRIMEIRO — é a pessoa que abre a porta */
+  var en=end||enderecoDaAtividade(a);
+  var rotEnd=(en&&en.contatoNome)?("quem recebe: "+en.contatoNome):"quem recebe no "+MARCA_END_INST;
+  [[(en&&en.contatoTel)||"",rotEnd],[c.tel,""],[c.tel2,"2º telefone"],[c.cel,"celular"],[c.respTel,c.respNome?"responsável: "+c.respNome:"responsável"],[a&&a.tel,""]]
     .forEach(function(x){
       var d=String(x[0]||"").replace(/[^0-9]/g,"");
       if(d.length>=12&&d.slice(0,2)==="55")d=d.slice(2);
@@ -49004,8 +49055,8 @@ function telefonesDaAtividade(a){
     });
   return L;
 }
-function htmlLigarAtividade(a){
-  var L=telefonesDaAtividade(a),c=cliPorId(a&&a.clienteId)||{};
+function htmlLigarAtividade(a,end){
+  var L=telefonesDaAtividade(a,end),c=cliPorId(a&&a.clienteId)||{};
   var nome=String(c.nome||a.cliente||"cliente").split(" ")[0];
   if(!L.length)return '<button class="bt-maps bt-ligar" type="button" disabled>Cliente sem telefone — complete o cadastro</button>';
   return L.map(function(t){
@@ -49016,10 +49067,35 @@ function htmlMapsAtividade(a){
   var end=enderecoDaAtividade(a),r=rotaGoogleMaps(end);
   var ap=end.equip?('<div class="note" style="margin:0 0 8px"><b>Aparelho desta atividade:</b> '+
     esc(rotuloEquip(end.equip))+"</div>"+(end.proprio?avisoEndAparelho(end.equip):"")):"";
-  if(!r)return ap+'<button class="bt-maps" type="button" id="dt_maps" disabled>Cliente sem endereço — complete o cadastro</button>'+htmlLigarAtividade(a);
+  /* v576: o endereço veio do PEDIDO — o técnico tem de saber que não é o do cadastro */
+  if(end.doPedido)ap+=htmlEndInstPedido(end.pedido,"nota");
+  var dizEnd=end.doPedido?(" · "+MARCA_END_INST+" informado no pedido "+((end.pedido&&end.pedido.numero)||""))
+    :(end.proprio?" · endereço onde o aparelho está instalado":" · endereço do cadastro");
+  if(!r)return ap+'<button class="bt-maps" type="button" id="dt_maps" disabled>Cliente sem endereço — complete o cadastro</button>'+htmlLigarAtividade(a,end);
   return ap+'<a class="bt-maps" id="dt_maps" href="'+esc(r.url)+'" target="_blank" rel="noopener">&#128205; Ir com o Google Maps</a>'+
     '<div class="t-sub" style="margin-top:6px">'+(r.porPonto?"Rota pelo ponto marcado no mapa":"Rota pelo endereço: "+esc(r.texto))+
-    (end.proprio?" · endereço onde o aparelho está instalado":" · endereço do cadastro")+"</div>"+htmlLigarAtividade(a);
+    dizEnd+"</div>"+htmlLigarAtividade(a,end);
+}
+/* o bloco do endereço (ou dos endereços) de instalação de um pedido. modo "nota" = caixa de
+   aviso; modo "linha" = texto curto. Cada endereço vem com os itens que vão para ele. */
+function htmlEndInstPedido(p,modo){
+  var gr=endsDaInstalacao(p);
+  if(!gr.some(function(g){return !!g.end;}))return "";
+  var c=cliPorId(p&&p.clienteId)||{};
+  var varios=gr.length>1;
+  return gr.map(function(g){
+    var e=g.end?enderecoDoAparelho({endInst:g.end},c):{proprio:false,texto:enderecoCadastroCli(c),geo:c.geo||"",ref:c.ref||"",contatoNome:"",contatoTel:"",horario:""};
+    var tit=g.end?("<b>"+MARCA_END_INST.charAt(0).toUpperCase()+MARCA_END_INST.slice(1)+"</b> (informado no pedido)")
+                 :"<b>Endereço do cadastro</b>";
+    var det=esc(e.texto||"—")+
+      (e.ref?"<br>Referência: "+esc(e.ref):"")+
+      (e.contatoNome||e.contatoTel?("<br>Quem recebe: <b>"+esc(e.contatoNome||"—")+"</b>"+(e.contatoTel?" · "+esc(e.contatoTel):"")):"")+
+      (e.horario?"<br>Horário: "+esc(e.horario):"")+
+      (e.geo?" · "+mapaLink(e.geo):"")+
+      (varios?('<br><span class="t-sub">'+esc(g.itens.join(" · "))+"</span>"):"");
+    if(modo==="linha")return '<div class="t-sub">'+(g.end?"📍 "+MARCA_END_INST+": ":"")+det+"</div>";
+    return '<div class="note '+(g.end?"warn":"")+'" style="margin:6px 0">'+tit+"<br>"+det+"</div>";
+  }).join("");
 }
 /* a lista de escolha do purificador (janela de nova atividade e atividade futura) */
 function montarEscolhaPurificador(pref,cid,manut,equipAtual){
@@ -52963,16 +53039,33 @@ function renderInstalacao(){
   }
   var c=cliPorId(p.clienteId)||{};
   var tel=String(c.tel||"").replace(/\D/g,"");
-  var end=[[c.rua,c.num].filter(Boolean).join(", "),c.comp,c.bairro,[c.cidade,c.uf].filter(Boolean).join("/"),c.cep].filter(Boolean).join(" · ");
-  var gm=(c.geo&&window.linkMapaMF)?window.linkMapaMF(c.geo):(end?"https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(end):"");
-  var wz=(c.geo&&window.linkWazeMF)?window.linkWazeMF(c.geo):"";
+  /* v576: a instalação acontece onde a venda informou. Um bloco por endereço, com os itens
+     daquele endereço, a rota pelo ponto dele e o telefone de quem recebe. */
+  var grIns=endsDaInstalacao(p);
+  if(!grIns.length)grIns=[{end:null,itens:[]}];
+  var variosIns=grIns.length>1;
+  var blocosIns=grIns.map(function(g){
+    var e=g.end?enderecoDoAparelho({endInst:g.end},c)
+               :{proprio:false,texto:enderecoCadastroCli(c),geo:c.geo||"",ref:c.ref||"",contatoNome:"",contatoTel:"",horario:""};
+    var gmG=(e.geo&&window.linkMapaMF)?window.linkMapaMF(e.geo)
+      :(e.texto?"https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(e.texto):"");
+    var wzG=(e.geo&&window.linkWazeMF)?window.linkWazeMF(e.geo):"";
+    var telG=String(e.contatoTel||"").replace(/\D/g,"");
+    return '<div class="note'+(g.end?" warn":"")+'" style="margin:6px 0">'+
+      (g.end?"<b>📍 Endereço de instalação</b> (informado no pedido)":"<b>Endereço do cadastro</b>")+"<br>"+
+      esc(e.texto||"endereço não cadastrado")+
+      (e.ref?"<br>Referência: "+esc(e.ref):"")+
+      (e.contatoNome||telG?("<br>Quem recebe: <b>"+esc(e.contatoNome||"—")+"</b>"+
+        (telG?' · <a href="tel:+55'+telG+'">'+esc(e.contatoTel)+"</a>":"")):"")+
+      (e.horario?"<br>Horário: "+esc(e.horario):"")+
+      (variosIns&&g.itens.length?('<br><span class="t-sub">'+esc(g.itens.join(" · "))+"</span>"):"")+
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">'+
+        (gmG?'<a class="btn sm" target="_blank" rel="noopener" href="'+esc(gmG)+'">📍 Rota no Google Maps</a>':"")+
+        (wzG?'<a class="btn sm ghost" target="_blank" rel="noopener" href="'+esc(wzG)+'">🚗 Rota no Waze</a>':"")+"</div></div>";
+  }).join("");
   $("ins_cliente").innerHTML="<div><b>"+esc(p.cliente||"—")+"</b>"+
     (tel?' · <a href="tel:+55'+tel+'">'+esc(c.tel)+'</a> · <a href="https://wa.me/55'+tel+'" target="_blank" rel="noopener">WhatsApp</a>':"")+"</div>"+
-    '<div class="t-sub" style="margin-top:4px">'+(c.doc?"CPF/CNPJ "+esc(c.doc)+"<br>":"")+
-      esc(end||"endereço não cadastrado")+(c.ref?"<br>Referência: "+esc(c.ref):"")+"</div>"+
-    '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">'+
-      (gm?'<a class="btn sm" target="_blank" rel="noopener" href="'+esc(gm)+'">📍 Rota no Google Maps</a>':"")+
-      (wz?'<a class="btn sm ghost" target="_blank" rel="noopener" href="'+esc(wz)+'">🚗 Rota no Waze</a>':"")+"</div>";
+    (c.doc?'<div class="t-sub" style="margin-top:4px">CPF/CNPJ '+esc(c.doc)+"</div>":"")+blocosIns;
   var formas=(p.formas||[]).filter(function(f){return +f.valor>0;});
   $("ins_venda").innerHTML=
     '<div class="t-sub">Pedido '+p.numero+" de "+esc(dataBR(p.data||""))+" · vendedor "+esc(p.vendedor||"—")+
@@ -53319,7 +53412,19 @@ function docPedido(p,c){
     formas.map(function(f,ix){return docTabelaForma(f,ix,dataV);}).join("")+
     (p.instalacao
       ? cx("INSTALAÇÃO FUTURA",'<div class="os-par">'+par("Data",esc(dataCurta(pr[0])))+par("Horário",esc(pr[1]||""))+
-          par("Responsável",esc(respInstalacao(p)||""))+"</div>")
+          par("Responsável",esc(respInstalacao(p)||""))+
+          /* v576: o endereço de instalação informado na venda sai no papel do técnico */
+          (function(){
+            var gr=endsDaInstalacao(p),varios=gr.length>1;
+            return gr.filter(function(g){return !!g.end;}).map(function(g){
+              var e=enderecoDoAparelho({endInst:g.end},c);
+              return par("Endereço de instalação",docMaiusc(e.texto))+
+                (e.ref?par("Referência",docMaiusc(e.ref)):"")+
+                (e.contatoNome||e.contatoTel?par("Quem recebe",docMaiusc([e.contatoNome,e.contatoTel].filter(Boolean).join(" · "))):"")+
+                (e.horario?par("Horário no local",esc(e.horario)):"")+
+                (varios?par("Itens",docMaiusc(g.itens.join(" · "))):"");
+            }).join("");
+          })()+"</div>")
       : "")+
     (obs?cx("OBSERVAÇÕES",'<div class="in">'+esc(obs)+"</div>"):"")+
     '<div style="margin-top:12px">De Acordo:</div>'+docAssinatura(p)+
@@ -63659,7 +63764,8 @@ function montarPessoaAgenda(sel){
 function rotuloEv(e){return e.cliente||e.tipo;}
 function horarioEv(e){return (e.hora||"")+(e.fim?"–"+e.fim:"");}
 function tituloEv(e){
-  return e.rot+" · "+e.cliente+(e.cidade?" · "+e.cidade:"")+(e.obs?" — "+e.obs:"");
+  return e.rot+" · "+e.cliente+(e.cidade?" · "+e.cidade:"")+
+    (e.endInst?" · "+MARCA_END_INST+": "+e.endInst:"")+(e.obs?" — "+e.obs:"");
 }
 /* cidade do compromisso: a do próprio registro, senão a do cadastro do cliente */
 function cidadeDoEvento(reg,cid){
@@ -63701,8 +63807,12 @@ function eventos(){
     return kI===agS;}).forEach(function(p){
     var pr=String(p.instalacao).split(" ");
     /* id "ped:": o clique abre a janela da instalação */
+    /* v576: a cidade e o endereço são os da INSTALAÇÃO (o que a venda informou), não os do cadastro */
+    var eiE=enderecoDaInstalacao(p);
     out.push({id:"ped:"+p.id,pedido:p.id,data:pr[0],hora:pr[1]||"",fim:"",quem:respInstalacao(p),
-      cliente:p.cliente,cidade:cidadeDoEvento(p,p.clienteId),tipo:"Instalação",obs:soCompromissoPed(p)?"":(p.obsInstalacao||p.obs||""),classe:"inst",
+      cliente:p.cliente,cidade:(eiE&&eiE.partes&&eiE.partes.cidade)||cidadeDoEvento(p,p.clienteId),
+      endInst:eiE?eiE.texto:"",endOutro:!!eiE,
+      tipo:"Instalação",obs:soCompromissoPed(p)?"":(p.obsInstalacao||p.obs||""),classe:"inst",
       meu:podeInstalar(p),
       rot:(p.instaladoEm?"Instalação finalizada":"Instalação")+" · pedido "+p.numero});
   });
@@ -63869,7 +63979,8 @@ function renderCalendario(){
       hp+='<div class="hora"><div class="h">'+(e.hora||"—")+(e.fim?"<br>"+e.fim:"")+'</div><div class="evs">'+
         '<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'"><b>'+esc(e.cliente||"—")+
           (e.cidade?' <span class="pill p-mut">'+esc(e.cidade)+"</span>":"")+"</b><span>"+
-          esc(e.rot)+(e.tipo?" · "+esc(e.tipo):"")+(e.quem?" · "+esc(e.quem):"")+(e.meu?"":' · <i>só leitura</i>')+"</span></div>"+
+          esc(e.rot)+(e.tipo?" · "+esc(e.tipo):"")+(e.quem?" · "+esc(e.quem):"")+(e.meu?"":' · <i>só leitura</i>')+
+          (e.endInst?'<br>📍 <b>'+MARCA_END_INST+":</b> "+esc(e.endInst):"")+"</span></div>"+
         (e.id&&e.id.indexOf("ped:")!==0?htmlLixeira("atividade",e.id):"")+"</div></div>";});
     area.innerHTML=hp+"</div>";ligarEventosCal();return;
   }
@@ -63930,7 +64041,7 @@ function renderCalendario(){
       hs+='<div class="col'+(hj2?" hoje":"")+'"><div class="ch"><div class="d">'+WD[dd.getDay()]+'</div><div class="n">'+dd.getDate()+"</div></div>";
       if(!lst.length)hs+='<div style="font-size:12.5px;color:var(--ink-3);text-align:center;padding:8px 0">—</div>';
       lst.forEach(function(e){
-        hs+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(tituloEv(e))+'"><b>'+(e.trava?"🔒 ":"")+(e.hora?esc(e.hora):"")+"</b>"+esc(rotuloEv(e))+(e.cidade?'<span class="ev-cid">'+esc(e.cidade)+"</span>":"")+"</div>";});
+        hs+='<div class="ev '+e.classe+(e.id?" clicavel":"")+'" data-ev="'+(e.id||"")+'" title="'+esc(tituloEv(e))+'"><b>'+(e.trava?"🔒 ":"")+(e.hora?esc(e.hora):"")+"</b>"+esc(rotuloEv(e))+(e.cidade?'<span class="ev-cid">'+(e.endInst?"📍 ":"")+esc(e.cidade)+"</span>":"")+"</div>";});
       hs+="</div>";
     }
     area.innerHTML=hs+"</div>";ligarEventosCal();
@@ -63947,7 +64058,9 @@ function renderCalendario(){
           (e.cidade?' <span class="pill p-mut">'+esc(e.cidade)+"</span>":"")+"</b><span>"+
           esc(e.rot)+(e.tipo?" · "+esc(e.tipo):"")+(e.quem?" · "+esc(e.quem):"")+
           (e.meu?"":' · <i>só leitura</i>')+
-          (e.trava?' · 🔒 <b>resolva a atrasada antes</b>':"")+"</span></div>"+
+          (e.trava?' · 🔒 <b>resolva a atrasada antes</b>':"")+
+          /* v576: a instalação mostra o endereço que a venda informou, com a marca */
+          (e.endInst?'<br>📍 <b>'+MARCA_END_INST+":</b> "+esc(e.endInst):"")+"</span></div>"+
         /* lixeira do agendamento, só para o Administrador (regra dele, 20/09) */
         (e.id&&e.id.indexOf("ped:")!==0?htmlLixeira("atividade",e.id):"")+"</div></div>";
     });
