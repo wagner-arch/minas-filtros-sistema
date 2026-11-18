@@ -5318,11 +5318,25 @@ img{max-width:100%}
     <section class="screen" id="s-caixas" hidden>
       <div class="page-head"><h1>Caixas</h1><p>Saldo de cada caixa e o movimento do período. Abertura, fechamento e sangria em um lugar só.</p></div>
       <div class="kpis" id="cmKpis"></div>
+      <!-- v579: abrir o dia, sangria e fechar o dia do caixa de dinheiro (gaveta da loja) -->
+      <div class="card" id="cxDiaCard" hidden style="margin-bottom:20px">
+        <div class="toolbar" style="padding:0 0 12px">
+          <h2 id="cxDiaTit" style="margin:0">O dia do caixa</h2><span class="sp"></span>
+          <button class="btn" type="button" id="cxAbrir">Abrir o dia</button>
+          <button class="btn ghost" type="button" id="cxSangria">Sangria</button>
+          <button class="btn ghost" type="button" id="cxFechar">Fechar o dia</button>
+        </div>
+        <div id="cxDiaResumo"></div>
+        <div id="cxDiaAjustes"></div>
+        <div id="cxDiaHist"></div>
+      </div>
       <div class="card flush">
         <div class="toolbar">
           <select id="cmCaixa" style="max-width:230px"></select>
           <input id="cmDe" type="date" style="max-width:160px">
           <input id="cmAte" type="date" style="max-width:160px">
+          <!-- v579: busca por valor, pedido, cliente/fornecedor, descrição e nota fiscal -->
+          <input id="cmBusca" placeholder="Buscar por valor, pedido, cliente, descrição ou nota" style="max-width:300px" autocomplete="off">
           <span class="count" id="cmCount"></span><span class="sp"></span>
           <button class="btn" type="button" id="cmMov">Lançar movimento</button>
           <button class="btn ghost" type="button" id="cmTransf">Transferir entre caixas</button>
@@ -5431,6 +5445,7 @@ img{max-width:100%}
         <div class="cal-views rl-abas" id="rlAbas">
           <button type="button" data-t="vendas" aria-current="true">Relatório de Vendas</button>
           <button type="button" data-t="fechamento" aria-current="false">Fechamento do Mês</button>
+          <button type="button" data-t="extrato" aria-current="false">Extrato</button>
           <button type="button" data-t="pagar" aria-current="false">Contas a Pagar</button>
           <button type="button" data-t="receber" aria-current="false">Contas a Receber</button>
           <button type="button" data-t="origens" aria-current="false">Origens</button>
@@ -5453,6 +5468,11 @@ img{max-width:100%}
             <select id="rt_base"><option value="vencimento">Vencimento</option><option value="emissao">Emissão</option><option value="pagamento">Pagamento / recebimento</option></select></div>
         </div>
 
+        <!-- v579: extrato (formato de extrato bancário, para a contabilidade) -->
+        <div class="grid g4 rl-f" data-rel="extrato" style="margin-top:12px">
+          <div class="fld"><label for="rx_caixa">Caixa</label><select id="rx_caixa"></select></div>
+          <div class="fld"><label for="rx_busca">Busca</label><input id="rx_busca" placeholder="Valor, pedido, cliente, descrição ou nota" autocomplete="off"></div>
+        </div>
         <div class="grid g4 rl-f" data-rel="fechamento" style="margin-top:12px">
           <div class="fld"><label for="rf_contaDe">Conta (caixa) de</label><select id="rf_contaDe"></select></div>
           <div class="fld"><label for="rf_contaAte">até a conta</label><select id="rf_contaAte"></select></div>
@@ -32873,14 +32893,432 @@ async function salvarMov__corpo(){
   $("movModal").hidden=true;
   renderCaixasMov();renderCadCaixas();renderFluxo();
 }
+/* =============== v579 (18/11, regra dele): ABRIR, SANGRIA E FECHAR O CAIXA ===============
+   Quem pode: o perfil Financeiro, o Administrador e quem está marcado como responsável por aquele
+   caixa no Cadastro de Caixas. Vale para o caixa de DINHEIRO (gaveta da loja) e para o cofre.
+   · ABRIR o dia: informa o valor contado na gaveta. Diferente do saldo do sistema, a diferença é
+     REGISTRADA com motivo obrigatório e NÃO ajusta nada: fica esperando o Financeiro ou o
+     Administrador aprovar o ajuste.
+   · SANGRIA: retirada para outro caixa (cofre, banco) ou para despesa, com valor, destino e motivo.
+     Para outro caixa é transferência (saída aqui, entrada lá, o mesmo `transfId` do Transferir);
+     para despesa é uma saída com centro de custo. O dinheiro nunca desaparece.
+   · FECHAR o dia: informa o valor contado; o sistema mostra o esperado (abertura contada +
+     entradas − saídas, e a sangria já é saída) e a diferença, que também pede motivo e espera
+     aprovação. O ajuste da diferença NÃO entra na conta do esperado — o valor contado já é a
+     realidade da gaveta.
+   Tudo fica no histórico do caixa (`c.dias`), e nada apaga nem altera lançamento antigo. */
+var CX_DIAS_GUARDA=180;
+function ehCaixaDeDinheiro(c){return !!c&&(c.tipo==="dinheiro"||c.tipo==="cofre");}
+function caixasDeDinheiro(){
+  return daLoja(caixas).filter(function(c){return c.status!=="inativo"&&ehCaixaDeDinheiro(c);})
+    .sort(function(a,b){return (b.padrao==="sim"?1:0)-(a.padrao==="sim"?1:0);});
+}
+function caixaDoDiaSel(){
+  var id=$("cmCaixa")?$("cmCaixa").value:"";
+  var c=id?caixaPor(id):null;
+  if(c&&ehCaixaDeDinheiro(c)&&c.loja===lojaAtual)return c;
+  return caixasDeDinheiro()[0]||null;
+}
+function podeMexerNoDia(c){
+  if(!c||c.loja!==lojaAtual)return false;
+  var pf=perfilDe(usuarioAtual);
+  if(pf==="Financeiro"||pf==="Administrador")return true;
+  return !!c.responsavel&&String(c.responsavel)===usuarioAtual;
+}
+function podeAprovarDifCaixa(){var pf=perfilDe(usuarioAtual);return pf==="Financeiro"||pf==="Administrador";}
+function diasDoCaixa(c){return (c&&c.dias)||[];}
+function diaDoCaixa(c,data){return diasDoCaixa(c).filter(function(d){return d.data===data;})[0]||null;}
+function diaDoCaixaCria(c,data){
+  var d=diaDoCaixa(c,data);
+  if(d)return d;
+  c.dias=(c.dias||[]).concat([{data:data,sangrias:[]}]);
+  c.dias.sort(function(a,b){return String(a.data).localeCompare(String(b.data));});
+  if(c.dias.length>CX_DIAS_GUARDA)c.dias=c.dias.slice(-CX_DIAS_GUARDA);
+  return diaDoCaixa(c,data);
+}
+function movsDoDiaCaixa(c,data){
+  return movs.filter(function(m){return m.loja===lojaAtual&&m.caixaId===c.id&&m.data===data;});
+}
+/* o esperado da gaveta no fim do dia. O ajuste da diferença fica FORA: o contado já é a realidade */
+function contaDoDiaCaixa(c,data){
+  var d=diaDoCaixa(c,data),ls=movsDoDiaCaixa(c,data);
+  var base=(d&&d.abertura)?(+d.abertura.valor||0):saldoCaixa(c.id,somaDias(data,-1));
+  var ent=0,sai=0,sang=0,ajs=0;
+  ls.forEach(function(m){
+    var v=+m.valor||0;
+    if(m.diferencaCaixa){ajs+=(m.tipo==="entrada"?1:-1)*v;return;}
+    if(m.tipo==="entrada")ent+=v;else{sai+=v;if(m.sangria)sang+=v;}
+  });
+  return {base:base,ent:ent,sai:sai,sangrias:sang,ajustes:ajs,esperado:arred(base+ent-sai),
+    sistema:saldoCaixa(c.id,data),antes:saldoCaixa(c.id,somaDias(data,-1)),dia:d};
+}
+/* o dia que a tela mostra: hoje */
+function diaDaTelaCaixa(){return hojeISO();}
+/* a abertura e o fechamento têm cada um a SUA diferença, e cada uma espera a sua aprovação:
+   `d.ajustes` é a lista (um por etapa). Dia gravado antes, com um `d.ajuste` só, continua valendo. */
+function ajustesDoDia(d){
+  if(!d)return [];
+  var L=(d.ajustes||[]).slice();
+  if(d.ajuste&&!L.some(function(a){return a.tipo===d.ajuste.tipo;}))L.push(d.ajuste);
+  return L;
+}
+function ajustePorTipo(d,tipo){return ajustesDoDia(d).filter(function(a){return a.tipo===tipo;})[0]||null;}
+function pendenteAjuste(a){return !!a&&!a.aprovadoEm&&!a.recusadoEm;}
+function poeAjusteNoDia(d,a){
+  d.ajustes=(d.ajustes||[]).filter(function(x){return x.tipo!==a.tipo;}).concat([a]);
+  if(d.ajuste&&d.ajuste.tipo===a.tipo)delete d.ajuste;
+}
+function ajustesPendentesCaixas(){
+  var L=[];
+  caixasDeDinheiro().forEach(function(c){
+    diasDoCaixa(c).forEach(function(d){
+      ajustesDoDia(d).forEach(function(a){if(pendenteAjuste(a))L.push({c:c,d:d,a:a});});});});
+  return L;
+}
+/* ---------- abrir o dia ---------- */
+function abrirDiaCaixa(c){
+  if(!c){toast("Nenhum caixa de dinheiro ativo nesta empresa.");return false;}
+  if(!podeMexerNoDia(c)){toast("Quem abre e fecha o caixa é o Financeiro, o Administrador ou o responsável pelo caixa.");return false;}
+  var data=diaDaTelaCaixa(),d=diaDoCaixa(c,data);
+  if(d&&d.abertura){toast("O dia deste caixa já foi aberto por "+(d.abertura.por||"")+".");return false;}
+  var esperado=saldoCaixa(c.id,somaDias(data,-1));
+  var m=$("cxdModal");
+  if(!m){m=document.createElement("div");m.className="modal";m.id="cxdModal";document.body.appendChild(m);}
+  m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Abrir o dia · '+esc(c.nome)+"</h3>"+
+    '<div class="sub">'+esc(dataBR(data))+" · saldo do sistema no fim do dia anterior: <b>"+BRL(esperado)+"</b></div>"+
+    '<div class="fld" style="margin-top:14px"><label for="cxd_valor">Valor contado na gaveta <span class="req">*</span></label>'+
+      '<input id="cxd_valor" inputmode="decimal" placeholder="0,00"></div>'+
+    '<div id="cxd_dif"></div>'+
+    '<div class="fld" id="cxd_motivoBox" hidden><label for="cxd_motivo">Motivo da diferença <span class="req">*</span></label>'+
+      '<input id="cxd_motivo" placeholder="Ex.: sobrou troco da véspera"></div>'+
+    '<div id="cxd_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="cxd_ok">Abrir o dia</button>'+
+    '<button class="btn mut" type="button" id="cxd_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  function mostra(){
+    var v=numMF($("cxd_valor").value)||0,dif=arred(v-esperado);
+    $("cxd_motivoBox").hidden=(Math.abs(dif)<0.005);
+    $("cxd_dif").innerHTML=Math.abs(dif)<0.005
+      ?'<div class="note ok">Bate com o sistema.</div>'
+      :'<div class="note warn"><b>Diferença de '+BRL(Math.abs(dif))+(dif>0?" a mais":" a menos")+
+        ".</b> O sistema NÃO ajusta nada agora: a diferença fica registrada e espera o Financeiro ou o Administrador aprovar o ajuste.</div>";
+  }
+  $("cxd_valor").oninput=mostra;mostra();
+  $("cxd_nao").onclick=function(){m.hidden=true;};
+  $("cxd_ok").onclick=function(){return salvarAberturaCaixa(c,data,esperado);};
+  return true;
+}
+function salvarAberturaCaixa(){return travaSalvar("salvarAberturaCaixa",salvarAberturaCaixa__corpo,this,arguments);}
+async function salvarAberturaCaixa__corpo(c,data,esperado){
+  if(!podeMexerNoDia(c))return false;
+  var txt=$("cxd_valor")?$("cxd_valor").value:"";
+  if(!String(txt).trim()){$("cxd_alerta").innerHTML='<div class="note crit"><b>Informe o valor contado.</b></div>';return false;}
+  var v=arred(numMF(txt)||0),dif=arred(v-esperado),mot=($("cxd_motivo")?$("cxd_motivo").value:"").trim();
+  if(v<0){$("cxd_alerta").innerHTML='<div class="note crit"><b>O valor contado não pode ser negativo.</b></div>';return false;}
+  if(Math.abs(dif)>=0.005&&!mot){$("cxd_alerta").innerHTML='<div class="note crit"><b>Escreva o motivo da diferença.</b></div>';return false;}
+  if(diaDoCaixa(c,data)&&diaDoCaixa(c,data).abertura){$("cxd_alerta").innerHTML='<div class="note crit"><b>Este dia já foi aberto.</b></div>';return false;}
+  var antes=copiaReg(c),quando=agoraCarimbo();
+  var d=diaDoCaixaCria(c,data);
+  d.abertura={valor:v,esperado:arred(esperado),dif:dif,motivo:mot,por:usuarioAtual,quando:quando};
+  if(Math.abs(dif)>=0.005)
+    poeAjusteNoDia(d,{tipo:"abertura",valor:dif,motivo:mot,por:usuarioAtual,quando:quando});
+  try{await gravaConf("caixas",c);}
+  catch(e){voltarReg(c,antes);$("cxd_alerta").innerHTML='<div class="note crit"><b>A abertura não foi gravada:</b> '+esc(motivoBanco(e))+"</div>";return false;}
+  $("cxdModal").hidden=true;
+  toast("Dia aberto em "+BRL(v)+(Math.abs(dif)>=0.005?" · diferença de "+BRL(Math.abs(dif))+" registrada, esperando aprovação":"")+".");
+  renderCaixaDia();renderCaixasMov();return true;
+}
+/* ---------- sangria ---------- */
+function abrirSangria(c){
+  if(!c){toast("Nenhum caixa de dinheiro ativo nesta empresa.");return false;}
+  if(!podeMexerNoDia(c)){toast("Quem faz a sangria é o Financeiro, o Administrador ou o responsável pelo caixa.");return false;}
+  var data=diaDaTelaCaixa(),saldo=saldoCaixa(c.id,data);
+  var destinos=daLoja(caixas).filter(function(x){return x.status!=="inativo"&&x.id!==c.id;});
+  var m=$("cxsModal");
+  if(!m){m=document.createElement("div");m.className="modal";m.id="cxsModal";document.body.appendChild(m);}
+  m.innerHTML='<div class="box" style="width:min(600px,100%)"><h3>Sangria · '+esc(c.nome)+"</h3>"+
+    '<div class="sub">'+esc(dataBR(data))+" · saldo de hoje: <b>"+BRL(saldo)+"</b></div>"+
+    '<div class="grid g2" style="margin-top:14px">'+
+      '<div class="fld"><label for="cxs_valor">Valor <span class="req">*</span></label><input id="cxs_valor" inputmode="decimal" placeholder="0,00"></div>'+
+      '<div class="fld"><label for="cxs_dest">Para onde vai <span class="req">*</span></label><select id="cxs_dest">'+
+        '<option value="">— escolha —</option>'+
+        destinos.map(function(x){return '<option value="'+esc(x.id)+'">'+esc(x.nome)+(x.banco?" · "+esc(x.banco):"")+"</option>";}).join("")+
+        '<option value="despesa">Despesa (sai da empresa)</option></select></div>'+
+      '<div class="fld" id="cxs_ccBox" hidden style="grid-column:1/-1"><label for="cxs_centro">Centro de custo <span class="req">*</span></label>'+
+        '<select id="cxs_centro"></select></div>'+
+      '<div class="fld" style="grid-column:1/-1"><label for="cxs_motivo">Motivo <span class="req">*</span></label>'+
+        '<input id="cxs_motivo" placeholder="Ex.: depósito do malote"></div>'+
+    "</div>"+
+    '<div class="note">A sangria sai deste caixa e entra no destino escolhido — o dinheiro nunca desaparece. Para despesa, sai da empresa e entra no centro de custo.</div>'+
+    '<div id="cxs_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="cxs_ok">Lançar a sangria</button>'+
+    '<button class="btn mut" type="button" id="cxs_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  try{opcoes("cxs_centro",centrosOrdenados().filter(function(x){return x.tipo==="saida";}),
+    function(x){return x.id;},function(x){return caminhoCentro(x);},"— escolha —");}catch(e){}
+  $("cxs_dest").onchange=function(){$("cxs_ccBox").hidden=(this.value!=="despesa");};
+  $("cxs_nao").onclick=function(){m.hidden=true;};
+  $("cxs_ok").onclick=function(){return salvarSangria(c,data);};
+  return true;
+}
+function salvarSangria(){return travaSalvar("salvarSangria",salvarSangria__corpo,this,arguments);}
+async function salvarSangria__corpo(c,data){
+  if(!podeMexerNoDia(c))return false;
+  var v=arred(numMF($("cxs_valor").value)||0),dest=$("cxs_dest").value,mot=$("cxs_motivo").value.trim();
+  var cc=$("cxs_centro")?$("cxs_centro").value:"";
+  var falta=[];
+  if(!(v>0))falta.push("o valor");
+  if(!dest)falta.push("para onde vai");
+  if(!mot)falta.push("o motivo");
+  if(dest==="despesa"&&!cc)falta.push("o centro de custo");
+  if(falta.length){$("cxs_alerta").innerHTML='<div class="note crit"><b>Falta '+esc(falta.join(", "))+".</b></div>";return false;}
+  var saldo=saldoCaixa(c.id,data);
+  if(v>saldo+0.005&&!confirm("A sangria de "+BRL(v)+" é maior que o saldo de hoje ("+BRL(saldo)+"). Lançar assim mesmo?"))return false;
+  var antes=copiaReg(c),quando=agoraCarimbo(),par=uid(),sid=uid();
+  var nomeDest=dest==="despesa"?"despesa":((caixaPor(dest)||{}).nome||"outro caixa");
+  var saida={id:uid(),loja:lojaAtual,caixaId:c.id,data:data,tipo:"saida",valor:v,hora:agoraHM(),
+    descricao:"Sangria · "+(dest==="despesa"?"despesa":"para "+nomeDest)+" · "+mot,
+    sangria:true,sangriaId:sid,por:usuarioAtual};
+  var entrada=null;
+  if(dest==="despesa")saida.centroId=cc;
+  else{
+    saida.transfId=par;
+    entrada={id:uid(),loja:lojaAtual,caixaId:dest,data:data,tipo:"entrada",valor:v,hora:agoraHM(),
+      descricao:"Sangria de "+c.nome+" · "+mot,sangria:true,sangriaId:sid,transfId:par,por:usuarioAtual};
+  }
+  var d=diaDoCaixaCria(c,data);
+  d.sangrias=(d.sangrias||[]).concat([{id:sid,valor:v,destino:dest,destinoNome:nomeDest,centroId:(dest==="despesa"?cc:""),
+    motivo:mot,por:usuarioAtual,quando:quando,movSaida:saida.id,movEntrada:entrada?entrada.id:""}]);
+  try{
+    movs.push(saida);await gravaConf("movs",saida);
+    if(entrada){movs.push(entrada);await gravaConf("movs",entrada);}
+    await gravaConf("caixas",c);
+  }catch(e){
+    [saida,entrada].forEach(function(x){if(!x)return;var k=movs.indexOf(x);if(k>=0)movs.splice(k,1);});
+    voltarReg(c,antes);
+    $("cxs_alerta").innerHTML='<div class="note crit"><b>A sangria não foi gravada:</b> '+esc(motivoBanco(e))+"</div>";return false;}
+  $("cxsModal").hidden=true;
+  toast("Sangria de "+BRL(v)+" · saiu de "+c.nome+(entrada?" e entrou em "+nomeDest:" como despesa")+".");
+  renderCaixaDia();renderCaixasMov();renderCadCaixas();renderFluxo();return true;
+}
+/* ---------- fechar o dia ---------- */
+function abrirFechamentoCaixa(c){
+  if(!c){toast("Nenhum caixa de dinheiro ativo nesta empresa.");return false;}
+  if(!podeMexerNoDia(c)){toast("Quem abre e fecha o caixa é o Financeiro, o Administrador ou o responsável pelo caixa.");return false;}
+  var data=diaDaTelaCaixa(),d=diaDoCaixa(c,data);
+  if(d&&d.fechamento){toast("O dia deste caixa já foi fechado por "+(d.fechamento.por||"")+".");return false;}
+  var ct=contaDoDiaCaixa(c,data);
+  var m=$("cxfModal");
+  if(!m){m=document.createElement("div");m.className="modal";m.id="cxfModal";document.body.appendChild(m);}
+  m.innerHTML='<div class="box" style="width:min(600px,100%)"><h3>Fechar o dia · '+esc(c.nome)+"</h3>"+
+    '<div class="sub">'+esc(dataBR(data))+"</div>"+
+    '<div class="note" style="margin-top:12px"><b>O esperado na gaveta: '+BRL(ct.esperado)+"</b>"+
+      '<div class="t-sub">'+((d&&d.abertura)?"abertura contada "+BRL(ct.base):"saldo do dia anterior "+BRL(ct.base))+
+      " + entradas "+BRL(ct.ent)+" − saídas "+BRL(ct.sai)+
+      (ct.sangrias?" (das quais "+BRL(ct.sangrias)+" de sangria)":"")+
+      (Math.abs(ct.ajustes)>=0.005?" · o ajuste de diferença de "+BRL(Math.abs(ct.ajustes))+" fica fora: o contado já é a realidade":"")+
+      "</div></div>"+
+    '<div class="fld" style="margin-top:12px"><label for="cxf_valor">Valor contado na gaveta <span class="req">*</span></label>'+
+      '<input id="cxf_valor" inputmode="decimal" placeholder="0,00"></div>'+
+    '<div id="cxf_dif"></div>'+
+    '<div class="fld" id="cxf_motivoBox" hidden><label for="cxf_motivo">Motivo da diferença <span class="req">*</span></label>'+
+      '<input id="cxf_motivo" placeholder="Ex.: faltou troco"></div>'+
+    '<div id="cxf_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="cxf_ok">Fechar o dia</button>'+
+    '<button class="btn mut" type="button" id="cxf_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  function mostra(){
+    var v=numMF($("cxf_valor").value)||0,dif=arred(v-ct.esperado);
+    $("cxf_motivoBox").hidden=(Math.abs(dif)<0.005);
+    $("cxf_dif").innerHTML=Math.abs(dif)<0.005
+      ?'<div class="note ok">Bate com o esperado.</div>'
+      :'<div class="note warn"><b>Diferença de '+BRL(Math.abs(dif))+(dif>0?" a mais (sobrou)":" a menos (faltou)")+
+        ".</b> Fica registrada com o motivo e espera o Financeiro ou o Administrador aprovar o ajuste. Nada é alterado agora.</div>";
+  }
+  $("cxf_valor").oninput=mostra;mostra();
+  $("cxf_nao").onclick=function(){m.hidden=true;};
+  $("cxf_ok").onclick=function(){return salvarFechamentoCaixa(c,data,ct.esperado);};
+  return true;
+}
+function salvarFechamentoCaixa(){return travaSalvar("salvarFechamentoCaixa",salvarFechamentoCaixa__corpo,this,arguments);}
+async function salvarFechamentoCaixa__corpo(c,data,esperado){
+  if(!podeMexerNoDia(c))return false;
+  var txt=$("cxf_valor")?$("cxf_valor").value:"";
+  if(!String(txt).trim()){$("cxf_alerta").innerHTML='<div class="note crit"><b>Informe o valor contado.</b></div>';return false;}
+  var v=arred(numMF(txt)||0),dif=arred(v-esperado),mot=($("cxf_motivo")?$("cxf_motivo").value:"").trim();
+  if(v<0){$("cxf_alerta").innerHTML='<div class="note crit"><b>O valor contado não pode ser negativo.</b></div>';return false;}
+  if(Math.abs(dif)>=0.005&&!mot){$("cxf_alerta").innerHTML='<div class="note crit"><b>Escreva o motivo da diferença.</b></div>';return false;}
+  var dj=diaDoCaixa(c,data);
+  if(dj&&dj.fechamento){$("cxf_alerta").innerHTML='<div class="note crit"><b>Este dia já foi fechado.</b></div>';return false;}
+  var antes=copiaReg(c),quando=agoraCarimbo();
+  var d=diaDoCaixaCria(c,data);
+  d.fechamento={valor:v,esperado:arred(esperado),dif:dif,motivo:mot,por:usuarioAtual,quando:quando};
+  /* a diferença do fechamento é OUTRA: a da abertura continua esperando a sua aprovação */
+  if(Math.abs(dif)>=0.005)
+    poeAjusteNoDia(d,{tipo:"fechamento",valor:dif,motivo:mot,por:usuarioAtual,quando:quando});
+  try{await gravaConf("caixas",c);}
+  catch(e){voltarReg(c,antes);$("cxf_alerta").innerHTML='<div class="note crit"><b>O fechamento não foi gravado:</b> '+esc(motivoBanco(e))+"</div>";return false;}
+  $("cxfModal").hidden=true;
+  toast("Dia fechado em "+BRL(v)+(Math.abs(dif)>=0.005?" · diferença de "+BRL(Math.abs(dif))+" esperando aprovação":" · bateu com o esperado")+".");
+  renderCaixaDia();renderCaixasMov();return true;
+}
+/* ---------- aprovar (ou recusar) o ajuste da diferença: só Financeiro e Administrador ---------- */
+function aprovarDifCaixa(){return travaSalvar("aprovarDifCaixa",aprovarDifCaixa__corpo,this,arguments);}
+async function aprovarDifCaixa__corpo(cid,data,tipo){
+  if(!podeAprovarDifCaixa()){toast("Só o Financeiro e o Administrador aprovam o ajuste da diferença de caixa.");return false;}
+  var c=caixaPor(cid),d=c?diaDoCaixa(c,data):null;
+  var a=tipo?ajustePorTipo(d,tipo):(ajustesDoDia(d).filter(pendenteAjuste)[0]||null);
+  if(!a||!pendenteAjuste(a)){toast("Este ajuste já foi decidido.");return false;}
+  var antes=copiaReg(c),quando=agoraCarimbo();
+  var cc=await centroFixo(a.valor>0?"Diferença de caixa (sobra)":"Diferença de caixa (falta)",
+    "Impostos e taxas",a.valor>0?"entrada":"saida");
+  var mv={id:"cxdif-"+c.id+"-"+data+"-"+(a.tipo||"x"),loja:lojaAtual,caixaId:c.id,data:data,
+    tipo:(a.valor>0?"entrada":"saida"),valor:arred(Math.abs(a.valor)),hora:agoraHM(),
+    descricao:"Ajuste da diferença de caixa · "+(a.tipo==="abertura"?"abertura":"fechamento")+" · "+(a.motivo||""),
+    centroId:cc,diferencaCaixa:true,por:usuarioAtual,aprovadoPor:usuarioAtual};
+  if(movs.some(function(m){return m.id===mv.id;})){toast("O ajuste deste dia já foi lançado.");return false;}
+  a.aprovadoPor=usuarioAtual;a.aprovadoEm=quando;a.movId=mv.id;
+  try{movs.push(mv);await gravaConf("movs",mv);await gravaConf("caixas",c);}
+  catch(e){var k=movs.indexOf(mv);if(k>=0)movs.splice(k,1);voltarReg(c,antes);
+    toast("O ajuste não foi lançado: "+motivoBanco(e));return false;}
+  toast("Ajuste de "+BRL(Math.abs(a.valor))+" lançado no caixa "+c.nome+".");
+  renderCaixaDia();renderCaixasMov();renderCadCaixas();renderFluxo();return true;
+}
+function recusarDifCaixa(){return travaSalvar("recusarDifCaixa",recusarDifCaixa__corpo,this,arguments);}
+async function recusarDifCaixa__corpo(cid,data,motivo,tipo){
+  if(!podeAprovarDifCaixa()){toast("Só o Financeiro e o Administrador decidem o ajuste.");return false;}
+  var c=caixaPor(cid),d=c?diaDoCaixa(c,data):null;
+  var a=tipo?ajustePorTipo(d,tipo):(ajustesDoDia(d).filter(pendenteAjuste)[0]||null);
+  if(!a||!pendenteAjuste(a)){toast("Este ajuste já foi decidido.");return false;}
+  var mot=String(motivo==null?(prompt("Por que o ajuste não vai ser lançado? (fica registrado)")||""):motivo).trim();
+  if(!mot){toast("Sem o motivo o ajuste não é recusado.");return false;}
+  var antes=copiaReg(c);
+  a.recusadoPor=usuarioAtual;a.recusadoEm=agoraCarimbo();a.recusadoMotivo=mot;
+  try{await gravaConf("caixas",c);}
+  catch(e){voltarReg(c,antes);toast("Não foi gravado: "+motivoBanco(e));return false;}
+  toast("Ajuste recusado — a diferença fica registrada no histórico.");
+  renderCaixaDia();return true;
+}
+/* ---------- o quadro do dia, os ajustes e o histórico ---------- */
+function renderCaixaDia(){
+  var card=$("cxDiaCard");if(!card)return;
+  var c=caixaDoDiaSel();
+  var pode=podeMexerNoDia(c),aprov=podeAprovarDifCaixa();
+  card.hidden=!c||(!pode&&!aprov);
+  if(card.hidden)return;
+  var data=diaDaTelaCaixa(),d=diaDoCaixa(c,data),ct=contaDoDiaCaixa(c,data);
+  $("cxDiaTit").textContent="O dia do caixa · "+c.nome;
+  ["cxAbrir","cxSangria","cxFechar"].forEach(function(id){var b=$(id);if(b)b.hidden=!pode;});
+  if($("cxAbrir"))$("cxAbrir").disabled=!!(d&&d.abertura);
+  if($("cxFechar"))$("cxFechar").disabled=!!(d&&d.fechamento)||!pode;
+  $("cxDiaResumo").innerHTML='<div class="note'+((d&&d.fechamento)?" ok":"")+'">'+
+    "<b>"+esc(dataBR(data))+"</b> · "+
+    (d&&d.abertura?("aberto em "+BRL(d.abertura.valor)+" por "+esc(d.abertura.por||"")+
+      (Math.abs(+d.abertura.dif||0)>=0.005?' <span class="pill p-warn">diferença de '+BRL(Math.abs(d.abertura.dif))+"</span>":""))
+      :'<span class="pill p-warn">o dia ainda não foi aberto</span>')+
+    "<div class=\"t-sub\" style=\"margin-top:6px\">Esperado na gaveta agora: <b>"+BRL(ct.esperado)+"</b> · "+
+      ((d&&d.abertura)?"abertura contada":"saldo do dia anterior")+" "+BRL(ct.base)+
+      " + entradas "+BRL(ct.ent)+" − saídas "+BRL(ct.sai)+
+      (ct.sangrias?" (sangrias "+BRL(ct.sangrias)+")":"")+
+      " · saldo do sistema hoje "+BRL(ct.sistema)+"</div>"+
+    (d&&d.fechamento?'<div class="t-sub">Fechado em '+BRL(d.fechamento.valor)+" por "+esc(d.fechamento.por||"")+" em "+esc(d.fechamento.quando||"")+
+      (Math.abs(+d.fechamento.dif||0)>=0.005?" · diferença de "+BRL(Math.abs(d.fechamento.dif))+" ("+esc(d.fechamento.motivo||"")+")":" · bateu")+"</div>":"")+
+    "</div>";
+  /* ajustes esperando decisão (de qualquer dia, de todos os caixas de dinheiro) */
+  var pend=ajustesPendentesCaixas();
+  $("cxDiaAjustes").innerHTML=!pend.length?"":
+    '<div class="sect"><p class="sect-t">Diferenças esperando aprovação</p>'+
+    '<div class="tw"><table><thead><tr><th>Dia</th><th>Caixa</th><th>Etapa</th><th class="num">Diferença</th><th>Motivo</th><th>Quem contou</th><th></th></tr></thead><tbody>'+
+    pend.map(function(x){
+      return "<tr><td>"+esc(dataBR(x.d.data))+"</td><td>"+esc(x.c.nome)+"</td><td>"+(x.a.tipo==="abertura"?"abertura":"fechamento")+"</td>"+
+        '<td class="num"><b>'+BRL(Math.abs(x.a.valor))+"</b> "+(x.a.valor>0?"a mais":"a menos")+"</td>"+
+        '<td class="d">'+esc(x.a.motivo||"")+"</td><td>"+esc(x.a.por||"")+'<div class="t-sub">'+esc(x.a.quando||"")+"</div></td>"+
+        '<td>'+(aprov?'<button class="btn sm" type="button" data-cxap="'+esc(x.c.id)+'" data-cxd="'+esc(x.d.data)+'" data-cxt="'+esc(x.a.tipo||"")+'">Aprovar o ajuste</button> '+
+          '<button class="btn mut sm" type="button" data-cxrec="'+esc(x.c.id)+'" data-cxd="'+esc(x.d.data)+'" data-cxt="'+esc(x.a.tipo||"")+'">Recusar</button>'
+          :'<span class="t-sub">o Financeiro decide</span>')+"</td></tr>";
+    }).join("")+"</tbody></table></div>"+
+    '<p class="help">Aprovar lança o ajuste no caixa, no dia da contagem, com o centro de custo "Diferença de caixa". Nada do que já estava lançado muda.</p></div>';
+  Array.prototype.forEach.call($("cxDiaAjustes").querySelectorAll("[data-cxap]"),function(b){
+    b.onclick=function(){aprovarDifCaixa(b.getAttribute("data-cxap"),b.getAttribute("data-cxd"),b.getAttribute("data-cxt"));};});
+  Array.prototype.forEach.call($("cxDiaAjustes").querySelectorAll("[data-cxrec]"),function(b){
+    b.onclick=function(){recusarDifCaixa(b.getAttribute("data-cxrec"),b.getAttribute("data-cxd"),null,b.getAttribute("data-cxt"));};});
+  /* histórico: os últimos 20 dias deste caixa */
+  var hs=diasDoCaixa(c).slice(-20).reverse();
+  $("cxDiaHist").innerHTML=!hs.length?"":
+    '<div class="sect"><p class="sect-t">Histórico deste caixa</p>'+hs.map(function(x){
+      var L=[];
+      if(x.abertura)L.push("Abertura "+BRL(x.abertura.valor)+" (esperado "+BRL(x.abertura.esperado)+")"+
+        (Math.abs(+x.abertura.dif||0)>=0.005?" · diferença "+BRL(Math.abs(x.abertura.dif))+" · "+(x.abertura.motivo||""):"")+
+        " · "+(x.abertura.por||"")+" em "+(x.abertura.quando||""));
+      (x.sangrias||[]).forEach(function(sg){
+        L.push("Sangria "+BRL(sg.valor)+" para "+(sg.destinoNome||"")+" · "+(sg.motivo||"")+" · "+(sg.por||"")+" em "+(sg.quando||""));});
+      if(x.fechamento)L.push("Fechamento "+BRL(x.fechamento.valor)+" (esperado "+BRL(x.fechamento.esperado)+")"+
+        (Math.abs(+x.fechamento.dif||0)>=0.005?" · diferença "+BRL(Math.abs(x.fechamento.dif))+" · "+(x.fechamento.motivo||""):" · bateu")+
+        " · "+(x.fechamento.por||"")+" em "+(x.fechamento.quando||""));
+      ajustesDoDia(x).forEach(function(aj){
+        L.push("Ajuste da diferença da "+(aj.tipo==="abertura"?"abertura":"fechamento")+" "+BRL(Math.abs(aj.valor))+" · "+
+          (aj.aprovadoEm?("aprovado por "+(aj.aprovadoPor||"")+" em "+aj.aprovadoEm)
+            :(aj.recusadoEm?("recusado por "+(aj.recusadoPor||"")+" em "+aj.recusadoEm+" · "+(aj.recusadoMotivo||""))
+              :"esperando aprovação")));});
+      return '<div class="nf-hist-i"><div><b>'+esc(dataBR(x.data))+"</b></div>"+
+        (L.length?"<ul>"+L.map(function(t){return "<li>"+esc(t)+"</li>";}).join("")+"</ul>":"")+"</div>";
+    }).join("")+"</div>";
+}
+/* ---------- o aviso do sino: caixa de dinheiro sem fechamento ---------- */
+function avisosCaixaDia(){
+  var L=[];
+  if(!podeAprovarDifCaixa())return L;
+  var hoje=hojeISO();
+  caixasDeDinheiro().forEach(function(c){
+    for(var i=1;i<=7;i++){
+      var dia=somaDias(hoje,-i);
+      if(!diaUtil(dia))continue;
+      var d=diaDoCaixa(c,dia);
+      if(d&&d.fechamento)continue;
+      /* só avisa de dia que teve vida: abertura ou movimento no caixa */
+      if(!(d&&d.abertura)&&!movsDoDiaCaixa(c,dia).length)continue;
+      L.push({chave:"cxnaofech:"+c.id+":"+dia,icone:"🧾",
+        titulo:"O caixa "+c.nome+" não foi fechado em "+dataBR(dia),
+        texto:"Esperado na gaveta: "+BRL(contaDoDiaCaixa(c,dia).esperado)+" · toque para abrir a tela de Caixas",
+        quando:dia,ir:function(){ir("caixas");}});
+    }
+    /* hoje: só depois do fim do expediente */
+    var dh=diaDoCaixa(c,hoje);
+    if(diaUtil(hoje)&&agoraHM()>="18:00"&&!(dh&&dh.fechamento)&&((dh&&dh.abertura)||movsDoDiaCaixa(c,hoje).length))
+      L.push({chave:"cxnaofech:"+c.id+":"+hoje,icone:"🧾",
+        titulo:"O caixa "+c.nome+" ainda não foi fechado hoje",
+        texto:"Esperado na gaveta: "+BRL(contaDoDiaCaixa(c,hoje).esperado)+" · toque para fechar",
+        quando:hoje,ir:function(){ir("caixas");}});
+  });
+  /* diferença esperando a decisão do Financeiro */
+  ajustesPendentesCaixas().forEach(function(x){
+    L.push({chave:"cxdif:"+x.c.id+":"+x.d.data+":"+(x.a.tipo||"")+":"+x.a.quando,icone:"⚠",
+      titulo:"Diferença de "+BRL(Math.abs(x.a.valor))+" no caixa "+x.c.nome,
+      texto:(x.a.tipo==="abertura"?"Na abertura":"No fechamento")+" de "+dataBR(x.d.data)+" · "+(x.a.motivo||"")+" · toque para aprovar o ajuste",
+      quando:String(x.a.quando||x.d.data),ir:function(){ir("caixas");}});
+  });
+  return L;
+}
+window.__caixaDiaMF={caixa:caixaDoDiaSel,pode:podeMexerNoDia,conta:contaDoDiaCaixa,dia:diaDoCaixa,
+  abrir:abrirDiaCaixa,salvarAbertura:function(c,d,e){return salvarAberturaCaixa__corpo(c,d,e);},
+  sangria:abrirSangria,salvarSangria:function(c,d){return salvarSangria__corpo(c,d);},
+  fechar:abrirFechamentoCaixa,salvarFechamento:function(c,d,e){return salvarFechamentoCaixa__corpo(c,d,e);},
+  aprovar:function(a,b,t){return aprovarDifCaixa__corpo(a,b,t);},recusar:function(a,b,m,t){return recusarDifCaixa__corpo(a,b,m,t);},
+  ajustes:ajustesDoDia,porTipo:ajustePorTipo,
+  pendentes:ajustesPendentesCaixas,avisos:avisosCaixaDia,render:renderCaixaDia,dinheiro:caixasDeDinheiro,
+  busca:casaBuscaCaixa,valorBusca:valorDaBusca};
 function renderCaixasMov(){
   opcoesFinanceiro();
+  try{renderCaixaDia();}catch(eCd){console.warn("dia do caixa",eCd);}
   var cx=$("cmCaixa").value,de=$("cmDe").value,ate=$("cmAte").value;
+  /* v579: busca por valor (60, 60,00 e 60.00), pedido, cliente/fornecedor, descrição e nota fiscal */
+  var bq=semAcento(String(($("cmBusca")&&$("cmBusca").value)||"")).toLowerCase().trim();
   var lista=movs.filter(function(m){
     if(m.loja!==lojaAtual)return false;
     if(cx&&m.caixaId!==cx)return false;
     if(de&&m.data<de)return false;
     if(ate&&m.data>ate)return false;
+    if(bq&&!casaBuscaCaixa(m,bq))return false;
     return true;}).sort(function(a,b){return (a.data||"").localeCompare(b.data||"");});
   var ativos=daLoja(caixas).filter(function(c){return c.status!=="inativo";});
   $("cmKpis").innerHTML=ativos.map(function(c){
@@ -32890,7 +33328,8 @@ function renderCaixasMov(){
       BRL(ativos.reduce(function(a,c){return a+saldoCaixa(c.id);},0))+"</div></div>";
   $("cmCount").textContent=lista.length+(lista.length===1?" lançamento":" lançamentos");
   var b=$("cmBody");b.innerHTML="";
-  if(!lista.length){b.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Sem movimento</div>Baixas de títulos e lançamentos manuais aparecem aqui.</div></td></tr>';return;}
+  if(!lista.length){b.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">'+(bq?"Nada encontrado":"Sem movimento")+'</div>'+
+    (bq?"Nenhum lançamento com essa busca neste período.":"Baixas de títulos e lançamentos manuais aparecem aqui.")+"</div></td></tr>";return;}
   var acc=cx?( (caixaPor(cx)||{}).saldo||0 ):ativos.reduce(function(a,c){return a+(+c.saldo||0);},0);
   if(de)acc=cx?saldoCaixa(cx,somaDias(de,-1)):ativos.reduce(function(a,c){return a+saldoCaixa(c.id,somaDias(de,-1));},0);
   lista.forEach(function(m){
@@ -32904,8 +33343,10 @@ function renderCaixasMov(){
       "<td>"+esc(m.descricao||"—")+"</td><td>"+esc(nomeCentrosLanc(m))+"</td>"+
       '<td class="num">'+(ent?'<span style="color:var(--ok)">'+BRL(m.valor)+"</span>":"—")+"</td>"+
       '<td class="num">'+(!ent?'<span style="color:var(--crit)">'+BRL(m.valor)+"</span>":"—")+"</td>"+
-      '<td class="num"><b>'+BRL(acc)+"</b></td></tr>";
+      '<td class="num">'+(bq?'<span class="t-sub">—</span>':"<b>"+BRL(acc)+"</b>")+"</td></tr>";
   });
+  /* com busca o saldo acumulado nao faz sentido (faltam linhas): a coluna fica vazia e a tela diz por que */
+  if(bq)b.innerHTML+='<tr><td colspan="8"><div class="t-sub">Com busca o saldo acumulado nao aparece: ele só fecha com todos os lançamentos do período. Limpe a busca para ver o saldo.</div></td></tr>';
 }
 
 /* ---------- FLUXO DE CAIXA ---------- */
@@ -33986,6 +34427,7 @@ var REL_AJUDA={
   planosinf:"Os Planos Premium que os vendedores informaram na venda ou na OS, conferidos no sistema antigo: cliente, purificador, plano, vencimento, quem informou e quando, e os itens que saíram cobertos. O período é a data em que o plano foi informado. Clique na foto para ver a tela do sistema antigo.",
   vendas:"Pedidos do período, com quem vendeu, pagamento, total e valor depreciado. Agrupe por vendedor, dia, forma de pagamento, produto, cidade ou situação.",
   fechamento:"O que entrou e saiu dos caixas no período, por centro de custo — no modelo do fechamento do LSoft. Créditos (1) e débitos (2), com os totais de cada conta e o total geral.",
+  extrato:"O movimento do período em formato de extrato bancário, para a contabilidade: saldo inicial, cada entrada e saída em ordem de data com o saldo acumulado, e o saldo final. Com \"Todos\", a transferência entre caixas da empresa aparece marcada e fica fora dos totais.",
   pagar:"Títulos a pagar pela data de vencimento, emissão ou pagamento, com totais pagos, em aberto e vencidos.",
   receber:"Títulos a receber pela data de vencimento, emissão ou recebimento, com totais recebidos, em aberto e vencidos.",
   estoque:"O que tem em cada estoque da empresa (almoxarifado, Estoque da Loja e o de cada colaborador), tudo o que entrou e saiu no período, e as contagens e ajustes de inventário com a diferença de cada produto.",
@@ -34030,7 +34472,7 @@ function cabecalhoRel(titulo,sub,filtros){
 function rodapeRel(n,rot){
   return '<div class="rel-reg">'+n+" "+esc(rot||(n===1?"registro":"registros"))+"</div>";
 }
-var REL_NOMES={vendas:"Relatório de Vendas",fechamento:"Relatório Fechamento do Mês",pagar:"Relatório de Contas a Pagar",
+var REL_NOMES={vendas:"Relatório de Vendas",fechamento:"Relatório Fechamento do Mês",extrato:"Extrato de Caixa",pagar:"Relatório de Contas a Pagar",
   receber:"Relatório de Contas a Receber",origens:"Relatório de Origens",centros:"Lista de Categorias",estoque:"Relatório de Estoque",planosinf:"Planos informados pelos vendedores",dre:"DRE - Demonstração do Resultado"};
 function textoRodapeRel(aba){return "Sistema Minas Filtros - Sistema de Gestão Comercial - "+(REL_NOMES[aba]||"Relatório");}
 /* folha: o cabeçalho fica no thead de uma tabela externa — na impressão ele se repete no alto de cada página,
@@ -34111,6 +34553,7 @@ function opcoesRelatorios(){
   encherMulti("rg_uf",listaUF,"Todos os estados","estados");
   encher("rg_quem",EQUIPE.slice(),"Todos");encher("rg_vend",EQUIPE.slice(),"Todos");
   encher("rt_caixa",cx.map(function(c){return {v:c.id,t:codConta(c.id)+" · "+c.nome};}),"Todos");
+  encher("rx_caixa",cx.map(function(c){return {v:c.id,t:codConta(c.id)+" · "+c.nome};}),"Todos");
   try{
     encher("rs_local",estoquesDaEmpresa(lojaAtual).map(function(e){return {v:e.loc,t:e.nome};}),"Todos os estoques");
     encher("rs_grupo",listaGruposProd(),"Todos");
@@ -34144,7 +34587,7 @@ function mostrarAbaRel(){
   if(dre){try{renderDRE();}catch(e){console.warn(e);}return;}
   Array.prototype.forEach.call(document.querySelectorAll("#rlFiltros .rl-f"),function(el){
     el.hidden=String(el.getAttribute("data-rel")).split(" ").indexOf(relAba)<0;});
-  var tit={planosinf:"Filtros dos planos informados",estoque:"Filtros do relatório de estoque",vendas:"Filtros do relatório de vendas",fechamento:"Filtros do fechamento do mês",pagar:"Filtros de contas a pagar",receber:"Filtros de contas a receber",origens:"Filtros do relatório de origens"}[relAba];
+  var tit={planosinf:"Filtros dos planos informados",estoque:"Filtros do relatório de estoque",vendas:"Filtros do relatório de vendas",fechamento:"Filtros do fechamento do mês",extrato:"Filtros do extrato",pagar:"Filtros de contas a pagar",receber:"Filtros de contas a receber",origens:"Filtros do relatório de origens"}[relAba];
   $("rlFiltTit").textContent=tit;$("rlFiltAjuda").textContent=REL_AJUDA[relAba];
   var rec=relAba==="receber";
   $("rt_pessoaRot").textContent=rec?"Cliente contém":"Fornecedor contém";
@@ -34194,6 +34637,9 @@ function ligarRelatorios(){
   ["rl_de","rl_ate"].forEach(function(id){$(id).onchange=function(){$("rl_mes").value="";gerarRelatorio();};});
   Array.prototype.forEach.call(document.querySelectorAll("#rlFiltros select"),function(s){
     s.addEventListener("change",function(){gerarRelatorio();});});
+  /* v579: a busca do extrato refaz o relatório enquanto se digita (espera 300 ms) */
+  if($("rx_busca"))$("rx_busca").oninput=function(){
+    clearTimeout(window.__rxBuscaT);window.__rxBuscaT=setTimeout(function(){gerarRelatorio();},300);};
   $("rl_gerar").onclick=function(){gerarRelatorio();try{$("rlSaida").scrollIntoView({behavior:"smooth",block:"start"});}catch(e){}};
   $("rl_imprimir").onclick=imprimirRelatorio;
   $("rl_csv").onclick=exportarRelatorioCSV;
@@ -34215,7 +34661,7 @@ function gerarRelatorio(){
   var P=periodoRel();
   if(P.de>P.ate){$("rl_alerta").innerHTML='<div class="note crit"><b>A data inicial é depois da final.</b> Corrija o período.</div>';return;}
   $("rl_alerta").innerHTML="";
-  var r=relAba==="planosinf"?relPlanosInformados(P):relAba==="estoque"?relEstoque(P):relAba==="vendas"?relVendas(P):relAba==="fechamento"?relFechamento(P):relAba==="origens"?relOrigens(P):relAba==="centros"?relCentros(P):relTitulos(relAba,P);
+  var r=relAba==="planosinf"?relPlanosInformados(P):relAba==="estoque"?relEstoque(P):relAba==="vendas"?relVendas(P):relAba==="fechamento"?relFechamento(P):relAba==="extrato"?relExtrato(P):relAba==="origens"?relOrigens(P):relAba==="centros"?relCentros(P):relTitulos(relAba,P);
   relUltimo=r;
   $("rlSaida").innerHTML='<div class="rel-folha" id="relFolha">'+montarFolhaRel(r,relAba)+"</div>";
 }
@@ -34617,6 +35063,145 @@ function estruturaFechamento(L){
     return {tipo:t,cod:t==="entrada"?"1":"2",nome:t==="entrada"?"Crédito":"Débito",grupos:gs,tot:somaFech(todas)};
   }).filter(function(n){return n.grupos.length;});
 }
+/* ===================== v579 (18/11, pedido dele): EXTRATO =====================
+   Um relatório no formato de extrato bancário, para a contabilidade: SALDO INICIAL do período,
+   cada movimento em ordem de data (entradas e saídas juntas) e SALDO FINAL, com os totais.
+   Filtros: um caixa ou Todos, e o período (padrão, o mês).
+   · Com "Todos", a transferência entre caixas da própria empresa aparece MARCADA e fica FORA dos
+     totais de entradas e saídas (senão o resultado da empresa inflava); no saldo acumulado ela
+     continua, porque o +X de um caixa e o −X do outro se anulam. Com um caixa só, a transferência
+     é entrada ou saída de verdade daquele caixa e conta normalmente.
+   · Estorno aparece como estorno, com a data do lançamento que ele desfaz.
+   · O saldo final de um caixa é a mesma conta da tela de Caixas (`saldoCaixa`), para bater sempre. */
+function pessoaDoMov(m,tit){
+  if(tit&&tit.pessoa)return tit.pessoa;
+  if(m&&m.pedidoId){var p=pedPorId(m.pedidoId);if(p)return p.cliente||"";}
+  if(tit&&tit.fornecedorId){var f=fornecPor(tit.fornecedorId);if(f)return f.nome||"";}
+  if(m&&m.notaId){var n=notas.filter(function(x){return x.id===m.notaId;})[0];if(n)return nomeFornNF(n);}
+  return "";
+}
+/* a nota fiscal de um lançamento de caixa: a da VENDA (regra da v578) ou a da nota de entrada */
+function nfDoMovTexto(m,tit){
+  var pid=(m&&m.pedidoId)||(tit&&tit.pedidoId)||"";
+  if(pid){var p=pedPorId(pid);if(p)return textoNFVenda(p);}
+  var nid=(m&&m.notaId)||(tit&&tit.notaId)||"";
+  if(nid){var n=notas.filter(function(x){return x.id===nid;})[0];if(n)return docNotaNF(n);}
+  return "—";
+}
+function nfDoMovHtml(m,tit){
+  var pid=(m&&m.pedidoId)||(tit&&tit.pedidoId)||"";
+  if(pid){var p=pedPorId(pid);if(p)return htmlNFVenda(p);}
+  return esc(nfDoMovTexto(m,tit));
+}
+/* o que este lançamento é, em uma palavra: transferência, estorno, sangria ou nada */
+function marcaDoMov(m){
+  if(!m)return "";
+  /* a sangria para outro caixa é uma transferência: a linha diz as duas coisas, porque é o
+     `transfId` que a tira dos totais no modo "Todos" */
+  if(m.sangria)return "sangria do caixa"+(m.transfId?" · transferência entre caixas":"");
+  if(m.transfId)return "transferência entre caixas";
+  if(m.estornoRecebimento)return "estorno do recebimento";
+  if(m.diferencaCaixa)return "ajuste da diferença de caixa";
+  return "";
+}
+/* ===== v579: a BUSCA dos caixas e do extrato — uma função só para os dois =====
+   Procura por valor (60, 60,00 e 60.00 dão no mesmo), número do pedido, nome do cliente ou do
+   fornecedor, descrição e nota fiscal. */
+function valorDaBusca(t){
+  var s=String(t||"").trim();
+  if(!s||!/^[0-9]+([.,][0-9]+)?$/.test(s.replace(/\s/g,"")))return null;
+  var v=numMF(s);
+  return v>0?v:null;
+}
+function casaBuscaCaixa(m,b,tit){
+  if(!b)return true;
+  if(tit===undefined)tit=m.tituloId?tituloPorId(m.tituloId):null;
+  var p=m.pedidoId?pedPorId(m.pedidoId):((tit&&tit.pedidoId)?pedPorId(tit.pedidoId):null);
+  var alvo=semAcento([m.descricao||"",pessoaDoMov(m,tit),nfDoMovTexto(m,tit),
+    (p?("pedido "+p.numero+" "+p.numero):""),(tit?descricaoTitulo(tit):""),
+    (tit&&tit.docRef)||"",nomeCentrosLanc(m),(caixaPor(m.caixaId)||{}).nome||""].join(" ")).toLowerCase();
+  if(alvo.indexOf(b)>=0)return true;
+  var v=valorDaBusca(b);
+  return v!=null&&Math.abs((+m.valor||0)-v)<0.005;
+}
+function linhasExtrato(P){
+  var cxSel=($("rx_caixa")&&$("rx_caixa").value)||"";
+  var b=semAcento(String(($("rx_busca")&&$("rx_busca").value)||"")).toLowerCase().trim();
+  var ini=somaDias(P.de,-1);
+  var cxs=daLoja(caixas);
+  var saldoIni=cxSel?saldoCaixa(cxSel,ini):cxs.reduce(function(a,c){return a+saldoCaixa(c.id,ini);},0);
+  var lista=movs.filter(function(m){
+    if(m.loja!==lojaAtual)return false;
+    if(!m.data||m.data<P.de||m.data>P.ate)return false;
+    if(cxSel&&m.caixaId!==cxSel)return false;
+    return true;
+  }).map(function(m){
+    var tit=m.tituloId?tituloPorId(m.tituloId):null;
+    return {m:m,tit:tit,pessoa:pessoaDoMov(m,tit),nf:nfDoMovTexto(m,tit),marca:marcaDoMov(m)};
+  });
+  if(b)lista=lista.filter(function(x){return casaBuscaCaixa(x.m,b,x.tit);});
+  lista.sort(function(a,b2){
+    return String(a.m.data).localeCompare(String(b2.m.data))||
+      String(horaMov(a.m)).localeCompare(String(horaMov(b2.m)))||
+      String(a.m.id).localeCompare(String(b2.m.id));});
+  /* o saldo acumulado só fecha com o saldo da tela quando NADA está filtrado fora;
+     com busca, o acumulado é o da seleção e o cabeçalho avisa */
+  var ac=saldoIni,ent=0,sai=0;
+  lista.forEach(function(x){
+    var e=(x.m.tipo==="entrada"),v=+x.m.valor||0;
+    ac+=(e?1:-1)*v;x.saldo=ac;
+    /* "Todos": a transferência entre caixas da empresa não é entrada nem saída do conjunto */
+    var fora=(!cxSel&&!!x.m.transfId);
+    x.fora=fora;
+    if(!fora){if(e)ent+=v;else sai+=v;}
+  });
+  return {linhas:lista,saldoIni:saldoIni,saldoFim:ac,ent:ent,sai:sai,cxSel:cxSel,busca:b,
+    /* o saldo do sistema no fim do período, para conferir com a tela de Caixas */
+    saldoTela:(cxSel?saldoCaixa(cxSel,P.ate):cxs.reduce(function(a,c){return a+saldoCaixa(c.id,P.ate);},0))};
+}
+function relExtrato(P){
+  var L=linhasExtrato(P);
+  var nomeCx=L.cxSel?((caixaPor(L.cxSel)||{}).nome||"Caixa"):"Todos os caixas";
+  var filt=filtrosUsados([["rx_caixa","Caixa"],["rx_busca","Busca"]]);
+  var cab=cabecalhoRel("EXTRATO DE CAIXA · "+String(nomeCx).toUpperCase(),P.txt,filt);
+  var h="";
+  var colg='<colgroup><col style="width:7%"><col style="width:11%"><col><col style="width:14%"><col style="width:11%"><col style="width:12%">'+
+    '<col style="width:9%"><col style="width:9%"><col style="width:10%"></colgroup>';
+  h+='<table class="rel-tab fixa larga">'+colg+
+    '<thead><tr><th>Data</th><th>Caixa</th><th>Descrição</th><th>Cliente / Fornecedor</th><th>Nota fiscal</th><th>Centro de custo</th>'+
+    '<th class="n">Entrada</th><th class="n">Saída</th><th class="n">Saldo</th></tr></thead><tbody>';
+  h+='<tr class="rel-g"><td colspan="8">SALDO INICIAL em '+esc(dataCurta(P.de))+'</td><td class="n">'+numRel(L.saldoIni)+"</td></tr>";
+  if(!L.linhas.length)h+='<tr><td colspan="9">Nenhum lançamento no período.</td></tr>';
+  L.linhas.forEach(function(x){
+    var m=x.m,e=(m.tipo==="entrada");
+    h+="<tr><td>"+esc(dataCurta(m.data))+"</td><td>"+esc((caixaPor(m.caixaId)||{}).nome||"—")+"</td>"+
+      '<td class="d">'+esc(m.descricao||"—")+
+        (x.marca?'<div class="rel-semnf">'+esc(x.marca)+(x.fora?" · fora dos totais":"")+
+          (m.estornoRecebimento&&m.motivo?" · "+esc(m.motivo):"")+"</div>":"")+"</td>"+
+      '<td class="d">'+esc(x.pessoa||"—")+'</td><td class="d">'+nfDoMovHtml(m,x.tit)+"</td>"+
+      '<td class="d">'+esc(nomeCentrosLanc(m))+"</td>"+
+      '<td class="n">'+(e?numRel(m.valor):"")+'</td><td class="n">'+(!e?numRel(m.valor):"")+"</td>"+
+      '<td class="n">'+numRel(x.saldo)+"</td></tr>";
+  });
+  h+='<tr class="rel-sub-l"><td colspan="6">SALDO FINAL em '+esc(dataCurta(P.ate))+'</td><td class="n">'+numRel(L.ent)+
+    '</td><td class="n">'+numRel(L.sai)+'</td><td class="n">'+numRel(L.saldoFim)+"</td></tr>";
+  h+="</tbody></table>";
+  h+=totRel([{n:"Saldo inicial:",v:L.saldoIni},{n:"Total de entradas:",v:L.ent},{n:"Total de saídas:",v:L.sai},
+    {n:"Saldo final:",v:L.saldoFim,s:1}],"geral");
+  if(!L.cxSel&&L.linhas.some(function(x){return x.fora;}))
+    h+='<p class="help">As transferências entre caixas da empresa aparecem marcadas e ficam fora dos totais de entradas e saídas: o dinheiro só troca de lugar.</p>';
+  if(L.busca)h+='<p class="help">Com busca, o saldo acumulado é o da seleção. O saldo do sistema no fim do período é '+BRL(L.saldoTela)+".</p>";
+  h+=rodapeRel(L.linhas.length,L.linhas.length===1?"lançamento":"lançamentos");
+  var csv=[["Data","Caixa","Descrição","Marca","Cliente / Fornecedor","Nota fiscal","Centro de custo","Entrada","Saída","Saldo"]];
+  csv.push([dataCurta(P.de),"","SALDO INICIAL","","","","","","",numRel(L.saldoIni)]);
+  L.linhas.forEach(function(x){var m=x.m,e=(m.tipo==="entrada");
+    csv.push([dataCurta(m.data),(caixaPor(m.caixaId)||{}).nome||"",m.descricao||"",
+      x.marca+(x.fora?" (fora dos totais)":""),x.pessoa,x.nf,nomeCentrosLanc(m),
+      e?numRel(m.valor):"",!e?numRel(m.valor):"",numRel(x.saldo)]);});
+  csv.push([dataCurta(P.ate),"","SALDO FINAL","","","","",numRel(L.ent),numRel(L.sai),numRel(L.saldoFim)]);
+  return {cab:cab,html:h,csv:csv,nome:"Extrato_"+(L.cxSel?chaveNomeCaixa(nomeCx)+"_":"")+P.de+"_a_"+P.ate};
+}
+window.__extratoMF={linhas:linhasExtrato,rel:relExtrato,pessoa:pessoaDoMov,nf:nfDoMovTexto,marca:marcaDoMov};
 function relFechamento(P){
   var L=linhasFechamento(P),E=estruturaFechamento(L),modo=$("rf_modo").value;
   var cx=caixasRel(),iDe=+$("rf_contaDe").value||1,iAte=+$("rf_contaAte").value||cx.length;
@@ -63381,6 +63966,8 @@ function pendenciasMF(){
   try{avisosAtivDeOutros().forEach(põe);}catch(eAv){console.warn("aviso de atividade",eAv);}
   /* v543: notas para conferir (almoxarifado) e falta/divergência (Financeiro) */
   try{avisosNotasNF().forEach(põe);}catch(eNf){console.warn("aviso de nota",eNf);}
+  /* v579: caixa de dinheiro sem fechamento no dia, e diferença esperando aprovação */
+  try{avisosCaixaDia().forEach(põe);}catch(eCx){console.warn("aviso do caixa",eCx);}
   /* 06/11: o WhatsApp da pessoa caiu — ela é avisada até abrir a janela de conexão */
   try{
     var zc=ZAP_SIS.conexao;
@@ -67255,6 +67842,13 @@ function ligar(){
   $("bx_data").addEventListener("change",function(){try{atualizarBotaoBaixa();}catch(e){}});
 
   ["cmCaixa","cmDe","cmAte"].forEach(function(id){$(id).onchange=renderCaixasMov;});
+  /* v579: a busca filtra enquanto se digita, e o caixa escolhido manda no quadro do dia */
+  if($("cmBusca"))$("cmBusca").oninput=function(){renderCaixasMov();};
+  $("cmCaixa").addEventListener("change",function(){try{renderCaixaDia();}catch(e){console.warn("dia do caixa",e);}});
+  if($("cmDe"))$("cmDe").addEventListener("change",function(){try{renderCaixaDia();}catch(e){}});
+  if($("cxAbrir"))$("cxAbrir").onclick=function(){abrirDiaCaixa(caixaDoDiaSel());};
+  if($("cxSangria"))$("cxSangria").onclick=function(){abrirSangria(caixaDoDiaSel());};
+  if($("cxFechar"))$("cxFechar").onclick=function(){abrirFechamentoCaixa(caixaDoDiaSel());};
   $("cmMov").onclick=function(){abrirMov("mov");};
   $("cmTransf").onclick=function(){abrirMov("transf");};
   $("mv_ok").onclick=salvarMov;
