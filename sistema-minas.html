@@ -229,9 +229,32 @@
 #s-venda.vn .vn-so{display:block}
 #s-venda.vn .vn-so[hidden],#s-venda.vn .vv-so{display:none!important}
 #s-venda.vn #v_comissao>h2,#s-venda.vn #v_comissao>.calc,#s-venda.vn #c_faixas,#s-venda.vn #v_comissao>.split{display:none}
-#s-venda.vn .it-faixa{display:none}
+/* v583: a etiqueta da faixa (v581) APARECE também na tela nova — até aqui o `display:none`
+   a escondia e só o aviso amarelo saía na tela do vendedor */
+#s-venda.vn .it-faixa{display:block;margin-top:6px}
 .it-aviso{display:none;margin-top:4px}
 #s-venda.vn .it-aviso{display:block}
+/* a linha das três tabelas: pequena, cinza e sem caixa — o cliente pode estar olhando a tela */
+.it-tabelas{font-size:12px;color:var(--ink-3);margin-top:3px;line-height:1.5}
+.it-tabelas .tb-ag{color:var(--ink-2);font-weight:600}
+.it-tabelas .tb-set.tb-ag{color:var(--warn)}
+.it-tabelas .tb-ruim{color:var(--crit)}
+/* MODO CLIENTE (19/11, v583, regra dele): o vendedor entrega o celular na mão do cliente, e
+   nada do que é interno pode ficar à vista — faixa de comissão, tabelas, saldo do estoque,
+   custo e a Comissão ao vivo. Só esconde: nenhum valor do pedido muda. */
+body.modo-cliente .it-faixa,
+body.modo-cliente .it-tabelas,
+body.modo-cliente .it-aviso,
+body.modo-cliente .it-neg,
+body.modo-cliente #v_estNota,
+body.modo-cliente #v_precoNota,
+body.modo-cliente #v_comissao>h2,
+body.modo-cliente #v_comissao>.calc,
+body.modo-cliente #c_faixas,
+body.modo-cliente #v_comissao>.split{display:none!important}
+#v_modoCliBox{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:16px}
+#v_modoCli[aria-pressed="true"]{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}
+#v_modoCliNota{font-size:12px;color:var(--warn);font-weight:600}
 body.vn .rv-itens th:nth-child(3),body.vn .rv-itens td:nth-child(3),body.vn .rv-itens th:nth-child(6),body.vn .rv-itens td:nth-child(6){display:none}
 .vn-troca{margin:-10px 0 16px;display:flex;justify-content:flex-end}
 .vn-pergunta{margin:6px 0 4px;font-weight:600}
@@ -3164,7 +3187,12 @@ img{max-width:100%}
               <div class="fld" style="justify-content:flex-end"><button class="btn ghost" type="button" id="v_add">Adicionar</button></div>
             </div>
             <div id="v_planoCli"></div>
-            <div class="tw" style="margin-top:20px"><table class="t-itens">
+            <!-- MODO CLIENTE (19/11, v583): esconde o que é interno quando o cliente olha a tela -->
+            <div id="v_modoCliBox">
+              <span id="v_modoCliNota" hidden>o cliente pode ver a tela</span>
+              <button class="btn sm ghost" type="button" id="v_modoCli" aria-pressed="false">Modo cliente</button>
+            </div>
+            <div class="tw" style="margin-top:12px"><table class="t-itens">
               <thead><tr><th>Item</th><th class="num">Qtd</th><th class="num">Desconto</th><th class="num">Valor final</th><th class="num">Total</th></tr></thead>
               <tbody id="v_itens"></tbody>
             </table></div>
@@ -11464,8 +11492,56 @@ function etiquetaDaFaixa(i,p,fx){
   return ETIQ_FAIXA[fx&&fx.n]||ETIQ_ABAIXO;
 }
 function pillDaFaixa(e){return '<span class="pill '+e.cls+'">'+esc(e.t)+"</span>";}
+/* ===== AS TRÊS TABELAS NA LINHA DO ITEM (19/11, v583, regra dele) =====
+   "junto com essa notificação tem que falar a tabela máxima 100%, tabela mínima 100% e a tabela
+   70%" — e, no mesmo pedido, "algo discreto e pequeno, porque pode acontecer do cliente querer
+   ver o celular". Por isso é UMA linha pequena e cinza, sem caixa: máx · 100% · 70% · o quanto
+   falta, tudo no dinheiro da forma escolhida, com só o número da tabela em que o item caiu
+   destacado. Produto sem máxima cadastrada mostra uma linha só de 100%. */
+/* ===== MODO CLIENTE (19/11, v583, regra dele) =====
+   "pode acontecer do cliente querer ver o celular e ele não pode entender tanto". Um toque
+   esconde, na tela do pedido inteira, tudo o que é interno: a etiqueta de comissão, a linha das
+   tabelas, os avisos de faixa, o saldo do estoque do vendedor, as notas de preço/custo e a
+   Comissão ao vivo. **Só esconde** — nenhum valor do pedido muda, e o pedido grava igual.
+   A escolha fica guardada NO APARELHO (não no pedido, não no usuário): sai da tela do pedido e
+   volta como estava. */
+var CHAVE_MODO_CLI="mf_modo_cliente";
+function modoClienteLigado(){
+  try{return localStorage.getItem(CHAVE_MODO_CLI)==="1";}catch(e){return false;}
+}
+function guardarModoCliente(lig){
+  try{if(lig)localStorage.setItem(CHAVE_MODO_CLI,"1");else localStorage.removeItem(CHAVE_MODO_CLI);}catch(e){}
+}
+function aplicarModoCliente(){
+  var lig=modoClienteLigado();
+  try{document.body.classList.toggle("modo-cliente",lig);}catch(e){}
+  var b=$("v_modoCli"),n=$("v_modoCliNota");
+  if(b){b.setAttribute("aria-pressed",String(lig));b.textContent=lig?"Modo cliente ligado":"Modo cliente";}
+  if(n)n.hidden=!lig;
+  return lig;
+}
+function trocarModoCliente(){
+  var lig=!modoClienteLigado();
+  guardarModoCliente(lig);
+  aplicarModoCliente();
+  toast(lig
+    ? "Modo cliente ligado: comissão, tabelas e saldo saíram da tela. Os valores do pedido não mudaram."
+    : "Modo cliente desligado.");
+  return lig;
+}
+window.__modoClienteMF={ligado:modoClienteLigado,trocar:trocarModoCliente,aplicar:aplicarModoCliente};
+function linhaTabelasItem(p,fx,maxU,tabU,minU,falta){
+  if(!p)return "";
+  var cem=!!(fx&&fx.n==="100%"),set=!!(fx&&fx.n==="70%"),abx=!!(fx&&fx.abaixo),L=[];
+  if(maxU>tabU+0.009)L.push('<span class="tb-max">máx '+brMF(maxU)+"</span>");
+  L.push('<span class="tb-cem'+(cem?" tb-ag":"")+'">100% '+brMF(tabU)+"</span>");
+  if(minU>0&&minU<tabU-0.009)L.push('<span class="tb-set'+(set?" tb-ag":"")+(abx?" tb-ruim":"")+'">70% '+brMF(minU)+"</span>");
+  else L.push('<span class="tb-set">sem desconto</span>');
+  if(falta)L.push('<span class="tb-falta">'+esc(falta)+"</span>");
+  return L.join(" · ");
+}
 /* quanto falta para o item subir um degrau, no dinheiro que o cliente paga na forma escolhida */
-function faltaParaFaixa(i,p,fx,T){
+function faltaParaFaixa(i,p,fx,T,curta){
   if(!i||!p||itemSemComissao(i,p))return "";
   var n=(fx&&fx.n)||"",alvo=0,nome="";
   if(n==="100%")return "";
@@ -11476,6 +11552,9 @@ function faltaParaFaixa(i,p,fx,T){
   if(!(alvo>0))return "";
   var alvoF=precoPelaForma(alvo,1,T),falta=centavos(alvoF-(+i.valor||0));
   if(!(falta>0))return "";
+  /* v583: na linha discreta do item o texto é curto ("faltam 100,00 p/ 100%"); na revisão
+     e nos avisos continua por extenso */
+  if(curta)return "faltam "+brMF(falta)+" p/ "+(nome==="Campanha"?"campanha":nome);
   return "Faltam "+BRL(falta)+" para cair em "+(nome==="Campanha"?"Campanha":nome);
 }
 
@@ -19953,8 +20032,10 @@ function calcular(){
     if(mudouPreco)i.valorTabela=tabNova;
     /* item abaixo do mínimo fica em vermelho na linha inteira (pedido dele, 22/10) */
     if(fx.abaixo)tr.className="it-abaixo";
-    /* v581: a etiqueta da faixa e o "faltam R$ X", uma conta só por linha */
-    var etq=etiquetaDaFaixa(i,p,fx),ftx=faltaParaFaixa(i,p,fx,somaTab);
+    /* v581: a etiqueta da faixa e o "faltam R$ X", uma conta só por linha
+       v583: mais a linha discreta com as três tabelas, no dinheiro da forma escolhida */
+    var etq=etiquetaDaFaixa(i,p,fx),ftx=faltaParaFaixa(i,p,fx,somaTab,true);
+    var maxU=cobPl?0:precoPelaForma(precoTabela(p),1,somaTab);
     var dscU=cobPl?0:(i.descontoTipo!=="pct"&&i.digitou==="desconto"&&i.descontoFinalDig!=null?+i.descontoFinalDig:descontoItemFinal(i,somaTab));
     tr.innerHTML='<td><div class="t-main"><button class="lixo" type="button" data-rm="'+idx+
         '" title="Remover este item" aria-label="Remover '+esc(i.nome)+'">&#128465;</button>'+
@@ -19973,17 +20054,12 @@ function calcular(){
         /* A FAIXA DESCEU PARA CÁ (21/10): ela é a leitura do preço, não um dado a mais, e na
            coluna própria a pill "Abaixo da tabela cheia" não cabia. Aqui ela aparece na hora,
            ao lado de quanto aquele item paga de comissão. */
-        '<div class="it-faixa" style="margin-top:4px">'+pillDaFaixa(etq)+
-        /* v581: quanto falta para subir um degrau, no dinheiro da forma escolhida */
-        (ftx?' <span class="t-sub it-falta">'+esc(ftx)+"</span>":"")+
-        (cobPl?"":' <span class="t-lim">'+
-          '<b class="tf-100'+(fx.n==="100%"?" tf-ag":"")+'">100% '+BRL(tabU)+"</b>"+
-          (temMin?(' · <b class="tf-min'+(fx.n==="70%"?" tf-ag":"")+(fx.abaixo?" tf-ruim":"")+
-            '">70% '+BRL(minU)+"</b>"):' · <span class="t-sub">sem desconto</span>')+
-          "</span>")+
+        '<div class="it-faixa">'+pillDaFaixa(etq)+
         /* "paga N%" só quando o número difere do nome da faixa (Campanha e abaixo do mínimo) */
         (!cobPl&&fx.n!==(fx.f*100).toFixed(0)+"%"?' <span class="t-sub">paga '+(fx.f*100).toFixed(0)+"%</span>":"")+
         "</div>"+
+        /* v583: as três tabelas numa linha pequena e cinza, com o "faltam" curto no fim */
+        (cobPl?"":'<div class="it-tabelas">'+linhaTabelasItem(p,fx,maxU,tabU,minU,ftx)+"</div>")+
         /* v517 (tela nova): no lugar das tabelas, só o aviso — amarelo na 70%, vermelho abaixo dela */
         (etq.semCom?"":(fx.abaixo?'<div class="it-aviso note crit" style="padding:6px 10px">Abaixo da tabela: este item precisa de autorização do Administrador.</div>'
           :(fx.n==="70%"?'<div class="it-aviso note warn" style="padding:6px 10px">Com este desconto, este item cai para a tabela 70%.</div>':"")))+
@@ -23595,7 +23671,7 @@ function pillNegItem(i){
   var exc=(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"";
   var fica=saldoEm(i.pid,loc)-((reservasDe(loc,exc)[i.pid])||0)-noCarrinhoDe(i.pid,loc);
   if(fica>=0)return "";
-  return ' · <span class="pill p-warn" title="A reposição é pedida ao almoxarifado depois da aprovação">'+
+  return ' · <span class="pill p-warn it-neg" title="A reposição é pedida ao almoxarifado depois da aprovação">'+
     esc(loc===localVendaForm()?"seu estoque":nomeLocal(loc))+" vai ficar "+fica+"</span>";
 }
 function noCarrinhoDe(pid,loc){
@@ -69234,6 +69310,9 @@ function ligar(){
   $("v_serie").addEventListener("input",ajustarLocalItem);
   $("v_gar").onchange=notaGarantia;$("v_imagem").onchange=calcular;
   if($("v_pend"))$("v_pend").onchange=mostrarPendVenda;   /* v553 */
+  /* v583: o Modo cliente, com a escolha guardada no aparelho */
+  if($("v_modoCli"))$("v_modoCli").onclick=function(){trocarModoCliente();};
+  try{aplicarModoCliente();}catch(eMc){}
   $("finBusca").value="";$("finBusca").oninput=renderFin;$("finQuem").onchange=renderFin;
   window.addEventListener("pageshow",function(){try{if($("finBusca").value){$("finBusca").value="";renderFin();}}catch(eP){}});
   ["v_valor","v_qtd"].forEach(function(id){$(id).oninput=calcular;$(id).onchange=calcular;});
