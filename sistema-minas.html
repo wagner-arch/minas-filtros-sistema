@@ -11429,6 +11429,49 @@ function faixa(v,p){
   return{n:"Abaixo do mínimo",f:0,cls:"p-crit",abaixo:true};
 }
 
+/* ===== A ETIQUETA DA FAIXA, ENQUANTO SE DIGITA (19/11, v581) =====
+   Só MOSTRA: nenhuma regra de comissão mudou nesta versão. A etiqueta sai da MESMA
+   `faixa(v,p)` que a comissão usa, com o MESMO valor — o comercial do item na forma de
+   pagamento escolhida, já com o rateio do Desconto Especial e com a tolerância de um
+   centavo que está dentro da `faixa`. É por isso que ela não pode dizer uma faixa e a
+   comissão pagar outra: é uma conta só, num lugar só, usada na linha do item e na revisão. */
+var ETIQ_FAIXA={"100%":{cls:"p-ok",t:"Comissão 100%"},
+  "70%":{cls:"p-warn",t:"Comissão 70%"},
+  "Campanha":{cls:"p-laranja",t:"Campanha 50%"}};
+var ETIQ_ABAIXO={cls:"p-crit",t:"Abaixo da tabela — precisa de aprovação",abaixo:true};
+var ETIQ_SEMCOM={cls:"p-acc",t:"Coberto pelo Plano Premium · sem comissão",semCom:true};
+/* item que sai SEM COBRANÇA e por isso sem comissão — nunca "abaixo da tabela":
+   o coberto pelo plano (inclusive o plano INFORMADO do sistema antigo, que sai a R$ 0,00) e o
+   item de garantia, que vai a R$ 0,00 porque a garantia cobre e não porque houve desconto —
+   o produto dele não tem tabela nenhuma no catálogo. Item com tabela zerado à mão continua
+   abaixo da tabela, como tem de ser: ali houve desconto e a aprovação é devida. */
+function itemSemComissao(i,p){
+  if(!i)return false;
+  if(i.planoCobre)return true;
+  if(ehPlano(i))return false;          /* o plano VENDIDO comissiona como qualquer item */
+  if((+i.valor||0)>0.009)return false;
+  return !(pisoMinimo(p)>0)&&!(pisoCem(p)>0);
+}
+function etiquetaDaFaixa(i,p,fx){
+  if(itemSemComissao(i,p))return ETIQ_SEMCOM;
+  return ETIQ_FAIXA[fx&&fx.n]||ETIQ_ABAIXO;
+}
+function pillDaFaixa(e){return '<span class="pill '+e.cls+'">'+esc(e.t)+"</span>";}
+/* quanto falta para o item subir um degrau, no dinheiro que o cliente paga na forma escolhida */
+function faltaParaFaixa(i,p,fx,T){
+  if(!i||!p||itemSemComissao(i,p))return "";
+  var n=(fx&&fx.n)||"",alvo=0,nome="";
+  if(n==="100%")return "";
+  if(n==="70%"){alvo=pisoCem(p);nome="100%";}
+  else if(n==="Campanha"){alvo=pisoMinimo(p);nome="70%";}
+  else if(p.campativa==="sim"&&(+p.minimo||0)>0&&(+p.minimo||0)<pisoMinimo(p)){alvo=+p.minimo||0;nome="Campanha";}
+  else {alvo=pisoMinimo(p);nome="70%";}
+  if(!(alvo>0))return "";
+  var alvoF=precoPelaForma(alvo,1,T),falta=centavos(alvoF-(+i.valor||0));
+  if(!(falta>0))return "";
+  return "Faltam "+BRL(falta)+" para cair em "+(nome==="Campanha"?"Campanha":nome);
+}
+
 /* clientes */
 function faltantes(c){
   /* o que falta para este cadastro poder virar venda */
@@ -17141,6 +17184,10 @@ window.__revisaoMF=function(){return abrirRevisaoPedido();};
 window.__faltaEndMF=function(){return faltaEnderecoInstalacao();};
 window.__faltaLocMF=function(){return faltaLocalInstalacao();};
 window.__faixaMF=function(v,p){return faixa(v,p);};
+/* v581: a etiqueta da faixa, para os ensaios conferirem que ela e a comissao sao a mesma conta */
+window.__etiqFaixaMF={etiqueta:function(i,p,fx){return etiquetaDaFaixa(i,p,fx||faixa(centavos(valorBaseItem(i)),p));},
+  falta:function(i,p,fx,T){return faltaParaFaixa(i,p,fx||faixa(centavos(valorBaseItem(i)),p),T||somaTabelaCarrinho());},
+  semComissao:itemSemComissao,pill:pillDaFaixa};
 window.__faixasTextoMF=function(p){return textoFaixasProduto(p);};
 window.__opcoesProdutoMF=function(){return opcoesProduto();};
 window.__cfgPrecoMF=function(){return CFG_PRECO;};
@@ -19807,6 +19854,7 @@ function calcular(){
      para decidir a tabela em que o item cai e para a base. O frete fica de fora, porque não
      comissiona. */
   var fatorDescCom=fatorDescontoComissao(comp);
+  var somaTab=somaTabelaCarrinho();   /* v581: uma vez para a tabela inteira, não por linha */
   /* a tabela é redesenhada a cada conta: se o cursor está num valor de item, ele volta para lá */
   var focoVU=(document.activeElement&&document.activeElement.getAttribute&&document.activeElement.getAttribute("data-vu"));
   tb.innerHTML="";
@@ -19825,9 +19873,9 @@ function calcular(){
       (i.garantia==="Bronze"||!i.garantia)?'<span class="pill p-mut">Bronze</span>':'<span class="pill p-acc">'+esc(i.garantia)+"</span>";
     var tr=document.createElement("tr");
     /* o teto mostrado é o PISO da 100% (22/10): é até onde ele desce ainda na tabela cheia */
-    var tabU=cobPl?0:precoPelaForma(pisoCem(p)||(+i.valorTabela||0),1,somaTabelaCarrinho());
+    var tabU=cobPl?0:precoPelaForma(pisoCem(p)||(+i.valorTabela||0),1,somaTab);
     /* o mínimo na mesma forma de pagamento, para o vendedor comparar com o que está vendo */
-    var minU=cobPl?0:precoPelaForma(pisoMinimo(p),1,somaTabelaCarrinho());
+    var minU=cobPl?0:precoPelaForma(pisoMinimo(p),1,somaTab);
     var temMin=(!cobPl&&minU>0&&minU<tabU-0.009);
     /* O PREÇO MUDOU COM O PEDIDO ABERTO (22/10, regra dele): o item guarda a tabela de quando
        entrou; se o cadastro mudou desde então, a linha avisa e passa a valer o novo. */
@@ -19836,7 +19884,9 @@ function calcular(){
     if(mudouPreco)i.valorTabela=tabNova;
     /* item abaixo do mínimo fica em vermelho na linha inteira (pedido dele, 22/10) */
     if(fx.abaixo)tr.className="it-abaixo";
-    var dscU=cobPl?0:(i.descontoTipo!=="pct"&&i.digitou==="desconto"&&i.descontoFinalDig!=null?+i.descontoFinalDig:descontoItemFinal(i,somaTabelaCarrinho()));
+    /* v581: a etiqueta da faixa e o "faltam R$ X", uma conta só por linha */
+    var etq=etiquetaDaFaixa(i,p,fx),ftx=faltaParaFaixa(i,p,fx,somaTab);
+    var dscU=cobPl?0:(i.descontoTipo!=="pct"&&i.digitou==="desconto"&&i.descontoFinalDig!=null?+i.descontoFinalDig:descontoItemFinal(i,somaTab));
     tr.innerHTML='<td><div class="t-main"><button class="lixo" type="button" data-rm="'+idx+
         '" title="Remover este item" aria-label="Remover '+esc(i.nome)+'">&#128465;</button>'+
         '<span class="nome-item" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+'</span></div><div class="t-sub"><code>'+esc(i.cod)+"</code> · "+garPill+
@@ -19854,7 +19904,9 @@ function calcular(){
         /* A FAIXA DESCEU PARA CÁ (21/10): ela é a leitura do preço, não um dado a mais, e na
            coluna própria a pill "Abaixo da tabela cheia" não cabia. Aqui ela aparece na hora,
            ao lado de quanto aquele item paga de comissão. */
-        '<div class="it-faixa" style="margin-top:4px"><span class="pill '+fx.cls+'">'+fx.n+"</span>"+
+        '<div class="it-faixa" style="margin-top:4px">'+pillDaFaixa(etq)+
+        /* v581: quanto falta para subir um degrau, no dinheiro da forma escolhida */
+        (ftx?' <span class="t-sub it-falta">'+esc(ftx)+"</span>":"")+
         (cobPl?"":' <span class="t-lim">'+
           '<b class="tf-100'+(fx.n==="100%"?" tf-ag":"")+'">100% '+BRL(tabU)+"</b>"+
           (temMin?(' · <b class="tf-min'+(fx.n==="70%"?" tf-ag":"")+(fx.abaixo?" tf-ruim":"")+
@@ -19864,7 +19916,7 @@ function calcular(){
         (!cobPl&&fx.n!==(fx.f*100).toFixed(0)+"%"?' <span class="t-sub">paga '+(fx.f*100).toFixed(0)+"%</span>":"")+
         "</div>"+
         /* v517 (tela nova): no lugar das tabelas, só o aviso — amarelo na 70%, vermelho abaixo dela */
-        (cobPl?"":(fx.abaixo?'<div class="it-aviso note crit" style="padding:6px 10px">Abaixo da tabela: este item precisa de autorização do Administrador.</div>'
+        (etq.semCom?"":(fx.abaixo?'<div class="it-aviso note crit" style="padding:6px 10px">Abaixo da tabela: este item precisa de autorização do Administrador.</div>'
           :(fx.n==="70%"?'<div class="it-aviso note warn" style="padding:6px 10px">Com este desconto, este item cai para a tabela 70%.</div>':"")))+
         "</div></td>"+
       /* v224: quantidade editável na lista — "mesmo depois que o produto foi incluído o usuário
@@ -20204,16 +20256,23 @@ function abrirRevisaoPedido(){
     (c&&c.tel?("<br>Telefone: "+esc(c.tel)):"")+
     "<br>"+esc(enderecoCadastroCli(c)||"sem endereço no cadastro")+"</div></div>";
   /* ---- itens ---- */
+  /* v581: a revisão usa a MESMA conta da linha do item e da comissão — o valor comercial com o
+     rateio do Desconto Especial. Antes ela chamava a faixa com o valor sem esse rateio, e um
+     pedido com Desconto Especial podia mostrar aqui uma faixa e pagar outra. */
+  var fatorRev=fatorDescontoComissao(r&&r.comp);
+  var abaixoRev=[];
   var linhas=itens.map(function(i,ix){
     if(i.planoCobre)
       return "<tr><td>"+esc(i.nome)+'</td><td class="num">'+(i.qtd||1)+
         '</td><td class="num">—</td><td class="num">—</td><td class="num">'+BRL(0)+
-        '</td><td><span class="pill p-ok">coberto pelo plano</span></td></tr>';
+        "</td><td>"+pillDaFaixa(ETIQ_SEMCOM)+"</td></tr>";
     var p=produtoPor(i.pid)||{};
     /* o mesmo piso da 100% que a linha do item mostra (22/10) */
     var tabela=pisoCem(p)||(+i.valorTabela||0);
     var dRS=descontoItemFinal(i,T);
-    var fx=faixa(valorBaseItem(i),p);
+    var fx=faixa(centavos(valorBaseItem(i)*fatorRev),p);
+    var etq=etiquetaDaFaixa(i,p,fx),ftR=faltaParaFaixa(i,p,fx,T);
+    if(etq.abaixo)abaixoRev.push(i.nome);
     return "<tr"+(fx.abaixo?' class="it-abaixo"':"")+'><td data-r="Produto">'+esc(i.nome)+
       (i.serie?('<div class="t-sub">série '+esc(i.serie)+"</div>"):"")+
       '</td><td class="num" data-r="Qtd">'+(i.qtd||1)+
@@ -20224,7 +20283,8 @@ function abrirRevisaoPedido(){
         (i.descontoTipo==="pct"?('<div class="t-sub">'+brMF(+i.desconto||0)+"%</div>"):"")):"—")+
       '</td><td class="num" data-r="Preço final"><b>'+BRL(+i.valor||0)+"</b>"+
       ((i.qtd||1)>1?('<div class="t-sub">total '+BRL(centavos((+i.valor||0)*(i.qtd||1)))+"</div>"):"")+
-      '</td><td data-r="Faixa"><span class="pill '+fx.cls+'">'+fx.n+"</span></td></tr>";
+      '</td><td data-r="Faixa">'+pillDaFaixa(etq)+
+      (ftR?'<div class="t-sub">'+esc(ftR)+"</div>":"")+"</td></tr>";
   }).join("");
   h+='<div class="sect"><p class="sect-t">Itens</p><div class="tw cartoes"><table class="rv-itens"><thead><tr>'+
     '<th>Produto</th><th class="num">Qtd</th><th class="num">100% / 70%</th>'+
@@ -20248,10 +20308,12 @@ function abrirRevisaoPedido(){
     (freteLojaVenda()>0?'<div class="note" style="margin-top:8px">Frete grátis (por conta da loja): <b>'+BRL(freteLojaVenda())+"</b> — não é cobrado do cliente e sai da base de comissão.</div>"
       :((r&&r.comp&&+r.comp.frete>0)?'<div class="note" style="margin-top:8px">Frete pago pelo cliente: <b>'+BRL(+r.comp.frete)+"</b> (já está no total).</div>":""))+"</div>";
   /* ---- aprovação, se algum item ficou abaixo da faixa ---- */
-  if(r&&r.abaixo){
-    h+='<div class="note crit"><b>Este pedido precisa de autorização.</b> Algum item ficou '+
-      "abaixo da faixa de preço dele. Ao confirmar, o sistema abre o pedido de autorização "+
-      "para o Administrador, como já fazia.</div>";
+  if((r&&r.abaixo)||abaixoRev.length){
+    h+='<div class="note crit"><b>Este pedido precisa de autorização.</b> '+
+      (abaixoRev.length
+        ? ("Este item vai precisar de aprovação do Administrador: <b>"+abaixoRev.map(esc).join("</b>, <b>")+"</b>.")
+        : "Algum item ficou abaixo da faixa de preço dele.")+
+      " Ao confirmar, o sistema abre o pedido de autorização para o Administrador, como já fazia.</div>";
   }
   /* v553: venda com pendência */
   if(pendVendaForm().tem)h+='<div class="note warn"><b>Venda com pendência:</b> '+esc(pendVendaForm().texto||"(escreva qual é)")+
@@ -30289,13 +30351,54 @@ async function apagarColaborador(){
   renderUsuarios();render();
   toast("Cadastro de "+u.nome+" apagado.");
 }
+/* ===== OS ESTOQUES DAS DUAS EMPRESAS NA FICHA (19/11, v581) =====
+   Relato dele: com o sistema aberto na WF, a ficha de um Administrador com "ambas" (cadastro na
+   Minas Filtros) mostrava só os estoques da MF, e o Estoque da Loja da WF precisou ser escrito
+   à mão no banco. Agora quem tem "ambas" vê um bloco por empresa.
+   O campo gravado é o MESMO de sempre (`estoques`). Cuidado que vale lembrar: só o Estoque da
+   Loja carrega a empresa no nome (`eloja:mf`, `eloja:wf`); o Almoxarifado é `empresa` e o
+   estoque de cada pessoa é `colab:Nome` — eles são UM SÓ e a marcação vale nas duas empresas.
+   Por isso o Almoxarifado aparece nos dois blocos com a mesma marcação, em espelho, e quem
+   tem "ambas" aparece na lista das duas (a leitura não deixa repetir no campo). */
+function colabsDaEmpresaFicha(lj){
+  var m={};
+  movEst.forEach(function(x){
+    if(x.loja!==lj)return;
+    [x.origem,x.destino].forEach(function(l){if(l&&l.indexOf("colab:")===0)m[l.slice(6)]=1;});
+  });
+  (EQUIPE||[]).forEach(function(n){
+    var us=usuarioPor(n);
+    if(us&&us.loja&&us.loja!==lj&&us.loja!=="ambas"&&us.ambas!==true)return;
+    m[n]=1;
+  });
+  return Object.keys(m).sort(function(a,b){return a.localeCompare(b,"pt-BR");});
+}
+function estoquesDaEmpresaFicha(lj){
+  var r=[{loc:LOC_EMPRESA,nome:"Almoxarifado",ajuda:"tudo que entra por nota fiscal sai dele",umSo:true},
+         {loc:locLoja(lj),nome:"Estoque da Loja",ajuda:"o balcão de "+nomeLojaId(lj)}];
+  colabsDaEmpresaFicha(lj).forEach(function(nm){
+    r.push({loc:locColab(nm),nome:"Estoque de "+nm,ajuda:perfilDe(nm)||"colaborador",pessoa:nm,umSo:true});
+  });
+  return r;
+}
+/* o nome do local dizendo a empresa, para o registro de "Últimas mudanças" */
+function nomeLocalEmpresa(l){
+  var t=nomeLocal(l);
+  if(l===LOC_EMPRESA)return t+" (as duas empresas)";
+  if(l&&l.indexOf("colab:")===0){
+    var us=usuarioPor(l.slice(6));
+    var lj=us&&us.loja&&us.loja!=="ambas"?us.loja:"";
+    return "Estoque de "+t+(lj?" · "+nomeLojaId(lj):"");
+  }
+  return t;
+}
 /* a lista de estoques da empresa deste colaborador, com o que ele responde marcado */
 function montarEstoquesUsuario(u){
   var box=$("u_estoques");if(!box)return;
   var marcados=(u&&u.estoques)||[],lj=(u&&u.loja)||lojaAtual,nm=(u&&u.nome)||"";
   var podeMexer=ehGestor();
-  var lista=estoquesDaEmpresa(lj);
-  box.innerHTML=lista.map(function(e){
+  var ambas=!!(u&&u.ambas===true);
+  function linha(e){
     var proprio=(e.pessoa&&e.pessoa===nm);
     var marcado=proprio||marcados.indexOf(e.loc)>=0;
     var outros=responsaveisDoEstoque(e.loc).filter(function(x){return x!==nm;});
@@ -30307,15 +30410,31 @@ function montarEstoquesUsuario(u){
       (outros.length?("Também responde"+(outros.length>1?"m":"")+": "+esc(outros.join(", ")))
                     :(proprio?"":"Ninguém mais responde por este estoque."))+
       "</span></span></label>";
-  }).join("");
+  }
+  if(ambas){
+    /* um bloco por empresa, na ordem de sempre */
+    box.innerHTML=LOJAS.map(function(L){
+      return '<p class="sect-t" style="margin-top:10px">'+esc(L.nome)+"</p>"+
+        estoquesDaEmpresaFicha(L.id).map(linha).join("");
+    }).join("");
+    /* o Almoxarifado e o estoque de cada pessoa são um só: as duas caixas andam juntas */
+    Array.prototype.forEach.call(box.querySelectorAll("[data-uest]"),function(c){
+      c.addEventListener("change",function(){
+        Array.prototype.forEach.call(box.querySelectorAll('[data-uest="'+c.getAttribute("data-uest")+'"]'),
+          function(o){if(o!==c)o.checked=c.checked;});
+      });
+    });
+  }else box.innerHTML=estoquesDaEmpresa(lj).map(linha).join("");
   var nota=$("u_estoquesNota");
   if(nota){
     var h=((u&&u.estoquesHist)||[]).slice(-3).reverse().map(function(x){
       return "<li>"+esc(x.por||"")+" em "+dataBR(String(x.quando||"").slice(0,10))+
-        (x.entrou&&x.entrou.length?" · passou a responder por "+esc(x.entrou.map(nomeLocal).join(", ")):"")+
-        (x.saiu&&x.saiu.length?" · deixou "+esc(x.saiu.map(nomeLocal).join(", ")):"")+"</li>";
+        (x.entrou&&x.entrou.length?" · passou a responder por "+esc(x.entrou.map(nomeLocalEmpresa).join(", ")):"")+
+        (x.saiu&&x.saiu.length?" · deixou "+esc(x.saiu.map(nomeLocalEmpresa).join(", ")):"")+"</li>";
     }).join("");
-    nota.innerHTML='<div class="help" style="margin-top:10px">Estoques de <b>'+esc(nomeLojaId(lj))+"</b>."+
+    nota.innerHTML='<div class="help" style="margin-top:10px">'+
+      (ambas?"Esta pessoa trabalha nas <b>duas empresas</b>: a lista traz os estoques de cada uma. O <b>Almoxarifado</b> e o estoque de cada pessoa são um só — marcar num bloco vale nos dois."
+            :"Estoques de <b>"+esc(nomeLojaId(lj))+"</b>.")+
       (podeMexer?"":" Só o Administrador e o Gerente mudam esta marcação.")+
       (h?("<br>Últimas mudanças:<ul style=\"margin:6px 0 0 18px\">"+h+"</ul>"):"")+"</div>";
   }
@@ -30328,7 +30447,8 @@ function lerEstoquesDoForm(u){
     var loc=c.getAttribute("data-uest");
     /* o próprio estoque da pessoa não precisa ser marcado: ela responde por ele de qualquer jeito */
     if(loc===locColab(nm))return;
-    if(c.checked)agora.push(loc);
+    /* v581: o mesmo estoque pode estar nos dois blocos (Almoxarifado, estoque de pessoa) */
+    if(c.checked&&agora.indexOf(loc)<0)agora.push(loc);
   });
   if(!ehGestor())return antes;                       /* a trava vale por dentro (regra da v321) */
   var entrou=agora.filter(function(x){return antes.indexOf(x)<0;});
