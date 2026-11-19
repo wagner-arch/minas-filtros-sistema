@@ -620,6 +620,12 @@ body.tn .tv-so{display:none!important}
   .ser-n{min-width:22px;text-align:right;color:var(--ink-3);font-size:12.5px}
   .ser-l input{flex:1;min-width:0}
   .ser-av:empty{display:none}
+  /* v586: as séries livres do almoxarifado e o "Você quis dizer" */
+  .ser-livres{margin-top:8px}
+  .ser-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+  .ser-sug:empty{display:none}
+  .ser-sug{margin:4px 0 0 30px;font-size:12.5px;color:var(--warn)}
+  .ser-sug-t{margin-right:6px}
   .ser-av{margin-top:8px}
   .auto button{display:block;width:100%;text-align:left;background:none;border:0;font:inherit;
     padding:9px 11px;border-radius:7px;cursor:pointer;color:var(--ink)}
@@ -7314,6 +7320,23 @@ img{max-width:100%}
 
 <!-- INDICAÇÃO DO SISTEMA ANTIGO (20/11, v584): só Financeiro e Administrador -->
 <!-- PASSAR O PLANO PARA OUTRO APARELHO (20/11, v585): só Financeiro e Administrador -->
+<!-- SÉRIES AO SEPARAR A REQUISIÇÃO (20/11, v586): só série livre do almoxarifado -->
+<div class="modal" id="sepSerModal" hidden>
+  <div class="box" style="width:min(620px,100%)">
+    <h3>Qual purificador vai nesta requisição?</h3>
+    <div class="sub" id="sp_sub"></div>
+    <div class="note" style="margin-top:12px">Informe o número de série de cada aparelho que você está separando. 
+      Só vale série <b>cadastrada no almoxarifado</b> (vinda de nota ou de inventário) e livre. 
+      Ela fica <b>reservada</b> para esta requisição, e quem recebe só confere.</div>
+    <div id="sp_box" style="margin-top:10px"></div>
+    <div id="sp_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="sp_salvar">Separar com estas séries</button>
+      <button class="btn mut" type="button" id="sp_fechar">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="passPlanoModal" hidden>
   <div class="box" style="width:min(560px,100%)">
     <h3>Passar o plano para outro aparelho</h3>
@@ -7399,6 +7422,8 @@ img{max-width:100%}
         <tbody id="es_itens"></tbody>
       </table></div>
     </div>
+    <!-- v586: série de cada purificador quando o almoxarifado requisita para outra pessoa -->
+    <div id="es_serBox"></div>
     <div class="fld" id="es_motivoWrap" hidden style="margin-top:10px"><label for="es_motivoDev">Motivo da devolução <span class="req">*</span></label>
       <select id="es_motivoDev"><option value="">— escolha —</option><option>Sobra</option><option>Com defeito / quebrado</option></select></div>
     <div class="grid g3" style="margin-top:6px">
@@ -26583,6 +26608,7 @@ function renderEsItens(){
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-esrm]"),function(bt){
     bt.onclick=function(){esItens.splice(+bt.getAttribute("data-esrm"),1);renderEsItens();};});
+  try{renderEsSeries();}catch(e){}   /* v586 */
 }
 /* toque duplo nunca grava duas vezes (30/10) */
 function confirmarEstoque(){return travaSalvar("confirmarEstoque",confirmarEstoque__corpo,this,arguments);}
@@ -26599,6 +26625,18 @@ async function confirmarEstoque__corpo(){
         faltando.map(function(i){return esc(i.nome)+": pedido "+i.qtd+", disponível "+Math.max(0,dsp2(i.pid));}).join("<br>")+
         "<br>Acerte as quantidades ou avise o Administrador para comprar.</div>";return;}
   }
+  /* v586: requisição para OUTRA pessoa (caminho B): o purificador só vai com a série informada */
+  var itsNov=itensSerieDoEstModal(),confNov=null;
+  if(itsNov.length){
+    confNov=serBoxConferir(itsNov,"",LOC_EMPRESA,true,"");
+    if(!confNov.ok){
+      try{serBoxPintar($("es_serCx").querySelector(".ser-box"));}catch(eP2){}
+      $("es_alerta").innerHTML='<div class="note crit"><b>'+
+        (confNov.fora.length?"Série recusada — confira os destacados."
+          :"Informe o número de série de cada purificador que vai ser entregue.")+"</b></div>";
+      return;
+    }
+  }
   if(esModo==="req"||esModo==="dev"){
     var lcl=esLocal||locColab(esColab||usuarioAtual);
     var r={id:uid(),loja:lojaAtual,tipo:(esModo==="req"?"requisicao":"devolucao"),
@@ -26608,9 +26646,19 @@ async function confirmarEstoque__corpo(){
       itens:esItens.map(function(i){return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:i.qtd,atendida:i.qtd};}),
       obs:obs,data:data,status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual,abertaEm:new Date().toISOString()};
     if(esModo==="dev")r.motivoDev=$("es_motivoDev").value;
+    /* v586: as séries informadas na criação ficam reservadas, conferidas no banco */
+    if(confNov){
+      var resNov=await reservarSeriesReq(r,confNov.mapa);
+      if(resNov.erro){$("es_alerta").innerHTML='<div class="note crit"><b>'+esc(resNov.erro)+"</b> Nada foi enviado.</div>";return;}
+      r.seriesPrev=confNov.mapa;r.seriesPrevPor=usuarioAtual;r.seriesPrevEm=agoraCarimbo();
+      r.status="separada";r.separadaPor=usuarioAtual;r.separadaEm=hojeISO();
+      r.separadaQuando=new Date().toISOString();
+    }
     requisicoes.push(r);
     try{await gravaConf("requisicoes",r);}
-    catch(eRq){requisicoes.splice(requisicoes.indexOf(r),1);avisarRecusaBanco("es_alerta",eRq,"Nada foi enviado.");return;}
+    catch(eRq){requisicoes.splice(requisicoes.indexOf(r),1);
+      if(confNov)try{await liberarSeriesReq(r,"requisição não gravada");}catch(eL){}
+      avisarRecusaBanco("es_alerta",eRq,"Nada foi enviado.");return;}
     try{renderEstAfazer();renderEstSaldo();}catch(eRr){}
     $("estModal").hidden=true;
     toast(esModo==="req"
@@ -27434,9 +27482,11 @@ function serieOcupada(n,pedidoId){
   var r=reservasDeSerie()[normSerie(n)];
   return (r&&(!pedidoId||r.pedido.id!==pedidoId))?r:null;
 }
-function seriesLivresDoLocal(pid,loc,pedidoId){
+function seriesLivresDoLocal(pid,loc,pedidoId,reqId){
   return seriesDoLocal(pid,loc).filter(function(d){
-    return !serieOcupada(d.serieNorm,pedidoId)&&!ivsAparelhoDaSerie(d.serieNorm);});
+    /* v586: a reservada pelo almoxarifado para OUTRA requisição também não está livre */
+    return !serieOcupada(d.serieNorm,pedidoId)&&!ivsAparelhoDaSerie(d.serieNorm)&&
+      !serieReservadaReq(d,reqId);});
 }
 /* quantas unidades estão no estoque sem série cadastrada */
 function faltamSeriesNoLocal(pid,loc){
@@ -27461,16 +27511,23 @@ function ondeEstaSerie(n,ignorarId,pedidoId,opc){
   if(d)return "no estoque "+nomeLocal(d.local)+(d.produto?" · "+d.produto:"");
   var r=serieOcupada(n,pedidoId);
   if(r)return "reservada no pedido "+(r.pedido.numero||"sem número");
+  /* v586: reservada pelo almoxarifado para uma requisição */
+  var dr=seriesCad.filter(function(x){return serieDaLoja(x)&&x.serieNorm===n;})[0];
+  var rr=dr?serieReservadaReq(dr,(opc&&opc.reqId)||""):null;
+  if(rr)return "reservada em outra requisição"+(rr.por?" ("+rr.por+")":"");
   return "";
 }
 /* põe (ou move) a série num estoque, sempre no MESMO registro da coleção `series` */
-async function porSerieNoLocal(pid,nome,s,loc,texto){
+async function porSerieNoLocal(pid,nome,s,loc,texto,soMover){
   var n=normSerie(s);
   if(!n)return null;
   await carregarSeries();
   var ja=seriesCad.filter(function(d){return serieDaLoja(d)&&d.produtoId===pid&&d.serieNorm===n;})[0];
+  /* v586: na passagem de estoque a série NUNCA é criada — ou ela já existe, ou não entra */
+  if(!ja&&soMover)return null;
   var d=ja||{id:uid(),loja:lojaAtual,serieNorm:n,produtoId:pid,produto:nome||"",
     criadoEm:new Date().toISOString(),historico:[]};
+  if(soMover&&d.reservada)delete d.reservada;   /* entregue: a reserva da requisição acabou */
   d.serie=String(s).trim();d.situacao="estoque";d.local=loc;
   d.em=new Date().toISOString();d.por=usuarioAtual;
   d.historico=(d.historico||[]).concat([{quando:hojeISO(),por:usuarioAtual,
@@ -27486,14 +27543,89 @@ async function devolverSeriesDoLocal(pid,qtd,de,para,texto){
   var lista=seriesDoLocal(pid,de).sort(function(a,b){
     return (serieOcupada(a.serieNorm)?1:0)-(serieOcupada(b.serieNorm)?1:0);});
   var n=Math.min(lista.length,Math.max(0,+qtd||0)),p=prodPorId(pid)||{};
-  for(var i=0;i<n;i++)await porSerieNoLocal(pid,p.nome||lista[i].produto,lista[i].serie,para,texto);
+  for(var i=0;i<n;i++)await porSerieNoLocal(pid,p.nome||lista[i].produto,lista[i].serie,para,texto,true);
   return n;
 }
+
+/* ===== A SÉRIE DA PASSAGEM DE ESTOQUE SÓ PODE SER UMA QUE JÁ ESTÁ LÁ (20/11, v586) =====
+   O defeito que ele pegou: a conferência do aceite (v562/v570) só recusava número que JÁ estava
+   em OUTRO lugar. Número que não existia em lugar nenhum passava e era CRIADO pelo
+   `porSerieNoLocal` — série inventada na caixinha, no pedido e no aparelho do cliente, enquanto a
+   verdadeira continuava "em estoque" no almoxarifado.
+   A REGRA (dele): todo purificador tem a série cadastrada no almoxarifado, vinda de nota ou de
+   inventário. Na passagem do almoxarifado para o vendedor (e na devolução, no sentido contrário),
+   a série informada TEM de ser uma dessas: mesma empresa, mesmo produto, situação "estoque",
+   local = o estoque de ORIGEM, e livre (sem reserva de pedido nem de outra requisição).
+   Série que não existe, de outro produto, de outro estoque, já vendida ou reservada é recusada
+   com o motivo na linha. Cadastrar série nova continua só por nota, inventário ou "Informar
+   séries do estoque" — o vendedor nunca cadastra. */
+/* a reserva de uma requisição mora no PRÓPRIO registro da série (`d.reservada`), porque ela
+   precisa valer entre aparelhos: o almoxarifado separa aqui e o vendedor vê lá. A reserva morre
+   sozinha quando a requisição sai de "A separar"/"Separada". */
+function serieReservadaReq(d,reqId){
+  var rr=d&&d.reservada;
+  if(!rr||!rr.reqId)return null;
+  if(reqId&&rr.reqId===reqId)return null;
+  var r=(requisicoes||[]).filter(function(x){return x.id===rr.reqId;})[0];
+  if(r&&["pendente","separada"].indexOf(r.status)<0)return null;
+  return rr;
+}
+/* um dígito a mais, a menos ou trocado */
+function pertoDaSerie(a,b){
+  a=String(a||"");b=String(b||"");
+  if(!a||!b||a===b)return false;
+  var dif=Math.abs(a.length-b.length);
+  if(dif>1)return false;
+  if(dif===0){
+    var k=0;
+    for(var i=0;i<a.length;i++)if(a.charAt(i)!==b.charAt(i)){k++;if(k>1)return false;}
+    return k===1;
+  }
+  var L=(a.length>b.length)?a:b,S=(a.length>b.length)?b:a;
+  for(var j=0;j<L.length;j++)if(L.slice(0,j)+L.slice(j+1)===S)return true;
+  return false;
+}
+/* a série digitada existe, é deste produto e está livre no estoque de origem? */
+function conferirSerieOrigem(s,pid,origem,reqId,pedidoId){
+  var n=normSerie(s);
+  if(!n)return {ok:false,falta:true,texto:"falta"};
+  var eq=null;try{eq=ivsAparelhoDaSerie(n);}catch(e){}
+  if(eq)return {ok:false,texto:"já está no aparelho de "+(eq.cliente||"um cliente")};
+  var todas=seriesCad.filter(function(x){return serieDaLoja(x)&&x.serieNorm===n;});
+  var d=todas.filter(function(x){return x.produtoId===pid;})[0];
+  if(!d){
+    if(todas.length)return {ok:false,texto:"é a série de outro produto ("+(todas[0].produto||"")+")"};
+    return {ok:false,semCadastro:true,
+      texto:"não está cadastrada em "+nomeLocal(origem)};
+  }
+  if(d.situacao!=="estoque")return {ok:false,texto:"já saiu do estoque"};
+  if(d.local!==origem)return {ok:false,
+    texto:"está no estoque "+nomeLocal(d.local)+", não em "+nomeLocal(origem)};
+  var rr=serieReservadaReq(d,reqId);
+  if(rr)return {ok:false,texto:"reservada em outra requisição"+(rr.por?" ("+rr.por+")":"")};
+  var oc=serieOcupada(n,pedidoId);
+  if(oc)return {ok:false,texto:"reservada no pedido "+(oc.pedido.numero||"sem número")};
+  return {ok:true,d:d};
+}
+/* "Você quis dizer …?" — só quando UMA série livre é parecida; nunca troca sozinho */
+function sugerirSerie(s,pid,origem,reqId){
+  var n=normSerie(s);
+  if(!n)return null;
+  var l=seriesLivresDoLocal(pid,origem,"",reqId).filter(function(d){return pertoDaSerie(n,d.serieNorm);});
+  return (l.length===1)?l[0]:null;
+}
+/* quantas séries livres existem para este produto no estoque de origem */
+function faltaSerieParaEntregar(pid,origem,qtd,reqId){
+  var livres=seriesLivresDoLocal(pid,origem,"",reqId).length;
+  return Math.max(0,(+qtd||0)-livres);
+}
+var MSG_SEM_SERIE_ALMOX="Esta série não está cadastrada no almoxarifado. Peça ao almoxarifado para cadastrar (Informar séries do estoque).";
 
 /* ---------- a caixa de digitar/ler as séries (usada na aceitação e no "Informar séries") ---------- */
 var SERBOX={linhas:{}};
 function serBoxZerar(){SERBOX.linhas={};}
-function serBoxHtml(itens,id){
+function serBoxHtml(itens,id,opc){
+  opc=opc||{};
   var h=(itens||[]).map(function(x){
     var k=x.pid,qt=Math.max(0,+x.qtd||0);
     SERBOX.linhas[k]=SERBOX.linhas[k]||[];
@@ -27501,11 +27633,27 @@ function serBoxHtml(itens,id){
     for(var i=0;i<qt;i++){
       ls+='<div class="ser-l"><span class="ser-n">'+(i+1)+'</span>'+
         '<input data-ser="'+esc(k)+'" data-seri="'+i+'" autocomplete="off" spellcheck="false" '+
-        'placeholder="digite ou leia" value="'+esc(SERBOX.linhas[k][i]||"")+'">'+
-        '<button class="btn ghost sm" type="button" data-serler="'+esc(k)+'|'+i+'">ler</button></div>';
+        'placeholder="digite ou leia" value="'+esc(SERBOX.linhas[k][i]||"")+'"'+(opc.travado?" readonly":"")+">"+
+        (opc.travado?"":'<button class="btn ghost sm" type="button" data-serler="'+esc(k)+'|'+i+'">ler</button>')+
+        "</div>"+
+        /* v586: "Você quis dizer …?" desta linha */
+        '<div class="ser-sug" data-sersug="'+esc(k)+'|'+i+'"></div>';
+    }
+    /* v586: as séries livres daquele produto no estoque de origem, para tocar e preencher */
+    var livres="";
+    if(opc.exigir&&opc.origem&&!opc.travado){
+      var L=[];
+      try{L=seriesLivresDoLocal(k,opc.origem,"",opc.reqId||"");}catch(e){L=[];}
+      livres=L.length
+        ?('<div class="ser-livres"><span class="t-sub">Séries livres em '+esc(nomeLocal(opc.origem))+
+          ' — toque para preencher:</span><div class="ser-chips">'+
+          L.map(function(d){return '<button type="button" class="btn ghost sm" data-serusa="'+esc(k)+
+            '|'+esc(d.serie)+'">'+esc(d.serie)+"</button>";}).join("")+"</div></div>")
+        :('<div class="note crit" style="margin-top:6px"><b>Nenhuma série deste produto está cadastrada em '+
+          esc(nomeLocal(opc.origem))+'.</b> '+esc(MSG_SEM_SERIE_ALMOX)+"</div>");
     }
     return '<div class="ser-p"><b>'+esc(x.nome||"")+"</b> <span class=\"t-sub\">"+qt+
-      (qt===1?" número de série":" números de série")+"</span>"+ls+"</div>";
+      (qt===1?" número de série":" números de série")+"</span>"+ls+livres+"</div>";
   }).join("");
   return '<div class="ser-box" id="'+(id||"serBox")+'">'+h+'<div class="ser-av" id="'+(id||"serBox")+'_av"></div></div>';
 }
@@ -27527,11 +27675,33 @@ function serBoxLigar(box){
       if(c&&window.__lerCodigoMF)window.__lerCodigoMF(c);
     };
   });
+  /* v586: tocar numa série livre preenche a primeira linha vazia daquele produto */
+  Array.prototype.forEach.call(box.querySelectorAll("[data-serusa]"),function(b){
+    if(b.__ligado)return;b.__ligado=true;
+    b.onclick=function(){
+      var p=String(b.getAttribute("data-serusa")).split("|"),k=p[0],v=p.slice(1).join("|");
+      serBoxPreencher(box,k,v);
+    };
+  });
   serBoxPintar(box);
 }
-/* confere tudo: vazio, repetida na mesma caixa, já em outro estoque ou em cliente */
-function serBoxConferir(itens,pedidoId,origem){
-  var vistas={},erros=[],fora=[],mapa={};
+/* põe o valor na primeira linha vazia do produto (ou na que já tem o mesmo valor) */
+function serBoxPreencher(box,k,valor,linha){
+  SERBOX.linhas[k]=SERBOX.linhas[k]||[];
+  var cs=[].slice.call(box.querySelectorAll('[data-ser="'+k+'"]'));
+  var alvo=null;
+  if(linha!=null)alvo=cs.filter(function(c){return +c.getAttribute("data-seri")===+linha;})[0]||null;
+  if(!alvo)alvo=cs.filter(function(c){return !String(c.value||"").trim();})[0]||null;
+  if(!alvo){toast("Todas as linhas deste produto já estão preenchidas.");return false;}
+  alvo.value=valor;
+  SERBOX.linhas[k][+alvo.getAttribute("data-seri")]=valor;
+  serBoxPintar(box);
+  return true;
+}
+/* confere tudo. v586: com `exigir`, a série TEM de estar livre no estoque de origem — é a regra
+   nova; sem ele (o "Informar séries do estoque", a troca), vale a conferência de antes. */
+function serBoxConferir(itens,pedidoId,origem,exigir,reqId){
+  var vistas={},erros=[],fora=[],mapa={},sug={};
   (itens||[]).forEach(function(x){
     var k=x.pid,qt=Math.max(0,+x.qtd||0),L=SERBOX.linhas[k]||[],lista=[];
     for(var i=0;i<qt;i++){
@@ -27539,34 +27709,70 @@ function serBoxConferir(itens,pedidoId,origem){
       if(!n){erros.push({pid:k,i:i,texto:"falta"});continue;}
       if(vistas[n]){erros.push({pid:k,i:i,texto:"repetida nesta tela"});continue;}
       vistas[n]=1;
+      if(exigir&&origem){
+        var c=conferirSerieOrigem(s,k,origem,reqId||"",pedidoId||"");
+        if(!c.ok){
+          erros.push({pid:k,i:i,texto:c.texto});
+          fora.push(s+" — "+c.texto);
+          if(c.semCadastro){
+            var g=sugerirSerie(s,k,origem,reqId||"");
+            if(g)sug[k+"|"+i]=g.serie;
+          }
+          continue;
+        }
+        lista.push(s);
+        continue;
+      }
       /* v570: a série que vem do estoque de origem, do mesmo produto, é a mesma peça mudando de lugar */
-      var onde=ondeEstaSerie(n,null,pedidoId,origem?{origem:origem,pid:k}:null);
+      var onde=ondeEstaSerie(n,null,pedidoId,origem?{origem:origem,pid:k,reqId:reqId||""}:null);
       if(onde){erros.push({pid:k,i:i,texto:"já está "+onde});fora.push(s+" — já está "+onde);continue;}
       lista.push(s);
     }
     mapa[k]=lista;
   });
-  return {ok:!erros.length,erros:erros,fora:fora,mapa:mapa};
+  return {ok:!erros.length,erros:erros,fora:fora,mapa:mapa,sug:sug};
 }
 function serBoxPintar(box){
   if(!box)return;
-  var itens=box.__itens||[],r=serBoxConferir(itens,box.__pedidoId||"",box.__origem||"");
+  var itens=box.__itens||[];
+  var r=serBoxConferir(itens,box.__pedidoId||"",box.__origem||"",box.__exigir||false,box.__reqId||"");
   Array.prototype.forEach.call(box.querySelectorAll("[data-ser]"),function(c){
     var k=c.getAttribute("data-ser"),i=+c.getAttribute("data-seri");
     var e=r.erros.filter(function(x){return x.pid===k&&x.i===i&&x.texto!=="falta";})[0];
     c.style.borderColor=e?"var(--crit)":"";
     c.title=e?e.texto:"";
   });
+  /* v586: a sugestão de cada linha, com um toque para usar */
+  Array.prototype.forEach.call(box.querySelectorAll("[data-sersug]"),function(w){
+    var ch=String(w.getAttribute("data-sersug")).split("|"),g=r.sug[ch[0]+"|"+ch[1]];
+    w.innerHTML=g
+      ?('<span class="ser-sug-t">Você quis dizer <b>'+esc(g)+"</b>? </span>"+
+        '<button type="button" class="btn ghost sm" data-sergo="'+esc(ch[0])+"|"+esc(ch[1])+"|"+esc(g)+'">usar esta</button>')
+      :"";
+  });
+  Array.prototype.forEach.call(box.querySelectorAll("[data-sergo]"),function(b){
+    if(b.__ligado)return;b.__ligado=true;
+    b.onclick=function(){
+      var p=String(b.getAttribute("data-sergo")).split("|");
+      serBoxPreencher(box,p[0],p.slice(2).join("|"),p[1]);
+    };
+  });
   var av=box.querySelector(".ser-av");
   if(av)av.innerHTML=r.fora.length
-    ?'<div class="note crit"><b>Número de série já usado:</b><br>'+r.fora.map(esc).join("<br>")+"</div>":"";
+    ?'<div class="note crit"><b>Série recusada:</b><br>'+r.fora.map(esc).join("<br>")+"</div>":"";
   return r;
 }
-function serBoxMontar(alvo,itens,pedidoId,origem){
+function serBoxMontar(alvo,itens,pedidoId,origem,opc){
   if(!alvo)return null;
-  alvo.innerHTML=itens.length?serBoxHtml(itens,alvo.id+"_bx"):"";
+  opc=opc||{};
+  alvo.innerHTML=itens.length?serBoxHtml(itens,alvo.id+"_bx",
+    {exigir:!!opc.exigir,origem:origem||"",reqId:opc.reqId||"",travado:!!opc.travado}):"";
   var box=alvo.querySelector(".ser-box");
-  if(box){box.__itens=itens;box.__pedidoId=pedidoId||"";box.__origem=origem||"";serBoxLigar(box);}
+  if(box){
+    box.__itens=itens;box.__pedidoId=pedidoId||"";box.__origem=origem||"";
+    box.__exigir=!!opc.exigir;box.__reqId=opc.reqId||"";
+    serBoxLigar(box);
+  }
   return box;
 }
 /* v570: de qual estoque a peça está saindo nesta requisição ou devolução. Na requisição ela sai
@@ -27578,6 +27784,119 @@ function origemSerieReq(r){
   return LOC_EMPRESA;
 }
 window.__origemSerieReqMF=function(r){return origemSerieReq(r);};
+/* ===== CAMINHO B: O ALMOXARIFADO INFORMA AS SÉRIES E ELAS FICAM RESERVADAS (v586) =====
+   Quando quem cria ou separa a requisição é o almoxarifado (ou o substituto, o Gerente ou o
+   Administrador), as séries são informadas ali, com a MESMA conferência do caminho A, e ficam
+   RESERVADAS para aquela requisição — somem da lista de livres de outras requisições e dos
+   pedidos. A reserva é conferida NO BANCO na hora de gravar, para dois aparelhos não reservarem
+   a mesma. O vendedor, ao aceitar, VÊ as séries e não muda nada: só confere e aceita. */
+async function lerSerieNoBanco(id){
+  /* chave só dos ensaios: simula o que outro aparelho já gravou */
+  if(window.MODO_DEMO_MF&&window.__serieBancoMF)return window.__serieBancoMF[id]||null;
+  if(!db)return null;
+  try{
+    var sn=await col("series").doc(id).get();
+    return (sn&&sn.exists&&sn.data())||null;
+  }catch(e){return null;}
+}
+function seriesPrevReq(r,pid){return (r&&r.seriesPrev&&r.seriesPrev[pid])||[];}
+function temSeriesPrev(r,its){
+  if(!r||!r.seriesPrev||!its||!its.length)return false;
+  return its.every(function(x){return seriesPrevReq(r,x.pid).length>=Math.max(0,+x.qtd||0);});
+}
+async function reservarSeriesReq(r,mapa){
+  var docs=[],erro="",keys=Object.keys(mapa||{});
+  for(var a=0;a<keys.length&&!erro;a++){
+    var pid=keys[a],ls=mapa[pid]||[];
+    for(var b=0;b<ls.length&&!erro;b++){
+      var c=conferirSerieOrigem(ls[b],pid,LOC_EMPRESA,r.id,"");
+      if(!c.ok){erro="A série "+ls[b]+" "+c.texto+".";break;}
+      var noBanco=await lerSerieNoBanco(c.d.id);
+      if(noBanco){
+        var rr=noBanco.reservada;
+        if(rr&&rr.reqId&&rr.reqId!==r.id){
+          erro="A série "+ls[b]+" acabou de ser reservada"+(rr.por?" por "+rr.por:"")+" em outra requisição.";break;}
+        if(noBanco.local!==LOC_EMPRESA||noBanco.situacao!=="estoque"){
+          erro="A série "+ls[b]+" já saiu do almoxarifado.";break;}
+      }
+      var d=JSON.parse(JSON.stringify(c.d));
+      d.reservada={reqId:r.id,por:usuarioAtual,em:agoraCarimbo()};
+      d.historico=(d.historico||[]).concat([{quando:hojeISO(),por:usuarioAtual,
+        texto:"Separada para a requisição de "+(r.colaborador||nomeLocal(localDaReq(r)))}]);
+      docs.push(d);
+    }
+  }
+  if(erro)return {erro:erro};
+  if(!docs.length)return {ok:true,docs:[]};
+  try{await gravaJuntosConf(docs.map(function(d){return {colecao:"series",obj:d};}));}
+  catch(e){return {erro:motivoBanco(e)};}
+  docs.forEach(function(d){porNaLista(seriesCad,d);});
+  return {ok:true,docs:docs};
+}
+async function liberarSeriesReq(r,texto){
+  if(!r)return 0;
+  var docs=seriesCad.filter(function(d){
+      return serieDaLoja(d)&&d.reservada&&d.reservada.reqId===r.id;})
+    .map(function(d){
+      var c=JSON.parse(JSON.stringify(d));delete c.reservada;
+      c.historico=(c.historico||[]).concat([{quando:hojeISO(),por:usuarioAtual,
+        texto:texto||"Reserva da requisição liberada"}]);
+      return c;});
+  if(!docs.length)return 0;
+  try{await gravaJuntosConf(docs.map(function(d){return {colecao:"series",obj:d};}));}
+  catch(e){console.warn("liberar séries",e);return 0;}
+  docs.forEach(function(d){porNaLista(seriesCad,d);});
+  return docs.length;
+}
+/* "A série não confere" (regra dele): nada entra na caixinha, a requisição volta para o
+   almoxarifado corrigir e separar de novo, as reservas são liberadas e fica no histórico quem
+   apontou e quando. */
+async function serieNaoConfere(reqId,motivo){
+  var r=null;
+  try{r=await lerReqFresca(reqId);}catch(e){return "Não deu para conferir no banco. Tente de novo.";}
+  if(!r)return "Esta requisição não existe mais.";
+  if(r.loja!==lojaAtual)return "Esta requisição é de outra empresa.";
+  if(!podeAceitarReq(r))return "Só quem responde por "+nomeLocal(localDaReq(r))+" aponta isso.";
+  if(r.status!=="pendente"&&r.status!=="separada")return "Esta requisição já foi respondida.";
+  var antes=copiaReg(r);
+  r.serieConfere=(r.serieConfere||[]).concat([{por:usuarioAtual,em:agoraCarimbo(),
+    motivo:String(motivo||""),series:JSON.parse(JSON.stringify(r.seriesPrev||{}))}]);
+  r.serieNaoConfere=true;
+  r.seriesPrev=null;r.seriesPrevPor="";r.seriesPrevEm="";
+  r.status="pendente";r.separadaPor="";r.separadaEm="";r.separadaQuando="";
+  try{await gravaConf("requisicoes",r);}
+  catch(e){voltarReg(r,antes);return motivoBanco(e);}
+  try{await liberarSeriesReq(r,"Série não confere — apontado por "+usuarioAtual);}catch(e2){}
+  return "";
+}
+/* move para o estoque de destino as séries que o almoxarifado já tinha informado */
+async function moverSeriesPrev(r,its,destino){
+  var n=0;
+  for(var i=0;i<(its||[]).length;i++){
+    var x=its[i],ls=seriesPrevReq(r,x.pid).slice(0,Math.max(0,+x.qtd||0));
+    for(var j=0;j<ls.length;j++){
+      var d=await porSerieNoLocal(x.pid,x.nome,ls[j],destino,
+        "Recebido pela requisição separada pelo almoxarifado · "+nomeLocal(destino)+" · por "+usuarioAtual,true);
+      if(d)n++;
+    }
+    (r.series=r.series||{})[x.pid]=((r.series||{})[x.pid]||[]).concat(ls);
+  }
+  return n;
+}
+window.__serieTelasMF={abrirSeparar:function(r,its){return abrirSerieSeparar(r,its||itensSerieAbertosReq(r));},
+  gravarSeparar:function(){return gravarSerieSeparar__corpo();},
+  apontar:function(id){return apontarSerieNaoConfere(id);},
+  itensAbertos:function(r){return itensSerieAbertosReq(r);},
+  paraOutro:function(){return reqParaOutro();},
+  itensEstModal:function(){return itensSerieDoEstModal();},
+  caixa:function(){return SERBOX.linhas;},
+  pintar:function(sel){var b=document.querySelector(sel+" .ser-box");return b?serBoxPintar(b):null;},
+  livresHtml:function(sel){var b=document.querySelector(sel);return b?(b.innerHTML||""):"";}};
+window.__serieReqMF={prev:seriesPrevReq,temPrev:temSeriesPrev,reservar:reservarSeriesReq,
+  liberar:liberarSeriesReq,naoConfere:serieNaoConfere,moverPrev:moverSeriesPrev,
+  confOrigem:conferirSerieOrigem,sugerir:sugerirSerie,perto:pertoDaSerie,
+  faltaEntregar:faltaSerieParaEntregar,reservadaReq:serieReservadaReq};
+
 /* os produtos que pedem série dentro de uma lista de itens de requisição */
 function itensComSerieReq(r,idx){
   var out=[];
@@ -29562,11 +29881,26 @@ function abrirReposicaoItem(rid,idx){
     var alvo2=marcas0?alvo.filter(function(i){return marcados.indexOf(i)>=0;}):alvo;
     var its=ehTroca?[]:itensComSerieReq(r,alvo2);
     if(!its.length){wSer.innerHTML="";return;}
-    wSer.innerHTML='<div class="note"><b>Número de série de cada purificador recebido</b>'+
-      '<div class="t-sub">Digite ou leia o código de cada aparelho. Sem todas as séries o recebimento não é gravado.</div></div>'+
-      '<div id="rp_serBox"></div>';
+    /* v586: caminho B — o almoxarifado já informou as séries: o vendedor só confere */
+    var prev=temSeriesPrev(r,its);
+    if(prev)its.forEach(function(x){
+      SERBOX.linhas[x.pid]=seriesPrevReq(r,x.pid).slice(0,Math.max(0,+x.qtd||0));});
+    wSer.innerHTML=(prev
+      ?('<div class="note ok"><b>Séries separadas pelo almoxarifado</b><div class="t-sub">'+
+        "Confira o número de cada aparelho que você recebeu. Você não altera a série aqui: se o aparelho "+
+        "for outro, use <b>A série não confere</b>.</div></div>")
+      :('<div class="note"><b>Número de série de cada purificador recebido</b>'+
+        '<div class="t-sub">Digite, leia o código ou toque numa das séries livres do almoxarifado. '+
+        "Só vale série cadastrada lá: sem todas, o recebimento não é gravado.</div></div>"))+
+      '<div id="rp_serBox"></div>'+
+      (prev?'<div class="actions" style="justify-content:flex-start;margin-top:8px">'+
+        '<button class="btn mut sm" type="button" id="rp_naoConfere">A série não confere</button></div>':"");
     /* v570: a peça está saindo do estoque de origem (o almoxarifado, na requisição) */
-    serBoxMontar(document.getElementById("rp_serBox"),its,"",origemSerieReq(r));
+    /* v586: a série TEM de ser uma que já está lá — e no caminho B ela nem se digita */
+    serBoxMontar(document.getElementById("rp_serBox"),its,"",origemSerieReq(r),
+      {exigir:!ehTroca,reqId:r.id,travado:prev});
+    var bNC=document.getElementById("rp_naoConfere");
+    if(bNC)bNC.onclick=function(){return travaSalvar("serieNaoConfere",apontarSerieNaoConfere,null,[r.id]);};
   }
   var marcas0=marcar;
   repPend.pintarSeries=pintarSeriesRep;
@@ -29605,14 +29939,18 @@ async function confirmarReposicaoItens__corpo(){
     return;
   }
   /* v548: série obrigatória, uma por unidade, antes de qualquer gravação */
-  var itsSer=ehTrocaR?[]:itensComSerieReq(r,x.idx),confSer=null;
+  var itsSer=ehTrocaR?[]:itensComSerieReq(r,x.idx),confSer=null,prevSer=false;
   if(itsSer.length){
-    confSer=serBoxConferir(itsSer,"",origemSerieReq(r));
-    if(!confSer.ok){
-      try{serBoxPintar(document.querySelector("#rp_serBox .ser-box"));}catch(eP){}
-      toast(confSer.fora.length?"Número de série já usado — confira os destacados."
-        :"Informe o número de série de cada purificador recebido.");
-      return;
+    /* v586: caminho B — vale o que o almoxarifado separou; o vendedor não digita */
+    prevSer=temSeriesPrev(r,itsSer);
+    if(!prevSer){
+      confSer=serBoxConferir(itsSer,"",origemSerieReq(r),true,r.id);
+      if(!confSer.ok){
+        try{serBoxPintar(document.querySelector("#rp_serBox .ser-box"));}catch(eP){}
+        toast(confSer.fora.length?"Série recusada — confira os destacados."
+          :"Informe o número de série de cada purificador recebido.");
+        return;
+      }
     }
   }
   for(var k=0;k<x.idx.length;k++){
@@ -29622,13 +29960,17 @@ async function confirmarReposicaoItens__corpo(){
     it.recebido=true;it.recebidoEm=hojeISO();it.recebidoPor=usuarioAtual;
     nomes.push((it.atendida||it.qtd)+"× "+codNomeItem(it));
   }
-  if(confSer){
+  if(prevSer){
+    /* v586: caminho B — as séries separadas mudam de local, e a reserva morre com a entrega */
+    try{await moverSeriesPrev(r,itsSer,localDaReq(r));}catch(eMp){console.warn("séries separadas",eMp);}
+    serBoxZerar();
+  } else if(confSer){
     var alvoSer=localDaReq(r);
     for(var ks=0;ks<itsSer.length;ks++){
       var xs=itsSer[ks],ls=confSer.mapa[xs.pid]||[];
       for(var js=0;js<ls.length;js++)
         await porSerieNoLocal(xs.pid,xs.nome,ls[js],alvoSer,
-          "Recebido pela requisição"+(r.obs?" ("+r.obs+")":"")+" · "+nomeLocal(alvoSer)+" · por "+usuarioAtual);
+          "Recebido pela requisição"+(r.obs?" ("+r.obs+")":"")+" · "+nomeLocal(alvoSer)+" · por "+usuarioAtual,true);
       (r.series=r.series||{})[xs.pid]=((r.series||{})[xs.pid]||[]).concat(ls);
     }
     serBoxZerar();
@@ -29707,7 +30049,9 @@ function textoReq(r){
   if(r.origem==="reposicao")return "Reposição do pedido aprovado nº "+num+(cli?" · "+cli:"")+qdT;
   if(r.origem==="venda")return "Para atender o pedido nº "+num+(cli?" · "+cli:"")+qdT;
   if(r.origem==="troca")return "Purificador pego na troca"+(num?" · pedido nº "+num:"")+(cli?" · "+cli:"")+qdT;
-  return "Requisição de "+(r.pedidaPor||r.criadoPor||r.colaborador||"—")+qdT;
+  return "Requisição de "+(r.pedidaPor||r.criadoPor||r.colaborador||"—")+qdT+
+    /* v586: voltou porque a série do aparelho não era a que estava na tela */
+    (r.serieNaoConfere?" · SÉRIE NÃO CONFERE: corrija a série e separe de novo":"");
 }
 function prodAtualItem(i){
   var p=i&&i.pid?prodPorId(i.pid):null;
@@ -30091,6 +30435,90 @@ async function lerReqFresca(id){
   if(loc){Object.keys(loc).forEach(function(k){if(!(k in o))delete loc[k];});Object.keys(o).forEach(function(k){loc[k]=o[k];});return loc;}
   requisicoes.push(o);return o;
 }
+/* ----- as telas do caminho B (v586) ----- */
+/* os itens que pedem série de uma requisição inteira (só o que ainda não foi recebido) */
+function itensSerieAbertosReq(r){
+  if(!r||r.origem==="troca"||r.tipo!=="requisicao")return [];
+  var idx=(r.itens||[]).map(function(it,i){return itemFechadoReq(it)?-1:i;}).filter(function(i){return i>=0;});
+  return itensComSerieReq(r,idx);
+}
+var sepSerPend=null;
+function abrirSerieSeparar(r,its){
+  sepSerPend={r:r,its:its};
+  $("sp_sub").textContent=(r.colaborador||nomeLocal(localDaReq(r)))+" · "+itensTxt(r);
+  serBoxZerar();
+  $("sp_alerta").innerHTML="";
+  serBoxMontar($("sp_box"),its,"",LOC_EMPRESA,{exigir:true,reqId:r.id});
+  $("sepSerModal").hidden=false;
+}
+function gravarSerieSeparar(){return travaSalvar("serieSeparar",gravarSerieSeparar__corpo,this,arguments);}
+async function gravarSerieSeparar__corpo(){
+  var x=sepSerPend;if(!x)return false;
+  var r=x.r,its=x.its;
+  var c=serBoxConferir(its,"",LOC_EMPRESA,true,r.id);
+  if(!c.ok){
+    try{serBoxPintar($("sp_box").querySelector(".ser-box"));}catch(e){}
+    $("sp_alerta").innerHTML='<div class="note crit"><b>'+
+      (c.fora.length?"Série recusada — confira os destacados.":"Informe o número de série de cada purificador.")+"</b></div>";
+    return false;
+  }
+  var fr=null;
+  try{fr=await lerReqFresca(r.id);}
+  catch(e){$("sp_alerta").innerHTML='<div class="note crit">Não deu para conferir no banco. Tente de novo.</div>';return false;}
+  if(!fr||fr.status!=="pendente"){
+    $("sp_alerta").innerHTML='<div class="note crit">'+esc(quemJaFezAf(fr))+"</div>";return false;}
+  var res=await reservarSeriesReq(fr,c.mapa);
+  if(res.erro){$("sp_alerta").innerHTML='<div class="note crit"><b>'+esc(res.erro)+"</b></div>";return false;}
+  var antes=copiaReg(fr);
+  fr.seriesPrev=c.mapa;fr.seriesPrevPor=usuarioAtual;fr.seriesPrevEm=agoraCarimbo();
+  fr.serieNaoConfere=false;
+  fr.status="separada";fr.separadaPor=usuarioAtual;fr.separadaEm=hojeISO();
+  fr.separadaQuando=new Date().toISOString();
+  try{await gravaConf("requisicoes",fr);}
+  catch(e){
+    voltarReg(fr,antes);
+    try{await liberarSeriesReq(fr,"separação não gravada");}catch(e2){}
+    $("sp_alerta").innerHTML='<div class="note crit">Não foi salvo: '+esc(motivoBanco(e))+"</div>";
+    return false;
+  }
+  $("sepSerModal").hidden=true;sepSerPend=null;serBoxZerar();
+  toast("Separada com as séries informadas. "+quemReqAf(fr)+" confere e aceita ao receber.");
+  try{renderEstAfazer();renderEstEmpresa();renderEstColab();renderSino();}catch(e){}
+  return true;
+}
+/* "A série não confere", tocado pelo vendedor na janela do recebimento */
+async function apontarSerieNaoConfere(reqId){
+  var m=prompt("A série do aparelho que você recebeu é diferente da que está na tela.\n\nQuer dizer o motivo? (opcional)","");
+  if(m===null)return false;
+  var err=await serieNaoConfere(reqId,String(m||"").trim());
+  if(err){toast(err);return false;}
+  $("repModal").hidden=true;repPend=null;serBoxZerar();
+  toast("Apontado: nada entrou no seu estoque. A requisição voltou para o almoxarifado corrigir a série e separar de novo.");
+  try{renderEstAfazer();renderEstColab();renderEstEmpresa();renderSino();}catch(e){}
+  return true;
+}
+/* a caixa das séries na janela de REQUISITAR, quando o almoxarifado pede para outra pessoa */
+function reqParaOutro(){
+  if(esModo!=="req")return false;
+  var loc=esLocal||locColab(esColab||usuarioAtual);
+  try{return meusLocaisEst().indexOf(loc)<0;}catch(e){return false;}
+}
+function itensSerieDoEstModal(){
+  if(!reqParaOutro())return [];
+  return (esItens||[]).filter(function(i){return controlaSeriePid(i.pid);})
+    .map(function(i){return {pid:i.pid,nome:i.nome,qtd:+i.qtd||0};});
+}
+function renderEsSeries(){
+  var w=$("es_serBox");if(!w)return;
+  var its=itensSerieDoEstModal();
+  if(!its.length){w.innerHTML="";return;}
+  w.innerHTML='<div class="note"><b>Número de série de cada purificador que você vai entregar</b>'+
+    '<div class="t-sub">Você está requisitando para outra pessoa: informe agora qual aparelho vai. '+
+    "A série fica reservada para esta requisição e quem recebe só confere.</div></div>"+
+    '<div id="es_serCx"></div>';
+  serBoxMontar($("es_serCx"),its,"",LOC_EMPRESA,{exigir:true,reqId:""});
+}
+
 function quemJaFezAf(r){
   if(!r)return "Esta demanda não existe mais.";
   if(r.status==="separada")return "Já foi separada por "+(r.separadaPor||"outra pessoa")+".";
@@ -30128,6 +30556,13 @@ function separarAf(){return travaSalvar("separarAf",separarAf__corpo,this,argume
 async function separarAf__corpo(id){
   if(!podeConferir()||!visaoCompletaEst()){toast("Só o almoxarifado separa a requisição.");return false;}
   var r=requisicoes.filter(function(x){return x.id===id;})[0];
+  /* v586: purificador só se separa com a série informada — é ela que fica reservada */
+  var itsS=r?itensSerieAbertosReq(r):[];
+  if(itsS.length&&!temSeriesPrev(r,itsS)){
+    try{await carregarSeries();}catch(eCs){}
+    abrirSerieSeparar(r,itsS);
+    return false;
+  }
   var av=r?avisoNegativoSeparar([r]):"";
   if(av&&!confirm(av))return false;
   var x=await separarUmaAf(id);
@@ -30160,12 +30595,23 @@ async function aceitarUmaAf(id){
   if(r.status!=="pendente"&&r.status!=="separada")return {ok:false,ja:true,msg:quemJaFezAf(r)};
   if(!podeAceitarReq(r))return {ok:false,msg:"só quem responde por "+nomeLocal(localDaReq(r))+" aceita"};
   if(r.origem==="troca")return {ok:false,msg:"a troca se confirma pela própria requisição"};
+  /* v586: purificador precisa da série. Separada pelo almoxarifado, ela só muda de local aqui;
+     sem ela, o aceite é pela janela "Sim, recebi", que pede a série. */
+  var itsA=itensSerieAbertosReq(r);
+  if(itsA.length){
+    try{await carregarSeries();}catch(eCs2){}
+    if(!temSeriesPrev(r,itsA))
+      return {ok:false,msg:"este purificador precisa do número de série: aceite pelo botão do produto (\"Sim, recebi\")"};
+  }
   var ut=usadoTrocaDoColab(r.colaborador);
   if(!ehLocalLoja(localDaReq(r))&&ut.atrasado)return {ok:false,msg:"antes, transfira ao almoxarifado o Purificador Sucata pego na troca em "+dataCurta(ut.desde)};
   for(var k=0;k<(r.itens||[]).length;k++){
     var it=r.itens[k];if(!it||itemFechadoReq(it))continue;
     await lancarMov(it.pid,it.atendida||it.qtd,LOC_EMPRESA,localDaReq(r),"Requisição",r.obs,hojeISO(),"");
     it.recebido=true;it.recebidoEm=hojeISO();it.recebidoPor=usuarioAtual;
+  }
+  if(itsA.length){
+    try{await moverSeriesPrev(r,itsA,localDaReq(r));}catch(eMv){console.warn("séries separadas",eMv);}
   }
   r.status="concluida";r.recebidaPor=usuarioAtual;r.recebidaEm=hojeISO();r.recebidaQuando=new Date().toISOString();
   if((r.itens||[]).some(function(it){return it.naoReposto;}))r.parteNaoReposta=true;
@@ -69644,6 +70090,9 @@ function ligar(){
   ligarListinha("at_indicBusca","at_indicSug",null,"at_alerta");
   $("in_fechar").onclick=function(){$("indicModal").hidden=true;inCli=null;};
   /* v584: informar/corrigir indicação do sistema antigo */
+  /* v586: as séries informadas ao separar a requisição */
+  $("sp_fechar").onclick=function(){$("sepSerModal").hidden=true;sepSerPend=null;serBoxZerar();};
+  $("sp_salvar").onclick=function(){return gravarSerieSeparar();};
   /* v585: passar o plano e informar o modelo do purificador */
   $("pp_fechar").onclick=function(){$("passPlanoModal").hidden=true;ppEq=null;};
   $("pp_salvar").onclick=function(){return travaSalvar("passarPlano",gravarPassarPlano,null,[]);};
