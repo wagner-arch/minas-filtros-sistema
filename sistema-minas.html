@@ -3124,11 +3124,18 @@ img{max-width:100%}
                 </div>
               </div>
             </div>
+            <!-- PEÇA COBERTA PELO PLANO PREMIUM (19/11, v582, regra dele): o vendedor MARCA, item por
+                 item, que aquela peça é pelo plano. Antes a cobertura entrava sozinha e a pergunta do
+                 plano vinha à parte; agora é uma opção só, e é ela que manda. -->
+            <div class="fld" id="v_cpWrap" hidden style="margin-top:14px">
+              <label class="chk"><input type="checkbox" id="v_cpMarca"><span><b>Peça coberta pelo Plano Premium</b>
+                <span class="ajuda">marque quando esta peça é pelo plano do purificador do cliente</span></span></label>
+              <div id="v_cpNota"></div>
+            </div>
             <!-- É PELO PLANO PREMIUM? (29/10, regra dele): o plano é registrado NA VENDA, pelo vendedor,
                  conferido no sistema antigo — refil ou peça de um purificador sem plano registrado -->
             <div id="v_ppWrap" class="pp-box" hidden>
               <div class="pp-cab" id="v_ppCab"></div>
-              <label>É pelo Plano Premium? <span class="req">*</span></label>
               <div class="chips pp-chips" id="v_ppResp"></div>
               <div id="v_ppSim" hidden>
                 <label style="margin-top:12px">Qual plano? <span class="req">*</span></label>
@@ -17109,6 +17116,26 @@ window.__estadoPlanoMF=function(e){return estadoPlanoEquip(e);};window.__seloPla
 window.__gravarPlanosInfMF=function(p){p.planosInformados=resumoPlanosInformados(p);return gravarPlanosInformados(p);};
 window.__planoInfPendMF=function(){return planoInfPend;};window.__manutPelaVendaMF=function(p){return manutencaoPelaVenda(p);};
 window.__coberturaMF=function(cid,p,eq,l){return coberturaCliente(cid,p,eq,l||[]);};window.__cfgPlanoPergMF=function(){return CFG_PLANO_PERG;};
+/* v582: ganchos da opção "Peça coberta pelo Plano Premium", para os ensaios */
+window.__cobertaMF={
+  marcar:function(v){
+    cpVenda.marcado=!!v;
+    var c=$("v_cpMarca");if(c)c.checked=!!v;
+    ajustarCobertaPlano();try{ajustarPerguntaPlano();}catch(e){}
+    return cpMarcado();},
+  marcado:function(){return cpMarcado();},
+  visivel:function(){var w=$("v_cpWrap");return !!(w&&!w.hidden);},
+  nota:function(){var n=$("v_cpNota");return n?String(n.textContent||""):"";},
+  situacao:function(p,eid){return situacaoCobertaPlano(p,eid);},
+  falta:function(p,eid){return faltaCobertaPlano(p,eid);},
+  aparelhos:function(cid){return aparelhosParaPlano(cid);},
+  podeTerPlano:function(e){return equipPodeTerPlano(e);},
+  onde:function(e,info,d){return ondeUsouDireito(e,info,d);},
+  soCoberto:function(p){return pedidoSoCoberto(p);},
+  creditos:function(cid){return creditosDoPlano(cid);},
+  creditoFormas:function(fs2){return creditoDasFormas(fs2);},
+  perguntaVisivel:function(){var w=$("v_ppWrap");return !!(w&&!w.hidden);}
+};
 window.__abaRelPermMF=function(a){return abaRelPermitida(a);};window.__relPlanosInfMF=function(){return relPlanosInformados(periodoRel());};
 /* ganchos de teste da importação de manutenções (v256) */
 window.__clientesMF=function(){return clientes;};
@@ -18417,6 +18444,7 @@ function ajustarLocalItem(){
     $("v_serie").placeholder=(String(p.serie)==="sim")?"leia o código ou digite":"série, se o aparelho tiver";
   }
   try{ajustarSelecaoSerieVenda();}catch(e){console.warn("série da venda",e);}
+  try{ligarCobertaPlano();ajustarCobertaPlano();}catch(e){console.warn("peça coberta",e);}
   try{ajustarPerguntaPlano();}catch(e){console.warn("pergunta do plano",e);}
 }
 /* ---------- 2) NA VENDA A SÉRIE SE ESCOLHE, NÃO SE DIGITA (v548) ----------
@@ -18539,11 +18567,22 @@ function addItem(){
   var vinculo=uid();
   /* cliente com plano vigente (regra do Wagner, 14/09): o que o plano ainda cobre sai sem custo;
      o que passar da quantidade, ou o que o plano já esgotou, é cobrado pelo valor normal */
-  /* "É pelo Plano Premium?" (29/10): sem resposta, o item não entra */
+  /* v582: a cobertura do plano entra SÓ quando o vendedor marca "Peça coberta pelo Plano
+     Premium" — e é essa opção que pede o plano do sistema antigo, quando falta. */
+  var faltaCP=faltaCobertaPlano(p,equipId);
+  if(faltaCP){toast(faltaCP);try{$("v_cpWrap").scrollIntoView({block:"center"});}catch(e){}return;}
   var faltaPP=faltaPerguntaPlano();
   if(faltaPP){toast(faltaPP);try{$("v_ppWrap").scrollIntoView({block:"center"});}catch(e){}return;}
   if(!plano)confirmarPerguntaPlano();
-  var cobV=plano?null:coberturaVenda(p,equipId),msgPlano="";
+  var cobV=(plano||!cpMarcado())?null:coberturaVenda(p,equipId),msgPlano="";
+  /* marcada e, mesmo assim, o plano não cobre: o item NÃO entra — a tela diz o motivo */
+  if(!plano&&cpMarcado()&&!(cobV&&cobV.cobre)){
+    var stCP=situacaoCobertaPlano(p,equipId);
+    var mot=(stCP&&(stCP.trava||""))||"O plano não cobre esta peça.";
+    toast(String(mot).replace(/<[^>]*>/g,"").trim());
+    try{$("v_cpWrap").scrollIntoView({block:"center"});}catch(e){}
+    return;
+  }
   if(cobV&&cobV.cobre){
     var qc=Math.min(qtd,cobV.cobre.resta);
     itens.push({pid:p.id,nome:p.nome,cod:p.cod,qtd:qc,valor:0,serie:serie,equipId:equipId,local:local,
@@ -18620,7 +18659,7 @@ function addItem(){
            (respsT.length>1?"; o primeiro que responder decide.":"."))
         :" — este estoque está sem responsável; peça ao Administrador para marcar alguém na ficha do colaborador."));
   }
-  $("v_serie").value="";$("v_local").value="";zerarPerguntaPlano();render();
+  $("v_serie").value="";$("v_local").value="";zerarPerguntaPlano();zerarCobertaPlano();render();
   limparInclusao("v_prod","v_qtd",["v_valor"]);
   ajustarEquipItem();
   try{renderEndDoEquipVenda();}catch(e){}
@@ -18645,6 +18684,17 @@ function trocaDasFormas(formas){
   return centavos((formas||[]).reduce(function(a,f){
     return a+((f&&f.tipo===FORMA_TROCA)?(+f.valor||0):0);},0));
 }
+/* O CRÉDITO DO PLANO É UM DESCONTO (19/11, v582, regra dele): "funciona como desconto, com a
+   MESMA regra do Desconto de Troca". Ele conta no total e na faixa de cada item — o vendedor não
+   cai de faixa por causa dele —, mas sai da base de comissão, do faturamento e da meta: o cliente
+   está pagando com um direito do plano que ele já tinha, não com dinheiro novo.
+   Vale só para pedido NOVO (a marca `creditoForaBase`, como o `freteForaMeta` da v517): pedido
+   já aprovado não muda de faturamento nem de comissão por causa desta versão. */
+function creditoDasFormas(formas){
+  return centavos((formas||[]).reduce(function(a,f){
+    return a+((f&&f.tipo===FORMA_CREDITO)?(+f.valor||0):0);},0));
+}
+function creditoForaDaBase(p){return (p&&p.creditoForaBase)?creditoDasFormas(p.formas):0;}
 /* ---------- troca de purificador pela forma de pagamento (regra do Wagner, 16/09; substitui a pergunta da v117) ----------
    Venda com "Desconto de Troca" → nasce a requisição origem "troca" do produto USADO-TROCA para o vendedor, que
    confirma "recebi na troca" (entra no estoque dele, vindo de "troca"). No dia seguinte ele devolve ao almoxarifado
@@ -18865,6 +18915,18 @@ async function registrarTrocaDaVenda(ped){
    Os códigos dos registros são fixos por pedido: repetir nunca duplica a sucata. */
 var sucataPend=[];   /* coleção "sucatatroca": as pendências de devolver a sucata ao cliente */
 function trocaNoPedido(p){return !!p&&trocaDasFormas(p.formas)>0;}
+/* ===== PEDIDO SÓ COM ITENS COBERTOS PELO PLANO (19/11, v582, regra dele) =====
+   Total R$ 0,00: ele passa pela Aprovação Financeira como os outros — o financeiro confirma e o
+   estoque baixa —, mas NÃO é venda: fica fora de faturamento, meta, comissão, conversão e do
+   Dashboard. Na aprovação não há forma de pagamento nem caixa para escolher.
+   Pedido sem item nenhum não conta como coberto, e pedido MISTO (coberto + pago) é venda normal:
+   só a parte paga conta, como sempre. */
+function pedidoSoCoberto(p){
+  var its=(p&&p.itens)||[];
+  if(!its.length)return false;
+  if(!its.every(function(i){return !!(i&&i.planoCobre);}))return false;
+  return !((+p.total||0)>0.009);
+}
 function qtdSucataDoPedido(p){return Math.max(1,parseInt(p&&p.troca&&p.troca.qtd,10)||1);}
 function instalacaoPendentePed(p){return !!(p&&p.instalacao&&!p.instaladoEm);}
 function quemRecebeSucata(p){return quemInstalaPedido(p)||(p&&p.vendedor)||usuarioAtual;}
@@ -19026,9 +19088,13 @@ function direitoViraCredito(d){
   return /refil|elemento filtrante/.test(semAcento((d.item||"")+" "+(d.palavras||"")));
 }
 /* direitos de produto ainda não usados nos planos vigentes do cliente */
+/* v582 (regra dele): o crédito passa a valer também para o plano VENCIDO cujo refil do último
+   período não foi usado — é o mesmo direito, e ele vale até ser usado. Só o refil (direito que
+   vira crédito), nunca peça; usado como crédito, o direito do período se gasta (o `usoDoPlano`
+   já conta o `creditoPlano` do pedido), então ele não volta nem como peça coberta. */
 function creditosDoPlano(cid){
   var out=[];
-  planosVigentesCliente(cid).forEach(function(x){
+  planosQueCobrem(cid).forEach(function(x){
     var pl=x.info&&x.info.pl;if(!pl)return;
     var uso=usoDoPlano(x.e,x.info);
     (direitosDoPlano(pl)||[]).forEach(function(d){
@@ -19038,7 +19104,8 @@ function creditosDoPlano(cid){
       var vu=valorDoDireito(d);
       if(vu<=0)return;
       out.push({equipId:x.e.id,equip:x.e,plano:x.e.plano,direitoId:d.id,direito:d.item,
-        qtd:resta,unit:vu,valor:Math.round(resta*vu*100)/100,fim:x.info.fim});
+        qtd:resta,unit:vu,valor:Math.round(resta*vu*100)/100,
+        fim:(x.st&&x.st.info?x.st.info.fim:x.info.fim),soTroca:!!x.soTroca});
     });
   });
   return out;
@@ -19076,7 +19143,7 @@ function notaCreditoPlano(){
     .reduce(function(a,f){return a+(+f.valor||0);},0);
   if(!cr.length){
     w.innerHTML=usado
-      ? '<div class="note crit"><b>'+esc(c?c.nome:"O cliente")+" não tem plano vigente com direito disponível.</b> "+
+      ? '<div class="note crit"><b>'+esc(c?c.nome:"O cliente")+" não tem direito de plano disponível (nem vigente, nem o refil de um plano vencido).</b> "+
         "O crédito do plano não pode ser usado nesta venda.</div>"
       : "";
     return;
@@ -19086,7 +19153,9 @@ function notaCreditoPlano(){
     cr.map(function(x){
       return esc(x.plano)+" de "+esc(x.equip.produto||"aparelho")+(x.equip.serie?" (série "+esc(x.equip.serie)+")":"")+
         " · "+x.qtd+"× "+esc(x.direito)+" não usado"+(x.qtd===1?"":"s")+" · "+BRL(x.valor)+
-        " · vigente até "+esc(dataCurta(x.fim));
+        (x.soTroca
+          ? " · <b>plano vencido em "+esc(dataCurta(x.fim))+": é o refil do último período, e usá-lo encerra o plano</b>"
+          : " · vigente até "+esc(dataCurta(x.fim)));
     }).join("<br>")+
     (usado>tot?"<br><b>Você lançou "+BRL(usado)+" de crédito, acima do disponível.</b>":"")+
     "<br>Usando o crédito, o direito é baixado no plano: o cliente não recebe o produto depois.</div>";
@@ -20040,6 +20109,9 @@ function calcular(){
      vendedor não é punido por aceitar a troca, só não ganha comissão sobre ela. */
   var trocaCom=trocaDasFormas(formas);
   if(trocaCom>0)base=Math.max(0,base-trocaCom);
+  /* v582: o crédito do plano sai da base pela mesma regra da troca */
+  var credCom=creditoDasFormas(formas);
+  if(credCom>0)base=Math.max(0,base-credCom);
   /* v517: frete por conta da loja sai da base de comissão do pedido inteiro */
   var freteLojaCom=freteLojaVenda();
   if(freteLojaCom>0)base=Math.max(0,base-freteLojaCom);
@@ -20884,7 +20956,7 @@ async function salvarPedidoAgora(){
   trocaResp=trocaV>0?{tem:true,viaForma:true,valor:Math.round(trocaV*100)/100,qtd:1,
     serie:"",quando:hojeISO()+" "+agoraHM(),por:usuarioAtual}:null;
   /* venda abaixo da tabela (regra do Wagner, 16/09): o vendedor pede a autorização com o motivo antes de finalizar */
-  if(r.abaixo&&!descSolResp&&!(pedEditando&&pedEditando.descontoAutorizado&&autorizacaoContinua(pedEditando,itens))){abrirSolDesconto(recalcPedido(itens,formas,null,numMF(($("v_descGeral")||{}).value||0)||0,freteLojaVenda()));return;}
+  if(r.abaixo&&!descSolResp&&!(pedEditando&&pedEditando.descontoAutorizado&&autorizacaoContinua(pedEditando,itens))){abrirSolDesconto(recalcPedido(itens,formas,null,numMF(($("v_descGeral")||{}).value||0)||0,freteLojaVenda(),true));return;}
   var solDesc=r.abaixo?descSolResp:null;descSolResp=null;
   /* ESTOQUE NA VENDA (03/11): cada item novo fica com o estoque, a autorização ou a escolha
      usar/requisitar; sem saldo na entrega na hora o pedido não fecha (trava por dentro, não só na tela) */
@@ -20960,6 +21032,7 @@ async function salvarPedidoAgora(){
   ped.fretePagoPor=freteLojaVenda()>0?"loja":((+ped.frete||0)>0?"cliente":"");
   ped.freteLoja=freteLojaVenda();
   ped.freteForaMeta=true;
+  ped.creditoForaBase=true;   /* v582: o crédito do plano sai da base de comissão e da meta */
   /* pedido das peças e serviços de uma OS interna (regra do Wagner, 14/09) */
   /* de onde veio o prospector (30/10) */
   try{
@@ -24299,6 +24372,163 @@ function coberturaCliente(cid,p,equipId,lista){
   if(!res.cobre&&!res.noPlano&&vig.some(function(x){return x.soTroca;}))res.vencidoPeca=vig.filter(function(x){return x.soTroca;})[0];
   return res;
 }
+/* ===== "PEÇA COBERTA PELO PLANO PREMIUM" (19/11, v582, regra dele) =====
+   O vendedor MARCA, peça por peça, que aquela é pelo plano — antes a cobertura entrava sozinha
+   e a pergunta "É pelo Plano Premium?" vinha à parte, perguntando a mesma coisa. Agora é uma
+   opção só: marcada, ela escolhe o purificador, aplica a regra do plano e, quando o purificador
+   não tem plano registrado, é ela que pede o plano e o vencimento do sistema antigo.
+   A REGRA (dele): plano EM DIA cobre o que o cadastro do plano dá direito; plano VENCIDO cobre
+   SÓ a troca do refil do último período, se ainda não usada (as outras peças são cobradas), e
+   essa troca ENCERRA o plano; não acumula e não tem prazo — vale até usar. */
+var cpVenda={marcado:false};
+function zerarCobertaPlano(){
+  cpVenda={marcado:false};
+  var c=$("v_cpMarca");if(c)c.checked=false;
+  var n=$("v_cpNota");if(n)n.innerHTML="";
+}
+function cpMarcado(){return !!cpVenda.marcado;}
+/* o plano nunca se registra num "aparelho" que é o próprio plano, nem num refil (item 6 dele):
+   o plano é do PURIFICADOR */
+function equipPodeTerPlano(e){
+  if(!e||e.ativo===false)return false;
+  var pr=null;try{pr=prodPorId(e.produtoId);}catch(x){}
+  if(pr&&pr.grupo==="Planos")return false;
+  if(/^plano|plano premium/.test(semAcento(String(e.produto||e.equipamento||"").toLowerCase())))return false;
+  return equipEhAparelho(e);
+}
+function aparelhosParaPlano(cid){
+  if(!cid)return [];
+  return equipamentos.filter(function(e){
+    return e.loja===lojaAtual&&e.clienteId===cid&&equipPodeTerPlano(e);});
+}
+/* a opção aparece? produto que ALGUM plano cobre, com cliente escolhido */
+function cobertaPlanoCabe(p){
+  if(!p||p.grupo==="Planos")return false;
+  if(!($("v_cliente")&&$("v_cliente").value))return false;
+  try{return produtoDeAlgumPlano(p);}catch(e){return false;}
+}
+/* o purificador em que a cobertura se aplica: o escolhido na pergunta do aparelho */
+function cpEquipId(){
+  return ($("v_equip")&&$("v_equipWrap")&&!$("v_equipWrap").hidden)?$("v_equip").value:"";
+}
+/* o texto que a opção mostra, e o motivo que impede marcar (vazio = pode) */
+function situacaoCobertaPlano(p,eid){
+  var cid=($("v_cliente")||{}).value||"";
+  if(!cobertaPlanoCabe(p))return null;
+  var lista=aparelhosParaPlano(cid);
+  if(!lista.length)return {trava:"Este cliente não tem purificador cadastrado. Cadastre o aparelho (ou escolha o purificador certo) antes de marcar a peça como coberta pelo plano.",cls:"warn"};
+  if(!eid)return {trava:"Escolha o purificador do cliente para a peça entrar pelo plano.",cls:"warn"};
+  var e=equipPorId(eid);
+  if(!e)return {trava:"Escolha o purificador do cliente.",cls:"warn"};
+  if(!equipPodeTerPlano(e))return {trava:"O plano é do PURIFICADOR: escolha o purificador do cliente, não "+(e.produto||"este registro")+".",cls:"warn"};
+  /* sem plano registrado: é a própria opção que pergunta o plano e o vencimento (do sistema antigo) */
+  if(!equipTemPlanoRegistrado(e)&&!planoInfPend[e.id])return {pede:true,e:e,cls:""};
+  var cob=coberturaCliente(cid,p,eid,itens);
+  if(cob&&cob.cobre){
+    var st=cob.cobre;
+    if(st.soTroca)return {ok:true,e:e,cls:"warn",
+      texto:"Plano vencido em "+dataCurta(st.info.fim)+": cobre só este refil; depois desta troca o plano encerra — ofereça a renovação."+htmlRenovarPlano(e)};
+    return {ok:true,e:e,cls:"ok",
+      texto:"Plano "+e.plano+" em dia (vence em "+dataCurta(st.info.fim)+"): "+p.nome+" entra a R$ 0,00, coberto."};
+  }
+  if(cob&&cob.vencidoPeca){
+    var iv=cob.vencidoPeca;
+    return {trava:"Plano vencido em "+dataCurta(iv.st.info.fim)+": esta peça é cobrada. Ofereça a renovação."+htmlRenovarPlano(iv.e),cls:"warn"};
+  }
+  if(cob&&cob.esgotado){
+    var g=cob.esgotado,onde=ondeUsouDireito(g.e,g.info,g.d);
+    return {trava:"O direito deste período já foi usado"+(onde?" — "+onde:"")+". Não dá para marcar esta peça como coberta pelo plano."+
+      (g.soTroca?htmlRenovarPlano(g.e):""),cls:"crit"};
+  }
+  /* o plano do aparelho não cobre este produto */
+  var stq=estadoPlanoEquip(e);
+  if(stq&&stq.estado==="encerrado")
+    return {trava:"O plano deste purificador já foi encerrado na troca de "+dataCurta(stq.em)+". Ofereça a renovação."+htmlRenovarPlano(e),cls:"warn"};
+  if(stq&&stq.estado==="vencido")
+    return {trava:"Plano vencido em "+dataCurta(stq.info.fim)+": esta peça é cobrada. Ofereça a renovação."+htmlRenovarPlano(e),cls:"warn"};
+  return {trava:"O plano "+(e.plano||"")+" não cobre "+p.nome+" — a peça é cobrada pelo valor normal.",cls:"warn"};
+}
+/* onde o direito do período foi usado (data e pedido/OS/crédito), para a tela poder dizer.
+   Varre os mesmos lugares que o `usoDoPlano` conta — venda, crédito do plano, OS e a
+   manutenção registrada no aparelho — e devolve o uso mais recente. */
+function ondeUsouDireito(e,info,d){
+  if(!e||!info||!info.pl)return "";
+  var dirs=direitosDoPlano(info.pl),fimU=info.fimUso||info.fim,ach=[];
+  function mesmo(it){
+    if(!it||!it.planoCobre||it.planoCobre.equipId!==e.id)return false;
+    if(it.planoCobre.ciclo&&it.planoCobre.ciclo!==info.ini)return false;
+    if(!d)return true;
+    var dd=dirs.filter(function(x){return x.id===it.planoCobre.direitoId;})[0]||direitoDoItem(info.pl,it.pid,it.nome);
+    return !!dd&&dd.id===d.id;
+  }
+  (pedidos||[]).forEach(function(p){
+    if(p.status==="Cancelada"||p.clienteId!==e.clienteId)return;
+    var dt=String(p.data||"");
+    if(dt>=info.ini&&dt<=fimU&&(p.itens||[]).some(mesmo))ach.push({data:dt,txt:"pedido "+(p.numero||"")});
+    if(p.creditoPlano&&(p.creditoPlano.itens||[]).some(function(cp){
+      return cp.equipId===e.id&&(!d||cp.direitoId===d.id);}))
+      ach.push({data:dt,txt:"crédito do plano no pedido "+(p.numero||"")});
+  });
+  (typeof ordens!=="undefined"?ordens:[]).forEach(function(o){
+    if(["cancelada","reprovada"].indexOf(o.status)>=0||o.clienteId!==e.clienteId)return;
+    var dt=String(o.abertura||o.criadoEm||"").slice(0,10);
+    if(dt<info.ini||dt>fimU)return;
+    if((o.pecas||[]).concat(o.pedidoId?[]:(o.itensOS||[])).some(mesmo))ach.push({data:dt,txt:"OS "+(o.numero||"")});
+  });
+  (e.historico||[]).forEach(function(h){
+    if(h.cobranca!=="plano"||!h.data||h.data<info.ini||h.data>fimU)return;
+    ach.push({data:h.data,txt:"manutenção registrada no aparelho"});
+  });
+  ach.sort(function(a,b){return String(a.data).localeCompare(String(b.data));});
+  var u=ach[ach.length-1];
+  return u?("usado em "+dataCurta(u.data)+" · "+u.txt):"";
+}
+function htmlRenovarPlano(e){
+  if(!e||!e.id)return "";
+  return ' <button type="button" class="btn sm" data-renovar="'+esc(e.id)+'">Adicionar o Plano Premium neste pedido</button>';
+}
+function ajustarCobertaPlano(){
+  var w=$("v_cpWrap");if(!w)return;
+  var p=prodPorId(($("v_prod")||{}).value);
+  var cabe=cobertaPlanoCabe(p);
+  w.hidden=!cabe;
+  if(!cabe){if(cpVenda.marcado)zerarCobertaPlano();return;}
+  var c=$("v_cpMarca");if(c)c.checked=!!cpVenda.marcado;
+  var n=$("v_cpNota");if(!n)return;
+  var st=situacaoCobertaPlano(p,cpEquipId());
+  if(!cpVenda.marcado){
+    /* não marcada: só a dica de que o plano cobriria, para ninguém cobrar à toa */
+    var dica=(st&&st.ok)?st.texto:"";
+    n.innerHTML=dica?'<div class="note '+(st.cls||"")+'" style="margin-top:8px">'+dica+
+      "<br><b>Marque a opção acima</b> se esta peça é pelo plano.</div>":"";
+    return;
+  }
+  if(st&&st.pede){n.innerHTML="";return;}        /* a pergunta do plano assume daqui */
+  if(st&&st.trava){
+    n.innerHTML='<div class="note '+(st.cls||"warn")+'" style="margin-top:8px">'+st.trava+"</div>";
+    return;
+  }
+  n.innerHTML=(st&&st.texto)?('<div class="note '+(st.cls||"ok")+'" style="margin-top:8px">'+st.texto+"</div>"):"";
+}
+/* o que impede o Adicionar (vazio = pode entrar) */
+function faltaCobertaPlano(p,eid){
+  if(!cpMarcado()||!cobertaPlanoCabe(p))return "";
+  var st=situacaoCobertaPlano(p,eid);
+  if(!st)return "";
+  if(st.pede)return "";                           /* a pergunta do plano trava, com a mensagem dela */
+  if(st.trava)return String(st.trava).replace(/<[^>]*>/g,"").trim();
+  return "";
+}
+function ligarCobertaPlano(){
+  var c=$("v_cpMarca");if(!c||c.__lig)return;c.__lig=true;
+  c.addEventListener("change",function(){
+    cpVenda.marcado=!!c.checked;
+    if(!cpVenda.marcado){planoNaoPend={};zerarPerguntaPlano();}
+    ajustarCobertaPlano();
+    try{ajustarPerguntaPlano();}catch(e){}
+    try{notaPlanoVenda();}catch(e){}
+  });
+}
 /* ===== "É PELO PLANO PREMIUM?" (29/10, regra dele) =====
    Não se registra plano em massa: o vendedor confere no sistema antigo, cliente por cliente, e
    informa NA VENDA. Aparece ao lançar refil ou peça que algum plano cobre, ligada a um purificador
@@ -24343,15 +24573,19 @@ function ajustarPerguntaPlano(){
   var p=prodPorId($("v_prod").value);
   var eid=($("v_equip")&&!$("v_equipWrap").hidden)?$("v_equip").value:"";
   var e=eid?equipPorId(eid):null;
-  var mostra=perguntaPlanoLigada()&&!!p&&!!e&&produtoDeAlgumPlano(p)&&
-    !ehAparelhoDeOS(p.nome||"",p.grupo||"")&&!equipTemPlanoRegistrado(e)&&
-    !planoInfPend[e.id]&&!planoNaoPend[e.id];
+  /* v582: quem pergunta agora é a opção "Peça coberta pelo Plano Premium" — sem ela marcada,
+     nada é perguntado, e marcada o Sim já está dado (não existem mais duas perguntas) */
+  var mostra=perguntaPlanoLigada()&&cpMarcado()&&!!p&&!!e&&produtoDeAlgumPlano(p)&&
+    !ehAparelhoDeOS(p.nome||"",p.grupo||"")&&equipPodeTerPlano(e)&&!equipTemPlanoRegistrado(e)&&
+    !planoInfPend[e.id];
   w.hidden=!mostra;
   if(!mostra)return;
   if(ppVenda.equipId!==e.id){zerarPerguntaPlano();ppVenda.equipId=e.id;}
-  $("v_ppCab").innerHTML="<b>"+esc(rotuloEquip(e))+"</b> não tem Plano Premium registrado.";
-  $("v_ppResp").innerHTML=botaoEscolha(ppVenda.resp==="sim",'data-ppr="sim"',"Sim")+botaoEscolha(ppVenda.resp==="nao",'data-ppr="nao"',"Não");
-  $("v_ppSim").hidden=ppVenda.resp!=="sim";
+  ppVenda.resp="sim";                       /* a opção marcada É o sim */
+  $("v_ppCab").innerHTML="<b>"+esc(rotuloEquip(e))+"</b> não tem Plano Premium registrado. "+
+    "Confira no sistema antigo qual é o plano e quando vence — ele fica registrado neste purificador.";
+  $("v_ppResp").innerHTML="";
+  $("v_ppSim").hidden=false;
   $("v_ppPlano").innerHTML=planosPremiumAtivos().map(function(pl){
     return botaoEscolha(ppVenda.plano===pl.garantia,'data-ppp="'+esc(pl.garantia)+'"',esc(pl.garantia));}).join("");
   $("v_ppFotoPre").innerHTML=ppVenda.foto?'<img class="pp-foto" src="'+ppVenda.foto.dados+'" alt="Foto da tela do sistema antigo">'+
@@ -41220,6 +41454,9 @@ function valorDepreciadoPedido(p){
   if(a&&a.fator!=null&&+a.depAbaixo>0)d-=(+a.depAbaixo)*(1-(+a.fator));
   /* o que o cliente pagou com o purificador usado não gera comissão (regra do Wagner, 20/09) */
   d-=trocaDasFormas(p.formas);
+  /* v582: o crédito do plano também não — mas só no pedido novo (marca `creditoForaBase`),
+     para nenhum mês fechado nem prêmio já calculado mudar */
+  d-=creditoForaDaBase(p);
   /* v517 (regra dele, 06/11): o frete pago pelo cliente NÃO entra na meta nem no faturamento —
      só nos pedidos feitos a partir da v517 (freteForaMeta); os antigos ficam como estavam, para
      não mudar mês fechado nem prêmio já calculado. Sai a parte do frete no depreciado. */
@@ -42449,7 +42686,7 @@ function realizadoMetas(quem,de,ate){
   /* 09/11 (regra dele): a meta conta a venda APROVADA, pela data em que o cliente pagou — a mesma da comissão */
   var vds=pedidos.filter(function(p){
     var dc=dataContaVenda(p);
-    return !ehTeste(p)&&p.loja===lojaAtual&&vendaContaNoMes(p)&&!!dc&&dc>=de&&dc<=ate&&
+    return !ehTeste(p)&&!pedidoSoCoberto(p)&&p.loja===lojaAtual&&vendaContaNoMes(p)&&!!dc&&dc>=de&&dc<=ate&&
       (!quem||p.vendedor===quem||p.prospector===quem||p.instalador===quem);});
   return {
     aniversario:ats.filter(function(a){return temTipo(a,metaTipos.aniversario||[]);}).length,
@@ -43123,6 +43360,7 @@ function indicesDash(){
   var pc={},ac={};
   pedidos.forEach(function(p){
     if(!p.clienteId||p.loja!==lojaAtual||p.status==="Cancelada"||p.cancelada||ehTeste(p))return;
+    if(pedidoSoCoberto(p))return;   /* v582: pedido só coberto não é venda */
     (pc[p.clienteId]=pc[p.clienteId]||[]).push(p);});
   atendimentos.forEach(function(a){
     if(!a.clienteId||a.loja!==lojaAtual||a.natureza!=="atendimento"||ehTeste(a))return;
@@ -43184,7 +43422,7 @@ function dadosDash(quem){
       passaSituacao(a,"realizadas")&&noPeriodo(dataFimAtiv(a),j);});
   /* v540: venda é da VENDEDORA, pela data do pedido */
   var vds=pedidos.filter(function(p){
-    return !ehTeste(p)&&p.loja===lojaAtual&&noPeriodo(p.data,j)&&p.status!=="Cancelada"&&!p.cancelada&&
+    return !ehTeste(p)&&!pedidoSoCoberto(p)&&p.loja===lojaAtual&&noPeriodo(p.data,j)&&p.status!=="Cancelada"&&!p.cancelada&&
       (!quem||p.vendedor===quem);});
   var inst=pedidos.filter(function(p){
     if(ehTeste(p)||p.loja!==lojaAtual||p.status==="Cancelada"||p.cancelada)return false;
@@ -52973,7 +53211,7 @@ function revisarAutorizacaoDesconto(p,r,solDesc,d0,itensNovos){
   }
   if(solDesc){p.solicitacaoDesconto=solDesc;p.descontoRecusado=null;}
 }
-function recalcPedido(itens,formas,fatorAbaixo,descEspecial,freteLoja){
+function recalcPedido(itens,formas,fatorAbaixo,descEspecial,freteLoja,credFora){
   /* Desconto Especial: repartido entre os itens antes de decidir a tabela e a comissão — a mesma
      conta da tela (`fatorDescontoComissao`). Sem ele, o desconto derrubava só o depreciado. */
   var fDesc=1;
@@ -53022,6 +53260,9 @@ function recalcPedido(itens,formas,fatorAbaixo,descEspecial,freteLoja){
      para baixo da tabela, só não gera comissão. */
   var troca=trocaDasFormas(formas);
   if(troca>0)base=Math.max(0,base-troca);
+  /* v582: o crédito do plano sai da base como a troca (só nos pedidos novos, marcados) */
+  var credB=creditoDasFormas(formas);
+  if(credB>0&&credFora)base=Math.max(0,base-credB);
   /* v517: frete por conta da loja sai da base de comissão do pedido */
   if(+freteLoja>0)base=Math.max(0,base-(+freteLoja));
   return {total:total,dep:dep,base:base,pontos:pontos,abaixo:abaixo,depAbaixo:depAbaixo,linhas:linhas,soma:soma,
@@ -53075,7 +53316,7 @@ function renderPedDet(){
     pedRasc={id:p.id,versao:versaoPedRasc(p),sujo:false,
       itens:JSON.parse(JSON.stringify(p.itens||[])),formas:JSON.parse(JSON.stringify(p.formas||[]))};
   try{faixaTeste("pd_testeFaixa",p,"esta venda");}catch(eT){}   /* v376 */
-  var ed=editavel(p),r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0,freteLojaDe(p));
+  var ed=editavel(p),r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0,freteLojaDe(p),!!p.creditoForaBase);
   /* regra dele (22/09): a ficha do pedido salvo é SÓ LEITURA. Quem quer mudar toca em
      "Editar o pedido" e o pedido volta às sete etapas, com tudo preenchido. O ajuste solto
      dentro da ficha continua existindo só no caminho da reabertura de venda já encerrada. */
@@ -53490,7 +53731,7 @@ function ligarPedDet(){
     pedRasc=null;
     gravarPedido(p);toast("Alterações descartadas — venda reencerrada.");renderPedDet();render();});
   on("pd_salvar",async function(){
-    var r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0,freteLojaDe(p));
+    var r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0,freteLojaDe(p),!!p.creditoForaBase);
     if(!pedRasc.itens.length){toast("A venda precisa de ao menos um item.");return;}
     if(r.dif!==0){toast("A soma das formas não bate com o total.");return;}
     /* v548: vencimento da 1ª parcela nunca antes do dia da venda */
@@ -53856,7 +54097,7 @@ function abrirAutDesconto(p){
   if(!pode("aprovarDesconto")){toast("Só quem aprova venda abaixo da tabela autoriza o desconto.");return;}
   ligarDesconto();
   descAutPed=p;descAutFator=null;
-  var r=recalcPedido(p.itens||[],p.formas||[],null,+p.descontoGeral||0,freteLojaDe(p)),s=p.solicitacaoDesconto;
+  var r=recalcPedido(p.itens||[],p.formas||[],null,+p.descontoGeral||0,freteLojaDe(p),!!p.creditoForaBase),s=p.solicitacaoDesconto;
   $("da_sub").textContent="Pedido "+p.numero+" · "+p.cliente+" · vendedor "+(p.vendedor||"—")+" · total "+BRL(p.total)+" · depreciado "+BRL(r.dep);
   $("da_motivo").innerHTML=s
     ? '<div class="note warn"><b>Motivo de '+esc(s.por)+"</b> ("+esc(dataCurta(s.quando))+String(s.quando||"").slice(10)+"): "+esc(s.motivo)+"</div>"
@@ -53869,7 +54110,7 @@ function abrirAutDesconto(p){
 }
 function previaAutDesconto(){
   var p=descAutPed;if(!p||descAutFator==null)return;
-  var r=recalcPedido(p.itens||[],p.formas||[],descAutFator,+p.descontoGeral||0,freteLojaDe(p)),conta=r.dep-r.depAbaixo*(1-descAutFator);
+  var r=recalcPedido(p.itens||[],p.formas||[],descAutFator,+p.descontoGeral||0,freteLojaDe(p),!!p.creditoForaBase),conta=r.dep-r.depAbaixo*(1-descAutFator);
   $("da_alerta").innerHTML="";
   $("da_previa").innerHTML='<div class="note ok"><b>'+esc(nomeTabelaDesc(descAutFator))+":</b> a venda conta "+BRL(conta)+
     " na comissão, nas metas e na folha ("+BRL(r.depAbaixo)+" abaixo da tabela × "+Math.round(descAutFator*100)+"%"+
@@ -53879,7 +54120,7 @@ async function autorizarDesconto(p,fator){
   if(!pode("aprovarDesconto")){toast("Só quem aprova venda abaixo da tabela autoriza o desconto.");return false;}
   if((p.status||"").indexOf("esconto")<0)return false;
   if(fator==null){abrirAutDesconto(p);return false;}
-  var r=recalcPedido(p.itens||[],p.formas||[],fator,+p.descontoGeral||0,freteLojaDe(p)),tab=nomeTabelaDesc(fator);
+  var r=recalcPedido(p.itens||[],p.formas||[],fator,+p.descontoGeral||0,freteLojaDe(p),!!p.creditoForaBase),tab=nomeTabelaDesc(fator);
   p.abaixoTabela=true;
   p.descontoAutorizado={por:usuarioAtual,quando:hojeISO()+" "+agoraHM(),tabela:tab,fator:+fator,depAbaixo:Math.round(r.depAbaixo*100)/100,
     descItens:descontoTotalItens(p.itens||[])};
@@ -53922,7 +54163,7 @@ var instAberta=null,instPag={tipo:""},instModo="";
 /* produto incluído na instalação faz parte da venda (regra do Wagner, 12/09): total,
    depreciação, base de comissão e pontos são recalculados */
 function atualizarTotaisPedido(p){
-  var r=recalcPedido(p.itens||[],p.formas||[],fatorDesc(p),+p.descontoGeral||0,freteLojaDe(p));
+  var r=recalcPedido(p.itens||[],p.formas||[],fatorDesc(p),+p.descontoGeral||0,freteLojaDe(p),!!p.creditoForaBase);
   p.total=r.total;p.depreciado=r.dep;p.base=r.base;p.pontos=r.pontos;
   if(p.descontoAutorizado)p.descontoAutorizado.depAbaixo=Math.round((r.depAbaixo||0)*100)/100;
   return r;
@@ -54133,7 +54374,7 @@ function renderInstalacao(){
       toast(it.nome+" saiu da venda.");};});
   /* cobrança: o que entrou na instalação precisa de forma de pagamento — o financeiro
      só aprova com as formas somando o total */
-  var r=recalcPedido(p.itens||[],p.formas||[],null,+p.descontoGeral||0,freteLojaDe(p)),falta=r.dif;
+  var r=recalcPedido(p.itens||[],p.formas||[],null,+p.descontoGeral||0,freteLojaDe(p),!!p.creditoForaBase),falta=r.dif;
   var pagInst=(p.formas||[]).map(function(f,ix){return {f:f,ix:ix};}).filter(function(x){return x.f.daInstalacao;});
   var pag='<div class="calc">'+
     '<div class="r"><span>Total da venda</span><span>'+BRL(r.total)+"</span></div>"+
@@ -57898,6 +58139,23 @@ function pedirDataPagamento(p){
     var m=$("pgDataModal");
     if(!m){m=document.createElement("div");m.className="modal";m.id="pgDataModal";document.body.appendChild(m);}
     var fixa=!!p.pagoEm,sug=fixa?p.pagoEm:sugestaoPagoEm(p);
+    /* v582: pedido só com itens cobertos pelo plano não tem o que receber — a aprovação é só a
+       confirmação para o estoque baixar */
+    var soCob=pedidoSoCoberto(p);
+    if(soCob){
+      m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Aprovar · pedido '+esc(p.numero)+"</h3>"+
+        '<div class="sub">'+esc(p.cliente||"")+" · pedido de "+esc(dataCurta(p.data))+"</div>"+
+        '<div class="note ok" style="margin-top:14px"><b>Pedido sem valor: tudo coberto pelo Plano Premium.</b><br>'+
+        "Não há forma de pagamento nem caixa para escolher. Ao aprovar, a peça baixa do estoque de "+
+        esc(textoLocaisBaixa(p))+" e o direito do plano é baixado. Este pedido não conta em "+
+        "faturamento, meta, comissão nem no Dashboard.</div>"+
+        '<div class="actions"><button class="btn" type="button" id="pg_ok0">Aprovar</button>'+
+        '<button class="btn mut" type="button" id="pg_nao0">Cancelar</button></div></div>';
+      m.hidden=false;
+      $("pg_nao0").onclick=function(){m.hidden=true;fim(null);};
+      $("pg_ok0").onclick=function(){m.hidden=true;fim({data:(p.pagoEm||p.data||hojeISO()),caixas:{}});};
+      return;
+    }
     m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Aprovar o recebimento · pedido '+esc(p.numero)+"</h3>"+
       '<div class="sub">'+esc(p.cliente||"")+" · "+BRL(p.total)+" · pedido de "+esc(dataCurta(p.data))+"</div>"+
       '<div class="fld" style="margin-top:14px"><label for="pg_data">Data em que o cliente pagou <span class="req">*</span></label>'+
@@ -68968,7 +69226,9 @@ function ligar(){
   };
   try{ligarPerguntaPlano();}catch(ePP){console.warn("pergunta do plano",ePP);}
   $("v_equip").onchange=function(){ajustarLocalItem();try{notaPlanoVenda();}catch(e){}
+    try{ajustarCobertaPlano();ajustarPerguntaPlano();}catch(e){}   /* v582 */
     try{renderEndDoEquipVenda();}catch(e){}};
+  try{ligarCobertaPlano();}catch(e){}
   try{ligarEndDoEquipVenda();}catch(e){}
   /* série digitada ou lida pela câmera: a localização passa a opcional na hora */
   $("v_serie").addEventListener("input",ajustarLocalItem);
