@@ -2528,6 +2528,8 @@ img{max-width:100%}
             <option value="">Leads e clientes</option>
             <option value="lead">Só leads</option>
             <option value="incompleto">Cadastro incompleto</option>
+            <!-- v580: a lista dos cadastros com ponto aproximado, para deixar exato na visita -->
+            <option value="aprox">Localização aproximada</option>
           </select>
           <select id="cliPorPag" style="max-width:160px" title="Registros por página">
             <option value="10" selected>10 por página</option>
@@ -11841,6 +11843,7 @@ function montarPreClientes(){
       if(qual==="cliente"&&ehLead(c))return false;
       if(qual==="lead"&&!ehLead(c))return false;
       if(qual==="incompleto"&&!faltantes(c).length)return false;
+      if(qual==="aprox"&&!geoAprox(c))return false;   /* v580 */
       return true;})
     .sort(function(a,b){return compNomePT(a.nome||"",b.nome||"");});
   C.nLead=C.pre.filter(ehLead).length;
@@ -11907,7 +11910,7 @@ function renderClientesFiltro(){
       '<td data-r="Documento">'+esc(c.doc||"—")+"</td>"+
       '<td data-r="Endereço"><div class="t-main">'+esc([c.rua,c.num].filter(Boolean).join(", ")||c.ref||"—")+
         '</div><div class="t-sub">'+esc([c.bairro,c.distrito,c.cidade,c.uf].filter(Boolean).join(" · ")||"—")+
-        mapaLink(c.geo)+"</div></td>";
+        mapaLink(c.geo)+seloGeoAprox(c)+"</div></td>";
     tr.onclick=function(){abrirCliente(c);};b.appendChild(tr);
   });
   /* o botao "Cidades a conferir" acompanha a lista (a analise fica guardada: ela so e
@@ -12230,6 +12233,9 @@ function abrirCliente(c){
     }
   }catch(e){}
   $("c_geo").__escolhido=v.geo||"";$("c_geo").__geoExato=(v.geoOrigem==="exato")?(v.geo||""):"";
+  /* v580: a ficha reabre mostrando a etiqueta de aproximada que o cadastro já tem */
+  $("c_geo").__geoNivel=v.geoNivel||"";$("c_geo").__geoFonte=v.geoFonte||"";
+  try{$("c_geo").dispatchEvent(new Event("input",{bubbles:true}));}catch(eSl){}
   $("c_geo").__geoEnd=[v.rua,v.num,v.bairro,v.cidade].map(function(x){return String(x||"").trim();}).join("|").toLowerCase();
   $("c_temconj").value=v.temconj||"nao";
   preencherIndicados(v.indicado);toggleConj();toggleTipoPJ();renderEstrelas(c);
@@ -16521,6 +16527,28 @@ async function aplicarCidadesLista(lista,aviso){
 var cepgLev=null,cepgParar=false,cepgRodando=false;
 function cepValidoCad(v){var d=String(v||"").replace(/[^0-9]/g,"");return d.length===8&&!/^0{5}/.test(d);}
 function geoValidoCad(v){return /^-?[0-9]{1,2}[.][0-9]+[ ]*,[ ]*-?[0-9]{1,3}[.][0-9]+$/.test(String(v||"").trim());}
+/* ===== LOCALIZAÇÃO APROXIMADA (19/11, v580) =====
+   Rua nova que nenhuma base conhece (o caso de Nova Serrana): o ponto não é o da casa, mas
+   serve para o cadastro ser salvo e para a rota chegar perto. Ele guarda o NÍVEL de onde veio:
+   "cep" (coordenada do CEP da rua), "bairro" (centro do bairro) ou "cidade" (centro da cidade).
+   Ponto aproximado NUNCA vale como "o técnico está no cliente": em toda conta de distância ele
+   fica de fora, senão o rastreio acusa de longe quem está na porta. O nível "cidade" que o
+   preenchimento em lote já gravava entra nesta regra sem nada ser alterado. */
+var GEO_APROX={cep:"CEP da rua",bairro:"bairro",cidade:"cidade"};
+function nivelAprox(n){
+  var s=String(n||"").toLowerCase().replace(/^(aprox|mapa|ibge)-/,"");
+  return GEO_APROX[s]?s:"";
+}
+function geoAprox(x){return x?nivelAprox(x.geoNivel):"";}
+function textoGeoAprox(n){var k=nivelAprox(n);return k?"localização aproximada ("+GEO_APROX[k]+")":"";}
+function geoExatoCad(x){return !!(x&&geoValidoCad(x.geo))&&!geoAprox(x);}
+/* o ponto do endereço de instalação (aparelho ou item do pedido) segue a mesma regra */
+function geoAproxEnd(x){return x?nivelAprox(x.geoNivel):"";}
+function seloGeoAprox(x){
+  var t=textoGeoAprox(x&&x.geoNivel);
+  return t?' <span class="pill p-warn">'+esc(t)+"</span>":"";
+}
+window.__geoAproxMF={nivel:nivelAprox,de:geoAprox,texto:textoGeoAprox,exato:geoExatoCad};
 function cepFmtCad(d){return d.slice(0,5)+"-"+d.slice(5);}
 function ufDoCadastro(c){
   if(String(c.uf||"").trim())return String(c.uf).trim().toUpperCase();
@@ -43676,7 +43704,7 @@ function abrirDetalhes(a){
     mapaLink(c.geo)+
     (c.origem?'<br><span class="t-sub">veio por '+esc(c.origem)+"</span>":"")+
     (c.id?'<br><span class="t-sub cli-dica">dois cliques para editar o cadastro</span>':"");
-  try{$("dt_mapsBox").innerHTML=ativ?htmlMapsAtividade(a):"";}catch(eMp){console.warn("maps",eMp);$("dt_mapsBox").innerHTML="";}
+  try{$("dt_mapsBox").innerHTML=ativ?htmlMapsAtividade(a):"";if(ativ)ligarBotaoGeoAprox(a);}catch(eMp){console.warn("maps",eMp);$("dt_mapsBox").innerHTML="";}
   $("dt_quando").innerHTML="<b>"+esc(dataCurta(a.data))+(a.inicio?" às "+esc(a.inicio):"")+"</b>"+
     (a.fim?" – "+esc(a.fim):"")+
     "<br>"+esc(a.colaborador||"—")+
@@ -49734,10 +49762,10 @@ function enderecoDoAparelho(e,c){
     return {proprio:true,
       texto:[[x.rua,x.num].filter(Boolean).join(", "),x.comp,x.bairro,
         [x.cidade,x.uf].filter(Boolean).join("/"),x.cep?("CEP "+x.cep):""].filter(Boolean).join(" · "),
-      geo:x.geo||"",ref:x.ref||"",
+      geo:x.geo||"",geoNivel:x.geoNivel||"",ref:x.ref||"",
       contatoNome:x.contatoNome||"",contatoTel:x.contatoTel||"",horario:x.horario||""};
   }
-  return {proprio:false,texto:enderecoCadastroCli(c),geo:(c&&c.geo)||"",
+  return {proprio:false,texto:enderecoCadastroCli(c),geo:(c&&c.geo)||"",geoNivel:(c&&c.geoNivel)||"",
     ref:(c&&c.ref)||"",contatoNome:"",contatoTel:"",horario:""};
 }
 /* ===== O ENDEREÇO DE INSTALAÇÃO INFORMADO NO PEDIDO (18/11, v576) =====
@@ -49807,7 +49835,7 @@ function enderecoDaAtividade(a){
   if(ei)return ei;
   /* 3º: o cadastro (o aparelho sem endereço próprio também cai aqui, como antes) */
   if(e){var x2=enderecoDoAparelho(e,c);x2.equip=e;x2.partes=c;return x2;}
-  return {proprio:false,texto:enderecoCadastroCli(c),geo:c.geo||"",partes:c,equip:null,
+  return {proprio:false,texto:enderecoCadastroCli(c),geo:c.geo||"",geoNivel:c.geoNivel||"",partes:c,equip:null,
     ref:c.ref||"",contatoNome:"",contatoTel:"",horario:""};
 }
 /* a rota: o ponto do mapa quando existe (mais preciso), senão o endereço escrito */
@@ -49847,9 +49875,82 @@ function htmlLigarAtividade(a,end){
     return '<a class="bt-maps bt-ligar" href="tel:+55'+t.dig+'">&#128222; Ligar para '+esc(nome)+
       " · "+esc(t.tel)+(t.rot?" <small>("+esc(t.rot)+")</small>":"")+"</a>";}).join("");
 }
+/* ===== PONTO APROXIMADO NA VISITA (19/11, v580) =====
+   O técnico vê que a localização não é a da casa e, ao chegar, deixa o ponto exato com um
+   toque. O ponto anterior NÃO se perde: fica no histórico do registro que guardava o ponto —
+   o cadastro do cliente, o aparelho ou o item do pedido da instalação. */
+function avisoGeoAproxAtiv(a){
+  var end=enderecoDaAtividade(a),n=nivelAprox(end.geoNivel);
+  if(!n)return "";
+  return '<div class="note warn" style="margin:6px 0"><b>'+esc(textoGeoAprox(end.geoNivel))+
+    "</b> — o ponto do mapa não é a casa do cliente. Ao chegar, toque em "+
+    "<b>Marcar onde estou</b> e o endereço fica exato para sempre."+
+    '<div style="margin-top:6px"><button class="btn sm" type="button" id="dt_geoAprox">Marcar onde estou</button></div></div>';
+}
+function ligarBotaoGeoAprox(a){
+  var b=$("dt_geoAprox");
+  if(!b)return;
+  b.onclick=function(){return travaSalvar("dt_geoAprox",async function(){
+    if(!navigator.geolocation){toast("Este aparelho não informa a localização.");return;}
+    var pos=await new Promise(function(res){
+      navigator.geolocation.getCurrentPosition(function(p){res(p);},function(){res(null);},
+        {enableHighAccuracy:true,timeout:12000,maximumAge:0});
+    });
+    if(!pos){toast("Não consegui pegar a localização. Autorize o acesso e tente de novo.");return;}
+    try{await gravarGeoExatoAtiv(a,pos.coords.latitude,pos.coords.longitude,Math.round(pos.coords.accuracy||0));}
+    catch(e){toast("Não deu para gravar o ponto: "+((e&&e.message)||e));return;}
+    toast("Ponto gravado. A localização deste endereço agora é exata.");
+    try{$("dt_mapsBox").innerHTML=htmlMapsAtividade(a);ligarBotaoGeoAprox(a);}catch(eR){}
+  },b,arguments);};
+}
+async function gravarGeoExatoAtiv(a,la,lo,prec){
+  var end=enderecoDaAtividade(a),coord=(+la).toFixed(6)+","+(+lo).toFixed(6);
+  var quando=agoraCarimbo(),txt="Localização marcada no local pelo técnico ("+coord+
+    (prec?", precisão de "+prec+" m":"")+"), no lugar da "+(textoGeoAprox(end.geoNivel)||"localização anterior")+".";
+  /* 1º o aparelho, quando o ponto aproximado era o dele */
+  if(end.equip&&end.proprio){
+    var e=end.equip,antes=JSON.parse(JSON.stringify(e.endInst||{})),hAntes=(e.historico||[]).slice();
+    e.endInst=e.endInst||{};e.endInst.geoAnterior=antes.geo||"";e.endInst.geo=coord;
+    e.endInst.geoNivel="";e.endInst.geoOrigem="exato";e.endInst.geoFonte="local";
+    e.historico=(e.historico||[]).concat([{quando:quando,por:usuarioAtual,texto:txt}]);
+    try{await gravaConf("equipamentos",e);}
+    catch(er){e.endInst=antes;e.historico=hAntes;throw er;}
+    return "aparelho";
+  }
+  /* 2º o endereço de instalação informado no pedido (a instalação ainda não tem aparelho) */
+  if(end.doPedido&&end.pedido){
+    var p=end.pedido,aP=JSON.parse(JSON.stringify(p.itens||[])),hP=(p.historico||[]).slice();
+    var mexeu=false;
+    (p.itens||[]).forEach(function(i){
+      if(!i||!i.endInst)return;
+      if(String(i.endInst.geo||"")!==String(end.geo||""))return;
+      i.endInst.geoAnterior=i.endInst.geo||"";i.endInst.geo=coord;
+      i.endInst.geoNivel="";i.endInst.geoOrigem="exato";i.endInst.geoFonte="local";
+      mexeu=true;
+    });
+    if(mexeu){
+      p.historico=(p.historico||[]).concat([{quando:quando,por:usuarioAtual,texto:txt}]);
+      try{await gravaConf("pedidos",p);}
+      catch(er){p.itens=aP;p.historico=hP;throw er;}
+      return "pedido";
+    }
+  }
+  /* 3º o cadastro do cliente */
+  var c=cliPorId(a&&a.clienteId);
+  if(!c)throw new Error("não achei o cadastro deste cliente");
+  var gA=c.geo||"",nA=c.geoNivel||"",oA=c.geoOrigem||"",fA=c.geoFonte||"",altA=(c.alteracoes||[]).slice();
+  c.geoAnterior=gA;c.geo=coord;c.geoNivel="";c.geoOrigem="exato";c.geoFonte="local";
+  c.alteracoes=(c.alteracoes||[]).concat([{quando:iso(new Date()),por:usuarioAtual,
+    campo:"Geolocalização",de:gA||"(vazia)",para:coord}]);
+  try{await gravaConf("clientes",c);}
+  catch(er){c.geo=gA;c.geoNivel=nA;c.geoOrigem=oA;c.geoFonte=fA;c.alteracoes=altA;throw er;}
+  return "cliente";
+}
+window.__geoAtivMF={aviso:avisoGeoAproxAtiv,marcar:gravarGeoExatoAtiv};
 function htmlMapsAtividade(a){
   var end=enderecoDaAtividade(a),r=rotaGoogleMaps(end);
-  var ap=end.equip?('<div class="note" style="margin:0 0 8px"><b>Aparelho desta atividade:</b> '+
+  var ap=avisoGeoAproxAtiv(a);
+  ap+=end.equip?('<div class="note" style="margin:0 0 8px"><b>Aparelho desta atividade:</b> '+
     esc(rotuloEquip(end.equip))+"</div>"+(end.proprio?avisoEndAparelho(end.equip):"")):"";
   /* v576: o endereço veio do PEDIDO — o técnico tem de saber que não é o do cadastro */
   if(end.doPedido)ap+=htmlEndInstPedido(end.pedido,"nota");
@@ -59117,6 +59218,7 @@ function abrirAtend(a){
   ["cep","rua","num","comp","bairro","ref"].forEach(function(k){$("at_"+k).value=v[k]||"";});
   $("at_tipoend").value=v.tipoend||"urbano";$("at_geo").value=v.geo||"";
   $("at_geo").__escolhido=v.geo||"";$("at_geo").__geoExato=(v.geoOrigem==="exato")?(v.geo||""):"";
+  $("at_geo").__geoNivel=v.geoNivel||"";$("at_geo").__geoFonte=v.geoFonte||"";   /* v580 */
   $("at_geo").__geoEnd=[v.rua,v.num,v.bairro,v.cidade].map(function(x){return String(x||"").trim();}).join("|").toLowerCase();
   try{$("at_geo").dispatchEvent(new Event("input"));}catch(e){}
   $("at_colab").value=v.colaborador||usuarioAtual;
@@ -59323,6 +59425,7 @@ function preencherCliente(c){
   ["cep","rua","num","comp","bairro","ref"].forEach(function(k){$("at_"+k).value=c[k]||"";});
   $("at_tipoend").value=c.tipoend||"urbano";$("at_geo").value=c.geo||"";
   $("at_geo").__escolhido=c.geo||"";$("at_geo").__geoExato=(c.geoOrigem==="exato")?(c.geo||""):"";
+  $("at_geo").__geoNivel=c.geoNivel||"";$("at_geo").__geoFonte=c.geoFonte||"";   /* v580 */
   $("at_geo").__geoEnd=[c.rua,c.num,c.bairro,c.cidade].map(function(x){return String(x||"").trim();}).join("|").toLowerCase();
   try{$("at_geo").dispatchEvent(new Event("input"));}catch(e){}
   if($("at_uf"))$("at_uf").value=c.uf||"";
@@ -59367,6 +59470,7 @@ function abrirLeadCompleto(){
   if(tipoPessoaAt&&$("c_tipo")){$("c_tipo").value=tipoPessoaAt;try{toggleTipoPJ();}catch(e){}}
   /* localização exata do atendimento continua exata na ficha */
   $("c_geo").__geoExato=(d.geo&&$("at_geo").__geoExato===d.geo)?d.geo:"";
+  $("c_geo").__geoNivel=$("at_geo").__geoNivel||"";$("c_geo").__geoFonte=$("at_geo").__geoFonte||"";   /* v580 */
   $("c_geo").__geoEnd=$("at_geo").__geoEnd||[d.rua,d.num,d.bairro,d.cidade].map(function(x){return String(x||"").trim();}).join("|").toLowerCase();
   if(d.origem)$("c_origem").value=d.origem;
   try{mostrarFaltantes();}catch(e){}
@@ -59643,6 +59747,8 @@ async function salvarAtend__corpo(){
       comp:$("at_comp").value.trim(),ref:$("at_ref").value.trim(),
       tipoend:$("at_tipoend").value||"urbano",geo:$("at_geo").value.trim(),
       geoOrigem:($("at_geo").value&&$("at_geo").__geoExato===$("at_geo").value)?"exato":($("at_geo").value?"endereco":""),
+      geoNivel:($("at_geo").value?($("at_geo").__geoNivel||""):""),            /* v580 */
+      geoFonte:($("at_geo").value?($("at_geo").__geoFonte||""):""),
       indicado:($("at_indicado").value||""),
       tipoPrimeiroAtend:tiposSel[0]||"",primeiroAtendEm:iso(new Date()),
       criadoEm:iso(new Date()),criadoPor:usuarioAtual,criadoVia:"atendimento"};
@@ -59672,8 +59778,11 @@ async function salvarAtend__corpo(){
     var v=$("at_"+k).value.trim();if(k==="uf")v=v.toUpperCase();
     if(v&&!clienteVinc[k]){clienteVinc[k]=v;endMudou=true;}
   });
-  if(endMudou&&clienteVinc.geo&&clienteVinc.geo===$("at_geo").value.trim())
+  if(endMudou&&clienteVinc.geo&&clienteVinc.geo===$("at_geo").value.trim()){
     clienteVinc.geoOrigem=($("at_geo").__geoExato===clienteVinc.geo)?"exato":"endereco";
+    clienteVinc.geoNivel=$("at_geo").__geoNivel||"";                           /* v580 */
+    if($("at_geo").__geoFonte)clienteVinc.geoFonte=$("at_geo").__geoFonte;
+  }
   if(endMudou&&db){try{await col("clientes").doc(clienteVinc.id).set(clienteVinc);}catch(e){console.warn(e);}}
   /* ATENDIMENTO JÁ ABERTO (30/10, regra dele): um atendimento "novo" do mesmo cliente, da mesma
      pessoa, no mesmo dia, enquanto o anterior ainda está aberto, continua no que já existe */
@@ -59691,6 +59800,7 @@ async function salvarAtend__corpo(){
   a.comp=$("at_comp").value.trim();a.ref=$("at_ref").value.trim();
   a.tipoend=$("at_tipoend").value||"urbano";a.geo=$("at_geo").value.trim();
   a.geoOrigem=(a.geo&&$("at_geo").__geoExato===a.geo)?"exato":(a.geo?"endereco":"");
+  a.geoNivel=a.geo?($("at_geo").__geoNivel||""):"";                            /* v580 */
   a.colaborador=$("at_colab").value;a.tipos=tiposSel.slice();a.tipo=tiposSel.join(" · ");
   a.data=$("at_data").value;a.inicio=ini;a.fim=fim;a.obs=$("at_obs").value.trim();
   a.status="aberto";a.iniciativa=iniSel;
@@ -61168,7 +61278,7 @@ window.__contagemMF={cfg:function(){return cfgContagem();},rodizio:rodizioContag
   estoques:estoquesParaContagem,marcar:marcarContagemSemanal,mudar:mudarContagemMarcada,
   marcadas:contagensMarcadas,recontagemHoje:produtosRecontagemHoje,montarDia:montarRecontagemDoDia,
   doDia:recontagemDoDia,vespera:separarVespera,foraDeOrdem:vesperaFuraDeOrdem,
-  idDoc:function(){return idCfgContagem();},instalacoes:instalacoesDoDia,
+  idDoc:function(){return idCfgContagem();},instalacoes:instalacoesDoDia,proxDiaUtil:proximoDiaUtil,
   mudarRodizio:mudarRodizioContagem,pode:podeContagemEstoque,minimo:minRecontagem,hora:horaVespera,
   gravar:gravarCfgContagem};
 function ehSubstitutoAlmox(quem){var n=quem||usuarioAtual;return !!n&&n===substitutoAlmox();}
@@ -62487,6 +62597,9 @@ function paradaEmCliente(p){
   if(atendimentoNaParada(p.vendedor,p.inicio,p.fim))return true;
   var achou=false;
   (typeof clientes!=="undefined"?clientes:[]).some(function(c){
+    /* v580: ponto APROXIMADO (CEP, bairro ou centro da cidade) não é a casa do cliente —
+       ele não pode dizer que a pessoa chegou, nem que está longe */
+    if(geoAprox(c))return false;
     var g=coordDe(c.geo);
     if(!g)return false;
     if(metrosEntre({lat:+p.lat,lng:+p.lng},{lat:g.la,lng:g.lo})<=RAIO_CLIENTE_GEO){achou=true;return true;}
@@ -62499,6 +62612,7 @@ function paradaEmCliente(p){
      daqui para a frente terão ponto no mapa. */
   (typeof equipamentos!=="undefined"?equipamentos:[]).some(function(e){
     if(!e.endInst||!e.endInst.geo)return false;
+    if(geoAproxEnd(e.endInst))return false;   /* v580: aproximado não conta distância */
     var g2=coordDe(e.endInst.geo);
     if(!g2)return false;
     if(metrosEntre({lat:+p.lat,lng:+p.lng},{lat:g2.la,lng:g2.lo})<=RAIO_CLIENTE_GEO){achou=true;return true;}
@@ -67235,6 +67349,25 @@ function ligar(){
       $("ea_alerta").innerHTML='<div class="note warn">Não consegui falar com a base dos Correios. Preencha à mão.</div>';
     }
   };
+  /* v580: o campo do endereço de instalação lê a localização colada do mesmo jeito que o
+     cadastro — link do Google Maps, coordenadas soltas ou a localização do WhatsApp */
+  if($("ea_geo"))["paste","change"].forEach(function(ev){
+    $("ea_geo").addEventListener(ev,function(){
+      setTimeout(function(){
+        var t=($("ea_geo").value||"").trim();
+        if(!t||!window.extrairCoordMF)return;
+        var c=window.extrairCoordMF(t);
+        if(c){
+          $("ea_geo").value=c;
+          $("ea_alerta").innerHTML='<div class="note ok">Localização lida: '+esc(c)+" (enviada pelo cliente).</div>";
+        }else if(!/^-?[0-9]{1,2}[.,][0-9]+/.test(t)){
+          $("ea_alerta").innerHTML='<div class="note warn">Não reconheci uma localização. '+
+            "Cole as coordenadas (ex.: -19.864867, -44.603782) ou o link completo do Google Maps. "+
+            "Link curto não traz as coordenadas: abra o link, toque e segure no ponto e copie os números.</div>";
+        }
+      },ev==="paste"?30:0);
+    });
+  });
   if($("ea_geoAqui"))$("ea_geoAqui").onclick=function(){
     if(!navigator.geolocation){toast("Este aparelho não informa a localização.");return;}
     $("ea_alerta").innerHTML='<div class="note">Procurando onde você está…</div>';
@@ -68436,6 +68569,11 @@ function ligar(){
     Object.keys(fixos).forEach(function(k){c[k]=fixos[k];});
     /* localização colada ou marcada no local fica registrada como exata */
     c.geoOrigem=(c.geo&&$("c_geo").__geoExato===$("c_geo").value)?"exato":(c.geo?"endereco":"");
+    /* v580: o nível do ponto (vazio = o ponto é da casa; "cep"/"bairro"/"cidade" = aproximado)
+       e de onde ele veio — "cliente" é a localização que o próprio cliente mandou */
+    c.geoNivel=c.geo?($("c_geo").__geoNivel||""):"";
+    if(c.geo&&$("c_geo").__geoFonte)c.geoFonte=$("c_geo").__geoFonte;
+    else if(!c.geo)c.geoFonte="";
     /* o Administrador corrigiu dado pessoal de cliente: fica registrado na ficha */
     if(clienteTravado(editandoCli)&&podeCorrigirCadastro()){
       var ROT={nome:"Nome",doc:"CPF/CNPJ",rg:"RG",tipo:"Tipo"};
@@ -72607,6 +72745,71 @@ function erro(msg){
   window.loteEnderecoMF={correios:correiosRuaLote,cepUnico:cepUnicoCidade,rural:cepRuralCidade,
     mapa:mapaLote,ibge:cepGeoIBGE,faixa:faixaCobre};
 
+  /* ===== O PONTO APROXIMADO DO CADASTRO (19/11, v580) =====
+     Rua nova da cidade (o caso de Nova Serrana): não está na base do IBGE nem no mapa aberto,
+     e a localização é obrigatória — o cadastro não podia ser salvo. Agora o sistema desce um
+     degrau de cada vez: coordenada do CEP da rua, centro do bairro e, por último, centro da
+     cidade, sempre GRAVANDO O NÍVEL. Nenhuma chave paga entra aqui.
+
+     MAPA ABERTO COM PAUSA: o Nominatim aceita no máximo uma consulta por segundo e pede a
+     identificação de quem consulta — que é o endereço do próprio sistema, mandado pelo
+     navegador em toda consulta; nenhum dado de cliente viaja junto. A fila garante a pausa
+     mesmo quando duas buscas caem ao mesmo tempo. */
+  var nomUlt=0,nomFila=Promise.resolve();
+  function mapaAberto(params){
+    var qs=Object.keys(params).map(function(k){return k+"="+encodeURIComponent(params[k]);}).join("&");
+    nomFila=nomFila.then(function(){
+      return new Promise(function(r){setTimeout(r,Math.max(0,1050-(Date.now()-nomUlt)));});
+    }).then(function(){
+      nomUlt=Date.now();
+      return buscarJSON("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&countrycodes=br&"+qs)
+        .then(function(j){return (j&&j[0])||null;},function(){return {__rede:true};});
+    });
+    return nomFila;
+  }
+  /* a coordenada que as bases de CEP devolvem de graça: AwesomeAPI e, se faltar, BrasilAPI v2 */
+  var cachePontoCep={};
+  function pontoDoCep(cep){
+    var d=soDig(cep);
+    if(d.length!==8)return Promise.resolve(null);
+    if(cachePontoCep[d])return cachePontoCep[d];
+    cachePontoCep[d]=buscarJSON("https://cep.awesomeapi.com.br/json/"+d).then(function(j){
+      var la=parseFloat(j&&j.lat),lo=parseFloat(j&&j.lng);
+      if(!isNaN(la)&&!isNaN(lo))return {la:la,lo:lo,base:"AwesomeAPI"};
+      throw new Error("sem ponto");
+    }).then(null,function(){
+      return buscarJSON("https://brasilapi.com.br/api/cep/v2/"+d).then(function(j){
+        var cd=(j&&j.location&&j.location.coordinates)||{};
+        var la=parseFloat(cd.latitude),lo=parseFloat(cd.longitude);
+        return (!isNaN(la)&&!isNaN(lo))?{la:la,lo:lo,base:"BrasilAPI"}:null;
+      }).then(null,function(){return null;});
+    }).then(function(r){if(!r)delete cachePontoCep[d];return r;});
+    return cachePontoCep[d];
+  }
+  /* o centro do bairro e o centro da cidade, no mapa aberto (a cidade da resposta é conferida) */
+  function pontoDoBairro(bairro,cidade,uf){
+    if(!bairro||!cidade)return Promise.resolve(null);
+    return mapaAberto({q:[bairro,cidade,uf,"Brasil"].filter(Boolean).join(", ")}).then(function(r){
+      if(!r||r.__rede)return null;
+      var a=r.address||{},cid=a.city||a.town||a.village||a.municipality||"";
+      if(cid&&ibgeTexto(cid)!==ibgeTexto(cidade))return null;
+      return {la:+r.lat,lo:+r.lon};
+    });
+  }
+  function pontoDaCidade(cidade,uf){
+    if(!cidade)return Promise.resolve(null);
+    return mapaAberto({city:cidade,state:uf,country:"Brasil"}).then(function(r){
+      if(!r||r.__rede)return null;
+      var a=r.address||{},cid=a.city||a.town||a.village||a.municipality||"";
+      if(cid&&ibgeTexto(cid)!==ibgeTexto(cidade))return null;
+      return {la:+r.lat,lo:+r.lon};
+    });
+  }
+  /* CEP geral da cidade: é o que não traz a rua (termina em 000) */
+  function cepGeralDaCidade(cep){var d=soDig(cep);return d.length===8&&/000$/.test(d);}
+  window.__geoAproxBuscaMF={cep:pontoDoCep,bairro:pontoDoBairro,cidade:pontoDaCidade,
+    mapa:mapaAberto,geral:cepGeralDaCidade,correios:correiosRuaLote};
+
 
   /* P = prefixo do formulário: "c" (cadastro do cliente/lead) ou "at" (atendimento) */
   function ligarGeo(P){
@@ -72643,6 +72846,36 @@ function erro(msg){
         a.hidden=!p[3];
         if(p[3])a.href=p[3];
       });
+      mostrarSelo();
+    }
+    /* ---- v580: a etiqueta amarela do ponto aproximado ----
+       O ponto que não é da casa (CEP da rua, centro do bairro, centro da cidade) SERVE para
+       salvar o cadastro e para a rota chegar perto, mas a tela diz, sempre, que é aproximado. */
+    var NOMES_APROX={cep:"CEP da rua",bairro:"bairro",cidade:"cidade"};
+    function nivelDoCampo(){
+      var n=String(campo.__geoNivel||"").toLowerCase().replace(/^(aprox|mapa|ibge)-/,"");
+      return NOMES_APROX[n]?n:"";
+    }
+    function mostrarSelo(){
+      var el=document.getElementById(P+"_geoSelo");
+      if(!el){
+        el=document.createElement("span");el.id=P+"_geoSelo";el.className="pill p-warn";
+        acoes.appendChild(el);
+      }
+      var n=String(campo.value||"").trim()?nivelDoCampo():"";
+      el.hidden=!n;
+      el.textContent=n?"localização aproximada ("+NOMES_APROX[n]+")":"";
+    }
+    /* a caixa da sugestão dos Correios, logo acima do aviso */
+    function caixaSug(){
+      var el=document.getElementById(P+"_geoSug");
+      if(!el){
+        el=document.createElement("div");el.id=P+"_geoSug";
+        var av=document.getElementById(P+"_geoAviso");
+        if(av&&av.parentNode)av.parentNode.insertBefore(el,av);
+        else acoes.parentNode.appendChild(el);
+      }
+      return el;
     }
 
     /* ---- colar a localização (regra do Wagner, 12/09) ----
@@ -72660,8 +72893,12 @@ function erro(msg){
       /* link completo do Google Maps com marcador: !3d-19.86!4d-44.60 */
       m=/!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/.exec(s);
       if(m)return coordValida(m[1]+","+m[2])||"";
-      /* parâmetros q=, query=, ll=, destination=, center= */
-      m=/[?&](?:q|query|ll|destination|daddr|center)=(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/.exec(s);
+      /* parâmetros q=, query=, ll=, destination=, center= — o "loc:" é o que o WhatsApp manda
+         na localização compartilhada (maps.google.com/maps?q=loc:-19.86,-44.60) */
+      m=/[?&](?:q|query|ll|destination|daddr|center|saddr)=(?:loc:)?(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/.exec(s);
+      if(m)return coordValida(m[1]+","+m[2])||"";
+      /* endereço geo: do celular (geo:-19.86,-44.60) */
+      m=/geo:(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/.exec(s);
       if(m)return coordValida(m[1]+","+m[2])||"";
       /* centro do mapa: @-19.86,-44.60,17z */
       m=/@(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/.exec(s);
@@ -72682,13 +72919,15 @@ function erro(msg){
     }
     function aplicarColado(){
       var t=campo.value;
-      if(!String(t).trim()){campo.__escolhido="";campo.__geoExato="";atualizarLink();return;}
+      if(!String(t).trim()){campo.__escolhido="";campo.__geoExato="";campo.__geoNivel="";campo.__geoFonte="";atualizarLink();return;}
       if(t===campo.__escolhido){atualizarLink();return;}
       var c=extrairCoord(t);
       if(c){
         campo.value=c;campo.__escolhido=c;campo.__geoExato=c;campo.__geoEnd=assinaturaEnd();
+        /* v580: a localização que o cliente mandou é EXATA e deixa de ser aproximada */
+        campo.__geoNivel="";campo.__geoFonte="cliente";
         atualizarLink();
-        aviso("Localização gravada: "+c+". Os links de rota já levam até ela.","ok");
+        aviso("Localização gravada: "+c+" (enviada pelo cliente). Os links de rota já levam até ela.","ok");
         /* sem cidade ainda: o ponto preenche cidade e estado */
         if(!valorDe(P+"_cidade")){var pc=c.split(",");preencherPeloPonto(pc[0],pc[1],function(){});}
       }else{
@@ -72699,6 +72938,7 @@ function erro(msg){
         atualizarLink();
       }
     }
+    if(P==="c")window.extrairCoordMF=extrairCoord;   /* v580: a mesma leitura serve ao endereço do aparelho */
     campo.addEventListener("paste",function(){setTimeout(aplicarColado,30);});
     campo.addEventListener("change",aplicarColado);
 
@@ -72762,6 +73002,7 @@ function erro(msg){
         campo.value=la.toFixed(6)+","+lo.toFixed(6);
         campo.__escolhido=campo.value;
         campo.__geoExato=campo.value;   /* marcado no local: exato */
+        campo.__geoNivel="";campo.__geoFonte="local";   /* v580: deixa de ser aproximado */
         campo.__geoEnd=assinaturaEnd();
         atualizarLink();
         var m=Math.round(pos.coords.accuracy||0);
@@ -72797,10 +73038,10 @@ function erro(msg){
        Sem botão de apagar. Rural fica de fora (sem rua). */
     var geoTimer=null,geoBusca=0;
     function consultaMapa(params,cb){
-      var qs=Object.keys(params).map(function(k){return k+"="+encodeURIComponent(params[k]);}).join("&");
-      fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&"+qs)
-        .then(function(r){return r.json();})
-        .then(function(j){cb(j&&j.length?j[0]:null,false);},function(){cb(null,true);});
+      /* v580: toda consulta ao mapa aberto passa pela fila de 1 por segundo (limite do serviço) */
+      var B=window.__geoAproxBuscaMF;
+      if(!B){cb(null,true);return;}
+      B.mapa(params).then(function(r){cb((r&&!r.__rede)?r:null,!!(r&&r.__rede));},function(){cb(null,true);});
     }
     function geoPeloEndereco(automatico){
       /* o aviso DESTA busca: sai no toast quando a pessoa clicou */
@@ -72824,6 +73065,48 @@ function erro(msg){
         if(campo.value&&campo.value===campo.__geoExato&&assinaturaEnd()===campo.__geoEnd)return;
       }
       var minha=++geoBusca;
+      /* ===== v580: RUA QUE AS BASES NÃO CONHECEM =====
+         CEP geral da cidade (termina em 000, não traz a rua) ou campo de CEP vazio: a rua foi
+         digitada à mão. Os Correios por cidade + rua devolvem o CEP ESPECÍFICO e o nome
+         OFICIAL — mostrados como SUGESTÃO, que só entra no cadastro com o clique da pessoa.
+         O CEP específico ainda serve de ponto aproximado se nada melhor aparecer. */
+      var correiosP=null,cepOficial="";
+      function correios(){
+        if(correiosP)return correiosP;
+        if(!window.__geoAproxBuscaMF)return (correiosP=Promise.resolve(null));
+        correiosP=window.__geoAproxBuscaMF.correios({uf:uf,cidade:cidade,rua:rua,bairro:bairro,num:num})
+          .then(function(r){
+            if(!r||!r.cep)return null;
+            cepOficial=r.cep;
+            if(minha===geoBusca)sugerirCorreios(r);
+            return r;
+          },function(){return null;});
+        return correiosP;
+      }
+      function sugerirCorreios(r){
+        var el=caixaSug(),cepAgora=soDig(valorDe(P+"_cep"));
+        var mesmoCep=(cepAgora===r.cep),mesmaRua=(ibgeTexto(valorDe(P+"_rua"))===ibgeTexto(r.rua||""));
+        if(mesmoCep&&mesmaRua){el.innerHTML="";return;}
+        el.innerHTML='<div class="note warn"><b>Encontrei nos Correios:</b> <span id="'+P+
+          '_geoSugT"></span><br><button class="btn sm" type="button" id="'+P+
+          '_geoSugOk">Usar este endereço</button> <span class="t-sub">nada muda sem o seu toque</span></div>';
+        document.getElementById(P+"_geoSugT").textContent=
+          [r.rua||"",r.bairro?"bairro "+r.bairro:"","CEP "+r.cep.slice(0,5)+"-"+r.cep.slice(5)]
+            .filter(Boolean).join(", ")+" — usar?";
+        document.getElementById(P+"_geoSugOk").onclick=function(){
+          var cp=document.getElementById(P+"_cep");
+          preenchendoCEP=true;
+          if(r.rua)confirmar(P+"_rua",r.rua);
+          if(r.bairro)confirmar(P+"_bairro",r.bairro);
+          if(cp){cp.value=r.cep.slice(0,5)+"-"+r.cep.slice(5);cp.__escolhido=cp.value;}
+          preenchendoCEP=false;
+          el.innerHTML="";
+          aviso("Endereço dos Correios gravado no cadastro. Procurando a localização com o nome oficial…","ok");
+          geoPeloEndereco(false);
+        };
+      }
+      var cepNoCampo=valorDe(P+"_cep");
+      if(window.__geoAproxBuscaMF&&(!cepNoCampo||window.__geoAproxBuscaMF.geral(cepNoCampo)))correios();
       var tentativas=[];
       if(rua&&num)tentativas.push({street:num+" "+rua,city:cidade,state:uf,country:"Brasil"});
       if(rua)tentativas.push({street:rua,city:cidade,state:uf,country:"Brasil"});
@@ -72838,6 +73121,7 @@ function erro(msg){
         campo.value=(+la).toFixed(6)+","+(+lo).toFixed(6);
         campo.__escolhido=campo.value;
         campo.__geoExato="";
+        campo.__geoFonte="";
         campo.__geoNivel=nivel;
         campo.__geoEnd=assinaturaEnd();
         atualizarLink();
@@ -72864,29 +73148,84 @@ function erro(msg){
       }
       /* 1º: base de endereços do IBGE */
       if(rua){
-        buscarIBGE({rua:rua,num:num,bairro:bairro,cidade:cidade,uf:uf,cep:valorDe(P+"_cep")}).then(function(res){
+        /* pelo gancho (window.buscarIBGEMF é esta mesma função): é por onde os ensaios entram */
+        window.buscarIBGEMF({rua:rua,num:num,bairro:bairro,cidade:cidade,uf:uf,cep:valorDe(P+"_cep")}).then(function(res){
           if(minha!==geoBusca)return;
           if(res&&res.la!=null){ibgeRes=res;if(res.nivel==="numero"){usarIBGE();return;}}
           else if(res&&res.semRua)obsGoogle="Esta rua não está na base de endereços do IBGE. ";
           viaGoogle();
         },function(){if(minha!==geoBusca)return;viaGoogle();});
       }else viaGoogle();
+      /* v580: o mapa não achou a rua. Antes de desistir, os Correios dão o nome oficial (e com
+         ele o IBGE e o mapa são consultados de novo); depois vem o ponto aproximado. */
+      function semMapa(falhouRede){
+        if(minha!==geoBusca)return;
+        correios().then(function(r){
+          if(minha!==geoBusca)return;
+          if(!r||!r.rua||ibgeTexto(r.rua)===ibgeTexto(rua)){aproximar(falhouRede);return;}
+          window.buscarIBGEMF({rua:r.rua,num:num,bairro:r.bairro||bairro,cidade:cidade,uf:uf,cep:r.cep})
+            .then(function(res){
+              if(minha!==geoBusca)return;
+              if(res&&res.la!=null){
+                gravarPonto(res.la,res.lo,"ibge-"+res.nivel,
+                  "Com o nome oficial dos Correios ("+r.rua+"): "+res.texto,res.tipo);
+                return;
+              }
+              window.__geoAproxBuscaMF.mapa({street:(num?num+" ":"")+r.rua,city:cidade,state:uf,country:"Brasil"})
+                .then(function(mp){
+                  if(minha!==geoBusca)return;
+                  if(!mp){aproximar(falhouRede);return;}
+                  gravarPonto(+mp.lat,+mp.lon,"mapa-aberto",
+                    "Localização achada no mapa aberto com o nome oficial dos Correios ("+r.rua+
+                    "). Sem o número, o ponto é o da rua — confira no mapa.","");
+                },function(){if(minha===geoBusca)aproximar(falhouRede);});
+            },function(){if(minha===geoBusca)aproximar(falhouRede);});
+        },function(){if(minha===geoBusca)aproximar(falhouRede);});
+      }
+      /* o ponto aproximado, um degrau por vez: CEP da rua → centro do bairro → centro da cidade.
+         Ele GRAVA O NÍVEL ("aprox-cep", "aprox-bairro", "aprox-cidade"), satisfaz a
+         obrigatoriedade da localização e NUNCA vale como "o técnico chegou no cliente". */
+      function aproximar(falhouRede){
+        if(minha!==geoBusca)return;
+        var B=window.__geoAproxBuscaMF;
+        if(!B){desistir(falhouRede);return;}
+        var cepAgora=soDig(valorDe(P+"_cep"));
+        var cepUsar=cepOficial||((cepAgora.length===8&&!B.geral(cepAgora))?cepAgora:"");
+        var passos=[];
+        if(cepUsar)passos.push({n:"cep",fn:function(){return B.cep(cepUsar);},
+          msg:"Esta rua não está nas bases de endereço. Gravei a localização aproximada pelo CEP "+
+            cepUsar.slice(0,5)+"-"+cepUsar.slice(5)+"."});
+        if(bairro)passos.push({n:"bairro",fn:function(){return B.bairro(bairro,cidade,uf);},
+          msg:"Esta rua não está nas bases de endereço. Gravei a localização aproximada no centro do bairro "+bairro+"."});
+        passos.push({n:"cidade",fn:function(){return B.cidade(cidade,uf);},
+          msg:"Não achei a rua nem o bairro. Gravei a localização aproximada no centro de "+cidade+"."});
+        (function proximo(k){
+          if(minha!==geoBusca)return;
+          if(k>=passos.length){desistir(falhouRede);return;}
+          passos[k].fn().then(function(pt){
+            if(minha!==geoBusca)return;
+            if(!pt||pt.la==null){proximo(k+1);return;}
+            gravarPonto(pt.la,pt.lo,"aprox-"+passos[k].n,passos[k].msg+
+              " O cadastro já pode ser salvo; na visita, toque em “Marcar onde estou” para o ponto ficar exato.","");
+          },function(){if(minha===geoBusca)proximo(k+1);});
+        })(0);
+      }
+      function desistir(falhouRede){
+        bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
+        /* endereço alterado e nada achado: o ponto que estava no campo era de outro
+           endereço e sai (regra do Wagner: a geolocalização acompanha o endereço) */
+        var apagou="";
+        if(automatico&&campo.value&&campo.__geoEnd!==assinaturaEnd()){
+          campo.value="";campo.__escolhido="";campo.__geoExato="";campo.__geoNivel="";campo.__geoFonte="";
+          atualizarLink();
+          apagou=" O ponto anterior era de outro endereço e foi apagado.";
+        }
+        aviso(obsGoogle+(falhouRede?"Não consegui consultar o mapa agora — cole no campo a localização do Google Maps.":
+          "Não achei este endereço no mapa. Cole no campo a localização que o cliente mandar ou, no local, use “Marcar onde estou”.")+apagou,"erro");
+      }
       function tentar(i,falhouRede){
         if(minha!==geoBusca)return;
-        if(i>=tentativas.length){
-          bEnd.disabled=false;bEnd.textContent="Buscar pelo endereço";
-          /* endereço alterado e nada achado: o ponto que estava no campo era de outro
-             endereço e sai (regra do Wagner: a geolocalização acompanha o endereço) */
-          var apagou="";
-          if(automatico&&campo.value&&campo.__geoEnd!==assinaturaEnd()){
-            campo.value="";campo.__escolhido="";campo.__geoExato="";campo.__geoNivel="";
-            atualizarLink();
-            apagou=" O ponto anterior era de outro endereço e foi apagado.";
-          }
-          aviso(obsGoogle+(falhouRede?"Não consegui consultar o mapa agora — cole no campo a localização do Google Maps.":
-            "Não achei este endereço no mapa. Cole no campo a localização que o cliente mandar ou, no local, use “Marcar onde estou”.")+apagou,"erro");
-          return;
-        }
+        if(i>=tentativas.length){semMapa(falhouRede);return;}
         consultaMapa(tentativas[i],function(res,erroRede){
           if(minha!==geoBusca)return;
           if(!res){tentar(i+1,falhouRede||erroRede);return;}
@@ -72981,6 +73320,19 @@ function erro(msg){
        busca nunca aconteceu, e o vendedor era barrado num campo que o sistema sabe preencher.
        Nada é sobrescrito — só entra quando o campo está vazio. Devolve promessa, porque o
        salvar espera por ela antes de recusar. */
+    /* gancho dos ensaios (v580): dirige a busca, a colagem e a sugestão sem mexer na tela */
+    window.__geoCadMF=window.__geoCadMF||{};
+    window.__geoCadMF[P]={
+      buscar:function(){geoPeloEndereco(false);},
+      nivel:function(){return nivelDoCampo();},
+      colar:function(t){campo.value=t;aplicarColado();return campo.value;},
+      selo:function(){var e=document.getElementById(P+"_geoSelo");return (e&&!e.hidden)?e.textContent:"";},
+      sugestao:function(){var e=document.getElementById(P+"_geoSug");return e?(e.textContent||""):"";},
+      usarSugestao:function(){var b=document.getElementById(P+"_geoSugOk");if(b)b.click();return !!b;},
+      exato:function(){return campo.__geoExato||"";},
+      fonte:function(){return campo.__geoFonte||"";},
+      campo:function(){return campo;}
+    };
     window.geoAutosMF=window.geoAutosMF||{};
     window.geoAutosMF[P]=function(){
       return new Promise(function(pronto){
@@ -72992,7 +73344,9 @@ function erro(msg){
         var t0=Date.now();
         (function espera(){
           if(String(campo.value||"").trim())return pronto(campo.value);
-          if(Date.now()-t0>9000)return pronto("");
+          /* v580: a busca desce até o ponto aproximado (Correios, CEP, bairro, cidade) e o
+             mapa aberto só aceita uma consulta por segundo — por isso a espera é maior */
+          if(Date.now()-t0>22000)return pronto("");
           setTimeout(espera,300);
         })();
       });
