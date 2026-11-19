@@ -2737,6 +2737,8 @@ img{max-width:100%}
             <div class="fld" style="grid-column:span 3"><label>Indicações deste cadastro</label>
               <div id="c_estrelas"></div></div>
           </div>
+          <!-- INDICAÇÕES: O SALDO DO DESCONTO NO REFIL (20/11, v584) -->
+          <div id="c_indicSaldo"></div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="c_doc" id="c_lblDoc">CPF <span class="req" id="c_reqDoc">*</span></label><input id="c_doc" placeholder="000.000.000-00"></div>
             <div class="fld" id="c_rgWrap"><label for="c_rg">Identidade (RG)</label><input id="c_rg" placeholder="MG-00.000.000"></div>
@@ -3192,6 +3194,8 @@ img{max-width:100%}
               <span id="v_modoCliNota" hidden>o cliente pode ver a tela</span>
               <button class="btn sm ghost" type="button" id="v_modoCli" aria-pressed="false">Modo cliente</button>
             </div>
+            <!-- DESCONTO POR INDICAÇÃO (20/11, v584): aparece com saldo e refil no pedido -->
+            <div id="v_indicBox" hidden></div>
             <div class="tw" style="margin-top:12px"><table class="t-itens">
               <thead><tr><th>Item</th><th class="num">Qtd</th><th class="num">Desconto</th><th class="num">Valor final</th><th class="num">Total</th></tr></thead>
               <tbody id="v_itens"></tbody>
@@ -3203,6 +3207,8 @@ img{max-width:100%}
               <div class="r" id="o_cFreteR" hidden><span>Frete</span><span id="o_cFrete">—</span></div>
               <!-- desconto dado item a item (21/10): a soma do que foi tirado de cada linha -->
               <div class="r" id="o_cDescItR" hidden><span>Descontos nos itens</span><span id="o_cDescIt">—</span></div>
+              <!-- v584: o desconto por indicação entra como forma de pagamento, como o Desconto de Troca -->
+              <div class="r" id="o_cIndicR" hidden><span>Desconto de indicação</span><span id="o_cIndic">—</span></div>
               <!-- Desconto Especial no TOTAL: aposentado em 21/10, quando o desconto passou a
                    ser de cada item. A linha continua no HTML e some da venda nova; ela volta a
                    aparecer num pedido ANTIGO que tenha desconto no total, para ele continuar
@@ -7300,6 +7306,32 @@ img{max-width:100%}
   </div>
 </div>
 
+<!-- INDICAÇÃO DO SISTEMA ANTIGO (20/11, v584): só Financeiro e Administrador -->
+<div class="modal" id="indAntModal" hidden>
+  <div class="box" style="width:min(560px,100%)">
+    <h3 id="ia_titulo">Informar indicação do sistema antigo</h3>
+    <div class="sub" id="ia_sub"></div>
+    <div class="fld" style="margin-top:14px;position:relative">
+      <label for="ia_nome">Nome do indicado <span class="req">*</span></label>
+      <input id="ia_nome" autocomplete="off" placeholder="Quem este cliente indicou">
+      <input id="ia_ligado" type="hidden">
+      <div class="auto" id="ia_sug" hidden></div>
+      <div class="help">Tem cadastro na empresa? Escolha na lista para a indicação ficar ligada a ele.</div>
+    </div>
+    <div class="fld"><label for="ia_data">Data da compra do indicado <span class="req">*</span></label>
+      <input id="ia_data" type="date">
+      <div class="help">A indicação vale 1 ano a contar desta data. Mais de um ano: ela nasce vencida e não entra no saldo.</div></div>
+    <div class="fld"><label for="ia_obs">Observação</label><input id="ia_obs" placeholder="Opcional"></div>
+    <div class="fld" id="ia_motivoWrap" hidden><label for="ia_motivo">Motivo da correção <span class="req">*</span></label>
+      <input id="ia_motivo" placeholder="Fica no histórico do cadastro"></div>
+    <div id="ia_alerta"></div>
+    <div class="actions">
+      <button class="btn" type="button" id="ia_salvar">Gravar</button>
+      <button class="btn mut" type="button" id="ia_fechar">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="estModal" hidden>
   <div class="box">
     <h3 id="es_titulo">Movimento de estoque</h3>
@@ -10996,6 +11028,9 @@ async function carregar(){
       formasPgto.push({nome:FORMA_CREDITO,coef:{1:1}});antigo=true;}
     if(!formasPgto.some(function(f){return f.nome===FORMA_TROCA;})){
       formasPgto.push({nome:FORMA_TROCA,coef:{1:1}});antigo=true;}
+    /* v584: a forma do desconto por indicação, como a do crédito do plano */
+    if(!formasPgto.some(function(f){return f.nome===FORMA_INDIC;})){
+      formasPgto.push({nome:FORMA_INDIC,coef:{1:1}});antigo=true;}
     /* o orçamento da OS interna já foi recebido no caixa quando a OS foi aberta */
     if(!formasPgto.some(function(f){return f.nome===FORMA_ORC;})){
       formasPgto.push({nome:FORMA_ORC,coef:{1:1}});antigo=true;}
@@ -12577,8 +12612,22 @@ function travarDadosPessoais(c){
 function indicadosPor(id){
   return clientes.filter(function(c){return c.loja===lojaAtual&&c.indicado===id;});
 }
+/* v584 (regra dele): a estrela — e a indicação que dá desconto — só conta quando o indicado tem
+   VENDA APROVADA pelo financeiro e não cancelada. Antes bastava existir pedido, e pedido
+   cancelado ou esperando aprovação já contava estrela. */
+function vendaContaIndicacao(p){
+  return !!(p&&p.loja===lojaAtual&&pedidoAprovado(p)&&p.status!=="Cancelada"&&!p.cancelada);
+}
+function dataAprovIndic(p){return String((p&&(p.aprovadoEm||p.data))||"").slice(0,10);}
+/* a PRIMEIRA compra aprovada do indicado: é a data dela que começa o prazo de um ano */
+function compraDoIndicado(c){
+  if(!c)return null;
+  var ps=pedidos.filter(function(p){return p.clienteId===c.id&&vendaContaIndicacao(p);});
+  ps.sort(function(a,b){return String(dataAprovIndic(a)).localeCompare(String(dataAprovIndic(b)));});
+  return ps[0]||null;
+}
 function indicadosQueCompraram(id){
-  return indicadosPor(id).filter(function(c){return vendasDe(c.id).length>0;});
+  return indicadosPor(id).filter(function(c){return !!compraDoIndicado(c);});
 }
 function estrelasDe(id){return indicadosQueCompraram(id).length;}
 function selo(n){
@@ -12609,13 +12658,14 @@ function buscarIndicador(){
 }
 function renderEstrelas(c){
   var w=$("c_estrelas");
-  if(!c){w.innerHTML='<div class="note">O contador de indicações aparece depois que o cadastro for salvo.</div>';return;}
+  if(!c){try{montarSaldoIndic(null);}catch(e){}w.innerHTML='<div class="note">O contador de indicações aparece depois que o cadastro for salvo.</div>';return;}
   var ind=indicadosPor(c.id),conv=indicadosQueCompraram(c.id);
   w.innerHTML='<button class="btn ghost" type="button" id="c_verIndic" style="width:100%;text-align:left">'+
     "★ ".repeat(Math.min(conv.length,5))+(conv.length>5?"+"+(conv.length-5)+" ":"")+
     "<b>"+conv.length+" indicaç"+(conv.length===1?"ão":"ões")+" que virou venda</b>"+
     " · "+ind.length+" indicad"+(ind.length===1?"o":"os")+" no total · clique para ver</button>";
   $("c_verIndic").onclick=function(){abrirIndicacoes(c);};
+  try{montarSaldoIndic(c);}catch(e){}   /* v584: o saldo do desconto por indicação */
 }
 var inCli=null,inAba="ind";
 function abrirIndicacoes(c){
@@ -12661,6 +12711,444 @@ function renderIndicacoes(){
     ? '<div class="note"><b>'+(ind.length-conv.length)+" indicaç"+((ind.length-conv.length)===1?"ão":"ões")+
       " ainda sem compra.</b> A estrela só é contada quando o indicado fecha a primeira venda.</div>"
     : "";
+}
+
+/* ===== DESCONTO POR INDICAÇÃO NO REFIL (20/11, v584, regra dele) =====================
+   No sistema antigo quem indicava um cliente que comprava ganhava 25% de desconto no refil do
+   purificador dele. O sistema novo só contava as indicações; o desconto estava sendo dado à mão.
+   A REGRA, decidida por ele:
+     · cada indicado que COMPROU (venda aprovada, não cancelada) vale UMA indicação, 25%;
+     · acumula até 4 (100%); sobrando mais, o resto fica guardado para a próxima troca;
+     · cada indicação vale 1 ano contado da compra do indicado, e as que vencem antes saem antes;
+     · cada indicação é usada uma vez só, e só em REFIL (o mesmo critério do Plano Premium);
+     · vários refis no mesmo pedido = uma troca só: o % vale sobre a SOMA deles;
+     · o plano vem primeiro — refil coberto pelo plano não recebe nem consome indicação;
+     · indicação da Minas Filtros vale só na Minas Filtros, e da WF só na WF.
+   O DESCONTO SAI DA BASE DE COMISSÃO pelo MESMO caminho do crédito do plano (v582) e do
+   Desconto de Troca: uma forma de pagamento própria. Ele conta no total e na faixa de cada item
+   — o refil não cai de faixa por causa dele — mas sai da comissão, do faturamento e da meta.
+   Pedido antigo nunca tem esta forma, então nada do que já está gravado muda. */
+var IND_PCT=25,IND_MAX=4,IND_MESES=12;
+function soDigitosInd(s){return String(s||"").replace(/[^0-9]/g,"");}
+/* o MESMO cadastro de outro jeito: mesmo CPF/CNPJ ou mesmo telefone (proteção dele) */
+function mesmoCadastroInd(a,b){
+  if(!a||!b)return false;
+  if(a.id===b.id)return true;
+  var da=soDigitosInd(a.doc),db2=soDigitosInd(b.doc);
+  if(da&&da.length>=11&&da===db2)return true;
+  var TE=["tel","tel2","tel3","tel4"],ta={},bate=false;
+  TE.forEach(function(k){var t=soDigitosInd(a[k]);if(t.length>=10)ta[t]=1;});
+  TE.forEach(function(k){var t=soDigitosInd(b[k]);if(t.length>=10&&ta[t])bate=true;});
+  return bate;
+}
+function venceIndic(data){
+  var d=String(data||"").slice(0,10);
+  return d?somaMeses(d,IND_MESES):"";
+}
+/* o que já está reservado ou usado, lido do cadastro do cliente E conferido com o pedido:
+   pedido cancelado, ou pedido que não usa mais aquela indicação, devolve o direito ao saldo */
+function usosIndic(cid){
+  var c=cliPorId(cid),m={};
+  ((c&&c.indicUsos)||[]).forEach(function(u){
+    if(!u||!u.ind)return;
+    if(u.status!=="usada"&&u.status!=="reservada")return;
+    var p=u.pedidoId?pedPorId(u.pedidoId):null;
+    if(p){
+      if(p.status==="Cancelada"||p.cancelada)return;
+      if(!(p.indicacao&&(p.indicacao.ids||[]).indexOf(u.ind)>=0))return;
+    }
+    m[u.ind]=u;
+  });
+  return m;
+}
+/* a lista inteira das indicações deste cadastro, com situação */
+function indicacoesDoCliente(cid){
+  var out=[],cli=cid?cliPorId(cid):null;
+  /* indicação da Minas Filtros vale só na Minas Filtros, e da WF só na WF (regra 7 dele) */
+  if(!cli||(cli.loja&&cli.loja!==lojaAtual))return out;
+  indicadosPor(cid).forEach(function(c){
+    if(mesmoCadastroInd(cli,c))return;      /* ele mesmo, ou um cadastro duplicado dele */
+    var ped=compraDoIndicado(c);
+    if(!ped)return;
+    out.push({id:"novo:"+c.id,origem:"nova",nome:c.nome||"",indicadoId:c.id,
+      data:dataAprovIndic(ped),pedido:ped.numero});
+  });
+  (cli.indicacoesAntigas||[]).forEach(function(a){
+    if(!a||a.cancelada)return;
+    out.push({id:"ant:"+a.id,origem:"antiga",nome:a.nome||"",indicadoId:a.indicadoId||"",
+      data:String(a.data||"").slice(0,10),obs:a.obs||"",por:a.por||"",quando:a.quando||""});
+  });
+  var usos=usosIndic(cid),h=hojeISO();
+  out.forEach(function(x){
+    x.vence=venceIndic(x.data);
+    x.vencida=!!(x.vence&&x.vence<h);
+    x.uso=usos[x.id]||null;
+    x.usada=!!(x.uso&&x.uso.status==="usada");
+    x.reservada=!!(x.uso&&x.uso.status==="reservada");
+    x.livre=!x.vencida&&!x.uso;
+  });
+  out.sort(function(a,b){return String(a.vence).localeCompare(String(b.vence))||ordAZ(a.nome,b.nome);});
+  return out;
+}
+/* as que podem entrar AGORA: não vencidas e não usadas — a reserva deste mesmo pedido conta */
+function indicacoesDisponiveis(cid,pedidoId){
+  return indicacoesDoCliente(cid).filter(function(x){
+    if(x.vencida)return false;
+    if(!x.uso)return true;
+    return !!(pedidoId&&x.uso.pedidoId===pedidoId&&x.uso.status!=="usada");
+  });
+}
+function pctIndic(n){return Math.min(IND_MAX,Math.max(0,parseInt(n,10)||0))*IND_PCT;}
+/* refil do pedido pelo MESMO critério do Plano Premium (v582). Coberto pelo plano fica fora:
+   o plano vem primeiro e o item já sai a R$ 0,00. */
+function ehItemRefil(i){
+  if(!i||i.planoCobre)return false;
+  if(ehPlano(i))return false;
+  var p=null;try{p=prodPorId(i.pid);}catch(e){}
+  return ehRefilNome((p&&p.nome)||i.nome||"");
+}
+function somaRefisDoPedido(itens){
+  return centavos((itens||[]).reduce(function(a,i){
+    return ehItemRefil(i)?a+centavos((+i.valor||0)*(i.qtd||1)):a;},0));
+}
+/* quanto é o desconto: o % das indicações usadas sobre a SOMA dos refis (uma troca só) */
+function contaIndicacao(itens,qtd){
+  var refis=somaRefisDoPedido(itens),pct=pctIndic(qtd);
+  return {pct:pct,qtd:Math.min(IND_MAX,Math.max(0,parseInt(qtd,10)||0)),refis:refis,
+    valor:centavos(refis*pct/100)};
+}
+function indicDasFormas(formas){
+  return centavos((formas||[]).reduce(function(a,f){
+    return a+((f&&f.tipo===FORMA_INDIC)?(+f.valor||0):0);},0));
+}
+/* quem informa, corrige e exclui indicação do sistema antigo: Financeiro e Administrador, da
+   própria empresa. A conferência vale na tela E na hora de gravar. */
+function podeInformarIndicacao(quem){
+  var n=quem||usuarioAtual,pf=perfilDe(n);
+  if(pf!=="Financeiro"&&pf!=="Administrador")return false;
+  var u=usuarioPor(n);
+  if(u&&u.loja&&u.loja!==lojaAtual&&u.ambas!==true)return false;
+  return true;
+}
+var MSG_SO_FIN_IND="Só o Financeiro e o Administrador informam indicação do sistema antigo.";
+
+/* ===== A OPÇÃO NA TELA DO PEDIDO (v584) ======================================
+   Com saldo e refil no pedido a opção aparece JÁ MARCADA, dizendo quantas indicações entram e
+   quantos %. O vendedor pode desmarcar, e aí fica registrado no pedido quem desmarcou. */
+var indVenda={usar:true,desmarcadoPor:"",ids:[],nomes:[],pct:0,qtd:0,valor:0};
+function zerarIndicacaoVenda(){indVenda={usar:true,desmarcadoPor:"",ids:[],nomes:[],pct:0,qtd:0,valor:0};}
+/* põe, acerta ou tira a forma do desconto, e devolve a conta. Chamada de dentro do `calcular`,
+   depois de os itens receberem o valor da forma de pagamento escolhida. */
+function sincIndicacaoVenda(its,fs,totalVenda){
+  var cli=null;try{cli=clienteDaVenda();}catch(e){}
+  var pid=(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"";
+  var disp=cli?indicacoesDisponiveis(cli.id,pid):[];
+  var refis=somaRefisDoPedido(its);
+  var ix=-1;(fs||[]).forEach(function(f,k){if(f&&f.tipo===FORMA_INDIC)ix=k;});
+  if(!(cli&&disp.length&&refis>0.009&&indVenda.usar)){
+    indVenda.ids=[];indVenda.nomes=[];indVenda.pct=0;indVenda.qtd=0;indVenda.valor=0;
+    if(ix>=0){fs.splice(ix,1);try{renderFormas();}catch(e){}}
+    return null;
+  }
+  var usa=disp.slice(0,IND_MAX),c=contaIndicacao(its,usa.length);
+  indVenda.ids=usa.map(function(x){return x.id;});
+  indVenda.nomes=usa.map(function(x){return x.nome;});
+  indVenda.pct=c.pct;indVenda.qtd=c.qtd;indVenda.valor=c.valor;
+  var f=(ix>=0)?fs[ix]:null;
+  if(!f){f={tipo:FORMA_INDIC,parc:1,__auto:false};fs.push(f);try{renderFormas();}catch(e){}}
+  f.parc=1;f.base=c.valor;f.valor=c.valor;f.__auto=false;
+  /* o resto do total continua com as outras formas: o pagamento tem de fechar com o total */
+  var outras=(fs||[]).filter(function(x){return x!==f;});
+  if(outras.length){
+    var alvo=centavos(Math.max(0,(+totalVenda||0)-c.valor));
+    var soma=centavos(outras.reduce(function(a,x){return a+(+x.base||0);},0));
+    if(Math.abs(soma-alvo)>0.009){
+      var alvoF=outras.filter(function(x){return (x.__auto!==false)&&!semJuros(x);})[0]
+        ||outras.slice().sort(function(a,b){return (+b.base||0)-(+a.base||0);})[0];
+      alvoF.base=centavos(Math.max(0,(+alvoF.base||0)+(alvo-soma)));
+    }
+  }
+  return c;
+}
+function textoIndicacao(x){
+  return esc(x.nome||"indicado")+(x.origem==="antiga"?" (sistema antigo)":"")+
+    " · vence em "+esc(dataCurta(x.vence));
+}
+var indBoxSelo="";
+function notaIndicacaoVenda(){
+  var w=$("v_indicBox");if(!w)return;
+  var cli=null;try{cli=clienteDaVenda();}catch(e){}
+  var pid=(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"";
+  var disp=cli?indicacoesDisponiveis(cli.id,pid):[];
+  var refis=somaRefisDoPedido(itens);
+  if(!cli||!disp.length||!(refis>0.009)){
+    if(indBoxSelo!==""){w.hidden=true;w.innerHTML="";indBoxSelo="";}
+    return;
+  }
+  var usa=disp.slice(0,IND_MAX),c=contaIndicacao(itens,usa.length),sobra=disp.length-usa.length;
+  var selo=[cli.id,usa.length,sobra,c.pct,c.valor,refis,indVenda.usar?1:0].join("|");
+  if(selo===indBoxSelo)return;
+  indBoxSelo=selo;
+  w.hidden=false;
+  w.innerHTML="<div class=\"note "+(indVenda.usar?"ok":"warn")+"\" style=\"margin-top:14px\">"+
+    "<label class=\"chk\"><input type=\"checkbox\" id=\"v_indicUsar\""+(indVenda.usar?" checked":"")+">"+
+    "<span><b>Desconto de indicação · "+usa.length+(usa.length===1?" indicação":" indicações")+
+    " · "+c.pct+"%</b>"+(indVenda.usar?(" — "+BRL(c.valor)+" de desconto no refil"):" — desmarcado")+
+    "</span></label>"+
+    "<div class=\"help\" style=\"margin:8px 0 0\">Quem indicou e comprou: "+usa.map(textoIndicacao).join(" · ")+"</div>"+
+    (sobra>0?("<div class=\"help\" style=\"margin:4px 0 0\">"+sobra+(sobra===1?" indicação fica":" indicações ficam")+
+      " guardada"+(sobra===1?"":"s")+" para a próxima troca, dentro do prazo de cada uma.</div>"):"")+
+    (indVenda.usar?"":"<div class=\"help\" style=\"margin:4px 0 0\">Desmarcado: o refil sai pelo valor normal e as indicações continuam no saldo. Fica registrado no pedido quem desmarcou.</div>")+
+    "</div>";
+  var ck=$("v_indicUsar");
+  if(ck)ck.onchange=function(){
+    indVenda.usar=!!ck.checked;
+    indVenda.desmarcadoPor=indVenda.usar?"":usuarioAtual;
+    indBoxSelo="";
+    try{calcular();}catch(e){}
+    toast(indVenda.usar?"Desconto de indicação aplicado no refil.":"Desconto de indicação desmarcado.");
+  };
+}
+
+/* ===== RESERVA E BAIXA DAS INDICAÇÕES (v584) ==================================
+   A indicação usada num pedido fica RESERVADA no cadastro do cliente (`indicUsos`): nenhum outro
+   pedido aberto a usa ao mesmo tempo. A conferência é feita NO BANCO na hora de gravar — dois
+   aparelhos não conseguem usar a mesma. Na aprovação ela vira "usada"; pedido cancelado, ou
+   pedido que deixou de usar aquela indicação, devolve o direito ao saldo (`usosIndic`). */
+/* o que o BANCO diz que já está reservado ou usado; null = o banco não respondeu */
+async function lerIndicUsosDoBanco(cid){
+  /* chave só dos ensaios: simula o que outro aparelho já gravou */
+  if(window.MODO_DEMO_MF&&window.__indicBancoMF)return window.__indicBancoMF[cid]||[];
+  if(!db)return null;
+  try{
+    var snap=await col("clientes").doc(cid).get();
+    var d=(snap&&snap.exists&&snap.data())||null;
+    return d?(d.indicUsos||[]):null;
+  }catch(e){return null;}
+}
+async function conferirIndicacaoNoBanco(cid,ids,pedidoId){
+  if(!cid||!ids||!ids.length)return "";
+  var banco=await lerIndicUsosDoBanco(cid);
+  if(banco==null)return "";                 /* banco calado não trava a venda */
+  /* o cadastro em memória pode estar velho: vale o que está no banco */
+  var cli=cliPorId(cid);
+  if(cli)cli.indicUsos=banco;
+  var tomadas=[];
+  (banco||[]).forEach(function(u){
+    if(!u||!u.ind||ids.indexOf(u.ind)<0)return;
+    if(u.status!=="usada"&&u.status!=="reservada")return;
+    if(pedidoId&&u.pedidoId===pedidoId)return;
+    tomadas.push(u);
+  });
+  if(!tomadas.length)return "";
+  return "Outra pessoa acabou de usar "+tomadas.length+(tomadas.length===1?" indicação":" indicações")+
+    " deste cliente (pedido "+(tomadas[0].numero||"—")+"). O desconto de indicação foi refeito: confira e finalize de novo.";
+}
+async function reservarIndicacoes(ped){
+  var ids=(ped&&ped.indicacao&&ped.indicacao.ids)||[];
+  var cli=ped?cliPorId(ped.clienteId):null;
+  if(!cli)return "";
+  var antes=JSON.stringify(cli.indicUsos||[]),antesAlt=(cli.alteracoes||[]).length;
+  var lista=(cli.indicUsos||[]).filter(function(u){return !(u&&u.pedidoId===ped.id);});
+  var tinha=((cli.indicUsos||[]).length!==lista.length);
+  if(!ids.length&&!tinha)return "";
+  ids.forEach(function(id){
+    lista.push({ind:id,pedidoId:ped.id,numero:ped.numero,status:"reservada",
+      quando:agoraCarimbo(),por:usuarioAtual});
+  });
+  cli.indicUsos=lista;
+  cli.alteracoes=cli.alteracoes||[];
+  cli.alteracoes.push({quando:iso(new Date()),por:usuarioAtual,campo:"Indicações",
+    de:"",para:(ids.length?(ids.length+" reservada(s)"):"nenhuma")+" no pedido "+ped.numero});
+  try{await gravaConf("clientes",cli);}
+  catch(e){
+    cli.indicUsos=JSON.parse(antes);
+    cli.alteracoes=(cli.alteracoes||[]).slice(0,antesAlt);
+    return motivoBanco(e);
+  }
+  return "";
+}
+/* a aprovação baixa de vez; o cancelamento devolve */
+async function mudarStatusIndicacoes(p,novo,texto){
+  var cli=p?cliPorId(p.clienteId):null;
+  if(!cli||!(cli.indicUsos||[]).length)return;
+  var mexeu=false;
+  cli.indicUsos=(cli.indicUsos||[]).filter(function(u){
+    if(!u||u.pedidoId!==p.id)return true;
+    if(novo==="fora"){mexeu=true;return false;}
+    if(u.status!==novo){u.status=novo;u.statusEm=agoraCarimbo();u.statusPor=usuarioAtual;mexeu=true;}
+    return true;
+  });
+  if(!mexeu)return;
+  cli.alteracoes=cli.alteracoes||[];
+  cli.alteracoes.push({quando:iso(new Date()),por:usuarioAtual,campo:"Indicações",de:"",
+    para:String(texto||"")+" · pedido "+p.numero});
+  try{await gravaConf("clientes",cli);}catch(e){console.warn("indicações",e);}
+}
+
+/* ===== A PARTE "INDICAÇÕES" DA FICHA DO CLIENTE (v584) =========================
+   O saldo: quantas indicações válidas, quantos % hoje, quando vence cada uma, quais já foram
+   usadas e em qual pedido. O vendedor VÊ; só o Financeiro e o Administrador informam, corrigem
+   e excluem as indicações do sistema antigo (a conferência vale na tela e na gravação). */
+function htmlSituacaoIndic(x){
+  if(x.usada)return "<span class=\"pill p-mut\">usada no pedido "+esc(String((x.uso&&x.uso.numero)||"—"))+"</span>";
+  if(x.reservada)return "<span class=\"pill p-warn\">reservada no pedido "+esc(String((x.uso&&x.uso.numero)||"—"))+"</span>";
+  if(x.vencida)return "<span class=\"pill p-crit\">vencida</span>";
+  return "<span class=\"pill p-ok\">válida</span>";
+}
+function montarSaldoIndic(c){
+  var w=$("c_indicSaldo");if(!w)return;
+  if(!c){w.innerHTML="";return;}
+  var lista=indicacoesDoCliente(c.id);
+  var livres=lista.filter(function(x){return x.livre;});
+  var pct=pctIndic(livres.length),sobra=Math.max(0,livres.length-IND_MAX);
+  var pode=podeInformarIndicacao();
+  var linhas=lista.map(function(x){
+    return "<tr><td><div class=\"t-main\">"+esc(x.nome||"—")+"</div>"+
+      "<div class=\"t-sub\">"+(x.origem==="antiga"?"sistema antigo":"pedido "+esc(String(x.pedido||"—")))+
+      (x.obs?" · "+esc(x.obs):"")+(x.por?" · informada por "+esc(x.por):"")+"</div></td>"+
+      "<td>"+esc(dataCurta(x.data))+"</td><td>"+esc(dataCurta(x.vence))+"</td>"+
+      "<td>"+htmlSituacaoIndic(x)+"</td>"+
+      "<td class=\"num\">"+((pode&&x.origem==="antiga")
+        ?("<button class=\"btn sm ghost\" type=\"button\" data-indcor=\""+esc(x.id)+"\">Corrigir</button>"+
+          (x.usada?"":" <button class=\"btn sm mut\" type=\"button\" data-indexc=\""+esc(x.id)+"\">Excluir</button>"))
+        :"—")+"</td></tr>";
+  }).join("");
+  w.innerHTML="<div class=\"note "+(livres.length?"ok":"")+"\" style=\"margin-top:10px\">"+
+    "<b>Saldo de indicações: "+livres.length+(livres.length===1?" válida":" válidas")+
+    " · "+pct+"% de desconto no refil</b>"+
+    (sobra>0?(" · "+sobra+(sobra===1?" fica":" ficam")+" para a próxima troca (o máximo é "+IND_MAX+" por troca)"):"")+
+    "<br>Cada indicado que comprou vale 25%, vale 1 ano a contar da compra dele e é usada uma vez só, "+
+    "sempre em refil. As que vencem antes são usadas antes.</div>"+
+    (lista.length
+      ?("<div class=\"tw\" style=\"margin-top:10px\"><table><thead><tr><th>Indicado</th><th>Compra dele</th>"+
+        "<th>Vence</th><th>Situação</th><th class=\"num\"></th></tr></thead><tbody>"+linhas+"</tbody></table></div>")
+      :"<div class=\"help\" style=\"margin-top:8px\">Nenhuma indicação ainda.</div>")+
+    (pode?("<div class=\"actions\" style=\"justify-content:flex-start;margin-top:10px\">"+
+      "<button class=\"btn sm\" type=\"button\" id=\"c_indAnt\">Informar indicação do sistema antigo</button></div>")
+     :"<div class=\"help\" style=\"margin-top:8px\">Só o Financeiro e o Administrador informam indicação do sistema antigo.</div>");
+  if($("c_indAnt"))$("c_indAnt").onclick=function(){abrirIndicAntiga(c,null);};
+  Array.prototype.forEach.call(w.querySelectorAll("[data-indcor]"),function(b){
+    b.onclick=function(){abrirIndicAntiga(c,b.getAttribute("data-indcor"));};
+  });
+  Array.prototype.forEach.call(w.querySelectorAll("[data-indexc]"),function(b){
+    b.onclick=function(){excluirIndicAntiga(c,b.getAttribute("data-indexc"));};
+  });
+}
+/* ----- informar, corrigir e excluir a indicação do sistema antigo ----- */
+var indAntCli=null,indAntId="";
+function antigaPorId(c,id){
+  return ((c&&c.indicacoesAntigas)||[]).filter(function(a){return a&&("ant:"+a.id)===id;})[0]||null;
+}
+function abrirIndicAntiga(c,id){
+  if(!podeInformarIndicacao()){toast(MSG_SO_FIN_IND);return;}
+  indAntCli=c;indAntId=id||"";
+  var a=id?antigaPorId(c,id):null;
+  $("ia_titulo").textContent=a?"Corrigir a indicação informada":"Informar indicação do sistema antigo";
+  $("ia_sub").textContent=(c&&c.nome)||"";
+  $("ia_nome").value=a?(a.nome||""):"";
+  $("ia_ligado").value=a?(a.indicadoId||""):"";
+  $("ia_data").value=a?String(a.data||"").slice(0,10):"";
+  $("ia_data").max=hojeISO();
+  $("ia_obs").value=a?(a.obs||""):"";
+  $("ia_motivo").value="";
+  $("ia_motivoWrap").hidden=!a;
+  $("ia_alerta").innerHTML="";
+  $("ia_sug").hidden=true;
+  $("indAntModal").hidden=false;
+}
+function buscarIndicadoAntiga(){
+  var box=$("ia_sug"),txt=$("ia_nome").value;
+  if(String(txt||"").trim().length<3){box.hidden=true;return;}
+  var achados=achaCliente(txt).filter(function(x){return !indAntCli||x.id!==indAntCli.id;}).slice(0,8);
+  if(!achados.length){box.hidden=true;return;}
+  box.innerHTML="";
+  achados.forEach(function(x){
+    var b=document.createElement("button");b.type="button";
+    b.innerHTML=linhaSugestao(x);
+    b.onclick=function(){$("ia_nome").value=x.nome;$("ia_ligado").value=x.id;box.hidden=true;};
+    box.appendChild(b);
+  });
+  box.hidden=false;
+}
+/* o que impede gravar (vazio = pode) */
+function erroIndicAntiga(c,dados,id){
+  if(!dados.nome)return "Informe o nome do indicado.";
+  if(!dados.data)return "Informe a data da compra do indicado.";
+  if(dados.data>hojeISO())return "A data da compra do indicado não pode ser futura.";
+  var lig=dados.indicadoId?cliPorId(dados.indicadoId):null;
+  if(lig&&mesmoCadastroInd(c,lig))
+    return "Este é o próprio cliente (ou um cadastro duplicado dele): ninguém indica a si mesmo.";
+  var chave=semAcento(String(dados.nome||"").toLowerCase()).replace(/\s+/g," ").trim();
+  var rep=((c.indicacoesAntigas||[]).filter(function(a){
+    if(!a||a.cancelada||("ant:"+a.id)===id)return false;
+    if(dados.indicadoId&&a.indicadoId===dados.indicadoId)return true;
+    return semAcento(String(a.nome||"").toLowerCase()).replace(/\s+/g," ").trim()===chave;
+  })[0]);
+  if(rep)return "Este indicado já foi informado para "+(c.nome||"este cliente")+" em "+dataCurta(rep.data)+".";
+  if(dados.indicadoId){
+    var ja=indicacoesDoCliente(c.id).filter(function(x){
+      return x.origem==="nova"&&x.indicadoId===dados.indicadoId;})[0];
+    if(ja)return "Este indicado já conta pelo sistema novo (compra aprovada em "+dataCurta(ja.data)+"): não precisa informar à mão.";
+  }
+  return "";
+}
+async function salvarIndicAntiga(){
+  var c=indAntCli;if(!c)return;
+  /* a conferência de quem pode vale na GRAVAÇÃO também, não só na tela */
+  if(!podeInformarIndicacao()){toast(MSG_SO_FIN_IND);return;}
+  var dados={nome:String($("ia_nome").value||"").trim(),
+    indicadoId:String($("ia_ligado").value||""),
+    data:String($("ia_data").value||"").slice(0,10),
+    obs:String($("ia_obs").value||"").trim()};
+  var a=indAntId?antigaPorId(c,indAntId):null;
+  if(a&&!String($("ia_motivo").value||"").trim()){
+    $("ia_alerta").innerHTML="<div class=\"note crit\">Escreva o motivo da correção — ele fica no histórico.</div>";
+    return;
+  }
+  var err=erroIndicAntiga(c,dados,indAntId);
+  if(err){$("ia_alerta").innerHTML="<div class=\"note crit\">"+esc(err)+"</div>";return;}
+  var antes=JSON.stringify(c.indicacoesAntigas||[]);
+  var vencida=(venceIndic(dados.data)<hojeISO());
+  c.indicacoesAntigas=c.indicacoesAntigas||[];
+  if(a){
+    a.historico=a.historico||[];
+    a.historico.push({quando:agoraCarimbo(),por:usuarioAtual,motivo:String($("ia_motivo").value||"").trim(),
+      de:(a.nome||"")+" · "+(a.data||""),para:dados.nome+" · "+dados.data});
+    a.nome=dados.nome;a.indicadoId=dados.indicadoId;a.data=dados.data;a.obs=dados.obs;
+  }else{
+    c.indicacoesAntigas.push({id:uid(),nome:dados.nome,indicadoId:dados.indicadoId,data:dados.data,
+      obs:dados.obs,por:usuarioAtual,quando:agoraCarimbo(),historico:[]});
+  }
+  try{await gravaConf("clientes",c);}
+  catch(e){
+    c.indicacoesAntigas=JSON.parse(antes);
+    $("ia_alerta").innerHTML="<div class=\"note crit\"><b>"+esc(RECUSA_BANCO)+"</b> Motivo do banco: "+esc(motivoBanco(e))+"</div>";
+    return;
+  }
+  $("indAntModal").hidden=true;
+  try{montarSaldoIndic(c);renderEstrelas(c);}catch(e){}
+  toast(vencida
+    ? "Indicação informada, mas com mais de um ano: está VENCIDA e não entra no saldo."
+    : (a?"Indicação corrigida.":"Indicação informada. Ela vence em "+dataCurta(venceIndic(dados.data))+"."));
+}
+async function excluirIndicAntiga(c,id){
+  if(!podeInformarIndicacao()){toast(MSG_SO_FIN_IND);return;}
+  var a=antigaPorId(c,id);if(!a)return;
+  var usos=usosIndic(c.id);
+  if(usos[id]){toast("Esta indicação já foi usada no pedido "+((usos[id]||{}).numero||"—")+": não pode ser excluída.");return;}
+  var motivo=prompt("Por que esta indicação está sendo excluída? (obrigatório)","");
+  if(motivo==null)return;
+  motivo=String(motivo).trim();
+  if(!motivo){toast("A exclusão precisa do motivo.");return;}
+  var antes=JSON.stringify(c.indicacoesAntigas||[]);
+  a.cancelada={motivo:motivo,por:usuarioAtual,quando:agoraCarimbo()};
+  a.historico=a.historico||[];
+  a.historico.push({quando:agoraCarimbo(),por:usuarioAtual,motivo:motivo,de:"válida",para:"excluída"});
+  try{await gravaConf("clientes",c);}
+  catch(e){c.indicacoesAntigas=JSON.parse(antes);toast(RECUSA_BANCO);return;}
+  try{montarSaldoIndic(c);renderEstrelas(c);}catch(e){}
+  toast("Indicação excluída. O motivo e quem excluiu ficam no histórico do cadastro.");
 }
 
 function toggleConj(){$("c_conjWrap").hidden=$("c_temconj").value!=="sim";}
@@ -17196,6 +17684,26 @@ window.__gravarPlanosInfMF=function(p){p.planosInformados=resumoPlanosInformados
 window.__planoInfPendMF=function(){return planoInfPend;};window.__manutPelaVendaMF=function(p){return manutencaoPelaVenda(p);};
 window.__coberturaMF=function(cid,p,eq,l){return coberturaCliente(cid,p,eq,l||[]);};window.__cfgPlanoPergMF=function(){return CFG_PLANO_PERG;};
 /* v582: ganchos da opção "Peça coberta pelo Plano Premium", para os ensaios */
+/* ===== ganchos do desconto por indicação, para os ensaios (v584) ===== */
+window.__indicMF={
+  lista:function(cid){return indicacoesDoCliente(cid);},
+  disponiveis:function(cid,pid){return indicacoesDisponiveis(cid,pid);},
+  pct:function(n){return pctIndic(n);},
+  conta:function(its,n){return contaIndicacao(its||itens,n);},
+  refis:function(its){return somaRefisDoPedido(its||itens);},
+  ehRefil:function(i){return ehItemRefil(i);},
+  estado:function(){return indVenda;},
+  usar:function(v){indVenda.usar=!!v;indVenda.desmarcadoPor=v?"":usuarioAtual;indBoxSelo="";try{calcular();}catch(e){}return indVenda;},
+  nota:function(){try{notaIndicacaoVenda();}catch(e){}return !$("v_indicBox").hidden;},
+  pode:function(q){return podeInformarIndicacao(q);},
+  abrir:function(c,id){return abrirIndicAntiga(c,id);},
+  salvarAntiga:function(){return salvarIndicAntiga();},
+  erroAntiga:function(c,d,id){return erroIndicAntiga(c,d,id);},
+  saldo:function(c){try{montarSaldoIndic(c);}catch(e){}return ($("c_indicSaldo")||{}).innerHTML||"";},
+  formaValor:function(fs){return indicDasFormas(fs||formas);},
+  usos:function(cid){return usosIndic(cid);},
+  soCoberto:function(p){return pedidoSoCoberto(p);},
+  estrelas:function(cid){return estrelasDe(cid);}};
 window.__cobertaMF={
   marcar:function(v){
     cpVenda.marcado=!!v;
@@ -18753,6 +19261,8 @@ function addItem(){
    exemplo) vira crédito na venda do purificador novo: o purificador sai pelo
    preço de tabela, a comissão não cai e o direito é baixado no plano. */
 var FORMA_CREDITO="Crédito Plano Premium Refil",FORMA_TROCA="Desconto de Troca";
+/* v584: o desconto por indicação é uma forma própria, pelo mesmo caminho do crédito do plano */
+var FORMA_INDIC="Desconto de Indicação";
 /* OS de atendimento interno: o orçamento é cobrado e recebido na abertura (regra do Wagner, 20/09) */
 var FORMA_ORC="Adiantamento do Orçamento";
 var FORMA_RENDIMENTOS="Máquina de Rendimentos";
@@ -19003,8 +19513,13 @@ function trocaNoPedido(p){return !!p&&trocaDasFormas(p.formas)>0;}
 function pedidoSoCoberto(p){
   var its=(p&&p.itens)||[];
   if(!its.length)return false;
-  if(!its.every(function(i){return !!(i&&i.planoCobre);}))return false;
-  return !((+p.total||0)>0.009);
+  if(its.every(function(i){return !!(i&&i.planoCobre);}))return !((+p.total||0)>0.009);
+  /* v584 (regra dele): refil 100% de graça pelo desconto de indicação e nada mais a pagar —
+     a aprovação é a mesma confirmação da v582: sem forma, sem caixa, e não conta como venda.
+     Pedido MISTO (tem outra coisa a pagar) continua venda normal. */
+  var vInd=indicDasFormas(p.formas);
+  if(!(vInd>0))return false;
+  return ((+p.total||0)-vInd-creditoDasFormas(p.formas))<=0.009;
 }
 function qtdSucataDoPedido(p){return Math.max(1,parseInt(p&&p.troca&&p.troca.qtd,10)||1);}
 function instalacaoPendentePed(p){return !!(p&&p.instalacao&&!p.instaladoEm);}
@@ -19311,9 +19826,10 @@ function renderFormas(){
     /* a forma "Crédito do plano" só existe para quem tem plano vigente com direito */
     /* o Adiantamento do Orçamento só aparece na forma que já veio da OS: ninguém escolhe à mão,
        e a forma que veio assim fica travada (o valor já foi recebido e aprovado) */
-    var travadaORC=(f.tipo===FORMA_ORC);
+    var travadaORC=(f.tipo===FORMA_ORC||f.tipo===FORMA_INDIC);
     var opts=porNomeAZ(formasPgto).filter(function(t){
         if(t.nome===FORMA_CREDITO)return temCredito||f.tipo===FORMA_CREDITO;
+        if(t.nome===FORMA_INDIC)return f.tipo===FORMA_INDIC;   /* v584: só pela opção da tela */
         if(t.nome===FORMA_ORC)return f.tipo===FORMA_ORC;
         return true;})
       .map(function(t){return '<option'+(t.nome===f.tipo?" selected":"")+">"+t.nome+"</option>";}).join("");
@@ -19324,7 +19840,9 @@ function renderFormas(){
       '<div class="fld"><label>Quanto da venda</label><input type="text" inputmode="decimal" data-f="valor" data-i="'+i+'" value="'+brMF(f.valor||0)+'"'+(travadaORC?" readonly":"")+'></div>'+
       '<div class="fld"><label>Parcelas</label><select data-f="parc" data-i="'+i+'">'+pOpts+'</select></div>'+
       '<div class="fld" style="justify-content:flex-end">'+(travadaORC
-        ?'<span class="help" style="margin:0">já recebido na abertura da OS</span>'
+        ?(f.tipo===FORMA_INDIC
+          ?'<span class="help" style="margin:0">desconto por indicação · marcado na lista de itens</span>'
+          :'<span class="help" style="margin:0">já recebido na abertura da OS</span>')
         :(formas.length>1?'<button class="btn mut sm" type="button" data-rmf="'+i+'">Remover</button>':'<span class="help" style="margin:0">à vista não deprecia</span>'))+'</div>'+
       /* v548/v549: Promissória, Boleto Loja e Cheque: data e valor de cada parcela (redesenhado a cada conta) */
       (formaComVenc1(f.tipo)?'<div data-pgt="'+i+'" style="grid-column:1/-1"></div>':"")+
@@ -19914,6 +20432,12 @@ function calcular(){
   var freteF=centavos(+comp.frete||0),descF=centavos(+xv.descontoFinal||0);
   /* é ESTE o valor que o cliente paga, e é ele que as formas repartem */
   var totalVenda=centavos(prodF+garF+freteF-descF);
+  /* v584: o desconto por indicação entra como forma, antes de o resto ser repartido */
+  var cInd=null;try{cInd=sincIndicacaoVenda(itens,formas,totalVenda);}catch(eInd){console.warn("indicação",eInd);}
+  if($("o_cIndicR")){
+    $("o_cIndicR").hidden=!(cInd&&cInd.valor>0);
+    $("o_cIndic").textContent="− "+BRL((cInd&&cInd.valor)||0);
+  }
   distribuirBase(formas,totalVenda);
   formas.forEach(function(f){
     /* o que foi repartido JÁ é o valor cobrado; a base é o que sobra depois da depreciação */
@@ -19984,6 +20508,7 @@ function calcular(){
 
   $("c_dep").textContent=BRL(dep);
   $("c_formula").textContent=partes.length?partes.join("  +  "):"—";
+  try{notaIndicacaoVenda();}catch(eNi){}
   try{atualizarParcelasFormas();}catch(e){}
 
   /* item coberto pelo plano sai sem custo: fora da divisão do valor, da faixa e da comissão */
@@ -20188,6 +20713,9 @@ function calcular(){
   /* v582: o crédito do plano sai da base pela mesma regra da troca */
   var credCom=creditoDasFormas(formas);
   if(credCom>0)base=Math.max(0,base-credCom);
+  /* v584: o desconto por indicação sai da base da mesma forma (Comissão ao vivo) */
+  var indCom=indicDasFormas(formas);
+  if(indCom>0)base=Math.max(0,base-indCom);
   /* v517: frete por conta da loja sai da base de comissão do pedido inteiro */
   var freteLojaCom=freteLojaVenda();
   if(freteLojaCom>0)base=Math.max(0,base-freteLojaCom);
@@ -20453,6 +20981,10 @@ function abrirRevisaoPedido(){
     '<div class="calc" style="margin-top:10px"><div class="r sep big"><span>Total final</span>'+
     "<span>"+BRL(totalFinal)+"</span></div></div>"+
     /* v517: quem paga o frete */
+    /* v584: o desconto por indicação, dito por extenso na revisão */
+    ((indicDasFormas(formas)>0)?'<div class="note ok" style="margin-top:8px">Desconto de indicação: <b>'+
+      BRL(indicDasFormas(formas))+"</b> ("+indVenda.qtd+(indVenda.qtd===1?" indicação":" indicações")+" · "+indVenda.pct+"%)"+
+      " — já abatido no pagamento, sobre o refil deste pedido.</div>":"")+
     (freteLojaVenda()>0?'<div class="note" style="margin-top:8px">Frete grátis (por conta da loja): <b>'+BRL(freteLojaVenda())+"</b> — não é cobrado do cliente e sai da base de comissão.</div>"
       :((r&&r.comp&&+r.comp.frete>0)?'<div class="note" style="margin-top:8px">Frete pago pelo cliente: <b>'+BRL(+r.comp.frete)+"</b> (já está no total).</div>":""))+"</div>";
   /* ---- aprovação, se algum item ficou abaixo da faixa ---- */
@@ -21025,6 +21557,16 @@ async function salvarPedidoAgora(){
     if(credV>limite+0.001){
       toast("O crédito do plano é de no máximo "+BRL(limite)+" para "+cliSel.nome+".");irEtapa(2);return;}
   }
+  /* v584: as indicações usadas neste pedido ainda estão livres no BANCO? */
+  if(indVenda.ids.length){
+    var errInd=await conferirIndicacaoNoBanco(cliSel.id,indVenda.ids,(pedEditando&&pedEditando.id)||"");
+    if(errInd){
+      indBoxSelo="";try{calcular();}catch(eCi){}
+      $("v_alerta").innerHTML='<div class="note crit"><b>'+esc(errInd)+"</b></div>";
+      try{$("v_alerta").scrollIntoView({block:"center"});}catch(eSv){}
+      toast(errInd);irEtapa(2);return null;
+    }
+  }
   /* troca (regra do Wagner, 16/09): não há mais pergunta — a forma "Desconto de Troca" é que diz que o cliente
      deu um purificador usado; o usado vai para o estoque do vendedor depois que ele confirmar o recebimento */
   var trocaV=formas.filter(function(f){return f.tipo===FORMA_TROCA;}).reduce(function(a,f){return a+(+f.valor||0);},0);
@@ -21109,6 +21651,12 @@ async function salvarPedidoAgora(){
   ped.freteLoja=freteLojaVenda();
   ped.freteForaMeta=true;
   ped.creditoForaBase=true;   /* v582: o crédito do plano sai da base de comissão e da meta */
+  /* v584: o desconto por indicação, as indicações que ele consome e quem o desmarcou */
+  ped.indicForaBase=true;
+  ped.indicacao=indVenda.ids.length?{pct:indVenda.pct,qtd:indVenda.qtd,valor:indVenda.valor,
+    ids:indVenda.ids.slice(),nomes:indVenda.nomes.slice(),refis:somaRefisDoPedido(itens),
+    quando:agoraCarimbo(),por:usuarioAtual}:null;
+  ped.indicacaoDesmarcadaPor=(!indVenda.usar&&indVenda.desmarcadoPor)?indVenda.desmarcadoPor:"";
   /* pedido das peças e serviços de uma OS interna (regra do Wagner, 14/09) */
   /* de onde veio o prospector (30/10) */
   try{
@@ -21175,6 +21723,11 @@ async function salvarPedidoAgora(){
       irEtapa(6);
       return null;
     }
+  }
+  /* v584: as indicações usadas ficam reservadas para este pedido */
+  if(ped.indicacao){
+    var errRes=await reservarIndicacoes(ped);
+    if(errRes)setTimeout(function(){toast("O desconto de indicação foi lançado, mas a reserva no cadastro do cliente não gravou: "+errRes);},2000);
   }
   /* o plano que o vendedor informou vai para o purificador agora (29/10) */
   try{await gravarPlanosInformados(ped);}catch(ePg){console.warn("planos informados",ePg);}
@@ -22155,6 +22708,7 @@ function retomarRascunho(r){
 function limparPedido(){
   tiInstOriginal=null;tiAntes=null;tiCtx=null;
   planoInfPend={};planoNaoPend={};try{zerarPerguntaPlano();}catch(e){}
+  zerarIndicacaoVenda();indBoxSelo="";   /* v584 */
   eqEndResp={};   /* a resposta de "continua instalado em…?" não passa para a venda seguinte */
   revEnderecos={};revRespondido={};   /* a venda nova nao herda as respostas da anterior (21/10, 22/10) */
   rascunhoAberto=null;   /* venda nova não continua o rascunho anterior */
@@ -25496,6 +26050,8 @@ async function cancelarPedido__corpo(p,motivo){
       }catch(eAj){console.warn("acerto do cancelamento",eAj);}
     }
     p.status="Cancelada";p.encerrada=false;p.reabertura=null;
+    /* v584: pedido cancelado devolve as indicações ao saldo do cliente */
+    try{await mudarStatusIndicacoes(p,"fora","indicações devolvidas ao saldo pelo cancelamento");}catch(eMc){console.warn("indicações",eMc);}
     p.canceladaPor=usuarioAtual;p.canceladaEm=hojeISO();p.motivoCancelamento=motivo.trim();
     await gravarPedido(p);
     /* v577: o PIX e o dinheiro que entraram no caixa na aprovação são ESTORNADOS (nada se apaga) */
@@ -32912,6 +33468,7 @@ async function gerarReceberDoPedido(p){
     var v=+f.valor||0;if(v<=0)return;
     if(f.tipo===FORMA_CREDITO)return;   /* já tratado acima: não gera parcela a receber */
     if(f.tipo===FORMA_TROCA)return;     /* o cliente pagou com o purificador usado: não há dinheiro a receber */
+    if(f.tipo===FORMA_INDIC)return;     /* v584: desconto por indicação é desconto, não dinheiro a receber */
     if(f.tipo===FORMA_ORC)return;       /* o orçamento entrou no caixa na abertura da OS */
     var n=f.parc||1,parcela=Math.round(v/n*100)/100;
     var cxF=caixaDaForma(f.tipo),dias=diasCreditoForma(f.tipo);
@@ -41533,6 +42090,9 @@ function valorDepreciadoPedido(p){
   /* v582: o crédito do plano também não — mas só no pedido novo (marca `creditoForaBase`),
      para nenhum mês fechado nem prêmio já calculado mudar */
   d-=creditoForaDaBase(p);
+  /* v584: o desconto por indicação também não gera faturamento nem meta (pedido antigo nunca
+     tem esta forma) */
+  d-=indicDasFormas(p.formas);
   /* v517 (regra dele, 06/11): o frete pago pelo cliente NÃO entra na meta nem no faturamento —
      só nos pedidos feitos a partir da v517 (freteForaMeta); os antigos ficam como estavam, para
      não mudar mês fechado nem prêmio já calculado. Sai a parte do frete no depreciado. */
@@ -45072,7 +45632,7 @@ async function cobrarOrcamentoOS(o){
 /* formas que o cliente pode usar para pagar o orçamento na hora (as internas ficam de fora) */
 function formasDoOrcamento(){
   return porNomeAZ(formasPgto).filter(function(f){
-    return [FORMA_CREDITO,FORMA_TROCA,FORMA_ORC].indexOf(f.nome)<0;});
+    return [FORMA_CREDITO,FORMA_TROCA,FORMA_ORC,FORMA_INDIC].indexOf(f.nome)<0;});
 }
 /* o valor que entra na comissão é o DEPRECIADO pela forma escolhida (regra do Wagner, 21/09) */
 function depreciadoOrcamento(valor,forma,parc){
@@ -45313,6 +45873,9 @@ function abrirPedidoParaEditar(p){
   formas=JSON.parse(JSON.stringify(p.formas||[]));
   normalizarValoresItens(itens);
   normalizarFormasVenda(formas);
+  /* v584: o desconto por indicação volta marcado, a não ser que alguém o tenha desmarcado */
+  zerarIndicacaoVenda();indBoxSelo="";
+  if(p.indicacaoDesmarcadaPor){indVenda.usar=false;indVenda.desmarcadoPor=p.indicacaoDesmarcadaPor;}
   try{
     if($("v_frete"))$("v_frete").value=brMF(+p.frete||0);
     /* v517: quem pagou o frete volta para a tela nova (pedido antigo com frete = cliente) */
@@ -45408,6 +45971,12 @@ async function aplicarEdicaoPedido(cli,r,solDesc){
   /* crédito do plano e desconto de troca seguem as formas que ficaram */
   var credE=formas.filter(function(f){return f.tipo===FORMA_CREDITO;}).reduce(function(a,f){return a+(+f.valor||0);},0);
   p.creditoPlano=(credE>0&&cli?montarCreditoPlano(cli.id,credE):null);
+  /* v584: o desconto por indicação segue as formas que ficaram, e a reserva é refeita */
+  p.indicForaBase=true;
+  p.indicacao=indVenda.ids.length?{pct:indVenda.pct,qtd:indVenda.qtd,valor:indVenda.valor,
+    ids:indVenda.ids.slice(),nomes:indVenda.nomes.slice(),refis:somaRefisDoPedido(itens),
+    quando:agoraCarimbo(),por:usuarioAtual}:null;
+  p.indicacaoDesmarcadaPor=(!indVenda.usar&&indVenda.desmarcadoPor)?indVenda.desmarcadoPor:"";
   var trocaE=formas.filter(function(f){return f.tipo===FORMA_TROCA;}).reduce(function(a,f){return a+(+f.valor||0);},0);
   if(trocaE>0&&!p.troca)p.troca={tem:true,viaForma:true,valor:Math.round(trocaE*100)/100,serie:"",
     quando:agoraCarimbo(),por:usuarioAtual};
@@ -53339,6 +53908,10 @@ function recalcPedido(itens,formas,fatorAbaixo,descEspecial,freteLoja,credFora){
   /* v582: o crédito do plano sai da base como a troca (só nos pedidos novos, marcados) */
   var credB=creditoDasFormas(formas);
   if(credB>0&&credFora)base=Math.max(0,base-credB);
+  /* v584: o desconto por indicação sai da base do mesmo jeito. Não precisa de marca: pedido
+     antigo nunca tem esta forma, então nenhuma comissão já calculada muda. */
+  var indB=indicDasFormas(formas);
+  if(indB>0)base=Math.max(0,base-indB);
   /* v517: frete por conta da loja sai da base de comissão do pedido */
   if(+freteLoja>0)base=Math.max(0,base-(+freteLoja));
   return {total:total,dep:dep,base:base,pontos:pontos,abaixo:abaixo,depAbaixo:depAbaixo,linhas:linhas,soma:soma,
@@ -54036,6 +54609,8 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm,cxFormas){
       registrarEvento(p,"Crédito aprovado por "+usuarioAtual+" · "+p.creditoFormas.join(" e "));
     }
     p.encerrada=true;p.status="Aprovada";p.devolucaoFin=null;
+    /* v584: aprovado, o direito é baixado de vez */
+    try{await mudarStatusIndicacoes(p,"usada","indicações baixadas na aprovação");}catch(eMi){console.warn("indicações",eMi);}
     /* 05/11: o texto diz de onde a baixa saiu DE VERDADE, e não o estoque do instalador */
     var locsB={};baixou.forEach(function(b){locsB[b.local]=1;});
     registrarEvento(p,"Recebimento aprovado · "+BRL(p.total)+" · baixa no estoque de "+
@@ -54812,7 +55387,7 @@ function cabecalhoEmpresaDoc(){
    garantir. Formas internas (troca, crédito do plano, adiantamento da OS) não contam — elas
    não são dinheiro a receber. */
 function vendaAPrazo(p){
-  var internas=[FORMA_TROCA,FORMA_CREDITO,FORMA_ORC];
+  var internas=[FORMA_TROCA,FORMA_CREDITO,FORMA_ORC,FORMA_INDIC];
   return (p.formas||[]).some(function(f){
     if(!f)return false;
     if(internas.indexOf(f.tipo)>=0)return false;
@@ -58219,11 +58794,14 @@ function pedirDataPagamento(p){
        confirmação para o estoque baixar */
     var soCob=pedidoSoCoberto(p);
     if(soCob){
+      var soInd=!!(indicDasFormas(p.formas)>0);
       m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Aprovar · pedido '+esc(p.numero)+"</h3>"+
         '<div class="sub">'+esc(p.cliente||"")+" · pedido de "+esc(dataCurta(p.data))+"</div>"+
-        '<div class="note ok" style="margin-top:14px"><b>Pedido sem valor: tudo coberto pelo Plano Premium.</b><br>'+
+        '<div class="note ok" style="margin-top:14px"><b>Pedido sem valor: '+
+        (soInd?"o refil saiu de graça pelo desconto por indicação.":"tudo coberto pelo Plano Premium.")+"</b><br>"+
         "Não há forma de pagamento nem caixa para escolher. Ao aprovar, a peça baixa do estoque de "+
-        esc(textoLocaisBaixa(p))+" e o direito do plano é baixado. Este pedido não conta em "+
+        esc(textoLocaisBaixa(p))+" e "+(soInd?"as indicações usadas são baixadas":"o direito do plano é baixado")+
+        ". Este pedido não conta em "+
         "faturamento, meta, comissão nem no Dashboard.</div>"+
         '<div class="actions"><button class="btn" type="button" id="pg_ok0">Aprovar</button>'+
         '<button class="btn mut" type="button" id="pg_nao0">Cancelar</button></div></div>';
@@ -68716,6 +69294,11 @@ function ligar(){
   $("at_indicBusca").oninput=function(){$("at_indicado").value="";buscarIndicadorAt();};
   ligarListinha("at_indicBusca","at_indicSug",null,"at_alerta");
   $("in_fechar").onclick=function(){$("indicModal").hidden=true;inCli=null;};
+  /* v584: informar/corrigir indicação do sistema antigo */
+  $("ia_fechar").onclick=function(){$("indAntModal").hidden=true;indAntCli=null;indAntId="";};
+  $("ia_salvar").onclick=function(){return travaSalvar("indicAntiga",salvarIndicAntiga,null,[]);};
+  $("ia_nome").oninput=function(){$("ia_ligado").value="";buscarIndicadoAntiga();};
+  ligarListinha("ia_nome","ia_sug",null,"ia_alerta");
   $("ac_fechar").onclick=function(){$("acoesModal").hidden=true;acReg=null;};
 
   /* ---- Manutenção periódica ---- */
@@ -69004,6 +69587,14 @@ function ligar(){
       c.codigo=codNovo||proxCodigo();
     }
     c.tipo=dados.tipo;c.indicado=$("c_indicado").value;
+    /* v584 (proteção dele): indicação do próprio cliente, ou de um cadastro duplicado dele
+       (mesmo CPF/CNPJ ou mesmo telefone), NÃO conta — e o sistema avisa na hora. O campo fica
+       como foi digitado: quem decide o que fazer com o cadastro repetido é a pessoa. */
+    try{
+      var indQ=c.indicado?cliPorId(c.indicado):null;
+      if(indQ&&mesmoCadastroInd(c,indQ))
+        setTimeout(function(){toast("Atenção: "+(indQ.nome||"o indicador")+" é o próprio cliente (ou um cadastro duplicado dele). Esta indicação NÃO conta e não gera desconto no refil.");},1500);
+    }catch(eMi){}
     /* a origem entra uma vez; só o LEAD troca depois (v524), com registro da troca */
     if(!c.origem&&dados.origem){c.origem=dados.origem;c.origemEm=iso(new Date());}
     else if(c.origem&&dados.origem&&dados.origem!==c.origem&&editandoCli&&ehLead(editandoCli)){
