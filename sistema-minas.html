@@ -13695,15 +13695,17 @@ window.__abrirPlanoMF=function(p){return abrirPlano(p);};
 window.__notasMF=function(){return notas;};
 window.__abrirConfMF=function(n){return abrirConferencia(n);};
 window.__fundirRepetidoMF=function(a,b){return fundirRepetido(a,b);};
-function custoDe(p){
-  /* custo de aquisição = produto + frete + impostos que não geram crédito − ICMS creditado */
-  return Math.round((((+p.custo||0)+(+p.frete||0)+(+p.ipi||0)+(+p.st||0)+(+p.federais||0)-(+p.icms||0)))*100)/100;
-}
+/* v589: a ficha do produto usa a MESMA conta das outras telas (`custoTotalDe`) — antes somava o
+   PIS/COFINS e descontava o ICMS, e por isso mostrava um custo diferente do resto do sistema. */
+function custoDe(p){return custoTotalDe(p);}
 function notaCusto(){
+  var pAtual=editandoProd||{};
   var v={custo:numMF($("p_custo").value)||0,frete:numMF($("p_frete").value)||0,
     ipi:numMF($("p_ipi").value)||0,st:numMF($("p_st").value)||0,
-    federais:numMF($("p_federais").value)||0,icms:numMF($("p_icms").value)||0};
-  var imp=v.ipi+v.st+v.federais-v.icms;
+    federais:numMF($("p_federais").value)||0,icms:numMF($("p_icms").value)||0,
+    /* v589: FCP ST e imposto de importação vêm da nota, não têm campo aqui, e entram no custo */
+    fcpst:+pAtual.fcpst||0,ii:+pAtual.ii||0};
+  var imp=Math.round((v.ipi+v.st+v.fcpst+v.ii)*100)/100;
   var tot=custoDe(v);
   var cheia=numMF($("p_cheia").value)||0,setenta=numMF($("p_campanha").value)||0,
       camp=numMF($("p_minimo").value)||0,maxima=numMF($("p_cheiaMax").value)||0;
@@ -13724,8 +13726,11 @@ function notaCusto(){
       " + frete "+BRL(v.frete)+
       (v.ipi?" + IPI "+BRL(v.ipi):"")+
       (v.st?" + ST "+BRL(v.st):"")+
-      (v.federais?" + federais "+BRL(v.federais):"")+
-      (v.icms?" − ICMS creditado "+BRL(v.icms):"")+
+      (v.fcpst?" + FCP ST "+BRL(v.fcpst):"")+
+      (v.ii?" + imposto de importação "+BRL(v.ii):"")+
+      /* v589: PIS/COFINS e ICMS da compra ficam de fora, só para conferência */
+      (v.federais||v.icms?'<div class="t-sub">Fora do custo (Simples Nacional, só para conferência): '+
+        [v.federais?"PIS/COFINS "+BRL(v.federais):"",v.icms?"ICMS da compra "+BRL(v.icms):""].filter(Boolean).join(" · ")+"</div>":"")+
     (v.custo>0?"<br>Frete "+pctF.toFixed(1).replace(".",",")+"% e impostos "+pctI.toFixed(1).replace(".",",")+"% sobre o valor do produto.":"")+
     /* faixa de preço (19/10): é a máxima que entra no pedido, então é dela que sai a margem
        de quem fecha sem desconto nenhum */
@@ -26547,10 +26552,12 @@ async function estornarVenda(p,obs){
   }
   return n;
 }
-/* v588: as duas empresas são do Simples Nacional — o ICMS da compra NÃO gera crédito, então não se
-   desconta do custo (saiu o "− icms"). ICMS ST, FCP ST, IPI e imposto de importação entram. */
+/* v588 e v589: as duas empresas são do Simples Nacional. No custo entram o produto, o frete, o IPI,
+   o ICMS ST, o FCP ST e o imposto de importação. NÃO entram o ICMS próprio da compra (não gera
+   crédito) nem o PIS/COFINS (já está no preço do produto na nota). Os dois continuam gravados no
+   produto e aparecem no quadro da nota, só para conferência. */
 function custoTotalDe(p){
-  return Math.round((((+p.custo||0)+(+p.frete||0)+(+p.ipi||0)+(+p.st||0)+(+p.fcpst||0)+(+p.ii||0)+(+p.federais||0)))*100)/100;
+  return Math.round((((+p.custo||0)+(+p.frete||0)+(+p.ipi||0)+(+p.st||0)+(+p.fcpst||0)+(+p.ii||0)))*100)/100;
 }
 
 /* ---------- modal de movimento ---------- */
@@ -37751,6 +37758,7 @@ function abrirNota(semNota){
   $("nf_emissao").value=hojeISO();$("nf_entrada").value=hojeISO();
   $("nf_frete").value=0;$("nf_desp").value=0;$("nf_seguro").value=0;$("nf_descTot").value=0;
   /* v588: quadro do imposto zerado; a nota digitada à mão informa aqui */
+  nfImpBase={};
   ["nf_vbc","nf_vicms","nf_vbcst","nf_vst","nf_vfcpst","nf_vipi","nf_vii","nf_vnf"].forEach(function(id){
     var e=$(id);if(e){e.value=0;e.disabled=false;}});
   /* entrada SEM nota fiscal nao tem quadro de imposto nenhum */
@@ -37783,7 +37791,7 @@ var CAMPOS_RATEIO_NF=[["frete","freteItem","frete"],["seguro","seguroItem","segu
    o XML trouxe o valor de cada um; pelo valor do item, quando só o total foi informado.
    O ICMS PRÓPRIO da compra não é descontado do custo (Simples Nacional: não gera crédito). */
 var CAMPOS_IMP_NF=[["st","st","vST","ICMS ST"],["fcpst","fcpst","vFCPST","FCP ST"],["ipi","ipi","vIPI","IPI"],["ii","ii","vII","imposto de importação"]];
-var CAMPOS_QUADRO_NF=["vBC","vICMS","vICMSDeson","vFCP","vBCST","vST","vFCPST","vProd","vFrete","vSeg","vDesc","vII","vIPI","vIPIDevol","vPIS","vCOFINS","vOutro","vNF"];
+var CAMPOS_QUADRO_NF=["vBC","vICMS","vICMSDeson","vFCP","vBCST","vST","vFCPST","vProd","vFrete","vSeg","vDesc","vII","vIPI","vIPIDevol","vPIS","vCOFINS","vOutro","vNF","vTotTrib"];
 /* o quadro da nota: o que veio do XML (n.imposto) ou, na nota antiga, a soma do que está nos itens */
 function impostoDaNota(n){
   var o=(n&&n.imposto)||null;
@@ -37792,6 +37800,7 @@ function impostoDaNota(n){
   CAMPOS_QUADRO_NF.forEach(function(k){c2[k]=0;});
   function soma(f){return arred(its.reduce(function(a,i){return a+(+i[f]||0);},0));}
   c2.vST=soma("st");c2.vFCPST=soma("fcpst");c2.vIPI=soma("ipi");c2.vII=soma("ii");c2.vICMS=soma("icms");
+  c2.fedItem=soma("federais");
   return c2;
 }
 function contaNota(n){
@@ -37826,8 +37835,11 @@ function contaNota(n){
     var impN=arred(pImp.st[k]+pImp.fcpst[k]+pImp.ipi[k]+pImp.ii[k]);
     var val=arred(subs[k]-parte.desconto[k]+acr+(semQuadro?0:impN));
     var temImp=i.ipi!=null||i.st!=null||i.federais!=null||i.icms!=null;
-    /* o ICMS próprio NÃO entra na conta do custo (Simples Nacional): saiu o "− icms" */
-    var imp=temImp?arred(impN+(+i.federais||0)):arred(+i.impostos||0);
+    /* v589: no custo entram SÓ o ICMS ST, o FCP ST, o IPI e o imposto de importação. O ICMS próprio
+       não entra (Simples Nacional: a compra não gera crédito) e o PIS/COFINS também não — ele já está
+       dentro do preço do produto na nota, e somá-lo de novo inflava o custo. Os dois continuam
+       GRAVADOS e aparecem no quadro, só para conferência. */
+    var imp=temImp?impN:arred(+i.impostos||0);
     var cu=q?arred((subs[k]-parte.desconto[k])/q):0,fu=q?arred(acr/q):0,iu=q?arred(imp/q):0;
     return {i:i,idx:k,sub:subs[k],peso:prod>0?subs[k]/prod:(its.length?1/its.length:0),
       frete:parte.frete[k],seguro:parte.seguro[k],outras:parte.outras[k],desconto:parte.desconto[k],
@@ -37841,6 +37853,8 @@ function contaNota(n){
   return {prod:prod,frete:somas.frete,seguro:somas.seguro,outras:somas.outras,desconto:somas.desconto,
     acrescimos:arred(somas.frete+somas.seguro+somas.outras),total:total,linhas:linhas,
     st:sImp.st,fcpst:sImp.fcpst,ipi:sImp.ipi,ii:sImp.ii,impNoTotal:!semQuadro,
+    /* v589: PIS/COFINS da compra — fora do custo e fora do total, só para conferência */
+    fed:arred(its.reduce(function(a,i){return a+(+i.federais||0);},0)),
     impostosNota:semQuadro?0:arred(sImp.st+sImp.fcpst+sImp.ipi+sImp.ii),
     quadro:quad,informado:inf,dif:dif,divergente:inf>0&&Math.abs(dif)>0.05};
 }
@@ -37858,6 +37872,14 @@ function htmlQuadroImpostoNF(n,c){
     L("Desconto",cc.desconto)+L("Outras despesas",cc.outras)+
     L("Valor total dos produtos",cc.prod)+L("VALOR TOTAL DA NOTA",cc.total,true)+
     "</tbody></table></div>";
+  /* v589: o que a nota informa e NÃO entra no custo nem no total — só para conferência */
+  var foraC=[];
+  if(+q.vICMS)foraC.push("ICMS da compra "+BRL(q.vICMS));
+  if(+q.vPIS||+q.vCOFINS){if(+q.vPIS)foraC.push("PIS "+BRL(q.vPIS));if(+q.vCOFINS)foraC.push("COFINS "+BRL(q.vCOFINS));}
+  else if(cc.fed)foraC.push("PIS/COFINS "+BRL(cc.fed));
+  if(+q.vTotTrib)foraC.push("valor aproximado dos tributos "+BRL(q.vTotTrib));
+  if(foraC.length)h+='<div class="help"><b>Fora do custo e fora do total</b> (Simples Nacional, só para conferência): '+
+    esc(foraC.join(" · "))+".</div>";
   if(cc.divergente)h+='<div class="note crit"><b>Divergência no total da nota.</b> A nota diz <b>'+BRL(cc.informado)+
     "</b> e a soma dos itens com frete, despesas e impostos dá <b>"+BRL(cc.total)+"</b> ("+
     (cc.dif>0?"R$ "+brMF(Math.abs(cc.dif))+" a mais":"R$ "+brMF(Math.abs(cc.dif))+" a menos")+
@@ -37868,13 +37890,16 @@ function htmlQuadroImpostoNF(n,c){
 }
 /* o formulário monta a nota do que está na tela e usa a mesma conta */
 var nfPorItem={};
-/* v588: o que está digitado no quadro do formulário */
+/* v588: o que está digitado no quadro do formulário. v589: o que veio no XML e NÃO tem campo na
+   tela (PIS, COFINS, ICMS desonerado, FCP, IPI devolvido, tributos aproximados) fica guardado em
+   `nfImpBase` e é regravado como está — salvar a nota não apaga nada do quadro. */
+var nfImpBase={};
 function impDaTelaNF(){
-  var o={};CAMPOS_QUADRO_NF.forEach(function(k){o[k]=0;});
+  var o={};CAMPOS_QUADRO_NF.forEach(function(k){o[k]=arred(+nfImpBase[k]||0);});
   function v(id){var e=$(id);return e?(numMF(e.value)||0):0;}
   o.vBC=v("nf_vbc");o.vICMS=v("nf_vicms");o.vBCST=v("nf_vbcst");o.vST=v("nf_vst");
   o.vFCPST=v("nf_vfcpst");o.vIPI=v("nf_vipi");o.vII=v("nf_vii");o.vNF=v("nf_vnf");
-  o.vProd=0;o.vFrete=v("nf_frete");o.vSeg=v("nf_seguro");o.vDesc=v("nf_descTot");o.vOutro=v("nf_desp");
+  o.vProd=arred(+nfImpBase.vProd||0);o.vFrete=v("nf_frete");o.vSeg=v("nf_seguro");o.vDesc=v("nf_descTot");o.vOutro=v("nf_desp");
   return o;
 }
 function rateioNota(){
@@ -38132,7 +38157,7 @@ async function aplicarNFe(nf){
     st:nf.itens.some(function(x){return x.temST;}),fcpst:nf.itens.some(function(x){return x.temFCPST;}),
     ipi:nf.itens.some(function(x){return x.temIPI;}),ii:nf.itens.some(function(x){return x.temII;})};
   /* v588: o quadro "Cálculo do imposto" vem inteiro do ICMSTot */
-  var qi=nf.imposto||{};
+  var qi=nf.imposto||{};nfImpBase=JSON.parse(JSON.stringify(qi));
   $("nf_vbc").value=brMF(+qi.vBC||0);$("nf_vicms").value=brMF(+qi.vICMS||0);
   $("nf_vbcst").value=brMF(+qi.vBCST||0);$("nf_vst").value=brMF(+qi.vST||0);
   $("nf_vfcpst").value=brMF(+qi.vFCPST||0);$("nf_vipi").value=brMF(+qi.vIPI||0);
@@ -38863,7 +38888,7 @@ async function concluirEntradaNota__corpo(){
       p.custoNF=n.numero;p.custoEm=hoje;p.custoForn=pessoa;
       p.historicoCusto=(p.historicoCusto||[]);
       p.historicoCusto.push({nota:n.numero,notaId:n.id,data:hoje,fornecedor:pessoa,qtd:q,custo:p.custo,frete:freteUnit,
-        impostos:Math.round((p.ipi+p.st+(+p.fcpst||0)+(+p.ii||0)+p.federais)*100)/100,total:custoTotalDe(p),antes:antesC,antesCampos:antesCampos,por:usuarioAtual});
+        impostos:Math.round((p.ipi+p.st+(+p.fcpst||0)+(+p.ii||0))*100)/100,total:custoTotalDe(p),antes:antesC,antesCampos:antesCampos,por:usuarioAtual});
       if(p.historicoCusto.length>30)p.historicoCusto=p.historicoCusto.slice(-30);
       if(it.codForn&&!p.codForn)p.codForn=it.codForn;
       await grava("produtos",p);
@@ -39222,7 +39247,7 @@ function abrirEdicaoNota(n){
   $("nf_seguro").value=brMF(+n.seguro||0);$("nf_descTot").value=brMF(+n.desconto||0);
   /* v588: a nota aberta para editar mostra o quadro. Tem o quadro gravado (ou o XML lido), vale ele;
      a nota de antes da v588 abre com a soma do imposto que está em cada item, para o Financeiro conferir. */
-  var qe=impostoDaNota(n);
+  var qe=impostoDaNota(n);nfImpBase=n.imposto?JSON.parse(JSON.stringify(n.imposto)):{};
   $("nf_vbc").value=brMF(qe.vBC);$("nf_vicms").value=brMF(qe.vICMS);
   $("nf_vbcst").value=brMF(qe.vBCST);$("nf_vst").value=brMF(qe.vST);
   $("nf_vfcpst").value=brMF(qe.vFCPST);$("nf_vipi").value=brMF(qe.vIPI);
@@ -39628,7 +39653,7 @@ async function confirmarConfNF2__corpo(n){
         registrarHistPreco(p,foto,"Entrada da "+docN);
         p.custoNF=n.numero;p.custoEm=hoje;p.custoForn=nomeFornNF(n);
         p.historicoCusto=(p.historicoCusto||[]).concat([{nota:n.numero,notaId:n.id,data:hoje,fornecedor:nomeFornNF(n),qtd:x.q,custo:p.custo,frete:p.frete,
-          impostos:Math.round((p.ipi+p.st+(+p.fcpst||0)+(+p.ii||0)+p.federais)*100)/100,total:custoTotalDe(p),antes:antesC,antesCampos:antesCampos,por:quem,conferencia:rn}]);
+          impostos:Math.round((p.ipi+p.st+(+p.fcpst||0)+(+p.ii||0))*100)/100,total:custoTotalDe(p),antes:antesC,antesCampos:antesCampos,por:quem,conferencia:rn}]);
         if(p.historicoCusto.length>30)p.historicoCusto=p.historicoCusto.slice(-30);
         if(it.codForn&&!p.codForn)p.codForn=it.codForn;
         rod.custo.push(it.pid);
@@ -39699,7 +39724,7 @@ function analisarDesfazerNF(n,movsAlvo,pids){
   });
   return {bloq:bloq,porLoc:porLoc,ordem:ordem,custos:custos,docN:docN};
 }
-function totalCustoNF(o){return Math.round(((+o.custo||0)+(+o.frete||0)+(+o.ipi||0)+(+o.st||0)+(+o.federais||0)-(+o.icms||0))*100)/100;}
+function totalCustoNF(o){return custoTotalDe(o);}
 function htmlResumoDesfazerNF(an){
   var vc=podeVerCusto(),h="";
   h+="<b>Sai do estoque</b>:<ul>"+(an.ordem.length?an.ordem.map(function(k){var x=an.porLoc[k];
@@ -40878,7 +40903,7 @@ async function gerarDemo(){
     demoProds[pi].custoNF="9021";demoProds[pi].custoEm=dias(-18);demoProds[pi].custoForn=f1.nome;
     demoProds[pi].historicoCusto=[{nota:"9021",data:dias(-18),fornecedor:f1.nome,qtd:6,
       custo:demoProds[pi].custo,frete:demoProds[pi].frete,
-      impostos:(demoProds[pi].ipi||0)+(demoProds[pi].st||0)+(demoProds[pi].federais||0)-(demoProds[pi].icms||0),
+      impostos:(demoProds[pi].ipi||0)+(demoProds[pi].st||0),
       total:custoTotalDe(demoProds[pi]),antes:0,por:"Guilherme Guimarães"}];
     await grava("produtos",demoProds[pi]);
   }
