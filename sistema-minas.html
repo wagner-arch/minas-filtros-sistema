@@ -3259,7 +3259,7 @@ img{max-width:100%}
             <!-- DE QUAL ESTOQUE SAI ESTE ITEM (23/10, regra dele): todo vendedor pode vender de
                  qualquer estoque, mas so com a autorizacao de quem responde por ele. -->
             <div class="fld" id="v_estoqueWrap" style="margin-top:12px">
-              <label for="v_estoque">Sai de qual estoque</label>
+              <label for="v_estoque" id="v_estoqueLab">Sai de qual estoque</label>
               <select id="v_estoque"></select>
               <div class="help" id="v_estNota"></div>
             </div>
@@ -19533,6 +19533,9 @@ function addItem(){
       /* 03/11: o item novo fica marcado; no "Automático" o estoque é decidido na revisão */
       itA.estNovo=true;
       if(estAuto)continue;
+      /* v595: a origem foi ESCOLHIDA (não é o padrão) — fica marcada, para a troca do
+         instalador não mexer nela e para o histórico do pedido dizer de onde saiu */
+      if(locEst!==estoquePadraoVenda())itA.estEscolhido=true;
     }else
     /* "meu estoque" não grava nada: o item segue o responsável da venda, como sempre */
     if(locEst===localVendaForm())continue;
@@ -23895,6 +23898,9 @@ function itensForaDoInstalador(lista,inst){
   if(!inst)return [];
   var alvo=locColab(inst);
   return (lista||[]).filter(function(i){
+    /* v595: item cuja origem quem vende ESCOLHEU de propósito (estoque que ela tem permissão)
+       não entra na troca: não se pergunta nada e ele não é movido sozinho. */
+    if(i&&i.estEscolhido)return false;
     return !!i&&!!i.pid&&!ehPlano(i)&&!ehServico(i)&&String(i.estoque||"").indexOf("colab:")===0&&i.estoque!==alvo;});
 }
 /* quem instala o pedido salvo: o responsável da instalação futura, ou o escolhido na entrega */
@@ -24030,21 +24036,58 @@ window.__trocaInstMF={conferir:function(r){return conferirTrocaInstalador(r);},e
    Vale para pedido NOVO e para pedido aberto quando for EDITADO: nenhum pedido existente tem a
    origem trocada sozinho. Os abertos com origem que agora é proibida ficam na 4ª lista da tela de
    Transição do estoque, para o Administrador decidir um por um. */
+/* ---------- v595: QUEM TEM PERMISSÃO EM MAIS DE UM ESTOQUE ESCOLHE DE QUAL SAI ----------
+   Regra dele: a "permissão" é a MARCAÇÃO que já existe na ficha do colaborador (u.estoques, a
+   mesma de responsaveisMarcados/respondePeloEstoque) — nunca o responsável padrão, que é o
+   almoxarifado. Quem conta é QUEM VENDE o pedido, não quem está logado, e só entram os estoques
+   da EMPRESA DO PEDIDO (a base é a estoquesDaEmpresaFicha da v581, para não existir uma segunda
+   lista de estoques): o Estoque da Loja da outra empresa nunca aparece, nem para quem tem "ambas".
+   A lista começa SEMPRE pelo padrão da v564 (com instalação, a caixinha de quem instala; sem
+   instalação, a Loja de quem é marcado nela ou a caixinha de quem vende), e por isso quem não tem
+   marcação nenhuma continua vendo exatamente o que via na v564: um estoque só, sem escolha. */
+function estoquesMarcadosVenda(vend){
+  var v=vend||quemVendeForm();if(!v)return [];
+  var marc=((typeof usuarioPor==="function"?usuarioPor(v):null)||{}).estoques||[],out=[];
+  estoquesDaEmpresaFicha(lojaAtual).forEach(function(e){
+    if(e&&e.loc&&marc.indexOf(e.loc)>=0)out.push(e.loc);
+  });
+  return out;
+}
+function estoquesPermitidosVenda(vend){
+  var v=vend||quemVendeForm(),out=[],vis={};
+  function poe(l){if(l&&!vis[l]){vis[l]=1;out.push(l);}}
+  var t=temInstalacaoVenda(),comInst=(t==="sim"||t==="agora"),ins=instaladorForm();
+  /* o padrão da v564 vem primeiro: é ele que fica marcado no item */
+  if(comInst){if(ins)poe(locColab(ins));}
+  else{
+    if(marcadoNaLoja(v))poe(locLoja(lojaAtual));
+    poe(locColab(v));
+  }
+  estoquesMarcadosVenda(v).forEach(poe);
+  return out;
+}
+window.__estPermitidosMF=function(v){return estoquesPermitidosVenda(v);};
 function origemPermitidaVenda(loc){
   if(!loc||loc==="meu")return true;
   if(!regraNovaEstoque())return true;
   var t=temInstalacaoVenda(),comInst=(t==="sim"||t==="agora");
   var ins=instaladorForm(),vend=quemVendeForm();
-  if(comInst)return !!ins&&loc===locColab(ins);
-  if(loc===locColab(vend))return true;
-  return ehLocalLoja(loc)&&loc===locLoja(lojaAtual)&&marcadoNaLoja(vend);
+  if(comInst&&!!ins&&loc===locColab(ins))return true;
+  if(!comInst&&loc===locColab(vend))return true;
+  if(!comInst&&ehLocalLoja(loc)&&loc===locLoja(lojaAtual)&&marcadoNaLoja(vend))return true;
+  /* v595: e qualquer estoque que quem vende tem marcado na ficha, com e sem instalação */
+  return estoquesPermitidosVenda(vend).indexOf(loc)>=0;
 }
 window.__origemPermitidaMF=function(l){return origemPermitidaVenda(l);};
 function estoquePadraoVenda(){
   var t=temInstalacaoVenda(),vend=quemVendeForm(),ins=instaladorForm();
   var comInst=(t==="sim"||t==="agora");
-  /* v564: com instalação é sempre a caixinha de quem instala, mesmo sendo quem vende */
-  if(comInst&&ins)return locColab(ins);
+  /* v564: com instalação é sempre a caixinha de quem instala, mesmo sendo quem vende.
+     v595: não estando ela entre os estoques permitidos, vale o primeiro da lista. */
+  if(comInst&&ins){
+    var LP=estoquesPermitidosVenda(vend);
+    return (!LP.length||LP.indexOf(locColab(ins))>=0)?locColab(ins):LP[0];
+  }
   if(!comInst&&marcadoNaLoja(vend))return locLoja(lojaAtual);
   return locColab(vend);
 }
@@ -24262,13 +24305,19 @@ function ligarEstRevisao(){
 /* grava no item o que a revisão mostrou; devolve o motivo quando não pode fechar */
 function aplicarEstoqueVenda(){
   var f=faltaEstRevisao();if(f)return f;
-  var quem=euNoEstoque(),agora=new Date().toISOString();
+  var quem=euNoEstoque(),agora=new Date().toISOString(),padraoAg=estoquePadraoVenda(),voltaram=[];
   planoEstoqueVenda().forEach(function(o){
+    /* v595: a conferência da origem vale aqui também, não só na tela — origem que quem vende
+       não tem permissão volta para o padrão, com aviso */
+    if(o.i.estoque&&o.i.estoque!==o.loc&&!origemPermitidaVenda(o.i.estoque))voltaram.push(o.i.nome||"");
+    if(o.loc===padraoAg)delete o.i.estEscolhido;
     o.i.estoque=o.loc;
     /* v564: a autorização de estoque acabou — o item nasce já com o uso decidido */
     delete o.i.autEstoque;
     o.i.usoEstoque={usar:o.usar,req:o.req,reqId:"",por:usuarioAtual,em:agora,auto:!!o.auto};
   });
+  if(voltaram.length)toast(voltaram.join(" e ")+": quem vende não tem permissão naquele estoque — "+
+    "a peça volta a sair do "+nomeLocal(padraoAg)+".");
   return "";
 }
 /* depois de gravar o pedido: a requisição de cada estoque que vai retirar no almoxarifado; na edição,
@@ -24276,6 +24325,13 @@ function aplicarEstoqueVenda(){
 async function criarReqsDaVenda(p){
   var porLoc={},n=0,falhou=0,mudou=false;
   try{if(await registrarTrocasEstoque(p))mudou=true;}catch(eTr){console.warn("troca do instalador",eTr);}
+  /* v595: de onde a peça saiu quando não foi o padrão — uma linha só, nunca repetida */
+  itensDeEstoque(p).forEach(function(it){
+    if(!it||!it.estEscolhido||!it.estoque)return;
+    var tx="Item "+(it.nome||"")+" sai do "+nomeLocal(it.estoque)+" (escolhido por quem vende)";
+    if((p.eventos||[]).some(function(e){return (e&&e.texto)===tx;}))return;
+    registrarEvento(p,tx);mudou=true;
+  });
   itensDeEstoque(p).forEach(function(it){
     var u=it.usoEstoque;if(!u||!(+u.req>0)||u.reqId)return;
     var l=localDoItemVenda(p,it);(porLoc[l]=porLoc[l]||[]).push({it:it,q:+u.req});});
@@ -24428,6 +24484,19 @@ document.addEventListener("pointerdown",function(e){
 document.addEventListener("click",function(e){
   if(e.target&&e.target.closest&&e.target.closest("#v_temInst"))setTimeout(function(){try{opcoesEstoqueItem();notaEstoqueItem();
     var a=tiAntes&&tiAntes.quem;if(instaladorForm()&&instaladorForm()!==a)conferirTrocaInstalador(false);}catch(x){}},0);});
+/* o nome de cada estoque dentro do campo do item (v595) */
+function rotuloEstoqueVenda(loc,vend,ins,comInst){
+  if(comInst&&ins&&loc===locColab(ins))return "Caixinha de quem instala · "+ins;
+  if(loc===locColab(vend))return "Estoque de quem vende · "+vend;
+  if(ehLocalLoja(loc))return "Estoque da Loja · "+nomeLojaId(lojaDoLocal(loc))+
+    (respEstoqueLoja(lojaDoLocal(loc))?" · "+respEstoqueLoja(lojaDoLocal(loc)):"");
+  if(loc===LOC_EMPRESA)return "Almoxarifado";
+  if(String(loc).indexOf("colab:")===0){
+    var nm=String(loc).slice(6);
+    return "Estoque de "+nm+" · "+(perfilDe(nm)||"colaborador");
+  }
+  return nomeLocal(loc);
+}
 /* monta o campo "Sai de qual estoque": o meu, o da loja aberta e os dos colegas */
 function opcoesEstoqueItem(){
   var s=$("v_estoque");if(!s)return;
@@ -24441,6 +24510,19 @@ function opcoesEstoqueItem(){
     /* v564: com instalação não há escolha — a peça sai da caixinha de quem instala e o campo
        nem aparece. Sem instalação, só o próprio estoque e a Loja de quem responde por ela. */
     var tI=temInstalacaoVenda(),comI=(tI==="sim"||tI==="agora"),insI=instaladorForm(),vendI=quemVendeForm();
+    var lista=estoquesPermitidosVenda(vendI),lab=$("v_estoqueLab");
+    /* v595: tendo DOIS ou mais estoques permitidos, quem vende escolhe de qual sai cada item —
+       com e sem instalação. Um só, fica exatamente como na v564. */
+    if(lista.length>1){
+      if(wEst)wEst.hidden=false;
+      if(lab)lab.textContent="Sai do estoque de";
+      add("meu","Automático · "+nomeLocal(estoquePadraoVenda()));
+      lista.forEach(function(l){add(l,rotuloEstoqueVenda(l,vendI,insI,comI));});
+      if(ant){try{s.value=ant;}catch(eV2){}}
+      if(!s.value||!origemPermitidaVenda(s.value))s.value="meu";
+      return;
+    }
+    if(lab)lab.textContent="Sai de qual estoque";
     if(comI&&insI){
       add(locColab(insI),"Caixinha de quem instala · "+insI);
       s.value=locColab(insI);
@@ -24504,7 +24586,8 @@ function notaEstoqueItem(){
   var fica=saldoEm(p.id,loc)-((reservasDe(loc)[p.id])||0)-noCarrinhoDe(p.id,loc)-qd;
   var avNeg="";
   if(regraNovaEstoque()&&loc!==LOC_EMPRESA){
-    el.innerHTML=linha+"<br>"+textoEstItemNovo(loc,String((s&&s.value)||"meu")==="meu",aut,dono);
+    /* v595: estoque que quem vende tem permissão sai DIRETO — nunca volta a autorização de terceiro */
+    el.innerHTML=linha+"<br>"+textoEstItemNovo(loc,String((s&&s.value)||"meu")==="meu",aut&&!origemPermitidaVenda(loc),dono);
     return;
   }
   if(qd>0&&fica<0){
