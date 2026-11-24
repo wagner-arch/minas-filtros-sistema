@@ -38258,7 +38258,7 @@ function abrirNota(semNota){
   nfEditando=null;$("nfSalvar").textContent="Continuar: destino e pagamento";
   nfTipoNota=(semNota===true?"semnota":(semNota==="consumo"?"consumo":""));
   nfSemNota=semNota===true;nfFormaXml="";nfSnFoto=null;
-  nfItens=[];nfDups=[];opcoesFinanceiro();
+  nfItens=[];nfDups=[];nfVincLog=[];opcoesFinanceiro();   /* v598: o registro dos vínculos desta tela */
   try{avisoProdZeradoNota();}catch(eAz){}   /* v565 */
   /* v536: entrada sem nota — sem XML, fornecedor opcional, item pode não ter cadastro, motivo e foto obrigatórios */
   /* v577: a nota de uso e consumo importa o XML como a normal e também aceita item escrito à mão */
@@ -38440,6 +38440,98 @@ function rateioNota(){
   if($("nf_porItemAviso"))$("nf_porItemAviso").textContent=av.length?"Veio por item no XML (cada item fica com o seu valor exato): "+av.join(", ")+".":"";
   return c;
 }
+/* ===== O BOTÃO "VINCULAR" NA PRIMEIRA TELA DA ENTRADA DE NOTAS (24/11, v598, regra dele) =====
+   O item do XML que vem fora do cadastro aparecia aqui só com o nome da nota e o código do
+   fornecedor; a ligação existia só na etapa seguinte, e ninguém percebia. Agora ela é feita
+   aqui, pela MESMA regra (`ligarItemLista`/`desligarItemLista`). Sem sugestão por nome: o
+   vínculo só acontece pelo botão e com a confirmação. */
+function podeVincularNF(){
+  if(nfTipoNota==="consumo")return false;             /* uso e consumo: o item fica como na nota */
+  if(!podeGerirNota(nfEditando||null))return false;    /* só quem lança a nota */
+  /* estoque já entrou: não se mexe mais no vínculo */
+  try{if(nfEditando&&movsAtivosNF(nfEditando).length)return false;}catch(e){}
+  return true;
+}
+function htmlVincularNF(it,k){
+  if(nfTipoNota==="consumo")return "";
+  var trancado=false;
+  try{trancado=!!(nfEditando&&movsAtivosNF(nfEditando).length);}catch(e){}
+  if(trancado)
+    return '<div class="t-sub">'+(it.nomeNota&&it.nomeNota!==it.nome?"Na nota: "+esc(it.nomeNota)+" · ":"")+
+      "o estoque desta nota já entrou. Para trocar, use <b>Estornar entrada</b>.</div>";
+  if(!podeVincularNF())
+    return (it.nomeNota&&it.nomeNota!==it.nome)?'<div class="t-sub">Na nota: '+esc(it.nomeNota)+"</div>":"";
+  if(!it.pid)
+    return '<div class="nf-ligar"><div class="t-sub"><b>Fora do cadastro</b> — ligue a um produto para o estoque e o custo entrarem nele.</div>'+
+      '<div class="nf-ligar-l"><button class="btn sm" type="button" data-nfvinc="'+k+'">Vincular</button></div></div>';
+  return '<div class="t-sub">Na nota: '+esc(it.nomeNota||it.nome)+
+    (it.ligPor?" · vinculado por "+esc(it.ligPor):"")+
+    ' · <button class="btn mut sm" type="button" data-nfvinc="'+k+'">Vincular a outro</button>'+
+    (it.nomeNota?' <button class="btn mut sm" type="button" data-nfdesv="'+k+'">Desfazer</button>':"")+"</div>";
+}
+function ligarVincularNF(raiz){
+  if(!raiz)return;
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-nfvinc]"),function(b){
+    b.onclick=function(){abrirVincularNF(+b.getAttribute("data-nfvinc"));};});
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-nfdesv]"),function(b){
+    b.onclick=function(){desvincularItemNFLanc(+b.getAttribute("data-nfdesv"));};});
+}
+/* a janelinha da busca e a confirmação */
+var nfVincIx=-1;
+function abrirVincularNF(k){
+  var it=nfItens[k];if(!it)return;
+  if(!podeVincularNF()){toast("Só o Financeiro ou o Administrador vinculam o item da nota.");return;}
+  nfVincIx=k;
+  try{listaProdNF();}catch(e){}
+  abrirModalNF({tit:it.pid?"Vincular a outro produto":"Vincular ao produto do cadastro",
+    sub:"Item da nota: <b>"+esc(it.nomeNota||it.nome)+"</b>"+
+      (it.codForn?" · código do fornecedor "+esc(it.codForn):"")+
+      ". Procure pelo código ou pelo nome do produto do cadastro.",
+    corpo:'<div class="fld"><label for="nfvc_prod">Produto do cadastro <span class="req">*</span></label>'+
+      '<input id="nfvc_prod" list="nfDlProd" autocomplete="off" placeholder="Código ou nome do produto"></div>'+
+      '<div id="nfvc_aviso"></div>',
+    ok:"Continuar",
+    ligar:function(){setTimeout(function(){try{$("nfvc_prod").focus();}catch(e){}},50);},
+    onOk:function(){
+      var p=acharProdutoLigavelNF(($("nfvc_prod")||{}).value||"");
+      if(!p){$("nfac_alerta").innerHTML='<div class="note crit"><b>Escolha um produto da lista</b> — pelo código ou pelo nome do cadastro.</div>';return false;}
+      confirmarVincularNF(k,p);
+      return false;
+    }});
+}
+function confirmarVincularNF(k,p){
+  var it=nfItens[k];if(!it||!p)return;
+  abrirModalNF({tit:"Confirmar o vínculo",
+    sub:"Ligar <b>"+esc(it.nomeNota||it.nome)+"</b> ao produto <b>"+esc((p.cod?p.cod+" · ":"")+p.nome)+"</b>?",
+    corpo:(outroItemDaNotaNoProduto(nfItens,it,p.id)
+      ?'<div class="note warn">Este produto já está ligado em outro item desta nota — confira.</div>':"")+
+      '<div class="note">O estoque e o custo desta nota entram neste produto. O nome que veio na nota fica guardado.</div>',
+    ok:"Confirmar",
+    onOk:function(){return vincularItemNFLanc(k,p.id);}});
+}
+function vincularItemNFLanc(k,pid){
+  var it=nfItens[k],p=prodPorId(pid);
+  if(!it||!p)return false;
+  if(!podeVincularNF()){toast("Só o Financeiro ou o Administrador vinculam o item da nota.");return false;}
+  var antes=it.nomeNota||it.nome;
+  if(!ligarItemLista(nfItens,it,p,($("nf_forn")&&$("nf_forn").value)||""))return false;
+  nfVincLog.push({campo:"Na nota: "+antes,de:"sem produto",para:(p.cod?p.cod+" · ":"")+p.nome});
+  fecharModalNF();
+  toast(antes+" vinculado a "+((p.cod?p.cod+" · ":"")+p.nome)+".");
+  calcNota();
+  return true;
+}
+function desvincularItemNFLanc(k){
+  var it=nfItens[k];if(!it||!it.nomeNota)return;
+  if(!podeVincularNF()){toast("Só o Financeiro ou o Administrador mexem no vínculo do item.");return;}
+  var antes=(it.cod?it.cod+" · ":"")+it.nome,naNota=it.nomeNota;
+  if(!desligarItemLista(it))return;
+  nfVincLog.push({campo:"Na nota: "+naNota,de:antes,para:"sem produto"});
+  toast("Vínculo desfeito: o item volta a ser "+naNota+". A ligação guardada do fornecedor continua — ela se desfaz na tela das ligações.");
+  calcNota();
+}
+/* o que foi vinculado nesta tela, para o histórico da nota nova */
+var nfVincLog=[];
 function calcNota(){
   var r=rateioNota();
   try{avisoProdZeradoNota();}catch(eAz){}   /* v565: aviso do produto zerado na transição */
@@ -38449,7 +38541,9 @@ function calcNota(){
     var i=l.i,p=prodPorId(i.pid)||{};
     var atual=(+p.custo||0)+(+p.frete||0),dif=l.custoFinal-atual;
     b.innerHTML+="<tr><td><div class=\"t-main\">"+esc(i.nome)+'</div><div class="t-sub"><code>'+esc(i.cod)+"</code>"+
-        (i.codForn?" · fornecedor "+esc(i.codForn):"")+"</div></td>"+
+        (i.codForn?" · fornecedor "+esc(i.codForn):"")+"</div>"+
+        /* v598: ligar o item a um produto do cadastro já aqui, na primeira tela */
+        htmlVincularNF(i,l.idx)+"</td>"+
       '<td class="num">'+i.qtd+'</td><td class="num">'+BRL(i.custo)+'</td><td class="num">'+BRL(l.sub)+"</td>"+
       '<td class="num">'+(l.peso*100).toFixed(1).replace(".",",")+"%</td>"+
       '<td class="num">'+(l.acrescimo?BRL(l.acrescimo):"—")+(l.desconto?'<div class="t-sub">desconto '+BRL(l.desconto)+"</div>":"")+"</td>"+
@@ -38461,6 +38555,7 @@ function calcNota(){
   });
   Array.prototype.forEach.call(b.querySelectorAll("[data-nfrm]"),function(bt){
     bt.onclick=function(){nfItens.splice(+bt.getAttribute("data-nfrm"),1);calcNota();};});
+  try{ligarVincularNF(b);}catch(eVc){console.warn("vincular na nota",eVc);}
   var n=Math.max(1,parseInt($("nf_parc").value,10)||1);
   var pctFrete=r.prod>0?(r.acrescimos/r.prod*100):0;
   if($("nf_quadro"))$("nf_quadro").innerHTML=htmlQuadroImpostoNF(null,r);
@@ -38611,6 +38706,52 @@ async function guardarLigacaoForn(p,fornId,codForn){
   if(p.ligacoesForn.length>60)p.ligacoesForn=p.ligacoesForn.slice(-60);
   if(!p.codForn)p.codForn=c;
   try{await grava("produtos",p);}catch(e){console.warn("ligação do fornecedor",e);return false;}
+  return true;
+}
+/* ===== LIGAR O ITEM DA NOTA A UM PRODUTO — UMA REGRA SÓ (24/11, v598) =====
+   A ligação acontece em duas telas: a do LANÇAMENTO (que trabalha na lista `nfItens`) e a de
+   "Destino e pagamento" (que trabalha em `notaFin.itens`). As duas passam por estas funções —
+   não existe regra de ligação em dois lugares. Sem sugestão por parecença de nome: a ligação
+   só acontece pelo botão e com a confirmação (decisão dele, 24/11). */
+function listaProdNF(){
+  var dl=$("nfDlProd");
+  if(dl&&!dl.__ok){
+    dl.innerHTML=prodsLigaveisNF().map(function(p){
+      return '<option value="'+esc((p.cod?p.cod+" · ":"")+p.nome)+'">';}).join("");
+    dl.__ok=true;
+  }
+  return dl;
+}
+function acharProdutoLigavelNF(txt){
+  var v=String(txt||"").trim();if(!v)return null;
+  var cod=v.split(" · ")[0].trim().toUpperCase();
+  return prodsLigaveisNF().filter(function(x){
+    return (x.cod&&String(x.cod).toUpperCase()===cod)||((x.cod?x.cod+" · ":"")+x.nome)===v;})[0]||null;
+}
+/* o produto já está ligado em outro item DESTA nota? permitido, mas avisa (regra dele) */
+function outroItemDaNotaNoProduto(lista,it,pid){
+  return (lista||[]).some(function(x){return x&&x!==it&&x.pid===pid;});
+}
+function ligarItemLista(lista,it,p,fornId){
+  if(!it||!p)return false;
+  if(!it.nomeNota)it.nomeNota=it.nome;
+  it.pid=p.id;it.cod=p.cod||"";it.nome=p.nome;it.ligadoPor=usuarioAtual;
+  it.ligPor=usuarioAtual;it.ligadoEm=agoraCarimbo();
+  delete it.sugPid;
+  try{it.__dest=destinoSugeridoNF(it);}catch(e){}
+  /* a confirmação fica guardada no produto: na próxima nota do mesmo fornecedor já vem ligado */
+  if(it.codForn){
+    guardarLigacaoForn(p,fornId||"",it.codForn).then(function(ok){
+      if(ok)toast("Ligação guardada: "+it.codForn+" → "+p.nome+". A próxima nota deste fornecedor já vem ligada.");});
+  }
+  if(outroItemDaNotaNoProduto(lista,it,p.id))
+    toast("Este produto já está ligado em outro item desta nota — confira.");
+  return true;
+}
+function desligarItemLista(it){
+  if(!it||!it.nomeNota)return false;
+  it.pid="";it.cod="";it.nome=it.nomeNota;delete it.nomeNota;
+  it.__dest="";delete it.destino;delete it.ligPor;delete it.ligadoPor;delete it.ligadoEm;
   return true;
 }
 /* todas as ligações fornecedor → produto, para a tela do Financeiro */
@@ -38820,6 +38961,8 @@ async function salvarNota__corpo(){
   if(nfTipoNota==="consumo")nota.usoConsumo=true;
   if(ed)return await gravarEdicaoNota(ed,nota);
   histNotaNF(nota,"Nota registrada"+(nfSemNota?" (entrada sem nota)":(nota.usoConsumo?" (uso e consumo)":""))+" · falta o centro de custo e o pagamento",[]);
+  /* v598: o que foi vinculado na primeira tela fica no histórico da nota */
+  if(nfVincLog.length)histNotaNF(nota,"Itens vinculados a produtos do cadastro no lançamento",nfVincLog.slice());
   try{await gravaConf("notas",nota);}
   catch(e){avisarRecusaBanco("nf_alerta",e,"A entrada não foi registrada.");return false;}
   notas.push(nota);
@@ -39760,7 +39903,7 @@ function abrirEdicaoNota(n){
   if(s!=="lancar"&&s!=="aguardando"&&s!=="conferida"){toast(s==="cancelada"?"Nota cancelada não se edita.":"Esta nota não pode ser editada agora.");return;}
   $("nfConf").hidden=true;$("nfFin").hidden=true;
   abrirNota(n.usoConsumo?"consumo":!!n.semNota);
-  nfEditando=n;
+  nfEditando=n;nfVincLog=[];
   $("nf_forn").value=n.fornecedorId||"";
   $("nf_num").value=n.semNota?"":(n.numero||"");$("nf_serie").value=n.serie||"";
   $("nf_emissao").value=n.emissao||"";
@@ -39834,6 +39977,8 @@ async function gravarEdicaoNota(ed,novo){
   if(recomeca)c.confirmarDeNovo=true;
   c.fluxo2=true;c.status="lancar";c.editadaEm=agoraCarimbo();c.editadaPor=usuarioAtual;
   histNotaNF(c,"Editada"+(recomeca?" · a conferência recomeça (o almoxarifado é avisado)":""),mud);
+  /* v598: o vínculo feito na primeira tela fica no histórico, com o nome da nota e o produto */
+  if(nfVincLog.length)histNotaNF(c,"Itens vinculados a produtos do cadastro",nfVincLog.slice());
   try{await gravaConf("notas",c);}
   catch(e){avisarRecusaBanco("nf_alerta",e,"A edição não foi salva. A nota continua como estava.");return false;}
   voltarReg(ed,c);
@@ -39882,9 +40027,7 @@ async function abrirLancarNota(n,op){
   }
   dfTravado=titulosAtivosNF(n).some(tituloPagoNF);
   dfPgOrig=pg?JSON.stringify(pgDeDfNF(n)):"";
-  var dl=$("nfDlProd");
-  if(dl&&!dl.__ok){dl.innerHTML=produtos.filter(function(p){return (p.status||"ativo")==="ativo"&&!p.sistema;})
-    .map(function(p){return '<option value="'+esc((p.cod?p.cod+" · ":"")+p.nome)+'">';}).join("");dl.__ok=true;}
+  try{listaProdNF();}catch(eDl){}
   ["nfLista","nfForm","nfConf"].forEach(function(id){$(id).hidden=true;});$("nfFin").hidden=false;
   renderDarEntrada();
   try{window.scrollTo(0,0);}catch(e){}
@@ -39892,24 +40035,21 @@ async function abrirLancarNota(n,op){
 }
 function ligarItemNF(k,txt){
   var it=notaFin&&notaFin.itens[k];if(!it)return;
-  var v=String(txt||"").trim(),cod=v.split(" · ")[0].trim();
-  var p=produtos.filter(function(x){return (x.status||"ativo")==="ativo"&&((x.cod&&x.cod===cod)||((x.cod?x.cod+" · ":"")+x.nome)===v);})[0];
+  /* v598: a mesma regra das duas telas (ligarItemLista) */
+  var p=acharProdutoLigavelNF(txt);
   if(!p){toast("Produto não encontrado. Escolha da lista ou cadastre um novo.");return;}
-  if(!it.nomeNota)it.nomeNota=it.nome;
-  it.pid=p.id;it.cod=p.cod||"";it.nome=p.nome;it.ligadoPor=usuarioAtual;
-  it.__dest=destinoSugeridoNF(it);
-  delete it.sugPid;
-  /* v577: o Financeiro confirmou — fornecedor + código do fornecedor ficam guardados no produto,
-     e na próxima nota do mesmo fornecedor a ligação já é segura (não pergunta de novo) */
-  if(it.codForn&&notaFin){
-    guardarLigacaoForn(p,notaFin.fornecedorId||"",it.codForn).then(function(ok){
-      if(ok)toast("Ligação guardada: "+it.codForn+" ("+nomeFornNF(notaFin)+") → "+p.nome+".");});
-  }
+  var antes=it.nomeNota||it.nome;
+  if(!ligarItemLista(notaFin.itens,it,p,(notaFin&&notaFin.fornecedorId)||""))return;
+  histNotaNF(notaFin,"Item vinculado a um produto do cadastro",
+    [{campo:"Na nota: "+antes,de:"sem produto",para:(p.cod?p.cod+" · ":"")+p.nome}]);
   renderDarEntrada();
 }
 function desligarItemNF(k){
   var it=notaFin&&notaFin.itens[k];if(!it||!it.nomeNota)return;
-  it.pid="";it.cod="";it.nome=it.nomeNota;delete it.nomeNota;it.__dest="";renderDarEntrada();
+  var antes=(it.cod?it.cod+" · ":"")+it.nome,naNota=it.nomeNota;
+  if(!desligarItemLista(it))return;
+  histNotaNF(notaFin,"Vínculo do item desfeito",[{campo:"Na nota: "+naNota,de:antes,para:"sem produto"}]);
+  renderDarEntrada();
 }
 function sugerirCodNF(grupo){
   var letras={};produtos.forEach(function(p){if(p.grupo!==grupo)return;var m=/^([A-Z])MF[0-9]{3}$/.exec(p.cod||"");if(m)letras[m[1]]=(letras[m[1]]||0)+1;});
@@ -40043,7 +40183,10 @@ function renderConfNF2(n){
     var sit=(dq?'<span class="pill p-crit">divergência em '+dq+'</span><div class="t-sub">'+esc(it.divergencia.obs||"")+" · o Financeiro resolve</div>":"")+
       (f===0&&!dq?'<span class="pill p-ok">recebido</span>':(f>0&&(+it.recebido>0||dq||+it.naoEntra>0)?' <span class="pill p-warn">falta receber '+f+"</span>":""))+
       (+it.naoEntra>0?' <span class="pill p-mut">'+it.naoEntra+" não vão entrar</span>":"");
-    return "<tr><td><div class=\"t-main\">"+esc(nomeProdNF(it.pid,it.nome))+'</div><div class="t-sub">'+dest+
+    return "<tr><td><div class=\"t-main\">"+esc(nomeProdNF(it.pid,it.nome))+"</div>"+
+      /* v598: o nome que veio na nota fica embaixo, pequeno */
+      ((it.nomeNota&&it.nomeNota!==it.nome)?'<div class="t-sub">Na nota: '+esc(it.nomeNota)+"</div>":"")+
+      '<div class="t-sub">'+dest+
         (podeVerCusto()&&veValoresNF()?" · custo "+BRL(lc.custoFinal)+" por unidade":"")+'</div><div class="nf-pills">'+sit+"</div></td>"+
       '<td class="num">'+it.qtd+'</td><td class="num">'+(+it.recebido||0)+"</td>"+
       '<td class="num">'+(fecha?"—":'<input type="number" min="0" max="'+f+'" step="1" style="max-width:90px" data-c2q="'+k+'" value="'+d.q+'">')+"</td>"+
