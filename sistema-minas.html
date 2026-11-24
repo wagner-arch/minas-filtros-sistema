@@ -5332,6 +5332,12 @@ img{max-width:100%}
         <p class="help" style="margin:0 0 12px">Desconto a autorizar e instalação a fazer. Quando a etapa termina, a venda sobe para a fila de aprovação.</p>
         <div id="finAntes"></div>
       </div>
+      <!-- v597: pedido com o Adiantamento do Orçamento acima do que o cliente pagou (só conferência) -->
+      <div class="card" style="margin-top:20px" id="finOrcCard" hidden>
+        <h2 style="margin:0 0 4px">Adiantamento do Orçamento acima do recebido</h2>
+        <p class="help" style="margin:0 0 12px">Estes pedidos têm na forma <b>Adiantamento do Orçamento</b> mais do que o cliente pagou pelo orçamento na OS. Nada é alterado aqui: confira cada um e acerte o pagamento pelo pedido.</p>
+        <div id="finOrcLista"></div>
+      </div>
       <!-- v577: vendas aprovadas sem o número da nota fiscal (Financeiro e Administrador) -->
       <div class="card" style="margin-top:20px" id="finSemNFCard" hidden>
         <h2 style="margin:0 0 4px">Vendas aprovadas sem nota fiscal</h2>
@@ -11794,12 +11800,14 @@ var ETIQ_SEMCOM={cls:"p-acc",t:"Coberto pelo Plano Premium · sem comissão",sem
    abaixo da tabela, como tem de ser: ali houve desconto e a aprovação é devida. */
 function itemSemComissao(i,p){
   if(!i)return false;
-  if(i.planoCobre)return true;
+  if(itemCobertoSemCobranca(i))return true;
   if(ehPlano(i))return false;          /* o plano VENDIDO comissiona como qualquer item */
   if((+i.valor||0)>0.009)return false;
   return !(pisoMinimo(p)>0)&&!(pisoCem(p)>0);
 }
 function etiquetaDaFaixa(i,p,fx){
+  /* v597: a garantia tem a etiqueta dela; o resto continua a do plano */
+  if(i&&i.garantiaCobre)return {cls:"p-acc",t:textoGarantiaCobre(i)+" · sem comissão",semCom:true};
   if(itemSemComissao(i,p))return ETIQ_SEMCOM;
   return ETIQ_FAIXA[fx&&fx.n]||ETIQ_ABAIXO;
 }
@@ -13079,7 +13087,7 @@ function pctIndic(n){return Math.min(IND_MAX,Math.max(0,parseInt(n,10)||0))*IND_
 /* refil do pedido pelo MESMO critério do Plano Premium (v582). Coberto pelo plano fica fora:
    o plano vem primeiro e o item já sai a R$ 0,00. */
 function ehItemRefil(i){
-  if(!i||i.planoCobre)return false;
+  if(!i||itemCobertoSemCobranca(i))return false;
   if(ehPlano(i))return false;
   var p=null;try{p=prodPorId(i.pid);}catch(e){}
   return ehRefilNome((p&&p.nome)||i.nome||"");
@@ -17080,7 +17088,7 @@ function precoAutoItem(p){
 function qtdDoForm(){return Math.max(1,parseInt($("v_qtd")?$("v_qtd").value:"1",10)||1);}
 function somaTabelaCarrinho(){
   return (itens||[]).reduce(function(a,i){
-    if(i.planoCobre)return a;
+    if(itemCobertoSemCobranca(i))return a;
     var p=prodPorId(i.pid);
     return a+(precoTabela(p)*(i.qtd||1));},0);
 }
@@ -19520,6 +19528,11 @@ function addItem(){
       vinculo:uid(),vemCom:vinculo,vemComNome:p.nome});
     nomesJuntos.push(qj+"× "+j.prod.nome);
   });
+  /* v597: pedido de OS de garantia — o que acabou de entrar sai a R$ 0,00, coberto pela garantia */
+  try{
+    var oGar=osDaVendaAberta();
+    if(osEhGarantia(oGar))cobrirItensPelaGarantia(itens.slice(idxAntes),oGar);
+  }catch(eGa){console.warn("garantia da OS",eGa);}
   /* de qual estoque sai cada linha que acabou de entrar (23/10). O item do PLANO e o
      SERVIÇO ficam de fora: eles não têm estoque. */
   var locEst=localItemForm(),euEst=euNoEstoque();
@@ -19576,6 +19589,171 @@ var FORMA_INDIC="Desconto de Indicação";
 /* OS de atendimento interno: o orçamento é cobrado e recebido na abertura (regra do Wagner, 20/09) */
 var FORMA_ORC="Adiantamento do Orçamento";
 var FORMA_RENDIMENTOS="Máquina de Rendimentos";
+/* ===== OS DE GARANTIA (24/11, v597, regra dele) =====
+   A OS nova guarda o tipo em `tipoOS`: "normal", "fabrica" (Garantia de fábrica) e "retorno"
+   (Retorno em garantia de serviço). A OS antiga guardava `tipo:"garantia"`. UMA função só diz
+   se a OS é de garantia, e é ela que todas as telas usam.
+   No pedido que nasce de OS de garantia a peça e o serviço saem a R$ 0,00 com a marca
+   `garantiaCobre`, que funciona como o `planoCobre`: fora da faixa, da comissão e dos pontos,
+   e nunca "abaixo da tabela" — o valor é zero porque a garantia cobre, não porque houve
+   desconto. Antes disso, peça com tabela no catálogo caía em "abaixo da tabela" e pedia
+   autorização do Administrador para fechar uma OS de garantia. */
+function osEhGarantia(o){
+  if(!o)return false;
+  var t=String(o.tipoOS||"");
+  return t==="fabrica"||t==="retorno"||o.tipo==="garantia";
+}
+/* só a garantia de FÁBRICA é cobrada do fabricante; o retorno em garantia de serviço é custo nosso */
+function osGarantiaFabrica(o){
+  if(!o)return false;
+  return String(o.tipoOS||"")==="fabrica"||o.tipo==="garantia";
+}
+function tipoGarantiaOS(o){
+  if(!o)return "";
+  if(String(o.tipoOS||"")==="retorno")return "retorno";
+  return osGarantiaFabrica(o)?"fabrica":"";
+}
+function nomeTipoOS(t){
+  return ({normal:"Normal",fabrica:"Garantia de fábrica",garantia:"Garantia de fábrica",
+    retorno:"Retorno em garantia de serviço"})[String(t||"")]||"";
+}
+function nomeTipoDeServicoOS(k){
+  try{
+    var t=(OS_TIPOS||[]).filter(function(x){return x.k===String(k||"");})[0];
+    return t?t.n:"";
+  }catch(e){return "";}
+}
+function marcaGarantiaCobre(o){
+  var t=tipoGarantiaOS(o);
+  if(!t)return null;
+  return {tipo:t,osId:o.id,osNumero:o.numero||""};
+}
+/* o item sai SEM COBRANÇA: coberto pelo plano ou coberto pela garantia. É esta função que
+   decide faixa, comissão, pontos e "abaixo da tabela" — nunca se duplica a regra. */
+function itemCobertoSemCobranca(i){return !!(i&&(i.planoCobre||i.garantiaCobre));}
+function textoGarantiaCobre(i){
+  var g=i&&i.garantiaCobre;if(!g)return "";
+  return g.tipo==="retorno"?"Coberto pela garantia do serviço":"Coberto pela garantia de fábrica";
+}
+/* a peça e o serviço do pedido de uma OS de garantia nascem cobertos, a R$ 0,00. O Serviço de
+   Orçamento fica de fora: ele é cobrado na abertura e só sai pela retirada, com motivo. */
+function itemAceitaGarantia(i){
+  if(!i||!i.pid)return false;
+  if(i.orcamentoOS||i.planoCobre||i.garantiaCobre)return false;
+  try{if(ehPlano(i))return false;}catch(e){}
+  return true;
+}
+/* v597: o que se cobra do fabricante é o CUSTO das peças cobertas pela garantia — o total da OS
+   é R$ 0,00, porque a garantia cobre. O "retorno em garantia de serviço" é custo NOSSO: fica
+   registrado na OS e não vai para o fabricante. */
+function custoGarantiaOS(o){
+  var lista=[];
+  try{var pd=pedidoDaOS(o);lista=(pd&&pd.itens)||(o&&o.itensOS)||[];}
+  catch(e){lista=(o&&o.itensOS)||[];}
+  return centavos((lista||[]).reduce(function(a,i){
+    if(!i||!i.garantiaCobre)return a;
+    var pr=null;try{pr=prodPorId(i.pid);}catch(e2){}
+    var c=pr?(+custoTotalDe(pr)||0):0;
+    var q=1;try{q=qtdItemOS(i)||1;}catch(e3){q=i.qtd||1;}
+    return a+c*q;
+  },0));
+}
+/* a OS do pedido que está na tela: a que abriu o pedido, ou a do pedido reaberto */
+function osDoPedidoEditado(){
+  try{
+    var id=(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.osId:"";
+    if(!id)return null;
+    return ordens.filter(function(x){return x.id===id;})[0]||null;
+  }catch(e){return null;}
+}
+function osDaVendaAberta(){
+  return ((typeof pedOrigemOS!=="undefined"&&pedOrigemOS)||osDoPedidoEditado())||null;
+}
+function cobrirItensPelaGarantia(lista,o){
+  var m=marcaGarantiaCobre(o);if(!m||!lista)return 0;
+  var n=0;
+  lista.forEach(function(i){
+    if(!itemAceitaGarantia(i)||i.garantiaTirada)return;
+    i.garantiaCobre={tipo:m.tipo,osId:m.osId,osNumero:m.osNumero};
+    i.valorCheio=(i.valorCheio!=null)?i.valorCheio:(+i.valor||0);
+    i.valor=0;i.valorFinal=0;i.digitou="";
+    n++;
+  });
+  return n;
+}
+/* ===== O ADIANTAMENTO DO ORÇAMENTO VALE SÓ O QUE O CLIENTE JÁ PAGOU (24/11, v597) =====
+   A OS interna lança o Serviço de Orçamento na abertura e punha a forma FORMA_ORC no pedido já
+   com o status "lancado" (ainda NÃO recebido). No pedido ela vinha travada e, sendo a única
+   forma, o automático jogava o TOTAL nela — e essa forma não gera título nem caixa, porque
+   entende que o dinheiro já entrou na OS. Resultado: venda aprovada sem título e sem caixa.
+   Agora: a forma só entra quando o orçamento foi RECEBIDO ou APROVADO, e sempre pelo valor do
+   adiantamento. Não recebido, o Serviço de Orçamento é item comum e é pago nas formas normais. */
+function adiantamentoOSdoPedido(){
+  var o=osDaVendaAberta(),a=o&&o.orcamentoAdiantado;
+  if(!a||(a.status!=="recebido"&&a.status!=="aprovado"))return 0;
+  return centavos(+a.valor||0);
+}
+function somaFormaORC(fs){
+  return centavos((fs||[]).reduce(function(a,f){
+    return a+((f&&f.tipo===FORMA_ORC)?(+f.valor||0):0);},0));
+}
+/* o adiantamento que ESTE pedido salvo pode ter na forma FORMA_ORC */
+function adiantamentoRecebidoDoPedido(p){
+  var o=(p&&p.osId)?(ordens.filter(function(x){return x.id===p.osId;})[0]||null):null;
+  var a=o&&o.orcamentoAdiantado;
+  if(!a||(a.status!=="recebido"&&a.status!=="aprovado"))return 0;
+  return centavos(+a.valor||0);
+}
+/* a trava por dentro, usada ao salvar e na aprovação financeira */
+function recusaFormaORC(p){
+  var so=somaFormaORC(p&&p.formas);
+  if(!(so>0.009))return "";
+  var rec=adiantamentoRecebidoDoPedido(p);
+  if(so-rec>0.009)
+    return FORMA_ORC+" de "+BRL(so)+" é mais do que o orçamento recebido do cliente ("+BRL(rec)+
+      "). Essa forma vale só o que já foi pago pelo orçamento: reparta o resto nas formas de pagamento normais.";
+  return "";
+}
+/* pedidos antigos para o Administrador e o Financeiro conferirem (v597, item 7): nada muda sozinho */
+function pedidosORCacimaDoRecebido(){
+  return (pedidos||[]).filter(function(p){
+    if(!p||p.loja!==lojaAtual)return false;
+    var so=somaFormaORC(p.formas);
+    return so>0.009&&(so-adiantamentoRecebidoDoPedido(p))>0.009;
+  });
+}
+/* a forma do adiantamento no pedido em montagem: valor fixo, travada, e o resto numa forma livre */
+function sincFormaORC(fs,totalVenda){
+  if(!fs)return 0;
+  var ix=-1;fs.forEach(function(f,k){if(f&&f.tipo===FORMA_ORC)ix=k;});
+  var val=adiantamentoOSdoPedido();
+  if(!(val>0.009)){
+    if(ix>=0){fs.splice(ix,1);try{renderFormas();}catch(e){}}
+    return 0;
+  }
+  var f=(ix>=0)?fs[ix]:null;
+  if(!f){f={tipo:FORMA_ORC,parc:1,__auto:false};fs.push(f);try{renderFormas();}catch(e){}}
+  var cab=centavos(Math.min(val,Math.max(0,+totalVenda||0)));
+  f.parc=1;f.base=cab;f.valor=cab;f.__auto=false;
+  var outras=fs.filter(function(x){return x!==f;});
+  var resto=centavos(Math.max(0,(+totalVenda||0)-cab));
+  if(!outras.length){
+    /* o resto precisa de uma forma LIVRE, para o cliente escolher como paga */
+    if(resto>0.009){
+      var fi=formasIniciais()[0]||{tipo:"Dinheiro",parc:1};
+      fs.push({tipo:fi.tipo,parc:fi.parc||1,base:resto,valor:resto,__auto:true});
+      try{renderFormas();}catch(e){}
+    }
+    return cab;
+  }
+  var soma=centavos(outras.reduce(function(a,x){return a+(+x.base||0);},0));
+  if(Math.abs(soma-resto)>0.009){
+    var alvoF=outras.filter(function(x){return (x.__auto!==false)&&!semJuros(x);})[0]
+      ||outras.slice().sort(function(a,b){return (+b.base||0)-(+a.base||0);})[0];
+    alvoF.base=centavos(Math.max(0,(+alvoF.base||0)+(resto-soma)));
+  }
+  return cab;
+}
 /* Quanto da venda foi pago com o purificador usado. Esse valor NÃO gera base de comissão
    (regra do Wagner, 20/09: "esse pagamento não pode gerar base de cálculo para comissão do
    vendedor"), mas continua no total do pedido e na faixa de cada item. */
@@ -19823,7 +20001,7 @@ function trocaNoPedido(p){return !!p&&trocaDasFormas(p.formas)>0;}
 function pedidoSoCoberto(p){
   var its=(p&&p.itens)||[];
   if(!its.length)return false;
-  if(its.every(function(i){return !!(i&&i.planoCobre);}))return !((+p.total||0)>0.009);
+  if(its.every(function(i){return itemCobertoSemCobranca(i);}))return !((+p.total||0)>0.009);
   /* v584 (regra dele): refil 100% de graça pelo desconto de indicação e nada mais a pagar —
      a aprovação é a mesma confirmação da v582: sem forma, sem caixa, e não conta como venda.
      Pedido MISTO (tem outra coisa a pagar) continua venda normal. */
@@ -20516,7 +20694,7 @@ function descontoItemFinal(i,T){
 function valorBaseItem(i){
   return Math.max(0,centavos((+i.valorBase||0)-descontoItemRS(i)));
 }
-function baseDoItem(i){return i.planoCobre?0:centavos(valorBaseItem(i)*(i.qtd||1));}
+function baseDoItem(i){return itemCobertoSemCobranca(i)?0:centavos(valorBaseItem(i)*(i.qtd||1));}
 /* O VALOR FINAL DIGITADO CONTINUA O MESMO (v282), mas a DEPRECIAÇÃO acompanha o parcelamento
    (regra dele, 05/10: "quando for alterado o número de parcelas o cálculo da depreciação seja
    alterado conforme o coeficiente respectivo da parcela que o usuário alterou").
@@ -20535,7 +20713,7 @@ function baseDoItem(i){return i.planoCobre?0:centavos(valorBaseItem(i)*(i.qtd||1
      digitou:"desconto" → o desconto FICA (R$ ou %, como foi digitado) e o valor final sai da tabela.
    Item sem nada digitado segue a tabela; coberto pelo plano e sucata ficam fora. A tabela da forma
    é a mesma do campo (`precoPelaForma` com `tabelaTotalVenda`), sem conta nova. */
-function itemForaDoDigitado(i){return !i||!!i.planoCobre||String(i.cod||"").toUpperCase()==="SUCATA";}
+function itemForaDoDigitado(i){return !i||itemCobertoSemCobranca(i)||String(i.cod||"").toUpperCase()==="SUCATA";}
 function tabelaNaFormaItem(i){
   return precoPelaForma(precoTabela(produtoPor(i.pid)||{})||(+i.valorTabela||0),1,tabelaTotalVenda(false));
 }
@@ -20612,7 +20790,7 @@ function redepreciarItensDigitados(lista){
   if(!lista||!lista.length)return;
   var T=tabelaTotalVenda(false);
   lista.forEach(function(i){
-    if(i.planoCobre||!(+i.valorFinal>0))return;
+    if(itemCobertoSemCobranca(i)||!(+i.valorFinal>0))return;
     i.valorBase=baseDoFinal(+i.valorFinal,i.qtd||1,T);
   });
 }
@@ -20625,7 +20803,7 @@ function normalizarValoresItens(lista){
 function composicaoVenda(lista,extras){
   var prod=0,gar=0;
   (lista||[]).forEach(function(i){
-    if(i.planoCobre)return;
+    if(itemCobertoSemCobranca(i))return;
     var v=baseDoItem(i);
     if(ehPlano(i))gar+=v;else prod+=v;
   });
@@ -20651,7 +20829,8 @@ function fatorDescontoComissao(comp){
 function distribuirBase(fs,totalBase){
   if(!fs||!fs.length)return;
   if(fs.length===1){
-    if(fs[0].__auto!==false)fs[0].base=centavos(totalBase);
+    /* v597: a forma do adiantamento do orçamento nunca recebe o total */
+    if(fs[0].__auto!==false&&fs[0].tipo!==FORMA_ORC)fs[0].base=centavos(totalBase);
     return;
   }
   var cj=formasComJuros().filter(function(f){return f.__auto!==false;});
@@ -20677,9 +20856,9 @@ function aplicarCobradoNosItens(lista,fs,totalBase,totalBruto){
   /* o preço final de cada item é a MESMA conta que sugere o valor no campo (`precoPelaForma`),
      então o que está na tela e o que é recalculado nunca divergem — inclusive quando há entrada
      sem juros, que entra pelo valor de face e só o resto recebe o acréscimo (v173). */
-  var T=(lista||[]).reduce(function(a,i){return i.planoCobre?a:a+((+valorBaseItem(i)||0)*(i.qtd||1));},0);
+  var T=(lista||[]).reduce(function(a,i){return itemCobertoSemCobranca(i)?a:a+((+valorBaseItem(i)||0)*(i.qtd||1));},0);
   (lista||[]).forEach(function(i){
-    if(i.planoCobre){i.valor=0;return;}
+    if(itemCobertoSemCobranca(i)){i.valor=0;return;}
     /* valor que o vendedor digitou vale como está (03/10) — o recálculo não mexe mais nele */
     /* valor digitado vale como esta — MENOS quando o item tem desconto proprio: ai o preco
        final e refeito do comercial com desconto, senao a tela mostraria um valor e a
@@ -20734,7 +20913,7 @@ function calcular(){
   aplicarCobradoNosItens(itens,formas,totalBase,0);
   var prodF=0,garF=0;
   itens.forEach(function(i){
-    if(i.planoCobre)return;
+    if(itemCobertoSemCobranca(i))return;
     var v=centavos((+i.valor||0)*(i.qtd||1));
     if(ehPlano(i))garF+=v;else prodF+=v;
   });
@@ -20748,6 +20927,8 @@ function calcular(){
     $("o_cIndicR").hidden=!(cInd&&cInd.valor>0);
     $("o_cIndic").textContent="− "+BRL((cInd&&cInd.valor)||0);
   }
+  /* v597: o Adiantamento do Orçamento vale só o adiantamento recebido; o resto vai nas formas livres */
+  try{sincFormaORC(formas,totalVenda);}catch(eOrc){console.warn("adiantamento do orçamento",eOrc);}
   distribuirBase(formas,totalVenda);
   formas.forEach(function(f){
     /* o que foi repartido JÁ é o valor cobrado; a base é o que sobra depois da depreciação */
@@ -20766,7 +20947,7 @@ function calcular(){
   if($("v_descGeralR"))$("v_descGeralR").hidden=!(descAntigo>0);
   /* e os descontos dados item a item ganham linha própria, somados */
   var descItens=centavos(itens.reduce(function(a,i){
-    return i.planoCobre?a:a+descontoItemFinal(i,somaTabelaCarrinho())*(i.qtd||1);},0));
+    return itemCobertoSemCobranca(i)?a:a+descontoItemFinal(i,somaTabelaCarrinho())*(i.qtd||1);},0));
   if($("o_cDescItR")){
     $("o_cDescItR").hidden=!(descItens>0);
     $("o_cDescIt").textContent="− "+BRL(descItens);
@@ -20844,7 +21025,7 @@ function calcular(){
   if(!itens.length)tb.innerHTML='<tr><td colspan="5"><div class="empty"><div class="big">Nenhum item</div>Escolha um produto acima e clique em Adicionar.</div></td></tr>';
   itens.forEach(function(i,idx){
     var p=prodPorId(i.pid)||{cheia:0};
-    var cobPl=!!i.planoCobre;
+    var cobPl=itemCobertoSemCobranca(i);
     var depI=cobPl?0:centavos(baseDoItem(i)*fatorDescCom),
         unit=cobPl?0:centavos(valorBaseItem(i)*fatorDescCom),
         fx=cobPl?{f:0,n:"plano",cls:"p-ok"}:faixa(unit,p);
@@ -20877,6 +21058,11 @@ function calcular(){
         '<span class="nome-item" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+'</span></div><div class="t-sub"><code>'+esc(i.cod)+"</code> · "+garPill+
         (i.serie?" · série "+esc(i.serie):"")+(i.local?" · "+esc(i.local):"")+
         (i.planoCobre?' · <span class="pill p-ok">coberto pelo plano '+esc(i.planoCobre.garantia)+"</span>":"")+
+        /* v597: coberto pela garantia da OS, com o botão de cobrar o item */
+        (i.garantiaCobre?' · <span class="pill p-ok">'+esc(textoGarantiaCobre(i))+"</span>"+
+          ' <button class="btn ghost sm" type="button" data-garcob="'+idx+'">Cobrar este item</button>':"")+
+        (i.garantiaTirada?' · <span class="pill p-warn">fora da garantia</span>'+
+          ' <button class="btn ghost sm" type="button" data-garvol="'+idx+'">Voltar para a garantia</button>':"")+
         (i.retirada&&i.retirada.status!=="cancelada"?' · <span class="pill p-warn">'+i.retirada.qtd+" com retirada do estoque geral</span>":"")+
         pillNegItem(i)+
         /* de qual estoque este item sai, e se ainda espera autorização (23/10) */
@@ -20949,8 +21135,8 @@ function calcular(){
          forma escolhida — assim o vendedor pode trabalhar pelo lado que preferir. */
       aplicarFinalDigitado(it,v);
       it.precoAuto=false;
-      /* com uma forma só, o valor dela volta a acompanhar o total */
-      if(formas.length===1)formas[0].__auto=true;
+      /* com uma forma só, o valor dela volta a acompanhar o total (menos a do adiantamento, v597) */
+      if(formas.length===1&&formas[0].tipo!==FORMA_ORC)formas[0].__auto=true;
       calcular();
     };
     inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};
@@ -20998,7 +21184,7 @@ function calcular(){
       }
       /* a retirada de estoque não pode pedir mais do que o item tem */
       if(it.retirada&&it.retirada.qtd>q)it.retirada.qtd=q;
-      if(formas.length===1)formas[0].__auto=true;
+      if(formas.length===1&&formas[0].tipo!==FORMA_ORC)formas[0].__auto=true;
       calcular();
     };
     inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();inp.blur();}};
@@ -21014,6 +21200,30 @@ function calcular(){
     /* tirou o principal: o que veio junto com ele sai também (v248) */
     itens=itens.filter(function(x){return x!==it&&!(it.vinculo&&(x.planoDe===it.vinculo||x.vemCom===it.vinculo));});
     render();};});
+  /* v597: "Cobrar este item" tira a marca da garantia e devolve o preço de tabela; "Voltar para
+     a garantia" desfaz. Quem tirou ou devolveu fica no item e vai para o histórico do pedido. */
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-garcob]"),function(b){b.onclick=function(){
+    var it=itens[+b.getAttribute("data-garcob")];if(!it||!it.garantiaCobre)return;
+    it.garantiaTirada={tipo:it.garantiaCobre.tipo,por:usuarioAtual,em:iso(new Date())};
+    delete it.garantiaCobre;
+    var pr=produtoPor(it.pid)||{};
+    it.valorTabela=precoTabela(pr)||(+it.valorCheio||0);
+    it.valorBase=baseDoCampoValor(pr,it.qtd||1)||(+it.valorTabela||0);
+    it.valor=precoPelaForma(+it.valorTabela||0,it.qtd||1,tabelaTotalVenda(true));
+    it.precoAuto=true;it.valorFinal=0;it.digitou="";
+    toast(it.nome+" saiu da garantia: volta a ser cobrado pelo preço de tabela.");
+    calcular();};});
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-garvol]"),function(b){b.onclick=function(){
+    var it=itens[+b.getAttribute("data-garvol")];if(!it||!it.garantiaTirada)return;
+    var o=(typeof pedOrigemOS!=="undefined"&&pedOrigemOS)||osDoPedidoEditado();
+    var m=marcaGarantiaCobre(o)||{tipo:it.garantiaTirada.tipo,osId:(o&&o.id)||"",osNumero:(o&&o.numero)||""};
+    it.garantiaDevolvida={por:usuarioAtual,em:iso(new Date())};
+    delete it.garantiaTirada;
+    it.garantiaCobre={tipo:m.tipo,osId:m.osId,osNumero:m.osNumero};
+    it.valorCheio=(it.valorCheio!=null)?it.valorCheio:(+it.valor||0);
+    it.valor=0;it.valorFinal=0;it.digitou="";
+    toast(it.nome+" voltou para a garantia, sem cobrança.");
+    calcular();};});
 
   /* Desconto de troca não gera comissão (regra do Wagner, 20/09): o que o cliente pagou com o
      purificador usado sai da base, mas continua contando no total e na faixa do item — o
@@ -21248,7 +21458,7 @@ function abrirRevisaoPedido(){
   var fatorRev=fatorDescontoComissao(r&&r.comp);
   var abaixoRev=[];
   var linhas=itens.map(function(i,ix){
-    if(i.planoCobre)
+    if(itemCobertoSemCobranca(i))
       return "<tr><td>"+esc(i.nome)+'</td><td class="num">'+(i.qtd||1)+
         '</td><td class="num">—</td><td class="num">—</td><td class="num">'+BRL(0)+
         "</td><td>"+pillDaFaixa(ETIQ_SEMCOM)+"</td></tr>";
@@ -21894,6 +22104,9 @@ async function salvarPedidoAgora(){
      itensForaDoInstalador(itens,instaladorForm()).length){conferirTrocaInstalador(true);return null;}
   var falhaEst=aplicarEstoqueVenda();
   if(falhaEst){toast(falhaEst);try{abrirRevisaoPedido();}catch(eRv){}return null;}
+  /* v597: a forma do adiantamento do orçamento nunca passa do que o cliente pagou (trava por dentro) */
+  var falhaORC=recusaFormaORC({formas:formas,osId:(pedOrigemOS&&pedOrigemOS.id)||((typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.osId:"")});
+  if(falhaORC){toast(falhaORC);irEtapa(2);return null;}
   /* v535: dono sem saldo → a requisição ao almoxarifado nasce sozinha (nunca reserva o que não existe) */
   try{resolverAutSemSaldo(itens,(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"");}catch(eSs){console.warn("sem saldo",eSs);}
   /* pedido reaberto pelo botão "Editar o pedido": atualiza o MESMO pedido, com o mesmo número,
@@ -22097,6 +22310,19 @@ async function salvarPedidoAgora(){
           if(aOrOS&&aOrOS.status!=="finalizado")await concluirAtivPorAcao(aOrOS,"Concluída pela OS "+osDoPed.numero);
         }
       }
+    }
+    /* v597: o orçamento que o cliente ainda NÃO pagou é cobrado dentro do pedido, como item
+       comum. Lançado o pedido, ele sai das listas de "a receber" e "a aprovar": a comissão vem
+       do pedido e não se paga duas vezes. */
+    var aOrc=osDoPed.orcamentoAdiantado;
+    if(aOrc&&aOrc.status==="lancado"&&(ped.itens||[]).some(function(i){return i&&i.orcamentoOS;})){
+      aOrc.status="recebidoNoPedido";aOrc.pedidoId=ped.id;aOrc.pedidoNumero=ped.numero;
+      aOrc.formasPedido=formasTexto(ped.formas)||"";aOrc.porNoPedido=usuarioAtual;
+      aOrc.recebidoNoPedidoEm=hojeISO();
+      osDoPed.historico=osDoPed.historico||[];
+      osDoPed.historico.push({quando:hojeISO(),por:usuarioAtual,
+        texto:"Serviço de Orçamento de "+BRL(aOrc.valor)+" cobrado dentro do pedido "+ped.numero+
+          (aOrc.formasPedido?" · "+aOrc.formasPedido:"")+" — sai das listas de orçamento a receber e a aprovar"});
     }
     osDoPed.historico=osDoPed.historico||[];
     osDoPed.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Pedido "+ped.numero+" lançado · "+BRL(ped.total)+
@@ -24342,6 +24568,18 @@ function aplicarEstoqueVenda(){
 async function criarReqsDaVenda(p){
   var porLoc={},n=0,falhou=0,mudou=false;
   try{if(await registrarTrocasEstoque(p))mudou=true;}catch(eTr){console.warn("troca do instalador",eTr);}
+  /* v597: item que saiu da garantia (ou voltou para ela) fica no histórico do pedido */
+  (p.itens||[]).forEach(function(it){
+    if(!it)return;
+    var tx="";
+    if(it.garantiaTirada)tx="Item "+(it.nome||"")+" saiu da garantia e passou a ser cobrado · "+
+      (it.garantiaTirada.por||"")+"";
+    else if(it.garantiaDevolvida&&it.garantiaCobre)tx="Item "+(it.nome||"")+" voltou para a garantia, sem cobrança · "+
+      (it.garantiaDevolvida.por||"")+"";
+    if(!tx)return;
+    if((p.eventos||[]).some(function(e){return (e&&e.texto)===tx;}))return;
+    registrarEvento(p,tx);mudou=true;
+  });
   /* v595: de onde a peça saiu quando não foi o padrão — uma linha só, nunca repetida */
   itensDeEstoque(p).forEach(function(it){
     if(!it||!it.estEscolhido||!it.estoque)return;
@@ -47664,6 +47902,62 @@ async function aprovarOrcamentoOS__corpo(o){
   await grava("ordens",o);
   return a;
 }
+/* ===== RETIRAR A COBRANÇA DO ORÇAMENTO NA OS DE GARANTIA (24/11, v597, regra dele) =====
+   O Serviço de Orçamento continua caindo sozinho na abertura. Sendo OS de garantia e enquanto o
+   cliente NÃO pagou (status "lancado"), quem abriu a OS, o atendente ou a gestão pode retirar a
+   cobrança, com motivo obrigatório. Já recebido ou aprovado, não se retira por aqui: a devolução
+   é pelo financeiro. */
+function podeRetirarOrcamentoOS(o){
+  var a=o&&o.orcamentoAdiantado;
+  if(!a||a.status!=="lancado"||!osEhGarantia(o))return false;
+  return podeAtendenteOS(o)||usuarioAtual===(o.criadoPor||o.abertaPor||"\u0000")||
+    usuarioAtual===(o.vendedor||"\u0000");
+}
+function abrirRetiradaOrcamentoOS(o){
+  var a=o&&o.orcamentoAdiantado;
+  if(!a){toast("Esta OS não tem Serviço de Orçamento lançado.");return;}
+  if(a.status==="recebido"||a.status==="aprovado"){
+    toast("O cliente já pagou o Serviço de Orçamento desta OS: a devolução é pelo financeiro, não por aqui.");
+    return;
+  }
+  if(a.status==="retirado"){toast("A cobrança do orçamento desta OS já foi retirada.");return;}
+  if(!osEhGarantia(o)){toast("A cobrança do orçamento só é retirada em OS de garantia.");return;}
+  if(!podeRetirarOrcamentoOS(o)){
+    toast("Só quem abriu a OS, o atendente ("+(o.atendente||o.criadoPor||"—")+") ou a gestão retira a cobrança do orçamento.");
+    return;
+  }
+  abrirModalNF({tit:"Retirar a cobrança do orçamento",
+    sub:"OS "+esc(o.numero||"")+" · "+esc(nomeTipoOS(o.tipoOS)||"garantia")+" · "+BRL(a.valor)+
+      " do Serviço de Orçamento. O item e a forma saem da OS e o cliente não paga o orçamento.",
+    corpo:"",motivo:true,phMot:"Por que a cobrança do orçamento não vale nesta OS",
+    ok:"Retirar a cobrança",
+    onOk:function(){
+      var mot=motivoModalNF();
+      if(!mot)return false;
+      fecharModalNF();
+      return retirarCobrancaOrcamentoOS(o,mot);
+    }});
+}
+/* toque duplo nunca grava duas vezes (30/10) */
+function retirarCobrancaOrcamentoOS(){return travaSalvar("retirarCobrancaOrcamentoOS",retirarCobrancaOrcamentoOS__corpo,this,arguments);}
+async function retirarCobrancaOrcamentoOS__corpo(o,motivo){
+  var a=o&&o.orcamentoAdiantado;
+  if(!a||a.status!=="lancado"||!osEhGarantia(o)||!podeRetirarOrcamentoOS(o))return false;
+  if(!String(motivo||"").trim())return false;
+  o.itensOS=(o.itensOS||[]).filter(function(i){return !(i&&i.orcamentoOS);});
+  o.formasOS=(o.formasOS||[]).filter(function(f){return !(f&&f.tipo===FORMA_ORC);});
+  a.status="retirado";a.retiradoEm=hojeISO();a.retiradoHora=agoraHM();
+  a.retiradoPor=usuarioAtual;a.motivoRetirada=String(motivo).trim();
+  o.total=totalOS(o);
+  o.historico=o.historico||[];
+  o.historico.push({quando:hojeISO(),por:usuarioAtual,
+    texto:"Cobrança do Serviço de Orçamento retirada ("+(nomeTipoOS(o.tipoOS)||"garantia")+") · "+
+      BRL(a.valor)+" · motivo: "+String(motivo).trim()});
+  try{await gravaConf("ordens",o);}catch(e){toast("A retirada não gravou: "+motivoBanco(e));return false;}
+  toast("Cobrança do orçamento retirada da OS "+(o.numero||"")+".");
+  try{renderOS();abrirOS(o);}catch(e){}
+  return true;
+}
 /* OS internas com o orçamento esperando o recebimento ou a aprovação */
 function orcamentosOSPendentes(st){
   return ordens.filter(function(o){
@@ -47672,6 +47966,13 @@ function orcamentosOSPendentes(st){
 /* linha do adiantamento, usada na ficha, no comprovante de entrega e no pedido da OS */
 function textoAdiantOrcamento(o){
   var a=o&&o.orcamentoAdiantado;if(!a)return "";
+  /* v597 */
+  if(a.status==="retirado")
+    return "Cobrança do Serviço de Orçamento retirada"+(a.retiradoPor?" por "+a.retiradoPor:"")+
+      (a.retiradoEm?" em "+dataBR(a.retiradoEm):"")+(a.motivoRetirada?": "+a.motivoRetirada:".");
+  if(a.status==="recebidoNoPedido")
+    return "Serviço de Orçamento de "+BRL(a.valor)+" pago junto com o pedido "+(a.pedidoNumero||a.pedidoId||"")+
+      (a.formasPedido?" · "+a.formasPedido:"")+".";
   if(a.status==="lancado")
     return "Serviço de Orçamento de "+BRL(a.valor)+" lançado na abertura, a receber do cliente.";
   var t="Já adiantado "+BRL(a.valor)+" do orçamento, recebido em "+dataBR(a.recebidoEm||a.quando)+
@@ -47976,7 +48277,12 @@ function abrirPedidoDaOS(o,modo,ativ,opc){
   try{if(o.tecnico&&[].slice.call($("v_iresp").options).some(function(x){return (x.value||x.textContent)===o.tecnico;}))$("v_iresp").value=o.tecnico;}catch(e){}
   /* a peça que o técnico marcou como "não usei" na execução NÃO vai para o pedido (09/10) */
   itens=JSON.parse(JSON.stringify((o.itensOS||[]).filter(function(i){return !itemNaoUsadoOS(i);})));
+  /* v597: OS de garantia — a peça e o serviço saem a R$ 0,00, cobertos pela garantia */
+  try{cobrirItensPelaGarantia(itens,o);}catch(eGar){console.warn("garantia da OS",eGar);}
   if((o.formasOS||[]).length)formas=JSON.parse(JSON.stringify(o.formasOS));
+  /* v597: a forma do Adiantamento do Orçamento só entra se o cliente já pagou o orçamento */
+  formas=(formas||[]).filter(function(f){return f.tipo!==FORMA_ORC;});
+  if(!formas.length)formas=formasIniciais();
   try{renderFormas();calcular();atualizarEtapas();}catch(e){console.warn(e);}
   /* OS externa, cliente não aprovou: o pedido leva só o serviço de atendimento */
   pedOSServAtend=!!(opc&&opc.servAtend);
@@ -48507,9 +48813,19 @@ function renderPedOS(){
     var cls=ao.status==="lancado"?"warn":"ok";
     tabela='<div class="note '+cls+'" id="os_orcNota"><b>Serviço de Orçamento · '+BRL(ao.valor)+"</b> — "+
       esc(textoAdiantOrcamento(o))+
-      " O valor já está na OS como <b>"+esc(FORMA_ORC)+"</b> e não é cobrado de novo no pedido."+
+      /* v597: só o que o cliente JÁ PAGOU entra no pedido como forma travada; o que ainda
+         não foi recebido é item comum do pedido e é pago nas formas normais */
+      ((ao.status==="recebido"||ao.status==="aprovado")
+        ? " O valor já está na OS como <b>"+esc(FORMA_ORC)+"</b> e não é cobrado de novo no pedido."
+        : ao.status==="lancado"
+          ? " Enquanto não for recebido, o <b>Serviço de Orçamento</b> vai no pedido como item comum, pago junto com o resto."
+          : "")+
       (ao.status==="lancado"
         ? '<div style="margin-top:8px"><button class="btn sm" type="button" id="osOrcRecebido">Recebido do cliente</button></div>'
+        : "")+
+      /* v597: OS de garantia — a cobrança do orçamento pode ser retirada, com motivo */
+      ((ao.status==="lancado"&&osEhGarantia(o))
+        ? '<div style="margin-top:8px"><button class="btn ghost sm" type="button" id="osOrcRetirar">Retirar a cobrança do orçamento (garantia)</button></div>'
         : "")+
       (ao.status==="recebido"
         ? '<div style="margin-top:8px"><button class="btn ghost sm" type="button" id="osOrcFin">Ver na Aprovação Financeira</button></div>'
@@ -48566,6 +48882,7 @@ function renderPedOS(){
   var dentro=function(id){return w.querySelector("#"+id);};
   /* pergunta a forma de pagamento antes de mandar ao financeiro (regra dele, 21/09) */
   if(dentro("osOrcRecebido"))dentro("osOrcRecebido").onclick=function(){abrirRecebimentoOrcamento(o);};
+  if(dentro("osOrcRetirar"))dentro("osOrcRetirar").onclick=function(){abrirRetiradaOrcamentoOS(o);};
   if(dentro("osOrcFin"))dentro("osOrcFin").onclick=function(){ir("fin");};
   if(dentro("osPecasPed"))dentro("osPecasPed").onclick=function(){abrirPedidoDaOS(o,"tecnico");};
   if(dentro("osAtivRealizada"))dentro("osAtivRealizada").onclick=atividadeRealizadaOS;
@@ -51288,7 +51605,7 @@ function totaisVersaoOrc(v){
   if(!v)return t;
   (v.itens||[]).forEach(function(i){
     var q=(i.qtd||1);
-    if(i.planoCobre){t.coberto+=(+i.valorCheio||0)*q;return;}
+    if(itemCobertoSemCobranca(i)){t.coberto+=(+i.valorCheio||0)*q;return;}
     var bruto=(+i.valor||0)*q;
     if(i.tipo==="servico")t.servicos+=bruto;else t.pecas+=bruto;
   });
@@ -52175,7 +52492,7 @@ function renderOS(){
   var atrasadas=abertas.filter(function(o){return o.prazo&&o.prazo<hojeISO();});
   var aguardando=base.filter(function(o){
     return ["agEquip","orcDisp","agAssin","novoOrc","recDevol"].indexOf(sitDaOS(o))>=0;});
-  var fab=base.filter(function(o){return o.tipo==="garantia"&&sitDaOS(o)!=="cancelada"&&!o.fabricantePagou;});
+  var fab=base.filter(function(o){return osGarantiaFabrica(o)&&sitDaOS(o)!=="cancelada"&&!o.fabricantePagou;});
   $("osKpis").innerHTML=
     '<div class="kpi"><div class="l">Em andamento</div><div class="v">'+abertas.length+"</div></div>"+
     '<div class="kpi"><div class="l">Fora do prazo</div><div class="v" style="color:'+(atrasadas.length?"var(--crit)":"inherit")+'">'+atrasadas.length+"</div></div>"+
@@ -52379,9 +52696,16 @@ function notaGarantiaOS(){
 }
 function notaFabricante(){
   var t=$("os_tipoSel").value;
+  /* v597: o retorno em garantia de serviço é custo nosso e não vai ao fabricante */
+  if(editandoOS&&String(editandoOS.tipoOS||"")==="retorno"){
+    $("os_fabNota").innerHTML='<div class="note"><b>Retorno em garantia de serviço.</b> A peça e o serviço saem sem cobrança para o cliente, e o custo é NOSSO: não entra em "cobrar do fabricante".'+
+      (custoGarantiaOS(editandoOS)>0?" Custo registrado nesta OS: <b>"+BRL(custoGarantiaOS(editandoOS))+"</b>.":"")+"</div>";
+    return;
+  }
   $("os_fabNota").innerHTML=(t==="garantia")
     ? '<div class="note warn"><b>Garantia de fábrica.</b> O serviço é feito por nós e o custo é cobrado do fabricante. '+
-      "Guarde o número de série e as fotos: a OS vira o comprovante do reembolso, e fica pendente até o fabricante pagar.</div>"
+      "Guarde o número de série e as fotos: a OS vira o comprovante do reembolso, e fica pendente até o fabricante pagar."+
+      ((editandoOS&&custoGarantiaOS(editandoOS)>0)?" Custo das peças cobertas: <b>"+BRL(custoGarantiaOS(editandoOS))+"</b>.":"")+"</div>"
     : "";
 }
 function calcOS(){
@@ -52425,7 +52749,7 @@ function calcOS(){
       ac+='<button class="btn ghost" type="button" id="osConcluir">Concluir OS</button>';
     if(!internaOS&&editandoOS.status==="concluida")
       ac+='<button class="btn ghost" type="button" id="osEntregar">Registrar entrega</button>';
-    if(editandoOS.tipo==="garantia"&&!editandoOS.fabricantePagou&&editandoOS.status!=="aberta")
+    if(osGarantiaFabrica(editandoOS)&&!editandoOS.fabricantePagou&&editandoOS.status!=="aberta")
       ac+='<button class="btn ghost" type="button" id="osFab">Fabricante pagou</button>';
     if(editandoOS.status!=="cancelada")
       ac+='<button class="btn mut" type="button" id="osCancelarOS">Cancelar OS</button>';
@@ -52469,7 +52793,16 @@ async function salvarOS__corpo(){
   var p=prodPorId(o.produtoId);
   o.equipamento=p?p.nome:($("os_marca").value.trim()||"Equipamento");
   o.serie=$("os_serie").value.trim();o.marca=$("os_marca").value.trim();o.compra=$("os_compra").value;
+  /* v597: trocar o tipo da OS depois de aberta fica no histórico, com quem trocou e quando —
+     é o tipo que decide a garantia (osEhGarantia) e o "cobrar do fabricante" */
+  var tipoAntes=o.tipo||"";
   o.tipo=$("os_tipoSel").value;o.abertura=$("os_abertura").value||hojeISO();
+  if(!novo&&tipoAntes!==(o.tipo||"")){
+    o.historico=o.historico||[];
+    o.historico.push({quando:hojeISO(),por:usuarioAtual,
+      texto:"Tipo da OS trocado de "+(nomeTipoDeServicoOS(tipoAntes)||"—")+" para "+
+        (nomeTipoDeServicoOS(o.tipo)||"—")+(osEhGarantia(o)?" · passa a valer como OS de garantia":"")});
+  }
   o.hora=$("os_hora").value||o.hora||(novo?agoraHM():"");
   if(!o.atendente)o.atendente=o.criadoPor||usuarioAtual;
   o.local=osLocalSel||o.local||"";o.fotosAvarias=osFotos.slice();
@@ -52620,7 +52953,9 @@ function ligarAcoesOS(){
   on("osFab",async function(){
     var o=editandoOS;if(!o)return;
     o.fabricantePagou=true;o.fabricantePagouEm=hojeISO();
-    o.historico.push({quando:hojeISO(),por:usuarioAtual,texto:"Fabricante reembolsou "+BRL(totalOS(o))});
+    o.historico.push({quando:hojeISO(),por:usuarioAtual,
+      texto:"Fabricante reembolsou "+BRL(custoGarantiaOS(o)||totalOS(o))+
+        (custoGarantiaOS(o)>0?" (custo das peças cobertas pela garantia)":"")});
     try{await gravaConf("ordens",o);}
     catch(eGr){
       o.fabricantePagou=false;o.fabricantePagouEm="";o.historico.pop();
@@ -53462,8 +53797,7 @@ function resumoEtapaOS(o,e){
     L+=linhaFeitoOS("Atendente",o.atendente||o.criadoPor||"");
     L+=linhaFeitoOS("Onde o técnico atende",localOSN(o.local));
     L+=linhaFeitoOS("Equipamento",(o.equipamento||"")+(o.serie?" · série "+o.serie:""));
-    L+=linhaFeitoOS("Tipo da OS",o.tipoOS==="garantia"?"Garantia de fábrica"
-      :o.tipoOS==="retorno"?"Retorno em garantia de serviço":o.tipoOS?"Normal":"");
+    L+=linhaFeitoOS("Tipo da OS",nomeTipoOS(o.tipoOS)||(o.tipoOS?"Normal":""));
     L+=linhaFeitoOS("Alegação do cliente",o.defeito||"");
     if(o.local!=="externo"){
       L+=linhaFeitoOS("Acessórios recebidos",o.acessorios||"nenhum acessório recebido");
@@ -55775,7 +56109,7 @@ function recalcPedido(itens,formas,fatorAbaixo,descEspecial,freteLoja,credFora){
      conta da tela (`fatorDescontoComissao`). Sem ele, o desconto derrubava só o depreciado. */
   var fDesc=1;
   if(+descEspecial>0){
-    var pgR=itens.reduce(function(a,i){return i.planoCobre?a:a+((i.valorBase!=null)?centavos(valorBaseItem(i)*(i.qtd||1)):0);},0);
+    var pgR=itens.reduce(function(a,i){return itemCobertoSemCobranca(i)?a:a+((i.valorBase!=null)?centavos(valorBaseItem(i)*(i.qtd||1)):0);},0);
     if(pgR>0)fDesc=Math.max(0,(pgR-(+descEspecial||0))/pgR);
   }
   var total=itens.reduce(function(a,i){return a+((+i.valor||0)*(i.qtd||1));},0);
@@ -55786,18 +56120,18 @@ function recalcPedido(itens,formas,fatorAbaixo,descEspecial,freteLoja,credFora){
     dep+=(coef?centavos((v/n)/coef):0);   /* centavos, para cima (regra dele, 20/09) */
   });
   /* mesma repartição da tela: pelo VALOR VENDIDO de cada item (regra dele, 20/09) */
-  var somaVend=itens.reduce(function(a,i){if(i.planoCobre)return a;return a+((+i.valor||0)*(i.qtd||1));},0);
+  var somaVend=itens.reduce(function(a,i){if(itemCobertoSemCobranca(i))return a;return a+((+i.valor||0)*(i.qtd||1));},0);
   /* pedido do modelo novo: o depreciado é a soma das bases repartidas (v208) */
   if(formas.some(function(f){return f.base!=null&&(+f.base||0)>0;}))
     dep=centavos(formas.reduce(function(a,f){return a+(+f.base||0);},0));
   var pesosP=itens.map(function(i){
-    if(i.planoCobre)return 0;
+    if(itemCobertoSemCobranca(i))return 0;
     return somaVend>0?(((+i.valor||0)*(i.qtd||1))/somaVend):(itens.length?1/itens.length:0);
   });
   var partesP=repartirDep(dep,pesosP);
   var base=0,pontos=0,abaixo=false,depAbaixo=0,linhas=[];
   itens.forEach(function(i,ix){
-    if(i.planoCobre)return;   /* coberto pelo plano: sem custo, fora da faixa e da comissão */
+    if(itemCobertoSemCobranca(i))return;   /* coberto pelo plano ou pela garantia: fora da faixa e da comissão */
     var p=prodPorId(i.pid)||{cheia:0};
     /* pedido do modelo novo (v206) guarda o valor base do item: a tabela é decidida por ele.
        Pedido antigo continua pela repartição do depreciado, como sempre foi. */
@@ -56450,6 +56784,9 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm,cxFormas){
       (EQUIPE.filter(podeAprovarCredito).join(", ")||"ninguém")+".");
     return false;
   }
+  /* v597: Adiantamento do Orçamento acima do recebido não aprova */
+  var eOrcA=recusaFormaORC(p);
+  if(eOrcA){toast(eOrcA);return false;}
   if(!vendaPendente(p)){toast("O pedido "+p.numero+" já foi aprovado ou está cancelado.");return false;}
   if(p.status!=="Aguardando aprovação financeira"&&p.status!=="Aguardando aprovação de crédito"){
     toast("O pedido "+p.numero+" ainda está em: "+p.status+".");return false;}
@@ -60709,12 +61046,15 @@ function pedirDataPagamento(p){
     var soCob=pedidoSoCoberto(p);
     if(soCob){
       var soInd=!!(indicDasFormas(p.formas)>0);
+      /* v597: pedido de OS de garantia — tudo coberto pela garantia, sem o que receber */
+      var soGar=(p.itens||[]).some(function(i){return i&&i.garantiaCobre;})&&
+        (p.itens||[]).every(function(i){return !i||!i.planoCobre;});
       m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Aprovar · pedido '+esc(p.numero)+"</h3>"+
         '<div class="sub">'+esc(p.cliente||"")+" · pedido de "+esc(dataCurta(p.data))+"</div>"+
         '<div class="note ok" style="margin-top:14px"><b>Pedido sem valor: '+
-        (soInd?"o refil saiu de graça pelo desconto por indicação.":"tudo coberto pelo Plano Premium.")+"</b><br>"+
+        (soGar?"tudo coberto pela garantia da OS.":soInd?"o refil saiu de graça pelo desconto por indicação.":"tudo coberto pelo Plano Premium.")+"</b><br>"+
         "Não há forma de pagamento nem caixa para escolher. Ao aprovar, a peça baixa do estoque de "+
-        esc(textoLocaisBaixa(p))+" e "+(soInd?"as indicações usadas são baixadas":"o direito do plano é baixado")+
+        esc(textoLocaisBaixa(p))+(soGar?"":" e "+(soInd?"as indicações usadas são baixadas":"o direito do plano é baixado"))+
         ". Este pedido não conta em "+
         "faturamento, meta, comissão nem no Dashboard.</div>"+
         '<div class="actions"><button class="btn" type="button" id="pg_ok0">Aprovar</button>'+
@@ -61019,6 +61359,22 @@ function renderFin(){
     tr.onclick=function(){var p=porId(tr.getAttribute("data-finabre"));
       if(p){if(veTela("pedidos")){ir("pedidos");abrirPedido(p);}else abrirInstalacao(p,"venda");}};});
   try{renderVendasSemNF();}catch(eNf){console.warn("vendas sem nota fiscal",eNf);}
+  try{renderPedidosORC();}catch(eOc){console.warn("adiantamento do orçamento",eOc);}
+}
+/* v597: SÓ MOSTRA — pedidos com o Adiantamento do Orçamento acima do que o cliente pagou.
+   Nenhum pedido antigo é alterado: o Administrador e o Financeiro conferem um por um. */
+function renderPedidosORC(){
+  var cd=$("finOrcCard");if(!cd)return;
+  var ls=[];try{ls=pedidosORCacimaDoRecebido();}catch(e){ls=[];}
+  cd.hidden=!(ls.length&&(ehGestor()||podeAcao("aprovarFinanceiro")));
+  if(cd.hidden){$("finOrcLista").innerHTML="";return;}
+  $("finOrcLista").innerHTML='<div class="tw"><table><thead><tr><th>Pedido</th><th>Cliente</th><th>Situação</th>'+
+    '<th class="num">Total</th><th class="num">No adiantamento</th><th class="num">Recebido na OS</th></tr></thead><tbody>'+
+    ls.slice(0,200).map(function(p){
+      return "<tr><td><b>"+esc(p.numero||"")+"</b></td><td>"+esc(p.cliente||"")+"</td><td>"+esc(p.status||"")+
+        '</td><td class="num">'+BRL(+p.total||0)+'</td><td class="num">'+BRL(somaFormaORC(p.formas))+
+        '</td><td class="num">'+BRL(adiantamentoRecebidoDoPedido(p))+"</td></tr>";
+    }).join("")+"</tbody></table></div>";
 }
 /* v577: a lista das vendas aprovadas sem o número da nota fiscal, com o campo na própria linha */
 function renderVendasSemNF(){
