@@ -41108,6 +41108,48 @@ function calcProdAtivos(){
     if(p.grupo==="Planos")return !!(p.garantia&&+p.cheia>0);
     return !produtoIncompleto(p);}));
 }
+/* v601 (pedido dele ao testar a v600): digitando o nome ou o código, o produto do cadastro
+   APARECE para ligar — pela mesma busca do pedido (nome, nome popular, Código MF e código de
+   barras), com a listinha de sempre (`ligarListinha`, v546). Não achou? o item fica como está,
+   digitado à mão. */
+function calcAchaProdutos(txt){
+  var q=semAcento(String(txt||"").trim());
+  if(q.length<2)return [];
+  var termos=q.split(/\s+/),dig=q.replace(/\D/g,""),out=[];
+  calcProdAtivos().forEach(function(p){
+    var nome=semAcento(p.nome||""),cod=semAcento(p.cod||""),pop=semAcento(p.pop||"");
+    var bar=String(p.barras||"").replace(/\D/g,"");
+    var t=nome+" "+cod+" "+pop+" "+bar;
+    for(var i=0;i<termos.length;i++)if(t.indexOf(termos[i])<0)return;
+    var nota=(dig.length>=8&&bar===dig)?-1
+      :(cod.indexOf(termos[0])===0?0:(pop.indexOf(termos[0])===0?0.5:(nome.indexOf(termos[0])===0?1:2)));
+    out.push({p:p,nota:nota});
+  });
+  out.sort(function(a,b){return a.nota-b.nota||ordAZ(a.p.nome,b.p.nome);});
+  return out.slice(0,8).map(function(x){return x.p;});
+}
+function calcPrecoBase(p){return pisoCem(p)||precoTabela(p)||0;}
+function sugerirCalcProd(k){
+  var i=CALC.itens[k],box=$("caSug"+k);if(!i||!box)return;
+  var l=calcAchaProdutos(i.nome);
+  if(!l.length){box.hidden=true;box.innerHTML="";return;}
+  box.innerHTML="";
+  l.forEach(function(pr){
+    var b=document.createElement("button");b.type="button";
+    b.innerHTML="<b>"+esc(pr.nome)+"</b><span>"+esc(pr.cod||"sem código")+
+      (pr.pop?" · "+esc(pr.pop):"")+(calcPrecoBase(pr)>0?" · tabela "+BRL(calcPrecoBase(pr)):"")+"</span>";
+    b.onclick=function(){escolherCalcProd(k,pr.id);};
+    box.appendChild(b);
+  });
+  box.hidden=false;
+}
+function escolherCalcProd(k,pid){
+  var i=CALC.itens[k],pr=prodPorId(pid);if(!i||!pr)return false;
+  i.pid=pr.id;i.nome=pr.nome;
+  if(!(+i.liq>0))i.liq=calcPrecoBase(pr);
+  renderCalc();
+  return true;
+}
 function calcOpcoesProd(sel){
   var h='<option value=""'+(!sel?" selected":"")+">— digitar à mão —</option>";
   calcProdAtivos().forEach(function(p){
@@ -41167,7 +41209,10 @@ function renderCalcProds(){
       (CALC.itens.length>1?'<button class="btn mut sm" type="button" data-carm="'+k+'">Remover</button>':"")+"</div>"+
       '<div class="ca-g3">'+
         '<div class="fld"><label>Produto</label><select data-capid="'+k+'">'+calcOpcoesProd(i.pid||"")+"</select>"+
-          (i.pid?"":'<input style="margin-top:8px" data-canome="'+k+'" placeholder="Nome do produto ou serviço" value="'+esc(i.nome||"")+'">')+"</div>"+
+          (i.pid?"":'<div style="position:relative;margin-top:8px"><input id="caBusca'+k+'" data-canome="'+k+'" '+
+            'placeholder="Nome, código ou código de barras" aria-label="Buscar o produto no cadastro" value="'+esc(i.nome||"")+'">'+
+            '<div class="auto" id="caSug'+k+'" hidden></div></div>'+
+            '<div class="ca-help" style="margin:6px 0 0">Digite o nome ou o código: achando no cadastro, toque para ligar. Senão fica como está, digitado à mão.</div>')+"</div>"+
         '<div class="fld"><label>Qtd.</label><input type="number" min="1" step="1" data-caqtd="'+k+'" value="'+(+i.qtd||1)+'"></div>'+
         '<div class="fld"><label>Precisa cair por unidade</label><input type="text" inputmode="decimal" style="text-align:right" data-caliq="'+k+'" value="'+(liq>0?brMF(liq):"")+'" placeholder="0,00"></div>'+
       "</div>"+
@@ -41183,8 +41228,14 @@ function ligarCalcProds(){
     i.pid=sl.value||"";
     if(i.pid){var pr=prodPorId(i.pid);if(pr){i.nome=pr.nome;if(!(+i.liq>0))i.liq=pisoCem(pr)||precoTabela(pr);}}
     renderCalc();};});
-  Array.prototype.forEach.call(w.querySelectorAll("[data-canome]"),function(el){el.oninput=function(){
-    var i=CALC.itens[+el.getAttribute("data-canome")];if(i)i.nome=el.value;renderCalcConf();};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-canome]"),function(el){
+    var k=+el.getAttribute("data-canome");
+    el.oninput=function(){var i=CALC.itens[k];if(i)i.nome=el.value;
+      try{sugerirCalcProd(k);}catch(e){console.warn("busca da calculadora",e);}
+      renderCalcConf();};
+    el.onfocus=function(){try{sugerirCalcProd(k);}catch(e){}};
+    try{ligarListinha("caBusca"+k,"caSug"+k,null,null);}catch(e){console.warn("listinha da calculadora",e);}
+  });
   Array.prototype.forEach.call(w.querySelectorAll("[data-caqtd]"),function(el){el.oninput=function(){
     var i=CALC.itens[+el.getAttribute("data-caqtd")];if(i)i.qtd=Math.max(1,parseInt(el.value,10)||1);renderCalcConf();};});
   Array.prototype.forEach.call(w.querySelectorAll("[data-caliq]"),function(el){
@@ -41410,6 +41461,7 @@ function aplicarCalcNaVenda(){
 window.__calcMF={estado:function(){return CALC;},render:renderCalc,problemas:calcProblemas,
   totLiq:calcTotLiq,totDist:calcTotDist,totCobrar:calcTotCobrar,rateio:calcRateio,
   cobrarForma:calcCobrarForma,faixa:calcFaixaItem,formas:calcFormasLista,
+  acha:calcAchaProdutos,sugerir:sugerirCalcProd,escolher:escolherCalcProd,
   novo:calcNovo,addProd:calcAddProd,addForma:calcAddForma,falta:calcFaltaUltima,
   lancar:calcLancarPedido,pendente:calcPedidoPendente,aplicar:aplicarCalcNaVenda,
   guardar:calcGuardar,ler:calcLer,migrar:migrarCalcTodos};
