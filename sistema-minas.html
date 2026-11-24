@@ -32130,6 +32130,74 @@ function daLoja(lista){return lista.filter(function(x){return !x.loja||x.loja===
 function caixaPor(id){return caixas.filter(function(c){return c.id===id;})[0]||null;}
 function centroPor(id){return centros.filter(function(c){return c.id===id;})[0]||null;}
 function fornecPor(id){return fornecedores.filter(function(f){return f.id===id;})[0]||null;}
+/* ===================== v603: O CÓDIGO DO FORNECEDOR NUNCA SE REPETE =====================
+   O banco tem um índice único GLOBAL no código do fornecedor (`ux_docs_fornecedores_codigo`,
+   em `supabase/schema.sql`): o código não pode repetir NEM ENTRE AS DUAS EMPRESAS. O código
+   saía de "FOR-" + (fornecedores.length + 1001), contado na LISTA DA TELA, que é só da empresa
+   aberta — na WF, vazia, ele nascia "FOR-1001", que já existia na Minas Filtros; o banco
+   recusava, o `grava()` engolia o erro e a nota ficava apontando para um fornecedor que não
+   existe. Agora: PREFIXO POR EMPRESA (a WF leva "WF" no meio, como o código do cliente faz
+   em `codigoClienteNovo`), o próximo número vem do MAIOR CÓDIGO QUE ESTÁ NO BANCO (não da
+   lista da tela) e, se o banco ainda assim recusar por código repetido (duas pessoas ao mesmo
+   tempo), tenta o número seguinte até 5 vezes. Quem cria fornecedor — a leitura do XML e o
+   cadastro à mão — passa por AQUI, para não haver um jeito diferente em cada tela. */
+function prefixoFornec(){return lojaAtual==="wf"?"FOR-WF-":"FOR-";}
+/* só os fornecedores da empresa aberta: Minas Filtros e WF nunca se misturam */
+function fornecsDaEmpresa(){
+  return (fornecedores||[]).filter(function(f){return f&&(!f.loja||f.loja===lojaAtual);});
+}
+function numDoCodigoFornec(cod,pre){
+  var c=String(cod||"").toUpperCase().trim();
+  if(c.indexOf(pre)!==0)return 0;
+  var resto=c.slice(pre.length);
+  return /^[0-9]+$/.test(resto)?parseInt(resto,10):0;
+}
+/* o maior número já usado NESTE prefixo. Pergunta ao BANCO (a lista da tela pode estar
+   desatualizada ou vazia) e, por segurança, olha também o que está na memória. */
+async function maiorCodigoFornec(pre){
+  var max=0;
+  function olhar(l){(l||[]).forEach(function(f){var n=numDoCodigoFornec(f&&f.codigo,pre);if(n>max)max=n;});}
+  if(db&&modoBanco()){
+    var g=await col("fornecedores").get();
+    olhar((g.docs||[]).map(function(d){var o=d.data()||{};o.id=d.id;return o;}));
+  }
+  olhar(fornecedores);
+  return max;
+}
+async function proximoCodigoFornec(){
+  var pre=prefixoFornec();
+  return pre+String(Math.max(await maiorCodigoFornec(pre),1000)+1);
+}
+/* o banco recusou porque o código já existe? (índice único) */
+function ehCodigoFornecRepetido(e){
+  var t=String((e&&e.message)||e||"")+" "+String((e&&e.code)||"")+" "+String((e&&e.details)||"");
+  return /23505|duplicate key|duplicad|unique|ux_docs_fornecedores_codigo/i.test(t);
+}
+/* cria o fornecedor NO BANCO e só então o põe na lista da tela. Se o banco recusar, o erro
+   SOBE (gravaConf) e nada fica na memória — a tela não pode mostrar o que o banco não tem. */
+async function criarFornecedorNovo(dados){
+  var pre=prefixoFornec(),base=Math.max(await maiorCodigoFornec(pre),1000)+1,ultimo=null;
+  for(var t=0;t<5;t++){
+    var f=Object.assign({},dados,{codigo:pre+String(base+t),loja:lojaAtual});
+    try{
+      await gravaConf("fornecedores",f);
+      fornecedores.push(f);
+      return f;
+    }catch(e){
+      ultimo=e;
+      if(!ehCodigoFornecRepetido(e))throw e;   /* outro motivo: não adianta tentar de novo */
+    }
+  }
+  throw ultimo||new Error("não consegui um código livre para o fornecedor");
+}
+/* a nota aponta para um fornecedor que não está na empresa aberta? */
+function fornecSumiuNF(n){
+  return !!(n&&n.fornecedorId&&!fornecPor(n.fornecedorId));
+}
+function avisoFornecSumiuNF(n){
+  if(!fornecSumiuNF(n))return "";
+  return '<div class="note crit"><b>Fornecedor não encontrado.</b> Esta nota aponta para um fornecedor que não está no cadastro desta empresa — releia o XML ou escolha o fornecedor.</div>';
+}
 function hojeISO(){return iso(new Date());}
 function somaDias(d,n){var x=new Date(d+"T00:00:00");x.setDate(x.getDate()+n);return iso(x);}
 
@@ -34500,7 +34568,10 @@ function abrirFornec(f){
   $("fnLista").hidden=true;$("fnForm").hidden=false;
   $("fnTitulo").textContent=f?("Editar · "+f.nome):"Novo fornecedor";
   var v=f||{};
-  $("fn_codigo").value=v.codigo||("FOR-"+String(fornecedores.length+1001));
+  /* v603: o código do fornecedor novo é gerado NA GRAVAÇÃO, pelo banco (`criarFornecedorNovo`) */
+  $("fn_codigo").value=v.codigo||"";
+  $("fn_codigo").readOnly=!f;
+  $("fn_codigo").placeholder=f?"":"gerado ao salvar";
   $("fn_tipo").value=v.tipo||"Pessoa Jurídica";$("fn_status").value=v.status||"ativo";
   ["nome","fantasia","doc","ie","contato","tel","email","prazo","end","cidade","uf","obs"]
     .forEach(function(k){var el=$("fn_"+k);if(el)el.value=v[k]||"";});
@@ -38741,6 +38812,8 @@ function lerXmlNFe(str){
     fornecedor:{cnpj:txt(emit,"CNPJ")||txt(emit,"CPF"),nome:txt(emit,"xNome"),
       fantasia:txt(emit,"xFant"),ie:txt(emit,"IE"),
       cidade:txt(emit,"xMun"),uf:txt(emit,"UF"),tel:txt(emit,"fone"),
+      /* v603: o e-mail do emitente, quando a nota traz, entra no cadastro do fornecedor */
+      email:txt(emit,"email"),
       end:[txt(emit,"xLgr"),txt(emit,"nro"),txt(emit,"xBairro")].filter(Boolean).join(", ")},
     frete:parseFloat(txt(tot,"vFrete"))||0,
     outras:parseFloat(txt(tot,"vOutro"))||0,
@@ -38910,16 +38983,27 @@ async function desfazerLigacaoForn__corpo(pid,k){
 async function aplicarNFe(nf){
   if(!nf){$("nf_import").innerHTML='<div class="note crit"><b>Não consegui ler este arquivo como NF-e.</b> '+
     "Envie o <b>XML</b> da nota — é ele que carrega os dados. O PDF (DANFE) é só a representação impressa do XML.</div>";return;}
-  /* fornecedor: acha pelo CNPJ ou cria na hora */
+  /* fornecedor: acha pelo CNPJ (SÓ na empresa aberta) ou cria na hora.
+     v603: o código vem do `criarFornecedorNovo` (prefixo da empresa + o próximo número do
+     BANCO) e a gravação AVISA se o banco recusar — antes era `grava()`, que engolia o erro e
+     deixava a nota apontando para um fornecedor que não existia. */
   var cnpj=soDigitos(nf.fornecedor.cnpj);
-  var f=fornecedores.filter(function(x){return soDigitos(x.doc)===cnpj;})[0];
+  var f=fornecsDaEmpresa().filter(function(x){return soDigitos(x.doc)===cnpj;})[0];
   var criado=false;
   if(!f&&cnpj){
-    f={id:uid(),codigo:"FOR-"+String(fornecedores.length+1001),tipo:"Pessoa Jurídica",
-      nome:nf.fornecedor.nome,fantasia:nf.fornecedor.fantasia,doc:nf.fornecedor.cnpj,
-      ie:nf.fornecedor.ie,tel:nf.fornecedor.tel,end:nf.fornecedor.end,
-      cidade:nf.fornecedor.cidade,uf:nf.fornecedor.uf,status:"ativo",criadoEm:hojeISO()};
-    fornecedores.push(f);await grava("fornecedores",f);criado=true;
+    try{
+      f=await criarFornecedorNovo({id:uid(),tipo:"Pessoa Jurídica",
+        nome:nf.fornecedor.nome,fantasia:nf.fornecedor.fantasia,doc:nf.fornecedor.cnpj,
+        ie:nf.fornecedor.ie,tel:nf.fornecedor.tel,email:nf.fornecedor.email||"",end:nf.fornecedor.end,
+        cidade:nf.fornecedor.cidade,uf:nf.fornecedor.uf,status:"ativo",criadoEm:hojeISO()});
+      criado=true;
+    }catch(eF){
+      $("nf_import").innerHTML='<div class="note crit"><b>Não foi possível cadastrar o fornecedor '+
+        esc(nf.fornecedor.nome||cnpj)+":</b> "+esc(motivoBanco(eF))+
+        '<br><span class="help" style="margin:0">A nota <b>não</b> foi preenchida, para não ficar apontando para um fornecedor que o banco não tem. '+
+        "Confira a internet e leia o XML de novo, ou cadastre o fornecedor em Cadastro Fornecedores.</span></div>";
+      return;
+    }
   }
   opcoesFinanceiro();
   if(f)$("nf_forn").value=f.id;
@@ -39098,7 +39182,7 @@ function abrirConferencia(n){
   $("cfTitulo").textContent=({lancar:"Aguardando o financeiro · ",conferida:"Nota conferida · ",aguardando:"Conferência · ",parcial:"Conferência · ",fechada:"Nota fechada · ",cancelada:"Nota cancelada · "}[situacaoNF(n)]||"")+(n.semNota?"Sem nota":"NF "+n.numero);
   var cc0=contaNota(n);
   /* o almoxarifado não vê valores da nota (só o Financeiro e o Administrador) */
-  $("cf_cab").innerHTML="<b>"+esc((f&&f.nome)||(n.semNota?"Sem fornecedor":"—"))+"</b> · emissão "+esc(dataBR(n.emissao))+
+  $("cf_cab").innerHTML=avisoFornecSumiuNF(n)+"<b>"+esc((f&&f.nome)||(n.semNota?"Sem fornecedor":"—"))+"</b> · emissão "+esc(dataBR(n.emissao))+
     (veValoresNF()?" · produtos "+BRL(cc0.prod)+(cc0.desconto?" · desconto "+BRL(cc0.desconto):"")+" · frete e despesas "+BRL(cc0.acrescimos)+
     " · total <b>"+BRL(cc0.total)+"</b>":" · "+(n.itens||[]).length+" item(ns)")+
     (n.semNota?"<br>Entrada sem nota · motivo: "+esc(n.motivoSemNota||"")+fotoReciboNota(n):"")+
@@ -39519,9 +39603,9 @@ function renderDarEntrada(){
     (n.semNota?"<br>Entrada sem nota · motivo: "+esc(n.motivoSemNota||"")+fotoReciboNota(n):"");
   /* chegou menos (ou mais) do que a nota: o estoque vai pelo conferido, as contas pelo total da nota */
   var dv=(n.itens||[]).filter(function(i){return i.pid&&(i.qtdConf==null?i.qtd:i.qtdConf)!==i.qtd;});
-  $("df_aviso").innerHTML=dv.length?'<div class="note warn"><b>Chegou diferente do que a nota diz em '+dv.length+" item(ns):</b> "+
+  $("df_aviso").innerHTML=avisoFornecSumiuNF(n)+(dv.length?'<div class="note warn"><b>Chegou diferente do que a nota diz em '+dv.length+" item(ns):</b> "+
     dv.map(function(i){return esc(i.nome)+" (nota "+i.qtd+", chegou "+(i.qtdConf==null?i.qtd:i.qtdConf)+")";}).join(" · ")+
-    ".<br>O estoque entra pelo que <b>chegou</b>; as contas são geradas pelo <b>total da nota</b> ("+BRL(tot)+"). Cobre a diferença do fornecedor.</div>":"";
+    ".<br>O estoque entra pelo que <b>chegou</b>; as contas são geradas pelo <b>total da nota</b> ("+BRL(tot)+"). Cobre a diferença do fornecedor.</div>":"");
   var cnD=contaNota(n),lcs=cnD.linhas,vals=lcs.map(function(l){return l.valor;});
   if($("df_quadro"))$("df_quadro").innerHTML=htmlQuadroImpostoNF(n,cnD);
   if(n.totalAntesConta!=null)$("df_aviso").innerHTML+='<div class="note warn"><b>O total desta nota foi refeito pela soma dos itens:</b> '+
@@ -41070,6 +41154,10 @@ window.__notaAcMF={acoes:acoesNotaNF,fazer:fazerAcaoNotaNF,editar:abrirEdicaoNot
   falta:faltaNotaNF,div:divNotaNF,rotulo:rotuloSitNF,veValores:veValoresNF,semRastro:estoqueSemRastroNF,movs:movsAtivosNF,
   /* v577 */
   segura:ligacaoSeguraNF,sugestao:sugestaoProdutoNF,ligacoes:todasLigacoesForn,desfazerLig:function(a,b){return desfazerLigacaoForn__corpo(a,b);},
+  /* v603 */
+  prefixoForn:prefixoFornec,proxCodForn:proximoCodigoFornec,criarForn:criarFornecedorNovo,
+  maiorCodForn:maiorCodigoFornec,fornsEmpresa:fornecsDaEmpresa,repetido:ehCodigoFornecRepetido,
+  fornSumiu:fornecSumiuNF,avisoForn:avisoFornecSumiuNF,
   guardarLig:guardarLigacaoForn,tipo:function(t){nfTipoNota=t||"";},itensEstoque:itensEstoqueNF};
 
 window.__notaFinMF={abrir:abrirDarEntrada,concluir:function(){return concluirEntradaNota__corpo();},clique:concluirEntradaNota,
@@ -72127,16 +72215,23 @@ function ligar(){
     if(!n||!d){$("fn_alerta").innerHTML='<div class="note crit"><b>Razão social e documento são obrigatórios.</b></div>';return;}
     var dup=fornecedores.filter(function(f){return f.doc===d&&(!editandoFn||f.id!==editandoFn.id);})[0];
     if(dup){toast("Já existe fornecedor com este documento: "+dup.nome);return;}
+    var novo=!editandoFn;
     var f=editandoFn||{id:uid(),criadoEm:hojeISO()};
-    f.codigo=f.codigo||$("fn_codigo").value;
     f.tipo=$("fn_tipo").value;f.status=$("fn_status").value;
     ["nome","fantasia","doc","ie","contato","tel","email","prazo","end","cidade","obs"]
       .forEach(function(k){f[k]=$("fn_"+k).value.trim();});
     f.uf=$("fn_uf").value.trim().toUpperCase();
-    if(!editandoFn)fornecedores.push(f);
-    await grava("fornecedores",f);editandoFn=null;
+    /* v603: o fornecedor novo nasce pelo mesmo caminho da leitura do XML — o código vem do
+       banco e a gravação avisa se for recusada. O que já existe mantém o código dele. */
+    try{
+      if(novo){f=await criarFornecedorNovo(f);}
+      else{await gravaConf("fornecedores",f);}
+    }catch(eF){
+      return avisarRecusaBanco("fn_alerta",eF,"O fornecedor não foi salvo.");
+    }
+    editandoFn=null;
     $("fnForm").hidden=true;$("fnLista").hidden=false;
-    renderFornec();opcoesFinanceiro();toast("Fornecedor salvo.");},this,arguments);};
+    renderFornec();opcoesFinanceiro();toast("Fornecedor salvo"+(novo?" com o código "+f.codigo:"")+".");},this,arguments);};
 
   ["rcBusca","cpBusca"].forEach(function(id){$(id).oninput=function(){renderReceber();renderPagar();};});
   ["rcSit","rcDe","rcAte"].forEach(function(id){$(id).onchange=renderReceber;});
