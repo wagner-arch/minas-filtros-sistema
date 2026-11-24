@@ -6010,6 +6010,7 @@ img{max-width:100%}
         </div>
         <div class="sect">
           <p class="sect-t">Pagamento da nota</p>
+          <div id="df_rot1"></div>
           <div class="grid g2">
             <div class="fld"><label for="df_forma">Forma de pagamento <span class="req">*</span></label><select id="df_forma"></select></div>
             <div class="fld"><label>Situação <span class="req">*</span></label><div class="chips" id="df_sit"></div></div>
@@ -39181,21 +39182,115 @@ function destinoSugeridoNF(it){
   return /insumo|uso e consumo|consumo|material de|ferrament|limpeza|escritorio/.test(semAcento(p.grupo||""))?"consumo":"revenda";
 }
 var notaFin=null,dfPg=null,dfCentroCompra="";
+/* ===================== v599: A NOTA PAGA COM MAIS DE UMA FORMA DE PAGAMENTO =====================
+   O pagamento da nota tem PARTES. Cada parte tem o que o pagamento tinha antes (forma, situação,
+   data, caixas e parcelas) mais o VALOR da parte. `dfPgs` são as partes da tela e `dfPg` continua
+   sendo a PRIMEIRA (dfPgs[0]): tudo o que já falava com dfPg continua falando com a Forma 1.
+   No banco, n.pagamento continua com os campos da Forma 1 e ganha n.pagamento.partes com todas.
+   Quem precisa da forma ou das parcelas de todas as partes usa partesPagamentoNF(n) — regra num
+   lugar só, e nota antiga (uma forma) funciona sem migrar nada. */
+var dfPgs=[];
+/* as partes do pagamento gravado: nota nova, as partes; nota antiga, o pagamento de sempre */
+function partesPagamentoNF(n){
+  var pg=n&&n.pagamento;if(!pg||!pg.situacao)return [];
+  return (pg.partes&&pg.partes.length)?pg.partes:[pg];
+}
+function sufParteNF(P){return P?"@"+P:"";}
+function pParteNF(v){var a=String(v||"").split("@");return {k:a[0],P:+(a[1]||0)};}
+function totalNotaNF(){return arred(+((notaFin||{}).total)||0);}
+/* o valor de cada parte: com UMA forma só, ela recebe o total da nota sozinha (como antes da v599) */
+function valorParteNF(P){
+  if(dfPgs.length<2)return totalNotaNF();
+  return arred(+(dfPgs[P]||{}).valor||0);
+}
+function somaPartesNF(){return arred(dfPgs.reduce(function(a,x){return a+(+x.valor||0);},0));}
+function parteNovaNF(n,forma,cx0,valor){
+  var v=arred(+valor||0);
+  var pp={forma:forma||"",sit:forma==="cartao"?"apagar":"",data:hojeISO(),valor:v,
+    cx:[{caixaId:cx0||"",valor:v}],
+    parc:sugestaoParcelasNF(n,0,v),ent:sugestaoEntradaNF(n,0,v),entCx:[{caixaId:cx0||"",valor:0}]};
+  if(forma==="cartao")pp.parc=pp.parc.map(function(x){return {venc:"",valor:x.valor};});
+  pp.entCx[0].valor=pp.ent[0].valor;
+  return pp;
+}
+/* a parte da tela a partir da parte gravada (abrir de novo o lançamento) */
+function parteDeGravadoNF(n,pg,cx0){
+  var sp=arred((pg.parcelas||[]).reduce(function(a,x){return a+(+x.valor||0);},0));
+  var v=pg.valor!=null?arred(+pg.valor||0):sp;
+  var pp={forma:pg.forma||"",sit:pg.situacao||"",data:pg.data||hojeISO(),valor:v,
+    cx:pg.situacao==="pago"&&(pg.caixas||[]).length?pg.caixas.map(function(x){return {caixaId:x.caixaId,valor:x.valor};}):[{caixaId:cx0||"",valor:v}],
+    parc:pg.situacao==="apagar"?(pg.parcelas||[]).map(function(x){return {venc:x.venc,valor:x.valor};}):sugestaoParcelasNF(n,0,v),
+    ent:pg.situacao==="entrada"?(pg.parcelas||[]).map(function(x){return {venc:x.venc,valor:x.valor};}):sugestaoEntradaNF(n,0,v),
+    entCx:pg.situacao==="entrada"&&(pg.caixas||[]).length?pg.caixas.map(function(x){return {caixaId:x.caixaId,valor:x.valor};}):[{caixaId:cx0||"",valor:0}]};
+  if(pg.situacao!=="entrada")pp.entCx[0].valor=pp.ent[0].valor;
+  return pp;
+}
+/* as parcelas de cada forma se repartem pelo VALOR DA FORMA (não pelo total da nota) */
+function repartirParteNF(pp,alvo){
+  var v=arred(+alvo||0);
+  function rp(l,fixo){
+    var idx=[],pesos=[];
+    for(var k=fixo;k<l.length;k++){idx.push(k);pesos.push(+l[k].valor>0?+l[k].valor:1);}
+    if(!idx.length)return;
+    var resto=arred(v-(fixo?arred(+(l[0]||{}).valor||0):0));
+    if(resto<0)resto=0;
+    var vs=repartir(resto,pesos);idx.forEach(function(k,j){l[k].valor=vs[j];});
+  }
+  rp(pp.parc,0);
+  if(arred(+(pp.ent[0]||{}).valor||0)>v&&pp.ent[0])pp.ent[0].valor=v;
+  rp(pp.ent,1);
+  if(pp.cx.length===1)pp.cx[0].valor=v;
+  if(pp.entCx.length===1)pp.entCx[0].valor=arred(+(pp.ent[0]||{}).valor||0);
+}
+/* a parte como ela fica gravada */
+function parteGravadaNF(pp,alvo){
+  var v=arred(+alvo||0);
+  return {forma:pp.forma,situacao:pp.sit,data:pp.sit==="apagar"?"":pp.data,valor:v,
+    caixas:pp.sit==="pago"?pp.cx.map(function(x){return {caixaId:x.caixaId,valor:arred(+x.valor||0)};})
+      :(pp.sit==="entrada"?pp.entCx.map(function(x){return {caixaId:x.caixaId,valor:arred(+x.valor||0)};}):[]),
+    parcelas:(pp.sit==="pago"?[{venc:pp.data,valor:v}]:(pp.sit==="entrada"?pp.ent:pp.parc))
+      .map(function(x){return {venc:x.venc,valor:arred(+x.valor||0)};})};
+}
+/* "Cartão de crédito 10× R$ X (a pagar) + Boleto 3× R$ Y (a pagar) · total R$ Z" */
+function textoPagamentoNF(ps,tot){
+  var SIT={pago:"já foi pago",apagar:"a pagar",entrada:"entrada + parcelas"};
+  var t=(ps||[]).map(function(x){
+    var sp=arred((x.parcelas||[]).reduce(function(a,y){return a+(+y.valor||0);},0));
+    return (nomeFormaNF(x.forma)||"forma a escolher")+" "+((x.parcelas||[]).length)+"× "+
+      BRL(x.valor!=null?x.valor:sp)+" ("+(SIT[x.situacao]||"")+")";}).join(" + ");
+  return t+(tot!=null?" · total "+BRL(tot):"");
+}
+/* o que vai em n.formaPg: com uma forma, a chave de sempre; com mais, o texto das formas juntas */
+function textoFormaPgNF(){
+  if(dfPgs.length<2)return (dfPgs[0]||{}).forma||"";
+  return dfPgs.map(function(x){return nomeFormaNF(x.forma)||"—";}).join(" + ");
+}
+function addFormaNF(){
+  var n=notaFin;if(!n||!dfPgs.length)return false;
+  if(dfPgs.length===1&&!(+dfPgs[0].valor>0))dfPgs[0].valor=totalNotaNF();
+  var falta=arred(totalNotaNF()-somaPartesNF());
+  dfPgs.push(parteNovaNF(n,"",caixaValidoNF(n.caixaId),Math.max(0,falta)));
+  renderDarEntrada();
+  return true;
+}
 /* sugestão das parcelas: duplicatas do XML; nota antiga, o Pagamento de antes; sem nada, 30/60/90 da emissão */
-function sugestaoParcelasNF(n,qtd){
-  var tot=arred(+n.total||0),em=n.emissao||hojeISO();
-  var dups=(n.duplicatas||[]).filter(function(d){return +d.valor>0;});
+function sugestaoParcelasNF(n,qtd,alvo){
+  /* v599: alvo = o valor DESTA forma de pagamento (sem alvo, o total da nota) */
+  var tot=(alvo==null?arred(+n.total||0):arred(alvo)),em=n.emissao||hojeISO();
+  var soParte=alvo!=null&&Math.abs(tot-arred(+n.total||0))>=0.005;
+  var dups=soParte?[]:(n.duplicatas||[]).filter(function(d){return +d.valor>0;});
   if(dups.length&&(!qtd||qtd===dups.length))
     return dups.map(function(d,k){return {venc:d.venc||somaDias(em,30*(k+1)),valor:arred(d.valor)};});
-  var antigo=!!n.primeiroVenc&&(!qtd||qtd===(+n.parcelas||1));
+  var antigo=!soParte&&!!n.primeiroVenc&&(!qtd||qtd===(+n.parcelas||1));
   var np=Math.max(1,qtd||(antigo?(+n.parcelas||1):1));
   var vals=repartir(tot,Array.apply(null,Array(np)).map(function(){return 1;}));
   return vals.map(function(v,k){
     return {venc:antigo?somaDias(n.primeiroVenc,(+n.intervalo||30)*k):somaDias(em,30*(k+1)),valor:v};});
 }
-function sugestaoEntradaNF(n,qtd){
-  var tot=arred(+n.total||0),em=n.emissao||hojeISO(),np=Math.max(2,qtd||2);
-  var dups=(n.duplicatas||[]).filter(function(d){return +d.valor>0;});
+function sugestaoEntradaNF(n,qtd,alvo){
+  var tot=(alvo==null?arred(+n.total||0):arred(alvo)),em=n.emissao||hojeISO(),np=Math.max(2,qtd||2);
+  var soParte=alvo!=null&&Math.abs(tot-arred(+n.total||0))>=0.005;
+  var dups=soParte?[]:(n.duplicatas||[]).filter(function(d){return +d.valor>0;});
   var sd=arred(dups.reduce(function(a,d){return a+(+d.valor||0);},0));
   if(dups.length&&np===dups.length+1&&tot-sd>0.005)
     return [{venc:hojeISO(),valor:arred(tot-sd)}].concat(dups.map(function(d,k){return {venc:d.venc||somaDias(em,30*(k+1)),valor:arred(d.valor)};}));
@@ -39218,16 +39313,17 @@ async function abrirDarEntrada(n){
     if(!it.destino)it.__dest=destinoSugeridoNF(it);else it.__dest=it.destino;
     it.__centro=it.centroId||"";
   });
-  var forma=n.formaPg||n.formaXml||((n.duplicatas||[]).length?"boleto":"");
-  dfPg={forma:forma,sit:forma==="cartao"?"apagar":"",data:hojeISO(),
-    cx:[{caixaId:caixaValidoNF(n.caixaId),valor:arred(+n.total||0)}],
-    parc:sugestaoParcelasNF(n,0),ent:sugestaoEntradaNF(n,0),entCx:[{caixaId:caixaValidoNF(n.caixaId),valor:0}]};
-  if(forma==="cartao")dfPg.parc=dfPg.parc.map(function(p){return {venc:"",valor:p.valor};});
-  dfPg.entCx[0].valor=dfPg.ent[0].valor;
+  var forma=formaValidaNF(n);
+  dfPgs=[parteNovaNF(n,forma,caixaValidoNF(n.caixaId),arred(+n.total||0))];dfPg=dfPgs[0];
   ["nfLista","nfForm","nfConf"].forEach(function(id){$(id).hidden=true;});$("nfFin").hidden=false;
   renderDarEntrada();
   try{window.scrollTo(0,0);}catch(e){}
   return true;
+}
+function formaValidaNF(n){
+  var f=n.formaPg||"";
+  if(!FORMAS_NF.some(function(x){return x[0]===f;}))f="";
+  return f||n.formaXml||((n.duplicatas||[]).length?"boleto":"");
 }
 function caixaValidoNF(id){
   return daLoja(caixas).some(function(c){return c.id===id&&c.status!=="inativo";})?id:"";
@@ -39240,18 +39336,19 @@ function opcoesCentroNF(sel){
   return '<option value="">— escolha o centro de custo —</option>'+centrosDoLado("saida")
     .map(function(c){return '<option value="'+esc(c.id)+'"'+(c.id===sel?" selected":"")+">"+esc(caminhoCentro(c))+"</option>";}).join("");
 }
-function linhasCaixaNF(chave,lista){
+function linhasCaixaNF(chave,lista,P){
+  var sf=sufParteNF(P||0);
   return '<div class="df-cxs">'+lista.map(function(l,j){
     return '<div class="grid g2" style="margin-top:8px;align-items:end">'+
-      '<div class="fld"><label>'+(j?"Outro caixa":"Caixa")+' <span class="req">*</span></label><select data-dfcx="'+chave+":"+j+'">'+opcoesCaixaNF(l.caixaId)+"</select></div>"+
-      '<div class="fld"><label>Valor que saiu deste caixa</label><div style="display:flex;gap:8px"><input type="text" inputmode="decimal" style="min-width:0;flex:1" data-dfcxv="'+chave+":"+j+'" value="'+brMF(l.valor)+'">'+
-      (j?'<button class="btn mut sm" type="button" data-dfcxrm="'+chave+":"+j+'">Tirar</button>':"")+"</div></div></div>";
+      '<div class="fld"><label>'+(j?"Outro caixa":"Caixa")+' <span class="req">*</span></label><select data-dfcx="'+chave+":"+j+sf+'">'+opcoesCaixaNF(l.caixaId)+"</select></div>"+
+      '<div class="fld"><label>Valor que saiu deste caixa</label><div style="display:flex;gap:8px"><input type="text" inputmode="decimal" style="min-width:0;flex:1" data-dfcxv="'+chave+":"+j+sf+'" value="'+brMF(l.valor)+'">'+
+      (j?'<button class="btn mut sm" type="button" data-dfcxrm="'+chave+":"+j+sf+'">Tirar</button>':"")+"</div></div></div>";
   }).join("")+
-  '<div class="actions" style="justify-content:flex-start;margin:8px 0 0"><button class="btn ghost sm" type="button" data-dfcxadd="'+chave+'">+ outro caixa</button></div>'+
-  '<div data-dfcxsoma="'+chave+'"></div></div>';
+  '<div class="actions" style="justify-content:flex-start;margin:8px 0 0"><button class="btn ghost sm" type="button" data-dfcxadd="'+chave+sf+'">+ outro caixa</button></div>'+
+  '<div data-dfcxsoma="'+chave+sf+'"></div></div>';
 }
-function tabelaParcelasNF(lista,desde){
-  var N=lista.length;
+function tabelaParcelasNF(lista,desde,P){
+  var N=lista.length,sf=sufParteNF(P||0);
   /* linhas em grade (não tabela): cabem no celular de 360 px sem rolar para o lado */
   /* no celular estreito o valor desce para baixo da data (flex que quebra a linha) */
   var G='display:flex;flex-wrap:wrap;gap:8px;align-items:center;';
@@ -39259,9 +39356,46 @@ function tabelaParcelasNF(lista,desde){
     lista.map(function(p,k){
       if(k<desde)return "";
       return '<div style="'+G+'margin-top:8px"><b style="width:40px">'+(k+1)+"/"+N+"</b>"+
-        '<input type="date" aria-label="Vencimento da parcela '+(k+1)+'" style="flex:1 1 150px;min-width:0" data-dfpv="'+k+'" value="'+esc(p.venc||"")+'">'+
-        '<input type="text" inputmode="decimal" aria-label="Valor da parcela '+(k+1)+'" placeholder="Valor" style="flex:1 1 110px;min-width:0;text-align:right" data-dfpval="'+k+'" value="'+brMF(p.valor)+'"></div>';
+        '<input type="date" aria-label="Vencimento da parcela '+(k+1)+'" style="flex:1 1 150px;min-width:0" data-dfpv="'+k+sf+'" value="'+esc(p.venc||"")+'">'+
+        '<input type="text" inputmode="decimal" aria-label="Valor da parcela '+(k+1)+'" placeholder="Valor" style="flex:1 1 110px;min-width:0;text-align:right" data-dfpval="'+k+sf+'" value="'+brMF(p.valor)+'"></div>';
     }).join("")+"</div>";
+}
+/* v599: o bloco de uma forma de pagamento. A Forma 1 usa os campos fixos da tela (df_forma, df_sit,
+   df_data, df_n) e as outras os mesmos campos com o número da parte no atributo — mesma regra, mesmo
+   desenho, um código só. */
+function opcoesFormaNF(sel){
+  return '<option value="">— escolha a forma —</option>'+FORMAS_NF.map(function(x){
+    return '<option value="'+x[0]+'"'+(x[0]===sel?" selected":"")+">"+x[1]+"</option>";}).join("");
+}
+function chipsSitNF(pp,P){
+  var cartao=pp.forma==="cartao",sf=sufParteNF(P);
+  return [["pago","Já foi pago"],["apagar","A pagar"],["entrada","Entrada + parcelas"]].map(function(x){
+    var on=pp.sit===x[0],off=cartao&&x[0]!=="apagar";
+    return '<button type="button" data-dfsit="'+x[0]+sf+'" aria-pressed="'+on+'"'+(off?" disabled":"")+">"+(on?"✓ ":"")+x[1]+"</button>";}).join("");
+}
+function htmlCorpoParteNF(pp,P){
+  var sf=sufParteNF(P),varias=dfPgs.length>1,h="";
+  var idData=P?"":' id="df_data"',forData=P?"":' for="df_data"',idN=P?"":' id="df_n"',forN=P?"":' for="df_n"';
+  if(varias)h+='<div class="grid g2"><div class="fld"><label>Valor desta forma <span class="req">*</span></label>'+
+    '<input type="text" inputmode="decimal" data-dfval="'+P+'" value="'+brMF(pp.valor)+'"></div></div>';
+  if(pp.forma==="cartao")h+='<div class="note"><b>Cartão de crédito da empresa:</b> entra como <b>A pagar</b>. Digite o vencimento da fatura de cada parcela.</div>';
+  if(pp.sit==="pago"){
+    h+='<div class="grid g2"><div class="fld"><label'+forData+'>Data do pagamento <span class="req">*</span></label><input'+idData+' data-dfdata="'+P+'" type="date" value="'+esc(pp.data)+'"></div></div>'+
+      '<p class="sect-t" style="margin-top:14px">De onde saiu o dinheiro</p>'+linhasCaixaNF("pg",pp.cx,P);
+  } else if(pp.sit==="apagar"){
+    h+='<div class="grid g2"><div class="fld"><label'+forN+'>Número de parcelas</label><input'+idN+' data-dfn="'+P+'" type="number" min="1" max="60" value="'+pp.parc.length+'"></div></div>'+
+      '<div style="margin-top:10px">'+tabelaParcelasNF(pp.parc,0,P)+"</div>";
+  } else if(pp.sit==="entrada"){
+    var e0=pp.ent[0]||{valor:0};
+    h+='<div class="grid g2"><div class="fld"><label'+forN+'>Número de parcelas (com a entrada)</label><input'+idN+' data-dfn="'+P+'" type="number" min="2" max="60" value="'+pp.ent.length+'"></div></div>'+
+      '<p class="sect-t" style="margin-top:14px">Parcela 1/'+pp.ent.length+' · entrada, paga agora</p>'+
+      '<div class="grid g2"><div class="fld"><label'+forData+'>Data do pagamento <span class="req">*</span></label><input'+idData+' data-dfdata="'+P+'" type="date" value="'+esc(pp.data)+'"></div>'+
+      '<div class="fld"><label>Valor da entrada <span class="req">*</span></label><input type="text" inputmode="decimal" data-dfpval="0'+sf+'" value="'+brMF(e0.valor)+'"></div></div>'+
+      linhasCaixaNF("ent",pp.entCx,P)+
+      '<p class="sect-t" style="margin-top:14px">Parcelas a pagar</p>'+tabelaParcelasNF(pp.ent,1,P);
+  }
+  if(varias)h+='<div data-dfsomap="'+P+'" style="margin-top:8px"></div>';
+  return h;
 }
 function renderDarEntrada(){
   var n=notaFin;if(!n||!dfPg)return;
@@ -39306,34 +39440,27 @@ function renderDarEntrada(){
       "</div></div>";
   }).join("");
   renderCentrosNF();
-  /* pagamento */
-  $("df_forma").innerHTML='<option value="">— escolha a forma —</option>'+FORMAS_NF.map(function(x){
-    return '<option value="'+x[0]+'"'+(x[0]===dfPg.forma?" selected":"")+">"+x[1]+"</option>";}).join("");
-  var cartao=dfPg.forma==="cartao";
-  $("df_sit").innerHTML=[["pago","Já foi pago"],["apagar","A pagar"],["entrada","Entrada + parcelas"]].map(function(s){
-    var on=dfPg.sit===s[0],off=cartao&&s[0]!=="apagar";
-    return '<button type="button" data-dfsit="'+s[0]+'" aria-pressed="'+on+'"'+(off?" disabled":"")+">"+(on?"✓ ":"")+s[1]+"</button>";}).join("");
-  var h="";
-  if(cartao)h+='<div class="note"><b>Cartão de crédito da empresa:</b> entra como <b>A pagar</b>. Digite o vencimento da fatura de cada parcela.</div>';
-  if(dfPg.sit==="pago"){
-    h+='<div class="grid g2"><div class="fld"><label for="df_data">Data do pagamento <span class="req">*</span></label><input id="df_data" type="date" value="'+esc(dfPg.data)+'"></div></div>'+
-      '<p class="sect-t" style="margin-top:14px">De onde saiu o dinheiro</p>'+linhasCaixaNF("pg",dfPg.cx);
-  } else if(dfPg.sit==="apagar"){
-    h+='<div class="grid g2"><div class="fld"><label for="df_n">Número de parcelas</label><input id="df_n" type="number" min="1" max="60" value="'+dfPg.parc.length+'"></div></div>'+
-      '<div style="margin-top:10px">'+tabelaParcelasNF(dfPg.parc,0)+"</div>";
-  } else if(dfPg.sit==="entrada"){
-    var e0=dfPg.ent[0];
-    h+='<div class="grid g2"><div class="fld"><label for="df_n">Número de parcelas (com a entrada)</label><input id="df_n" type="number" min="2" max="60" value="'+dfPg.ent.length+'"></div></div>'+
-      '<p class="sect-t" style="margin-top:14px">Parcela 1/'+dfPg.ent.length+' · entrada, paga agora</p>'+
-      '<div class="grid g2"><div class="fld"><label for="df_data">Data do pagamento <span class="req">*</span></label><input id="df_data" type="date" value="'+esc(dfPg.data)+'"></div>'+
-      '<div class="fld"><label>Valor da entrada <span class="req">*</span></label><input type="text" inputmode="decimal" data-dfpval="0" value="'+brMF(e0.valor)+'"></div></div>'+
-      linhasCaixaNF("ent",dfPg.entCx)+
-      '<p class="sect-t" style="margin-top:14px">Parcelas a pagar</p>'+tabelaParcelasNF(dfPg.ent,1);
+  /* pagamento (v599: a Forma 1 nos campos fixos da tela, as outras no bloco de baixo) */
+  if(dfPgs.length<2&&dfPgs[0])dfPgs[0].valor=tot;
+  $("df_forma").innerHTML=opcoesFormaNF(dfPg.forma);
+  $("df_sit").innerHTML=chipsSitNF(dfPg,0);
+  if($("df_rot1"))$("df_rot1").innerHTML=dfPgs.length>1?'<div class="t-sub"><b>Forma 1 de '+dfPgs.length+"</b></div>":"";
+  var h=htmlCorpoParteNF(dfPg,0);
+  for(var P=1;P<dfPgs.length;P++){
+    var pp=dfPgs[P];
+    h+='<div style="border-top:1px solid var(--line);margin-top:16px;padding-top:12px">'+
+      '<div style="display:flex;align-items:center;gap:8px"><b>Forma '+(P+1)+" de "+dfPgs.length+'</b><span class="sp"></span>'+
+      '<button class="btn mut sm" type="button" data-dfrm="'+P+'">Remover</button></div>'+
+      '<div class="grid g2" style="margin-top:8px"><div class="fld"><label>Forma de pagamento <span class="req">*</span></label>'+
+      '<select data-dfforma="'+P+'">'+opcoesFormaNF(pp.forma)+"</select></div>"+
+      '<div class="fld"><label>Situação <span class="req">*</span></label><div class="chips">'+chipsSitNF(pp,P)+"</div></div></div>"+
+      htmlCorpoParteNF(pp,P)+"</div>";
   }
+  h+='<div class="actions" style="justify-content:flex-start;margin:12px 0 0"><button class="btn ghost sm" type="button" id="df_addForma">+ Adicionar outra forma de pagamento</button></div>';
   h+='<div id="df_soma" style="margin-top:10px"></div>';
   var travaPg=lanc&&dfTravado;
-  if(travaPg){var ppg=n.pagamento||{};h='<div class="note warn"><b>Há parcela paga desta nota.</b> O pagamento fica como está ('+esc(nomeFormaNF(ppg.forma)||"")+", "+
-    ((ppg.parcelas||[]).length)+" parcela(s), "+BRL(((ppg.parcelas||[]).reduce(function(a,x){return a+(+x.valor||0);},0)))+"). Para mudar, o Financeiro estorna o pagamento antes em Contas a Pagar.</div>"+'<div id='+'"df_soma"></div>';}
+  if(travaPg){h='<div class="note warn"><b>Há parcela paga desta nota.</b> O pagamento fica como está ('+
+    esc(textoPagamentoNF(partesPagamentoNF(n),null))+"). Para mudar, o Financeiro estorna o pagamento antes em Contas a Pagar.</div>"+'<div id='+'"df_soma"></div>';}
   $("df_pg").innerHTML=h;
   $("df_forma").disabled=travaPg;Array.prototype.forEach.call($("df_sit").querySelectorAll("button"),function(b){if(travaPg)b.disabled=true;});
   ligarDarEntrada();
@@ -39354,7 +39481,8 @@ function centrosDaNotaNF(n,rascunho){
     m[c]=arred(m[c]+vals[k]);});
   return ordem.map(function(c){return {centroId:c,valor:m[c]};});
 }
-function listaAtualNF(chave){return chave==="pg"?dfPg.cx:dfPg.entCx;}
+function listaAtualNF(chave,P){var pp=dfPgs[P||0]||dfPg;return chave==="pg"?pp.cx:pp.entCx;}
+function listaParcNF(P){var pp=dfPgs[P||0]||dfPg;return pp.sit==="entrada"?pp.ent:pp.parc;}
 function htmlLigarNF(it,k){
   if(nfModoFin!=="lancar")return "";
   /* nota de uso e consumo: o item fica como está na nota, sem produto (v577) */
@@ -39389,38 +39517,68 @@ function ligarDarEntrada(){
     var it=notaFin.itens[+s.getAttribute("data-dfdest")];it.__dest=s.value;if(s.value==="revenda")it.__centro="";renderDarEntrada();};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfcc]"),function(s){s.onchange=function(){
     notaFin.itens[+s.getAttribute("data-dfcc")].__centro=s.value;renderCentrosNF();resumoDarEntrada();};});
-  $("df_forma").onchange=function(){
-    var era=dfPg.forma;dfPg.forma=this.value;
-    if(dfPg.forma==="cartao"){dfPg.sit="apagar";dfPg.parc=dfPg.parc.map(function(p){return {venc:"",valor:p.valor};});}
-    else if(era==="cartao")dfPg.parc=sugestaoParcelasNF(notaFin,dfPg.parc.length);
-    renderDarEntrada();};
+  /* v599: a mesma regra para a Forma 1 e para as outras — o número da parte vem no atributo */
+  function trocaFormaNF(P,v){
+    var pp=dfPgs[P];if(!pp)return;
+    var era=pp.forma;pp.forma=v;
+    if(pp.forma==="cartao"){pp.sit="apagar";pp.parc=pp.parc.map(function(x){return {venc:"",valor:x.valor};});}
+    else if(era==="cartao")pp.parc=sugestaoParcelasNF(notaFin,pp.parc.length,valorParteNF(P));
+    renderDarEntrada();
+  }
+  $("df_forma").onchange=function(){trocaFormaNF(0,this.value);};
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfforma]"),function(s){s.onchange=function(){
+    trocaFormaNF(+s.getAttribute("data-dfforma"),s.value);};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfsit]"),function(b){b.onclick=function(){
-    if(b.disabled)return;dfPg.sit=b.getAttribute("data-dfsit");renderDarEntrada();};});
-  if($("df_data"))$("df_data").onchange=function(){dfPg.data=this.value;resumoDarEntrada();};
-  if($("df_n"))$("df_n").onchange=function(){
-    var q=Math.max(dfPg.sit==="entrada"?2:1,Math.min(60,parseInt(this.value,10)||1));
-    if(dfPg.sit==="entrada"){dfPg.ent=sugestaoEntradaNF(notaFin,q);dfPg.entCx=[{caixaId:(dfPg.entCx[0]||{}).caixaId||"",valor:dfPg.ent[0].valor}];}
-    else{dfPg.parc=sugestaoParcelasNF(notaFin,q);if(dfPg.forma==="cartao")dfPg.parc=dfPg.parc.map(function(p){return {venc:"",valor:p.valor};});}
-    renderDarEntrada();};
-  var lista=function(){return dfPg.sit==="entrada"?dfPg.ent:dfPg.parc;};
+    if(b.disabled)return;var a=pParteNF(b.getAttribute("data-dfsit"));
+    if(dfPgs[a.P])dfPgs[a.P].sit=a.k;renderDarEntrada();};});
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfdata]"),function(i){i.onchange=function(){
+    var pp=dfPgs[+i.getAttribute("data-dfdata")];if(pp)pp.data=i.value;resumoDarEntrada();};});
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfn]"),function(i){i.onchange=function(){
+    var P=+i.getAttribute("data-dfn"),pp=dfPgs[P];if(!pp)return;
+    var alvo=valorParteNF(P),q=Math.max(pp.sit==="entrada"?2:1,Math.min(60,parseInt(i.value,10)||1));
+    if(pp.sit==="entrada"){pp.ent=sugestaoEntradaNF(notaFin,q,alvo);pp.entCx=[{caixaId:(pp.entCx[0]||{}).caixaId||"",valor:pp.ent[0].valor}];}
+    else{pp.parc=sugestaoParcelasNF(notaFin,q,alvo);if(pp.forma==="cartao")pp.parc=pp.parc.map(function(x){return {venc:"",valor:x.valor};});}
+    renderDarEntrada();};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfpv]"),function(i){
-    i.onchange=i.oninput=function(){lista()[+i.getAttribute("data-dfpv")].venc=i.value;resumoDarEntrada();};});
+    i.onchange=i.oninput=function(){var a=pParteNF(i.getAttribute("data-dfpv"));
+      listaParcNF(a.P)[+a.k].venc=i.value;resumoDarEntrada();};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfpval]"),function(i){
-    i.oninput=function(){var k=+i.getAttribute("data-dfpval");lista()[k].valor=arred(numMF(i.value)||0);
-      if(dfPg.sit==="entrada"&&k===0&&dfPg.entCx.length===1){dfPg.entCx[0].valor=lista()[0].valor;
-        var c0=raiz.querySelector('[data-dfcxv="ent:0"]');if(c0)c0.value=brMF(dfPg.entCx[0].valor);}
+    i.oninput=function(){var a=pParteNF(i.getAttribute("data-dfpval")),P=a.P,k=+a.k,pp=dfPgs[P];
+      if(!pp)return;
+      var l=listaParcNF(P);l[k].valor=arred(numMF(i.value)||0);
+      if(pp.sit==="entrada"&&k===0&&pp.entCx.length===1){pp.entCx[0].valor=l[0].valor;
+        var c0=raiz.querySelector('[data-dfcxv="ent:0'+sufParteNF(P)+'"]');if(c0)c0.value=brMF(pp.entCx[0].valor);}
       resumoDarEntrada();};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfcx]"),function(s){s.onchange=function(){
-    var a=s.getAttribute("data-dfcx").split(":");listaAtualNF(a[0])[+a[1]].caixaId=s.value;resumoDarEntrada();};});
+    var a=pParteNF(s.getAttribute("data-dfcx")),b=String(a.k).split(":");
+    listaAtualNF(b[0],a.P)[+b[1]].caixaId=s.value;resumoDarEntrada();};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfcxv]"),function(i){i.oninput=function(){
-    var a=i.getAttribute("data-dfcxv").split(":");listaAtualNF(a[0])[+a[1]].valor=arred(numMF(i.value)||0);resumoDarEntrada();};});
+    var a=pParteNF(i.getAttribute("data-dfcxv")),b=String(a.k).split(":");
+    listaAtualNF(b[0],a.P)[+b[1]].valor=arred(numMF(i.value)||0);resumoDarEntrada();};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfcxrm]"),function(b){b.onclick=function(){
-    var a=b.getAttribute("data-dfcxrm").split(":");listaAtualNF(a[0]).splice(+a[1],1);renderDarEntrada();};});
+    var a=pParteNF(b.getAttribute("data-dfcxrm")),c=String(a.k).split(":");
+    listaAtualNF(c[0],a.P).splice(+c[1],1);renderDarEntrada();};});
   Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfcxadd]"),function(b){b.onclick=function(){
-    var ch=b.getAttribute("data-dfcxadd"),l=listaAtualNF(ch);
-    var alvo=ch==="pg"?arred(+notaFin.total||0):arred((dfPg.ent[0]||{}).valor||0);
-    var soma=arred(l.reduce(function(a,x){return a+(+x.valor||0);},0));
+    var a=pParteNF(b.getAttribute("data-dfcxadd")),ch=String(a.k),pp=dfPgs[a.P],l=listaAtualNF(ch,a.P);
+    var alvo=ch==="pg"?valorParteNF(a.P):arred((pp.ent[0]||{}).valor||0);
+    var soma=arred(l.reduce(function(x,y){return x+(+y.valor||0);},0));
     l.push({caixaId:"",valor:Math.max(0,arred(alvo-soma))});renderDarEntrada();};});
+  /* valor de cada forma: enquanto digita só confere; ao sair do campo, as parcelas se repartem */
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfval]"),function(i){
+    i.oninput=function(){var pp=dfPgs[+i.getAttribute("data-dfval")];
+      if(pp)pp.valor=arred(numMF(i.value)||0);resumoDarEntrada();};
+    i.onchange=function(){var P=+i.getAttribute("data-dfval"),pp=dfPgs[P];if(!pp)return;
+      pp.valor=arred(numMF(i.value)||0);
+      /* com DUAS formas, a outra fica com o que falta (é o que o Wagner pediu ao adicionar a 2ª) */
+      if(dfPgs.length===2){var O=P?0:1,fal=arred(totalNotaNF()-pp.valor);
+        dfPgs[O].valor=Math.max(0,fal);repartirParteNF(dfPgs[O],valorParteNF(O));}
+      repartirParteNF(pp,valorParteNF(P));renderDarEntrada();};});
+  if($("df_addForma"))$("df_addForma").onclick=function(){addFormaNF();};
+  Array.prototype.forEach.call(raiz.querySelectorAll("[data-dfrm]"),function(b){b.onclick=function(){
+    var P=+b.getAttribute("data-dfrm");if(!P)return;
+    dfPgs.splice(P,1);dfPg=dfPgs[0];
+    if(dfPgs.length===1){dfPgs[0].valor=totalNotaNF();repartirParteNF(dfPgs[0],totalNotaNF());}
+    renderDarEntrada();};});
 }
 function faltaSobraNF(alvo,soma){
   var d=arred(alvo-soma);
@@ -39428,16 +39586,24 @@ function faltaSobraNF(alvo,soma){
   return '<span class="pill p-crit">'+(d>0?"faltam ":"sobram ")+BRL(Math.abs(d))+"</span>";
 }
 function resumoDarEntrada(){
-  var n=notaFin;if(!n||!dfPg)return;
-  var tot=arred(+n.total||0),h="";
+  var n=notaFin;if(!n||!dfPg||!dfPgs.length)return;
+  var tot=arred(+n.total||0),h="",linhas=[],raiz=$("nfFin");
   function soma(l){return arred(l.reduce(function(a,x){return a+(+x.valor||0);},0));}
-  if(dfPg.sit==="pago"){var s=soma(dfPg.cx);h="Total dos caixas "+BRL(s)+" de "+BRL(tot)+" "+faltaSobraNF(tot,s);
-    var sc=$("nfFin").querySelector('[data-dfcxsoma="pg"]');if(sc)sc.innerHTML="";}
-  if(dfPg.sit==="apagar"){var s2=soma(dfPg.parc);h="Soma das parcelas "+BRL(s2)+" de "+BRL(tot)+" "+faltaSobraNF(tot,s2);}
-  if(dfPg.sit==="entrada"){var s3=soma(dfPg.ent),se=soma(dfPg.entCx),e0=arred((dfPg.ent[0]||{}).valor||0);
-    var sc2=$("nfFin").querySelector('[data-dfcxsoma="ent"]');
-    if(sc2)sc2.innerHTML='<div class="help">Caixas da entrada: '+BRL(se)+" de "+BRL(e0)+" "+faltaSobraNF(e0,se)+"</div>";
-    h="Entrada + parcelas "+BRL(s3)+" de "+BRL(tot)+" "+faltaSobraNF(tot,s3);}
+  dfPgs.forEach(function(pp,P){
+    var alvo=valorParteNF(P),sf=sufParteNF(P),t="";
+    if(pp.sit==="pago"){var s=soma(pp.cx);t="Total dos caixas "+BRL(s)+" de "+BRL(alvo)+" "+faltaSobraNF(alvo,s);
+      var sc=raiz.querySelector('[data-dfcxsoma="pg'+sf+'"]');if(sc)sc.innerHTML="";}
+    if(pp.sit==="apagar"){var s2=soma(pp.parc);t="Soma das parcelas "+BRL(s2)+" de "+BRL(alvo)+" "+faltaSobraNF(alvo,s2);}
+    if(pp.sit==="entrada"){var s3=soma(pp.ent),se=soma(pp.entCx),e0=arred((pp.ent[0]||{}).valor||0);
+      var sc2=raiz.querySelector('[data-dfcxsoma="ent'+sf+'"]');
+      if(sc2)sc2.innerHTML='<div class="help">Caixas da entrada: '+BRL(se)+" de "+BRL(e0)+" "+faltaSobraNF(e0,se)+"</div>";
+      t="Entrada + parcelas "+BRL(s3)+" de "+BRL(alvo)+" "+faltaSobraNF(alvo,s3);}
+    var box=raiz.querySelector('[data-dfsomap="'+P+'"]');
+    if(box)box.innerHTML=t?'<div class="help">'+t+"</div>":"";
+    if(t)linhas.push((dfPgs.length>1?"<b>Forma "+(P+1)+"</b> ("+(nomeFormaNF(pp.forma)||"forma a escolher")+"): ":"")+t);
+  });
+  h=linhas.join("<br>");
+  if(dfPgs.length>1)h+=(h?"<br>":"")+"<b>Total das formas "+BRL(somaPartesNF())+" de "+BRL(tot)+"</b> "+faltaSobraNF(tot,somaPartesNF());
   if($("df_soma"))$("df_soma").innerHTML=h?'<div class="note">'+h+"</div>":"";
   var pr=problemasDarEntrada();
   $("df_alerta").innerHTML=pr.length?'<div class="note warn"><b>Para concluir falta:</b><br>• '+pr.map(esc).join("<br>• ")+"</div>":
@@ -39456,41 +39622,55 @@ function problemasDarEntrada(){
     else if(it.__dest!=="revenda"&&!it.__centro)p.push("o centro de custo de "+it.nome);
   });
   if(nfModoFin==="lancar"&&dfTravado){
-    var spg=arred(((n.pagamento||{}).parcelas||[]).reduce(function(a,x){return a+(+x.valor||0);},0));
+    var spg=arred(partesPagamentoNF(n).reduce(function(a,x){
+      return a+arred((x.parcelas||[]).reduce(function(b,y){return b+(+y.valor||0);},0));},0));
     if(Math.abs(spg-tot)>=0.005)p.push("o total da nota mudou ("+BRL(tot)+") e há parcela paga: o Financeiro estorna o pagamento antes");
     return p;}
   /* v588: o total tem de bater com o valor impresso na nota */
   var cnP=contaNota(n);
   if(cnP.divergente)p.push("acertar a divergência do total: a nota diz "+BRL(cnP.informado)+" e a soma dá "+BRL(cnP.total));
-  if(!dfPg.forma)p.push("a forma de pagamento");
-  if(!dfPg.sit)p.push("a situação do pagamento (já foi pago, a pagar ou entrada + parcelas)");
-  if(dfPg.forma==="cartao"&&dfPg.sit&&dfPg.sit!=="apagar")p.push("cartão de crédito da empresa entra como A pagar");
-  function caixasOk(l,alvo,rot){
-    if(l.some(function(x){return !x.caixaId;}))p.push("o caixa "+rot);
-    if(l.some(function(x){return !(+x.valor>0);}))p.push("o valor de cada caixa "+rot);
-    if(Math.abs(soma(l)-alvo)>=0.005)p.push("a soma dos caixas "+rot+" ("+BRL(soma(l))+") tem que ser "+BRL(alvo));
+  /* v599: cada forma de pagamento confere com o SEU valor, e a soma das formas com o total da nota */
+  var varias=dfPgs.length>1;
+  if(varias){
+    var sf2=somaPartesNF(),dd=arred(tot-sf2);
+    if(Math.abs(dd)>=0.005)p.push("acertar o valor das formas: a soma dá "+BRL(sf2)+" e o total da nota é "+BRL(tot)+
+      " ("+(dd>0?"faltam ":"sobram ")+BRL(Math.abs(dd))+")");
   }
-  function parcOk(l,desde){
-    for(var k=desde;k<l.length;k++){
-      if(!l[k].venc)p.push("o vencimento da parcela "+(k+1));
-      if(!(+l[k].valor>0))p.push("o valor da parcela "+(k+1));}
-  }
-  if(dfPg.sit==="pago"){
-    if(!dfPg.data)p.push("a data do pagamento");else if(dfPg.data>h)p.push("a data do pagamento não pode ser futura");
-    caixasOk(dfPg.cx,tot,"de onde saiu o dinheiro");
-  }
-  if(dfPg.sit==="apagar"){
-    parcOk(dfPg.parc,0);
-    if(Math.abs(soma(dfPg.parc)-tot)>=0.005)p.push("a soma das parcelas ("+BRL(soma(dfPg.parc))+") tem que ser o total da nota, "+BRL(tot));
-  }
-  if(dfPg.sit==="entrada"){
-    if(dfPg.ent.length<2)p.push("ao menos uma parcela além da entrada");
-    if(!dfPg.data)p.push("a data do pagamento da entrada");else if(dfPg.data>h)p.push("a data do pagamento não pode ser futura");
-    if(!(+(dfPg.ent[0]||{}).valor>0))p.push("o valor da entrada");
-    caixasOk(dfPg.entCx,arred((dfPg.ent[0]||{}).valor||0),"da entrada");
-    parcOk(dfPg.ent,1);
-    if(Math.abs(soma(dfPg.ent)-tot)>=0.005)p.push("a soma da entrada e das parcelas ("+BRL(soma(dfPg.ent))+") tem que ser o total da nota, "+BRL(tot));
-  }
+  dfPgs.forEach(function(pp,P){
+    var rot=varias?"Forma "+(P+1)+": ":"",alvo=valorParteNF(P);
+    function caixasOk(l,alv,r){
+      if(l.some(function(x){return !x.caixaId;}))p.push(rot+"o caixa "+r);
+      if(l.some(function(x){return !(+x.valor>0);}))p.push(rot+"o valor de cada caixa "+r);
+      if(Math.abs(soma(l)-alv)>=0.005)p.push(rot+"a soma dos caixas "+r+" ("+BRL(soma(l))+") tem que ser "+BRL(alv));
+    }
+    function parcOk(l,desde){
+      for(var k=desde;k<l.length;k++){
+        if(!l[k].venc)p.push(rot+"o vencimento da parcela "+(k+1));
+        if(!(+l[k].valor>0))p.push(rot+"o valor da parcela "+(k+1));}
+    }
+    if(varias&&!(+pp.valor>0))p.push(rot+"o valor desta forma");
+    if(!pp.forma)p.push(rot+"a forma de pagamento");
+    if(!pp.sit)p.push(rot+"a situação do pagamento (já foi pago, a pagar ou entrada + parcelas)");
+    if(pp.forma==="cartao"&&pp.sit&&pp.sit!=="apagar")p.push(rot+"cartão de crédito da empresa entra como A pagar");
+    if(pp.sit==="pago"){
+      if(!pp.data)p.push(rot+"a data do pagamento");else if(pp.data>h)p.push(rot+"a data do pagamento não pode ser futura");
+      caixasOk(pp.cx,alvo,"de onde saiu o dinheiro");
+    }
+    if(pp.sit==="apagar"){
+      parcOk(pp.parc,0);
+      if(Math.abs(soma(pp.parc)-alvo)>=0.005)p.push(rot+"a soma das parcelas ("+BRL(soma(pp.parc))+") tem que ser "+
+        (varias?"o valor desta forma, "+BRL(alvo):"o total da nota, "+BRL(alvo)));
+    }
+    if(pp.sit==="entrada"){
+      if(pp.ent.length<2)p.push(rot+"ao menos uma parcela além da entrada");
+      if(!pp.data)p.push(rot+"a data do pagamento da entrada");else if(pp.data>h)p.push(rot+"a data do pagamento não pode ser futura");
+      if(!(+(pp.ent[0]||{}).valor>0))p.push(rot+"o valor da entrada");
+      caixasOk(pp.entCx,arred((pp.ent[0]||{}).valor||0),"da entrada");
+      parcOk(pp.ent,1);
+      if(Math.abs(soma(pp.ent)-alvo)>=0.005)p.push(rot+"a soma da entrada e das parcelas ("+BRL(soma(pp.ent))+") tem que ser "+
+        (varias?"o valor desta forma, "+BRL(alvo):"o total da nota, "+BRL(alvo)));
+    }
+  });
   return p;
 }
 /* conclusão: travada contra toque duplo (travaSalvar), relê a nota no banco e usa ids fixos —
@@ -39517,10 +39697,8 @@ async function concluirEntradaNota__corpo(){
   var principal=centrosN.slice().sort(function(a,b){return b.valor-a.valor;})[0]||{centroId:dfCentroCompra};
   n.status="entrada";n.entrada=hoje;n.entradaPor=usuarioAtual;n.entradaEm=quando;
   histNotaNF(n,"Entrada dada (fluxo antigo)",[]);
-  n.centros=centrosN;n.centroId=principal.centroId;n.formaPg=dfPg.forma;
-  n.pagamento={forma:dfPg.forma,situacao:dfPg.sit,data:dfPg.sit==="apagar"?"":dfPg.data,
-    caixas:dfPg.sit==="pago"?dfPg.cx.slice():(dfPg.sit==="entrada"?dfPg.entCx.slice():[]),
-    parcelas:(dfPg.sit==="pago"?[{venc:dfPg.data,valor:arred(+n.total||0)}]:(dfPg.sit==="entrada"?dfPg.ent:dfPg.parc)).map(function(p){return {venc:p.venc,valor:p.valor};})};
+  n.centros=centrosN;n.centroId=principal.centroId;n.formaPg=textoFormaPgNF();
+  n.pagamento=pgDeDfNF(n);
   try{
     /* 1) a nota fica marcada primeiro: outra tela que releia já vê "entrada" */
     await gravaConf("notas",n);
@@ -39563,28 +39741,14 @@ async function concluirEntradaNota__corpo(){
       await grava("produtos",p);
     }
     /* 4) contas: cada parcela guarda a divisão por centro; a paga já nasce paga, com uma saída em cada caixa */
-    var ps=n.pagamento.parcelas,N=ps.length,criados=0;
-    for(var k=0;k<N;k++){
-      var tid="nfp-"+n.id+"-"+k;
-      if(titulos.some(function(x){return x.id===tid;}))continue;
-      var pg=dfPg.sit==="pago"||(dfPg.sit==="entrada"&&k===0);
-      var cs=centrosN.length>1?repartir(ps[k].valor,centrosN.map(function(c){return c.valor;})).map(function(v,j){return {centroId:centrosN[j].centroId,valor:v};}):null;
-      var cxs=pg?(dfPg.sit==="pago"?dfPg.cx:dfPg.entCx).map(function(x){return {caixaId:x.caixaId,valor:arred(x.valor)};}):[];
-      var tt={id:tid,loja:n.loja,especie:"pagar",origem:"nota",notaId:n.id,fornecedorId:n.fornecedorId||"",pessoa:pessoa,docRef:docN,
-        descricao:docN+(N>1?" · parcela "+(k+1)+"/"+N:"")+(dfPg.sit==="entrada"&&k===0?" (entrada)":""),
-        centroId:principal.centroId,emissao:n.emissao,vencimento:ps[k].venc,valor:arred(ps[k].valor),
-        parcela:k+1,totalParcelas:N,formaNota:dfPg.forma,status:"aberto",valorPago:0,caixaId:"",criadoEm:hoje,criadoPor:usuarioAtual};
-      if(cs)tt.centros=cs;
-      if(pg){tt.status="pago";tt.pagoEm=dfPg.data;tt.valorPago=tt.valor;tt.caixaId=cxs[0].caixaId;tt.caixas=cxs;
-        tt.baixadoPor=usuarioAtual;tt.baixadoEm=quando;tt.pagoNaEntradaNota=true;}
+    var lotes=titulosDoPagamentoNF(n,n.pagamento,{hoje:hoje,quando:quando,pessoa:pessoa,centros:centrosN,principal:principal}),criados=0;
+    for(var q=0;q<lotes.length;q++){
+      var tt=lotes[q].titulo,mvsQ=lotes[q].movs;
+      if(titulos.some(function(x){return x.id===tt.id;}))continue;
       await gravaConf("titulos",tt);titulos.push(tt);criados++;
-      for(var j=0;j<cxs.length;j++){
-        var mvid="nfc-"+n.id+"-"+k+"-"+j;
-        if(movs.some(function(m){return m.id===mvid;}))continue;
-        var mv={id:mvid,loja:n.loja,caixaId:cxs[j].caixaId,data:dfPg.data,tipo:"saida",valor:cxs[j].valor,hora:agoraHM(),
-          descricao:"Pagamento · "+pessoa+" · "+docN+(N>1?" · parcela "+(k+1)+"/"+N:""),centroId:principal.centroId,
-          tituloId:tid,notaId:n.id,por:usuarioAtual};
-        if(cs)mv.centros=cs;
+      for(var j=0;j<mvsQ.length;j++){
+        var mv=mvsQ[j];
+        if(movs.some(function(m){return m.id===mv.id;}))continue;
         await gravaConf("movs",mv);movs.push(mv);
       }
     }
@@ -39597,8 +39761,9 @@ async function concluirEntradaNota__corpo(){
     return false;
   }
   var dv=n.itens.filter(function(i){return i.pid&&i.destino!=="despesa"&&(i.qtdConf==null?i.qtd:i.qtdConf)!==i.qtd;}).length;
+  var todasPagas=dfPgs.every(function(x){return x.sit==="pago";});
   toast("Entrada dada · estoque atualizado"+(dv?" pelo conferido ("+dv+" divergência)":"")+" · "+criados+" conta(s) criada(s)"+
-    (dfPg.sit==="pago"?", já paga(s)":"")+".");
+    (todasPagas?", já paga(s)":(dfPgs.some(function(x){return x.sit==="pago"||x.sit==="entrada";})?", com parcela já paga":""))+".");
   fecharDarEntrada();
   try{renderPagar();renderProdutos();renderFluxo();opcoesProduto();renderCaixasMov();}catch(eR){}
   return true;
@@ -39606,7 +39771,7 @@ async function concluirEntradaNota__corpo(){
 function fecharDarEntrada(){
   nfModoFin="";dfTravado=false;
   if(notaFin)(notaFin.itens||[]).forEach(function(it){delete it.__dest;delete it.__centro;});
-  notaFin=null;dfPg=null;$("nfFin").hidden=true;$("nfLista").hidden=false;renderNotas();
+  notaFin=null;dfPg=null;dfPgs=[];$("nfFin").hidden=true;$("nfLista").hidden=false;renderNotas();
 }
 /* ===================== v543: NOVO FLUXO DA ENTRADA DE NOTAS FISCAIS (pedido dele de 11/11) =====================
    ORDEM NOVA (nota com fluxo2:true):
@@ -39990,10 +40155,49 @@ async function gravarEdicaoNota(ed,novo){
 
 /* ---------- LANÇAR: destino, centro, produto e pagamento ---------- */
 var nfModoFin="",dfTravado=false,dfPgOrig="";
+/* v599: o pagamento gravado. Os campos de cima são os da Forma 1 (nota antiga lê igual) e .partes
+   traz todas as formas. Uma forma só: .partes tem uma parte, com o total da nota. */
 function pgDeDfNF(n){
-  return {forma:dfPg.forma,situacao:dfPg.sit,data:dfPg.sit==="apagar"?"":dfPg.data,
-    caixas:dfPg.sit==="pago"?dfPg.cx.map(function(x){return {caixaId:x.caixaId,valor:arred(+x.valor||0)};}):(dfPg.sit==="entrada"?dfPg.entCx.map(function(x){return {caixaId:x.caixaId,valor:arred(+x.valor||0)};}):[]),
-    parcelas:(dfPg.sit==="pago"?[{venc:dfPg.data,valor:arred(+n.total||0)}]:(dfPg.sit==="entrada"?dfPg.ent:dfPg.parc)).map(function(p){return {venc:p.venc,valor:arred(+p.valor||0)};})};
+  var tot=arred(+((n||{}).total)||0);
+  var ps=dfPgs.map(function(pp,P){return parteGravadaNF(pp,dfPgs.length<2?tot:arred(+pp.valor||0));});
+  var o={};Object.keys(ps[0]||{}).forEach(function(k){o[k]=ps[0][k];});
+  o.partes=ps;
+  return o;
+}
+/* v599: os títulos a pagar e as saídas de caixa de TODAS as partes, numa conta só. A Forma 1 mantém
+   os ids de sempre ("nfp-<nota>-<k><suf>") e as outras ganham "-fN" para nunca colidir. */
+function titulosDoPagamentoNF(n,pg,op){
+  var o=op||{},hoje=o.hoje||hojeISO(),quando=o.quando||agoraCarimbo(),docN=docNotaNF(n),pessoa=o.pessoa||"";
+  var centrosN=o.centros||[],principal=o.principal||{centroId:""},suf=o.suf||"";
+  var ps=(pg&&pg.partes&&pg.partes.length)?pg.partes:(pg?[pg]:[]),nP=ps.length,out=[];
+  ps.forEach(function(x,P){
+    var pre=P?"-f"+(P+1):"",parc=x.parcelas||[],N=parc.length;
+    var rotF=nP>1?" · forma "+(P+1)+"/"+nP:"";
+    for(var k=0;k<N;k++){
+      var tid="nfp-"+n.id+pre+"-"+k+suf;
+      var pago=x.situacao==="pago"||(x.situacao==="entrada"&&k===0);
+      var cs=centrosN.length>1?repartir(parc[k].valor,centrosN.map(function(c){return c.valor;})).map(function(v,j){return {centroId:centrosN[j].centroId,valor:v};}):null;
+      var cxs=pago?(x.caixas||[]).map(function(c){return {caixaId:c.caixaId,valor:arred(+c.valor||0)};}):[];
+      var tt={id:tid,loja:n.loja,especie:"pagar",origem:"nota",notaId:n.id,fornecedorId:n.fornecedorId||"",pessoa:pessoa,docRef:docN,
+        descricao:docN+rotF+(N>1?" · parcela "+(k+1)+"/"+N:"")+(x.situacao==="entrada"&&k===0?" (entrada)":""),
+        centroId:principal.centroId,emissao:n.emissao,vencimento:parc[k].venc,valor:arred(+parc[k].valor||0),
+        parcela:k+1,totalParcelas:N,formaNota:x.forma,status:"aberto",valorPago:0,caixaId:"",criadoEm:hoje,criadoPor:usuarioAtual};
+      if(nP>1){tt.formaParte=P+1;tt.totalFormas=nP;}
+      if(cs)tt.centros=cs;
+      if(pago&&cxs.length){tt.status="pago";tt.pagoEm=x.data;tt.valorPago=tt.valor;tt.caixaId=cxs[0].caixaId;tt.caixas=cxs;
+        tt.baixadoPor=usuarioAtual;tt.baixadoEm=quando;tt.pagoNaEntradaNota=true;}
+      var mvs=[];
+      for(var j=0;j<cxs.length;j++){
+        var mv={id:"nfc-"+n.id+pre+"-"+k+"-"+j+suf,loja:n.loja,caixaId:cxs[j].caixaId,data:x.data,tipo:"saida",valor:cxs[j].valor,hora:agoraHM(),
+          descricao:"Pagamento · "+pessoa+" · "+docN+rotF+(N>1?" · parcela "+(k+1)+"/"+N:""),centroId:principal.centroId,
+          tituloId:tid,notaId:n.id,por:usuarioAtual};
+        if(cs)mv.centros=cs;
+        mvs.push(mv);
+      }
+      out.push({titulo:tt,movs:mvs});
+    }
+  });
+  return out;
 }
 async function abrirLancarNota(n,op){
   if(!n)return false;
@@ -40011,20 +40215,15 @@ async function abrirLancarNota(n,op){
     it.__centro=it.centroId&&it.destino!=="revenda"?it.centroId:"";
   });
   var pg=n.pagamento,cx0=caixaValidoNF(n.caixaId);
+  /* v599: nota antiga tem uma parte só (o próprio pagamento); nota nova volta com todas as formas */
   if(pg&&pg.situacao){
-    dfPg={forma:pg.forma||"",sit:pg.situacao,data:pg.data||hojeISO(),
-      cx:pg.situacao==="pago"&&(pg.caixas||[]).length?pg.caixas.map(function(x){return {caixaId:x.caixaId,valor:x.valor};}):[{caixaId:cx0,valor:arred(+n.total||0)}],
-      parc:pg.situacao==="apagar"?(pg.parcelas||[]).map(function(p){return {venc:p.venc,valor:p.valor};}):sugestaoParcelasNF(n,0),
-      ent:pg.situacao==="entrada"?(pg.parcelas||[]).map(function(p){return {venc:p.venc,valor:p.valor};}):sugestaoEntradaNF(n,0),
-      entCx:pg.situacao==="entrada"&&(pg.caixas||[]).length?pg.caixas.map(function(x){return {caixaId:x.caixaId,valor:x.valor};}):[{caixaId:cx0,valor:0}]};
-    if(pg.situacao!=="entrada")dfPg.entCx[0].valor=dfPg.ent[0].valor;
+    dfPgs=partesPagamentoNF(n).map(function(x){return parteDeGravadoNF(n,x,cx0);});
   }else{
-    var forma=n.formaPg||n.formaXml||((n.duplicatas||[]).length?"boleto":"");
-    dfPg={forma:forma,sit:forma==="cartao"?"apagar":"",data:hojeISO(),cx:[{caixaId:cx0,valor:arred(+n.total||0)}],
-      parc:sugestaoParcelasNF(n,0),ent:sugestaoEntradaNF(n,0),entCx:[{caixaId:cx0,valor:0}]};
-    if(forma==="cartao")dfPg.parc=dfPg.parc.map(function(p){return {venc:"",valor:p.valor};});
-    dfPg.entCx[0].valor=dfPg.ent[0].valor;
+    dfPgs=[parteNovaNF(n,formaValidaNF(n),cx0,arred(+n.total||0))];
   }
+  if(!dfPgs.length)dfPgs=[parteNovaNF(n,"",cx0,arred(+n.total||0))];
+  if(dfPgs.length===1)dfPgs[0].valor=arred(+n.total||0);
+  dfPg=dfPgs[0];
   dfTravado=titulosAtivosNF(n).some(tituloPagoNF);
   dfPgOrig=pg?JSON.stringify(pgDeDfNF(n)):"";
   try{listaProdNF();}catch(eDl){}
@@ -40119,30 +40318,17 @@ async function salvarLancamentoNota__corpo(){
     ativos.forEach(function(t){var tc=copiaReg(t);tc.status="cancelado";tc.canceladoMotivo="Lançamento da "+docN+" refeito";tc.canceladoPor=usuarioAtual;tc.canceladoEm=quando;
       lista.push({colecao:"titulos",obj:tc});depois.push(function(){voltarReg(t,tc);});});
     if(ativos.length)det.push({campo:"Parcelas anteriores canceladas (lançamento refeito)",de:String(ativos.length),para:"0"});
-    var ps=novoPg.parcelas,N=ps.length,pago=dfPg.sit==="pago";
-    for(var k=0;k<N;k++){
-      var tId="nfp-"+n.id+"-"+k+suf,pg=pago||(dfPg.sit==="entrada"&&k===0);
-      var cs=centrosN.length>1?repartir(ps[k].valor,centrosN.map(function(c){return c.valor;})).map(function(v,j){return {centroId:centrosN[j].centroId,valor:v};}):null;
-      var cxs=pg?novoPg.caixas:[];
-      var tt={id:tId,loja:n.loja,especie:"pagar",origem:"nota",notaId:n.id,fornecedorId:n.fornecedorId||"",pessoa:pessoa,docRef:docN,
-        descricao:docN+(N>1?" · parcela "+(k+1)+"/"+N:"")+(dfPg.sit==="entrada"&&k===0?" (entrada)":""),
-        centroId:principal.centroId,emissao:n.emissao,vencimento:ps[k].venc,valor:arred(ps[k].valor),
-        parcela:k+1,totalParcelas:N,formaNota:dfPg.forma,status:"aberto",valorPago:0,caixaId:"",criadoEm:hoje,criadoPor:usuarioAtual};
-      if(cs)tt.centros=cs;
-      if(pg){tt.status="pago";tt.pagoEm=dfPg.data;tt.valorPago=tt.valor;tt.caixaId=cxs[0].caixaId;tt.caixas=cxs;
-        tt.baixadoPor=usuarioAtual;tt.baixadoEm=quando;tt.pagoNaEntradaNota=true;}
-      lista.push({colecao:"titulos",obj:tt});(function(x){depois.push(function(){titulos.push(x);});})(tt);criados++;
-      for(var j=0;j<cxs.length;j++){
-        var mv={id:"nfc-"+n.id+"-"+k+"-"+j+suf,loja:n.loja,caixaId:cxs[j].caixaId,data:dfPg.data,tipo:"saida",valor:cxs[j].valor,hora:agoraHM(),
-          descricao:"Pagamento · "+pessoa+" · "+docN+(N>1?" · parcela "+(k+1)+"/"+N:""),centroId:principal.centroId,tituloId:tId,notaId:n.id,por:usuarioAtual};
-        if(cs)mv.centros=cs;
-        lista.push({colecao:"movs",obj:mv});(function(x){depois.push(function(){movs.push(x);});})(mv);
-      }
-    }
-    det.push({campo:"Pagamento",de:null,para:null});
-    det[det.length-1].campo="Pagamento: "+nomeFormaNF(dfPg.forma)+" · "+({pago:"já foi pago",apagar:"a pagar",entrada:"entrada + parcelas"}[dfPg.sit]||"")+" · "+N+" parcela(s) · "+BRL(+n.total||0);
+    var lotes=titulosDoPagamentoNF(n,novoPg,{hoje:hoje,quando:quando,pessoa:pessoa,centros:centrosN,principal:principal,suf:suf});
+    lotes.forEach(function(lt){
+      lista.push({colecao:"titulos",obj:lt.titulo});
+      depois.push(function(){titulos.push(lt.titulo);});criados++;
+      lt.movs.forEach(function(mv){
+        lista.push({colecao:"movs",obj:mv});
+        depois.push(function(){movs.push(mv);});});
+    });
+    det.push({campo:"Pagamento: "+textoPagamentoNF(novoPg.partes,+n.total||0),de:null,para:null});
   }
-  nc.centros=centrosN;nc.centroId=principal.centroId;nc.formaPg=dfPg.forma;nc.pagamento=novoPg;
+  nc.centros=centrosN;nc.centroId=principal.centroId;nc.formaPg=textoFormaPgNF();nc.pagamento=novoPg;
   nc.fluxo2=true;
   var temEst=itensEstoqueNF(nc).length>0;
   nc.status=temEst?(rodadasAtivasNF(nc).length?statusAposConfNF(nc):"aguardando"):"fechada";
@@ -40157,7 +40343,8 @@ async function salvarLancamentoNota__corpo(){
   try{await gravaJuntosConf(lista);}
   catch(e){avisarRecusaBanco("df_alerta",e,"Nada foi gravado: a nota, as parcelas e o caixa continuam como estavam.");return false;}
   depois.forEach(function(f){f();});
-  toast(docN+(primeira?" lançada":" lançada de novo")+(mudouPg?" · "+criados+" parcela(s) em Contas a Pagar"+(dfPg.sit==="pago"?" (já paga)":""):" · pagamento mantido")+
+  toast(docN+(primeira?" lançada":" lançada de novo")+(mudouPg?" · "+criados+" parcela(s) em Contas a Pagar"+
+      (dfPgs.every(function(x){return x.sit==="pago";})?" (já paga)":(dfPgs.some(function(x){return x.sit==="pago"||x.sit==="entrada";})?" (com parcela já paga)":"")):" · pagamento mantido")+
     (temEst?". Foi para a conferência do almoxarifado.":". Só despesa: fechada."));
   fecharDarEntrada();
   try{renderPagar();renderFluxo();renderCaixasMov();}catch(eR){}
@@ -40576,7 +40763,7 @@ function pedirCancelarNota(n){
   if(pagos.length){
     var mvs=movs.filter(function(m){return m.notaId===n.id&&m.tipo==="saida"&&!m.estornadoEm;});
     abrirModalNF({tit:"Não dá para excluir a "+docNotaNF(n),sub:"Nada foi alterado.",
-      corpo:'<div class="note crit nf-bloq"><b>'+(n.pagamento&&n.pagamento.situacao==="pago"?"A nota foi lançada como “Já foi pago”.":"Há parcela paga desta nota.")+
+      corpo:'<div class="note crit nf-bloq"><b>'+(partesPagamentoNF(n).some(function(x){return x.situacao==="pago";})?"A nota foi lançada como “Já foi pago”.":"Há parcela paga desta nota.")+
         "</b> O Financeiro estorna o pagamento antes, em Contas a Pagar:<ul>"+pagos.map(function(t){
           return "<li>"+esc(descricaoTitulo(t))+" · pago "+BRL(+t.valorPago||+t.valor||0)+(t.pagoEm?" em "+esc(dataBR(t.pagoEm)):"")+"</li>";}).join("")+"</ul>"+
         (mvs.length?"Lançamentos no caixa:<ul>"+mvs.map(function(m){var cx=caixaPor(m.caixaId);return "<li>"+esc(dataBR(m.data))+" · "+esc(cx?cx.nome:"caixa")+" · "+BRL(+m.valor||0)+"</li>";}).join("")+"</ul>":"")+"</div>",
@@ -40782,7 +40969,11 @@ window.__notaFinMF={abrir:abrirDarEntrada,concluir:function(){return concluirEnt
   /* v588 */
   conta:contaNota,quadro:htmlQuadroImpostoNF,imposto:impostoDaNota,impTela:impDaTelaNF,
   salvarNota:function(){return salvarNota__corpo();},rateio:rateioNota,calc:calcNota,aplicarXml:aplicarNFe,
-  custoTotal:custoTotalDe};
+  custoTotal:custoTotalDe,
+  /* v599 */
+  partesPg:function(){return dfPgs;},addForma:addFormaNF,somaPartes:somaPartesNF,valorParte:valorParteNF,
+  partesDe:partesPagamentoNF,textoPg:textoPagamentoNF,formaPg:textoFormaPgNF,titulosPg:titulosDoPagamentoNF,
+  pgDeDf:pgDeDfNF};
 
 /* ===== v536: BOTÃO COM PENDÊNCIA (ponto 4) =====
    Fica acinzentado, com "Resolva os itens acima para concluir" embaixo; o toque não faz nada além de
