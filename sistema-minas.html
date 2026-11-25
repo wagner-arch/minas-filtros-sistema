@@ -2631,6 +2631,7 @@ img{max-width:100%}
     <button data-s="estTransicao">Transição do estoque</button>
     <button data-s="estAguardando">Peças aguardando aprovação</button>
     <button data-s="estContagem">Contagem do estoque</button>
+    <button data-s="estEncomendas">Encomendas</button>
     <button data-s="estInstalado">Peça instalada sem venda aprovada</button>
     <button data-s="estConsumo">Uso e consumo</button>
     <button data-s="ferramentas">Ferramentas</button>
@@ -5283,6 +5284,26 @@ img{max-width:100%}
           <div class="fld"><label for="paBusca">Buscar</label><input id="paBusca" placeholder="produto, cliente, pedido ou série"></div>
         </div>
         <div id="paCorpo"></div>
+      </div>
+    </section>
+
+    <!-- ENCOMENDAS (25/11, v605): os itens vendidos antes de chegar da fábrica -->
+    <section class="screen" id="s-estEncomendas" hidden>
+      <div class="cab">
+        <div>
+          <h2>Encomendas</h2>
+          <div class="sub">Produto <b>vendido antes de chegar da fábrica</b>. Aqui ficam as encomendas desta empresa, o total a pedir por produto e o que já foi pedido. O vendedor acompanha pelo próprio pedido.</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="filtros">
+          <div class="fld"><label for="encSit">Situação</label><select id="encSit"></select></div>
+          <div class="fld"><label for="encProd">Produto</label><select id="encProd"></select></div>
+          <div class="fld"><label for="encBusca">Buscar</label><input id="encBusca" placeholder="produto, cliente, pedido ou vendedor"></div>
+          <div class="fld"><label for="encAtr">Só atrasadas</label><select id="encAtr"><option value="">Não</option><option value="1">Sim</option></select></div>
+        </div>
+        <div id="enc_alerta"></div>
+        <div id="encCorpo"></div>
       </div>
     </section>
 
@@ -21193,6 +21214,12 @@ function calcular(){
         pillNegItem(i)+
         /* de qual estoque este item sai, e se ainda espera autorização (23/10) */
         seloEstoqueItem(i)+
+        /* v605: SOB ENCOMENDA — o item é vendido antes de chegar da fábrica */
+        (ehEncomenda(i)?" "+pillEnc(i):"")+
+        (podeSerEncomenda(i)
+          ? ' <button class="btn ghost sm" type="button" data-encmk="'+idx+'">'+
+            (ehEncomenda(i)?"Tirar de sob encomenda":"Sob encomenda")+"</button>"
+          : "")+
         /* produto composto (v248): diz de onde a linha veio, para o vendedor saber o que pode tirar */
         (i.vemCom?' · <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+
         /* o preço deste produto mudou no cadastro depois que o item entrou (22/10) */
@@ -21319,6 +21346,20 @@ function calcular(){
     var volta=tb.querySelector('[data-vu="'+focoVU+'"]');
     if(volta){try{volta.focus();volta.setSelectionRange(volta.value.length,volta.value.length);}catch(e){}}
   }
+  /* v605: marcar e desmarcar "Sob encomenda" — só mexe no item; quem grava é o pedido, então
+     funciona igual no modo sem internet */
+  Array.prototype.forEach.call(tb.querySelectorAll("[data-encmk]"),function(b){b.onclick=function(){
+    var it=itens[+b.getAttribute("data-encmk")];if(!it)return;
+    var liga=!ehEncomenda(it);
+    if(!marcarItemEncomenda(it,liga)){
+      toast(liga?"Este produto não pode ser vendido sob encomenda."
+        :"Esta encomenda já foi pedida à fábrica: o cancelamento é feito na tela Encomendas.");
+      return;
+    }
+    if(liga)delete it.estNovoSerie;
+    toast(liga?(it.nome+" passou a ser SOB ENCOMENDA: não sai do estoque agora.")
+      :(it.nome+" voltou a sair do estoque."));
+    render();};});
   Array.prototype.forEach.call(tb.querySelectorAll("[data-rm]"),function(b){b.onclick=function(){
     var it=itens[+b.getAttribute("data-rm")];if(!it)return;
     /* tirou o produto: o plano dele sai junto; tirou só o plano: o produto volta para Bronze */
@@ -24595,6 +24636,7 @@ function planoEstoqueVenda(){
   function res(l){return resCache[l]||(resCache[l]=reservasDe(l,exc));}
   itens.forEach(function(i,ix){
     if(!i||!i.estNovo||!i.pid||ehPlano(i)||ehServico(i))return;
+    if(ehEncomenda(i))return;   /* v605: item sob encomenda não sai de estoque nenhum */
     if(i.usoEstoque||i.autEstoque)return;
     var loc=i.estoque||padrao;
     /* v564: item NOVO com origem que a regra nova não permite volta para a origem automática */
@@ -25246,7 +25288,417 @@ function responsavelVenda(p){
   return p.instalacao?respInstalacao(p):(p.vendedor||p.instalador||"");
 }
 /* o que sai do estoque na venda: os itens vendidos e os produtos usados na instalação */
-function itensDeEstoque(p){return (p.itens||[]).concat(p.materiaisInstalacao||[]).filter(function(i){return !ehPlano(i)&&!ehServico(i);});}
+/* v605: o item SOB ENCOMENDA não tem estoque na venda — não reserva, não baixa, não requisita e
+   não entra nas travas de negativo. Ele entra no estoque quando a mercadoria chega (Parte 2). */
+function itensDeEstoque(p){return (p.itens||[]).concat(p.materiaisInstalacao||[]).filter(function(i){return !ehPlano(i)&&!ehServico(i)&&!ehEncomenda(i);});}
+
+/* ============ v605 (25/11, pedido dele): VENDA SOB ENCOMENDA — PARTE 1 ============
+   O produto é vendido ANTES de chegar da fábrica. No pedido, cada item pode ser marcado
+   "Sob encomenda" (`i.enc.on`): o mesmo pedido pode ter itens do estoque e itens sob encomenda,
+   e os do estoque seguem exatamente as regras de sempre.
+   O item sob encomenda NÃO exige saldo, NÃO escolhe estoque de origem, NÃO reserva nem baixa
+   estoque na venda e fica fora da requisição e das travas — é o `itensDeEstoque` acima, a porta
+   única por onde toda a máquina do estoque passa, mais o `planoEstoqueVenda` da revisão.
+   Qualquer vendedor marca, e a marcação é só do item (nada vai ao banco antes de gravar o
+   pedido), então vale também no modo sem internet.
+   Serviço, plano e produto do sistema (SRV-*, planos, sucata) nunca podem ser encomenda.
+   Cada item tem a SITUAÇÃO dela, com histórico no item e no pedido:
+     aguardando → fabrica (com previsão) → chegou → entregue / retirado / instalado / cancelado.
+   As situações de "chegou" em diante são da Parte 2; a Parte 1 vai até o pedido à fábrica. */
+var SIT_ENC=[["aguardando","Aguardando pedido à fábrica"],["fabrica","Pedido à fábrica"],
+  ["chegou","Chegou · reservado"],["entregue","Entregue"],["retirado","Retirado"],
+  ["instalado","Instalado"],["cancelado","Cancelado"]];
+function rotuloSitEnc(k){
+  var r=SIT_ENC.filter(function(x){return x[0]===k;})[0];
+  return r?r[1]:"Aguardando pedido à fábrica";
+}
+function ehEncomenda(i){return !!(i&&i.enc&&i.enc.on);}
+/* o que NUNCA vira encomenda: serviço, plano e os produtos que o sistema usa por dentro */
+function podeSerEncomenda(i){
+  if(!i||!i.pid)return false;
+  if(ehPlano(i)||ehServico(i))return false;
+  var p=prodPorId(i.pid);
+  if(!p)return false;
+  if(produtoDeSistema(p))return false;
+  return !ehProdutoSucata(p);
+}
+function sitEnc(i){return (i&&i.enc&&i.enc.sit)||"aguardando";}
+function encAberta(i){var k=sitEnc(i);return ehEncomenda(i)&&k!=="cancelado";}
+/* esperando a mercadoria: ainda não chegou */
+function encEsperando(i){var k=sitEnc(i);return ehEncomenda(i)&&(k==="aguardando"||k==="fabrica");}
+function encAtrasada(i){
+  return !!(ehEncomenda(i)&&sitEnc(i)==="fabrica"&&i.enc.previsao&&String(i.enc.previsao)<hojeISO());
+}
+function dataVendaEnc(p){return String((p&&(p.data||p.criadoEm))||"").slice(0,10);}
+function diasEncomenda(p){
+  var d=dataVendaEnc(p);
+  if(!d)return 0;
+  return Math.max(0,Math.round((new Date(hojeISO()+"T00:00:00")-new Date(d+"T00:00:00"))/86400000));
+}
+/* o texto da situação, com a previsão quando há */
+function textoSitEnc(i){
+  var k=sitEnc(i),t=rotuloSitEnc(k);
+  if(k==="fabrica"&&i.enc&&i.enc.previsao)t+=" · previsão "+dataBR(i.enc.previsao);
+  return t;
+}
+function classeSitEnc(i){
+  var k=sitEnc(i);
+  if(encAtrasada(i))return "p-crit";
+  if(k==="cancelado")return "p-mut";
+  if(k==="chegou")return "p-ok";
+  if(k==="fabrica")return "p-acc";
+  if(k==="entregue"||k==="retirado"||k==="instalado")return "p-ok";
+  return "p-warn";
+}
+function pillEnc(i){
+  if(!ehEncomenda(i))return "";
+  return '<span class="pill '+classeSitEnc(i)+'">'+esc(textoSitEnc(i))+"</span>"+
+    (encAtrasada(i)?' <span class="pill p-crit">atrasada</span>':"");
+}
+/* a marcação no item — só mexe no item; quem grava é o pedido */
+function novaEncItem(){
+  return {on:true,sit:"aguardando",desde:agoraCarimbo(),por:usuarioAtual,
+    fornecedorId:"",pedidoEm:"",previsao:"",obs:"",hist:[]};
+}
+function anotarEnc(i,texto,extra){
+  if(!i||!i.enc)return;
+  i.enc.hist=(i.enc.hist||[]).concat([Object.assign({texto:texto,por:usuarioAtual,quando:agoraCarimbo()},extra||{})]);
+  if(i.enc.hist.length>60)i.enc.hist=i.enc.hist.slice(-60);
+}
+function marcarItemEncomenda(i,on){
+  if(!i)return false;
+  if(on){
+    if(!podeSerEncomenda(i))return false;
+    if(ehEncomenda(i))return true;
+    if(i.enc)i.enc.on=true;else i.enc=novaEncItem();
+    i.enc.sit="aguardando";
+    /* sem estoque de origem, sem série e sem uso decidido: nada sai do estoque agora */
+    delete i.estoque;delete i.estEscolhido;delete i.usoEstoque;delete i.autEstoque;delete i.serie;
+    anotarEnc(i,"Marcado como sob encomenda");
+    return true;
+  }
+  if(!i.enc)return true;
+  if(sitEnc(i)!=="aguardando")return false;   /* já pedido à fábrica: desmarcar é cancelamento (Parte 3) */
+  i.enc.on=false;
+  anotarEnc(i,"Deixou de ser sob encomenda");
+  return true;
+}
+/* ---------- a lista de encomendas da empresa aberta ---------- */
+function encomendasDaEmpresa(filtro){
+  var f=filtro||{},out=[];
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||ehTeste(p))return;
+    (p.itens||[]).forEach(function(it,ix){
+      if(!ehEncomenda(it))return;
+      var sit=sitEnc(it);
+      if(!f.comCancelada&&sit==="cancelado")return;
+      if(f.sit&&sit!==f.sit)return;
+      if(f.pid&&it.pid!==f.pid)return;
+      if(f.atrasadas&&!encAtrasada(it))return;
+      if(f.busca){
+        var alvo=semAcento((it.nome||"")+" "+(it.cod||"")+" "+(p.cliente||"")+" "+(p.numero||"")+" "+(p.vendedor||"")).toLowerCase();
+        if(alvo.indexOf(semAcento(String(f.busca)).toLowerCase())<0)return;
+      }
+      out.push({p:p,it:it,ix:ix,chave:p.id+"|"+ix});
+    });
+  });
+  return out.sort(function(a,b){
+    return String(dataVendaEnc(a.p)).localeCompare(String(dataVendaEnc(b.p)))||
+      (+a.p.numero||0)-(+b.p.numero||0);});
+}
+/* agrupado por produto, com o total a pedir à fábrica */
+function encomendasPorProduto(lista){
+  var m={},ordem=[];
+  (lista||[]).forEach(function(x){
+    var k=x.it.pid||x.it.cod||x.it.nome;
+    if(!m[k]){m[k]={pid:x.it.pid,cod:x.it.cod,nome:x.it.nome,qtd:0,linhas:[]};ordem.push(k);}
+    m[k].qtd+=+(x.it.qtd||1);m[k].linhas.push(x);
+  });
+  return ordem.map(function(k){return m[k];}).sort(function(a,b){return String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR");});
+}
+/* as encomendas de quem está na tela: as dos pedidos dele (vendedor) */
+function minhasEncomendas(){
+  return encomendasDaEmpresa().filter(function(x){return deMim(x.p,CAMPOS_PED);});
+}
+function podeEncomendas(quem){
+  return podeAcao("encomendas",quem)||perfilDe(quem||usuarioAtual)==="Administrador";
+}
+/* ---------- gravar ---------- */
+/* relê o pedido no banco antes de mexer: duas pessoas não gravam situações diferentes */
+async function lerPedidoFresco(id,local){
+  if(window.__encBancoTesteMF){
+    var tb=window.__encBancoTesteMF(id,local);
+    if(tb&&local&&tb!==local)Object.keys(tb).forEach(function(k){local[k]=tb[k];});
+    return local;
+  }
+  if(!db||!modoBanco())return local;
+  var g=await col("pedidos").doc(id).get();
+  if(!g||!g.exists)return local;
+  var o=g.data()||{};o.id=id;
+  if(local){
+    Object.keys(local).forEach(function(k){if(!(k in o))delete local[k];});
+    Object.keys(o).forEach(function(k){local[k]=o[k];});
+    return local;
+  }
+  return o;
+}
+/* marca "pedido à fábrica" num ou em vários itens, de um ou de vários pedidos */
+function marcarFabricaEnc(){return travaSalvar("marcarFabricaEnc",marcarFabricaEnc__corpo,this,arguments);}
+async function marcarFabricaEnc__corpo(chaves,dados){
+  if(!podeEncomendas()){toast("Só quem tem a permissão Encomendas marca o pedido à fábrica.");return false;}
+  var d=dados||{},lista=(chaves||[]).slice();
+  if(!lista.length){toast("Escolha pelo menos uma encomenda.");return false;}
+  if(!d.pedidoEm){toast("Informe a data do pedido à fábrica.");return false;}
+  /* um pedido por vez: cada um é um registro do banco */
+  var porPed={};
+  lista.forEach(function(k){var a=String(k).split("|");(porPed[a[0]]=porPed[a[0]]||[]).push(+a[1]);});
+  var ids=Object.keys(porPed),feitos=0,erro="";
+  for(var j=0;j<ids.length;j++){
+    var p=pedPorId(ids[j]);
+    if(!p||p.loja!==lojaAtual)continue;
+    try{await lerPedidoFresco(p.id,p);}
+    catch(eL){erro="Não deu para conferir o pedido "+(p.numero||"")+" no banco.";break;}
+    var guarda=copiaReg(p),nomes=[],mexeu=false;
+    porPed[ids[j]].forEach(function(ix){
+      var it=(p.itens||[])[ix];
+      if(!it||!ehEncomenda(it)||!encEsperando(it))return;
+      it.enc.sit="fabrica";
+      it.enc.pedidoEm=d.pedidoEm;
+      it.enc.fornecedorId=d.fornecedorId||"";
+      it.enc.previsao=d.previsao||"";
+      if(d.obs)it.enc.obs=d.obs;
+      anotarEnc(it,"Pedido à fábrica em "+dataBR(d.pedidoEm)+
+        (d.previsao?" · previsão "+dataBR(d.previsao):"")+
+        (d.fornecedorId?" · "+((fornecPor(d.fornecedorId)||{}).nome||""):"")+
+        (d.obs?" · "+d.obs:""),{sit:"fabrica"});
+      nomes.push((it.qtd||1)+"× "+(it.nome||""));mexeu=true;
+    });
+    if(!mexeu)continue;
+    registrarEvento(p,"Encomenda pedida à fábrica: "+nomes.join(", ")+
+      " · em "+dataBR(d.pedidoEm)+(d.previsao?" · previsão "+dataBR(d.previsao):""));
+    try{await gravaConf("pedidos",p);feitos+=nomes.length;}
+    catch(eG){voltarReg(p,guarda);erro="O pedido "+(p.numero||"")+" não foi salvo: "+motivoBanco(eG);break;}
+  }
+  if(erro){
+    if($("enc_alerta"))$("enc_alerta").innerHTML='<div class="note crit"><b>'+esc(erro)+"</b></div>";
+    toast(erro);
+    try{renderEncomendas();}catch(e2){}
+    return false;
+  }
+  toast(feitos+(feitos===1?" encomenda marcada":" encomendas marcadas")+" como pedidas à fábrica.");
+  try{renderEncomendas();renderPedDet();}catch(e3){}
+  return true;
+}
+/* muda a previsão de chegada, com histórico */
+function mudarPrevisaoEnc(){return travaSalvar("mudarPrevisaoEnc",mudarPrevisaoEnc__corpo,this,arguments);}
+async function mudarPrevisaoEnc__corpo(chave,nova,motivo){
+  if(!podeEncomendas()){toast("Só quem tem a permissão Encomendas muda a previsão.");return false;}
+  var a=String(chave||"").split("|"),p=pedPorId(a[0]),ix=+a[1];
+  if(!p||p.loja!==lojaAtual){toast("Esta encomenda é de outra empresa.");return false;}
+  try{await lerPedidoFresco(p.id,p);}
+  catch(eL){if($("enc_alerta"))$("enc_alerta").innerHTML='<div class="note crit"><b>Não deu para conferir o pedido no banco.</b> Confira a internet e tente de novo.</div>';return false;}
+  var it=(p.itens||[])[ix];
+  if(!it||!ehEncomenda(it)||sitEnc(it)!=="fabrica"){toast("Só encomenda já pedida à fábrica tem previsão.");return false;}
+  var antes=it.enc.previsao||"",nv=String(nova||"");
+  if(nv===antes)return true;
+  var guarda=copiaReg(p);
+  it.enc.previsao=nv;
+  anotarEnc(it,"Previsão alterada de "+(antes?dataBR(antes):"— sem previsão —")+" para "+
+    (nv?dataBR(nv):"— sem previsão —")+(motivo?" · "+motivo:""),{de:antes,para:nv});
+  registrarEvento(p,"Encomenda "+(it.nome||"")+": previsão alterada de "+(antes?dataBR(antes):"— sem previsão —")+
+    " para "+(nv?dataBR(nv):"— sem previsão —")+(motivo?" · "+motivo:""));
+  try{await gravaConf("pedidos",p);}
+  catch(eG){voltarReg(p,guarda);return avisarRecusaBanco("enc_alerta",eG,"A previsão não foi salva.");}
+  toast("Previsão alterada.");
+  try{renderEncomendas();renderPedDet();}catch(e2){}
+  return true;
+}
+/* o comprovante da encomenda, para o vendedor mandar se quiser (nada é enviado sozinho) */
+function textoComprovanteEnc(p,it){
+  var c=cliPorId(p.clienteId)||{};
+  return "Olá"+(c.nome?", "+primeiroNome(c.nome):"")+"! Sobre o seu pedido "+(p.numero||"")+":\n"+
+    "• "+(it.qtd||1)+"× "+(it.nome||"")+"\n"+
+    "• Situação: "+textoSitEnc(it)+"\n"+
+    (it.enc&&it.enc.previsao&&sitEnc(it)==="fabrica"?"• Previsão de chegada: "+dataBR(it.enc.previsao)+"\n":"")+
+    "Qualquer novidade eu aviso. "+nomeLoja();
+}
+function enviarSituacaoEnc(pid,ix){
+  var p=pedPorId(pid);if(!p)return false;
+  var it=(p.itens||[])[ix];if(!it||!ehEncomenda(it))return false;
+  var c=cliPorId(p.clienteId)||null;
+  abrirWhatsApp({cliente:c,tel:(c&&c.tel)||"",nome:p.cliente||"",
+    mensagem:textoComprovanteEnc(p,it),
+    titulo:"Situação da encomenda · pedido "+(p.numero||""),origem:"encomenda"});
+  return true;
+}
+/* ---------- a tela Encomendas ---------- */
+var encMarcadas={};
+function montarFiltrosEnc(){
+  var ss=$("encSit");
+  if(ss&&!ss.options.length){
+    ss.innerHTML='<option value="">Todas</option>'+SIT_ENC.map(function(x){
+      return '<option value="'+x[0]+'">'+esc(x[1])+"</option>";}).join("");
+  }
+  var sp=$("encProd");
+  if(sp){
+    var antes=sp.value,vis={},ops=[];
+    encomendasDaEmpresa({comCancelada:true}).forEach(function(x){
+      var k=x.it.pid||"";
+      if(!k||vis[k])return;vis[k]=1;ops.push({id:k,nome:(x.it.cod?x.it.cod+" · ":"")+(x.it.nome||"")});
+    });
+    ops.sort(function(a,b){return String(a.nome).localeCompare(String(b.nome),"pt-BR");});
+    sp.innerHTML='<option value="">Todos</option>'+ops.map(function(o){
+      return '<option value="'+esc(o.id)+'">'+esc(o.nome)+"</option>";}).join("");
+    if(antes)sp.value=antes;
+  }
+}
+function renderEncomendas(){
+  var b=$("encCorpo");if(!b)return;
+  montarFiltrosEnc();
+  var f={sit:($("encSit")||{}).value||"",pid:($("encProd")||{}).value||"",
+    busca:($("encBusca")||{}).value||"",atrasadas:!!(($("encAtr")||{}).value)};
+  var todas=encomendasDaEmpresa({comCancelada:!!f.sit&&f.sit==="cancelado"});
+  var L=encomendasDaEmpresa(Object.assign({comCancelada:f.sit==="cancelado"},f));
+  var cont={};todas.forEach(function(x){var k=sitEnc(x.it);cont[k]=(cont[k]||0)+1;});
+  var nAtr=todas.filter(function(x){return encAtrasada(x.it);}).length;
+  var h='<div class="note">As encomendas de <b>'+esc(nomeLoja())+'</b>. Marcar o pedido à fábrica e mudar a previsão '+
+    'ficam no histórico do pedido, e o vendedor acompanha pela ficha dele.</div>';
+  h+='<div class="kpis" style="margin:12px 0">'+
+    ["aguardando","fabrica","chegou"].map(function(k){
+      return '<div class="kpi"><div class="l">'+esc(rotuloSitEnc(k))+'</div><div class="v">'+(cont[k]||0)+"</div></div>";}).join("")+
+    '<div class="kpi"><div class="l">Atrasadas</div><div class="v" style="color:'+(nAtr?"var(--crit)":"inherit")+'">'+nAtr+"</div></div></div>";
+  /* agrupado por produto: o total a pedir à fábrica */
+  var esperando=L.filter(function(x){return encEsperando(x.it);});
+  var gr=encomendasPorProduto(esperando);
+  if(gr.length){
+    h+='<div class="sect"><p class="sect-t">A pedir à fábrica, por produto</p><table class="tb"><thead><tr>'+
+      "<th>Produto</th><th class=\"num\">Total encomendado</th><th>Pedidos</th></tr></thead><tbody>"+
+      gr.map(function(g){
+        return "<tr><td>"+(g.cod?"<code>"+esc(g.cod)+"</code> · ":"")+esc(g.nome||"")+'</td><td class="num"><b>'+g.qtd+"</b></td>"+
+          "<td>"+esc(g.linhas.map(function(x){return x.p.numero;}).join(" · "))+"</td></tr>";
+      }).join("")+"</tbody></table></div>";
+  }
+  if(!L.length){
+    b.innerHTML=h+'<div class="note ok">Nenhuma encomenda nesta empresa com estes filtros.</div>';
+    ligarEncomendas();return;
+  }
+  var podeTocar=podeEncomendas();
+  h+='<div class="toolbar" style="padding:10px 0">'+
+    (podeTocar?'<button class="btn" type="button" id="encFab">Marcar pedido à fábrica</button>':"")+
+    '<span class="count">'+L.length+(L.length===1?" encomenda":" encomendas")+"</span></div>";
+  h+='<table class="tb"><thead><tr>'+(podeTocar?'<th style="width:34px"></th>':"")+
+    "<th>Produto</th><th class=\"num\">Qtd</th><th>Cliente</th><th>Pedido</th><th>Vendedor</th>"+
+    "<th>Venda</th><th>Situação</th><th>Previsão</th><th class=\"num\">Dias</th></tr></thead><tbody>"+
+    L.map(function(x){
+      var it=x.it,atr=encAtrasada(it);
+      return "<tr"+(atr?' class="it-abaixo"':"")+">"+
+        (podeTocar?'<td>'+(encEsperando(it)?'<input type="checkbox" class="enc-mc" data-enck="'+esc(x.chave)+'"'+
+          (encMarcadas[x.chave]?" checked":"")+">":"")+"</td>":"")+
+        "<td>"+(it.cod?"<code>"+esc(it.cod)+"</code> · ":"")+esc(it.nome||"")+"</td>"+
+        '<td class="num">'+(it.qtd||1)+"</td>"+
+        "<td>"+esc(x.p.cliente||"—")+"</td><td>"+esc(x.p.numero||"—")+"</td><td>"+esc(x.p.vendedor||"—")+"</td>"+
+        "<td>"+esc(dataCurta(dataVendaEnc(x.p)))+"</td>"+
+        "<td>"+pillEnc(it)+"</td>"+
+        "<td>"+(it.enc&&it.enc.previsao?esc(dataCurta(it.enc.previsao)):"—")+
+          (podeTocar&&sitEnc(it)==="fabrica"?' <button class="btn mut sm" type="button" data-encprev="'+esc(x.chave)+'">Mudar</button>':"")+"</td>"+
+        '<td class="num">'+(atr?'<span style="color:var(--crit)"><b>'+diasEncomenda(x.p)+"</b></span>":diasEncomenda(x.p))+"</td></tr>";
+    }).join("")+"</tbody></table>";
+  b.innerHTML=h;
+  ligarEncomendas();
+}
+function ligarEncomendas(){
+  ["encSit","encProd","encAtr"].forEach(function(id){
+    var e=$(id);if(!e||e.__ligado)return;e.__ligado=true;e.onchange=function(){encMarcadas={};renderEncomendas();};});
+  var bq=$("encBusca");
+  if(bq&&!bq.__ligado){bq.__ligado=true;bq.oninput=function(){encMarcadas={};renderEncomendas();};}
+  var w=$("encCorpo");if(!w)return;
+  Array.prototype.forEach.call(w.querySelectorAll(".enc-mc"),function(c){
+    c.onchange=function(){
+      var k=c.getAttribute("data-enck");
+      if(c.checked)encMarcadas[k]=1;else delete encMarcadas[k];
+    };});
+  var bf=$("encFab");
+  if(bf)bf.onclick=function(){
+    var ch=Object.keys(encMarcadas);
+    if(!ch.length){toast("Marque as encomendas que foram pedidas à fábrica.");return;}
+    abrirFabricaEnc(ch);
+  };
+  Array.prototype.forEach.call(w.querySelectorAll("[data-encprev]"),function(b2){
+    b2.onclick=function(){abrirPrevisaoEnc(b2.getAttribute("data-encprev"));};});
+}
+/* o quadro das encomendas — um só, usado pelos dois caminhos */
+function quadroEnc(){
+  var m=$("encModal");
+  if(!m){m=document.createElement("div");m.className="modal";m.id="encModal";document.body.appendChild(m);}
+  return m;
+}
+/* o quadro "Marcar pedido à fábrica" */
+function abrirFabricaEnc(chaves){
+  if(!podeEncomendas()){toast("Só quem tem a permissão Encomendas marca o pedido à fábrica.");return false;}
+  var lista=(chaves||[]).map(function(k){
+    var a=String(k).split("|"),p=pedPorId(a[0]);
+    return p?{chave:k,p:p,it:(p.itens||[])[+a[1]]}:null;
+  }).filter(function(x){return x&&x.it&&encEsperando(x.it);});
+  if(!lista.length){toast("Nenhuma encomenda esperando entre as marcadas.");return false;}
+  var m=quadroEnc();
+  var fs2=fornecsDaEmpresa().slice().sort(function(a,b){return String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR");});
+  m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Pedido à fábrica</h3>'+
+    '<div class="sub">'+lista.length+(lista.length===1?" encomenda":" encomendas")+"</div>"+
+    '<div class="t-sub" style="margin-top:8px">'+lista.map(function(x){
+      return esc((x.it.qtd||1)+"× "+(x.it.nome||"")+" · pedido "+(x.p.numero||""));}).join("<br>")+"</div>"+
+    '<div class="fld" style="margin-top:14px"><label for="encf_data">Data do pedido à fábrica</label>'+
+      '<input type="date" id="encf_data" value="'+esc(hojeISO())+'"></div>'+
+    '<div class="fld"><label for="encf_forn">Fornecedor</label><select id="encf_forn">'+
+      '<option value="">— não informado —</option>'+fs2.map(function(f){
+        return '<option value="'+esc(f.id)+'">'+esc((f.fantasia||f.nome||""))+"</option>";}).join("")+"</select></div>"+
+    '<div class="fld"><label for="encf_prev">Previsão de chegada</label><input type="date" id="encf_prev"></div>'+
+    '<div class="fld"><label for="encf_obs">Observação</label><input id="encf_obs" placeholder="opcional"></div>'+
+    '<div id="encf_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="encf_ok">Salvar</button>'+
+    '<button class="btn mut" type="button" id="encf_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  $("encf_nao").onclick=function(){m.hidden=true;};
+  $("encf_ok").onclick=async function(){
+    var d=$("encf_data").value,pv=$("encf_prev").value;
+    if(!d){$("encf_alerta").innerHTML='<div class="note crit"><b>Informe a data do pedido à fábrica.</b></div>';return;}
+    if(pv&&pv<d){$("encf_alerta").innerHTML='<div class="note crit"><b>A previsão não pode ser antes do pedido à fábrica.</b></div>';return;}
+    var ok=await marcarFabricaEnc(lista.map(function(x){return x.chave;}),
+      {pedidoEm:d,previsao:pv,fornecedorId:$("encf_forn").value,obs:$("encf_obs").value.trim()});
+    if(ok){m.hidden=true;encMarcadas={};renderEncomendas();}
+  };
+  return true;
+}
+/* o quadro da previsão */
+function abrirPrevisaoEnc(chave){
+  if(!podeEncomendas()){toast("Só quem tem a permissão Encomendas muda a previsão.");return false;}
+  var a=String(chave||"").split("|"),p=pedPorId(a[0]),it=p?(p.itens||[])[+a[1]]:null;
+  if(!it||!ehEncomenda(it)){toast("Esta encomenda não está mais na tela.");return false;}
+  var m=quadroEnc();
+  var hist=((it.enc&&it.enc.hist)||[]).slice().reverse();
+  m.innerHTML='<div class="box" style="width:min(520px,100%)"><h3>Previsão de chegada</h3>'+
+    '<div class="sub">'+esc((it.qtd||1)+"× "+(it.nome||""))+" · pedido "+esc(p.numero||"")+" · "+esc(p.cliente||"")+"</div>"+
+    '<div class="fld" style="margin-top:14px"><label for="encp_data">Nova previsão</label>'+
+      '<input type="date" id="encp_data" value="'+esc((it.enc&&it.enc.previsao)||"")+'"></div>'+
+    '<div class="fld"><label for="encp_mot">Motivo</label><input id="encp_mot" placeholder="opcional"></div>'+
+    '<div id="encp_alerta"></div>'+
+    (hist.length?'<div class="sect"><p class="sect-t">Histórico desta encomenda</p>'+hist.map(function(x){
+      return '<div class="t-sub">'+esc(x.texto||"")+" · "+esc(x.por||"")+" em "+esc(x.quando||"")+"</div>";}).join("")+"</div>":"")+
+    '<div class="actions"><button class="btn" type="button" id="encp_ok">Salvar</button>'+
+    '<button class="btn mut" type="button" id="encp_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  $("encp_nao").onclick=function(){m.hidden=true;};
+  $("encp_ok").onclick=async function(){
+    var ok=await mudarPrevisaoEnc(chave,$("encp_data").value,$("encp_mot").value.trim());
+    if(ok){m.hidden=true;renderEncomendas();}
+  };
+  return true;
+}
+window.__encomendaMF={ehEnc:ehEncomenda,pode:podeSerEncomenda,sit:sitEnc,texto:textoSitEnc,
+  marcar:marcarItemEncomenda,lista:encomendasDaEmpresa,porProduto:encomendasPorProduto,
+  atrasada:encAtrasada,dias:diasEncomenda,permissao:podeEncomendas,minhas:minhasEncomendas,
+  fabrica:function(ch,d){return marcarFabricaEnc__corpo(ch,d);},
+  previsao:function(ch,nv,m){return mudarPrevisaoEnc__corpo(ch,nv,m);},
+  comprovante:textoComprovanteEnc,enviar:enviarSituacaoEnc,esperando:encEsperando,aberta:encAberta};
 /* serviço (grupo Serviços / mão de obra, ex. Serviço de atendimento técnico): linha da venda, sem estoque nem reposição */
 function ehServico(i){
   if(!i)return false;
@@ -57215,6 +57667,9 @@ function renderPedDet(){
     if(i.planoCobre)subI.push("coberto pelo plano "+esc(i.planoCobre.garantia));
     /* de qual estoque o item sai, quando não é o de quem vendeu (23/10) */
     if(i.estoque)subI.push(seloEstoqueItem(i).replace(/^ /,""));
+    /* v605: a situação da encomenda, com o botão de mandar a situação ao cliente */
+    if(ehEncomenda(i))subI.push(pillEnc(i)+
+      ' <button class="btn ghost sm" type="button" data-enczap="'+idx+'">Enviar situação ao cliente</button>');
     ti.innerHTML+='<tr><td><div class="t-main"><span class="pd-nome" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+"</span></div>"+
       (subI.length?'<div class="t-sub">'+subI.join(" · ")+"</div>":"")+"</td>"+
       '<td class="num">'+(edInline?'<input type="number" min="1" style="max-width:80px" data-pi="qtd" data-i="'+idx+'" value="'+(i.qtd||1)+'">':(i.qtd||1))+"</td>"+
@@ -57485,6 +57940,9 @@ function ligarPedDet(){
     b.onclick=function(){abrirTransfDoPedido(b.getAttribute("data-pdtransf"));};});
 
   var p=pedAberto;
+  /* v605: o comprovante da encomenda, para o vendedor mandar se quiser (nada vai sozinho) */
+  Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-enczap]"),function(b){
+    b.onclick=function(){enviarSituacaoEnc(p.id,+b.getAttribute("data-enczap"));};});
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-pi]"),function(el){
     el.onchange=function(){
       pedRasc.sujo=true;
@@ -58509,7 +58967,9 @@ function docPedido(p,c){
       '<table><tr><th style="width:8%">Quant</th><th style="width:14%">Cod MF</th><th>Produto</th>'+
         '<th class="n" style="width:14%">Vlr Unitário</th><th class="n" style="width:14%">Vlr Total</th></tr>'+
       prods.map(function(i){
+        /* v605: o item vendido antes de chegar da fábrica sai marcado no papel */
         return '<tr><td class="c">'+(i.qtd||1)+"</td><td>"+esc(i.cod||"")+"</td><td>"+docMaiusc(i.nome)+
+          (ehEncomenda(i)?" <b>· SOB ENCOMENDA</b>":"")+
           '</td><td class="n">'+BRL(i.valor)+'</td><td class="n">'+BRL((+i.valor||0)*(i.qtd||1))+"</td></tr>";
       }).join("")+
       '<tr class="tot"><td colspan="4" class="n">Total Produtos:</td><td class="n">'+BRL(totProd)+"</td></tr></table>")+
@@ -64537,7 +64997,9 @@ var GRUPOS_TELA=[
   /* 04/11: a chave de cada tela continua a mesma (nenhuma permissão gravada muda); só o nome */
   {g:"Estoques",telas:[["estColab","Estoques · visão leve (Demandas do Estoque, Meu estoque, Minhas ferramentas, Meu histórico)"],
     ["estEmpresa","Estoques · visão completa (Demandas do Estoque, Saldo, Histórico, Inventário, Recuperações)"],
-    ["estConsumo","Uso e consumo"],["ferramentas","Ferramentas"]]},
+    ["estConsumo","Uso e consumo"],["ferramentas","Ferramentas"],
+    /* v605: a tela das vendas sob encomenda — quem vê é quem tem a AÇÃO "Encomendas" */
+    ["estEncomendas","Encomendas (venda sob encomenda)"]]},
   {g:"Gestão Administrativa",telas:[["fin","Aprovação Financeira"],["fornec","Cadastro Fornecedores"],
     ["caixas","Caixas"],["concil","Conciliação"],["pagar","Contas a Pagar"],["receber","Contas a Receber"],
     ["notas","Entrada de Notas Fiscais"],["faturamento","Faturamento"],["fluxo","Fluxo de Caixa"],
@@ -64578,7 +65040,10 @@ var ACOES=[
   ["editarProdutos","Cadastrar e alterar produtos e preços (inclui importar lista)"],
   /* 30/10 (regra dele): o prospector vem da origem da venda e fica travado; só quem tem esta
      permissão troca, com o motivo registrado no histórico do pedido */
-  ["alterarProspector","Alterar o prospector do pedido (fica registrado no histórico)"]
+  ["alterarProspector","Alterar o prospector do pedido (fica registrado no histórico)"],
+  /* v605 (25/11, regra dele): a tela Encomendas e o pedido à fábrica. Nasce na função
+     Almoxarifado; o Administrador tem sempre. O vendedor não precisa: ele acompanha pelo pedido. */
+  ["encomendas","Ver e tocar as encomendas (venda sob encomenda)"]
 ];
 var TODAS_TELAS=GRUPOS_TELA.reduce(function(a,g){return a.concat(g.telas.map(function(t){return t[0];}));},[]);
 /* as telas do dia a dia, que as funções padrão recebem. NÃO é o grupo do menu: o grupo
@@ -64611,7 +65076,7 @@ var SEED_FUNCOES=[
       "produtos","manut","estColab","os","fatur","veiculos"],acoes:[]},
   {nome:"Almoxarifado",desc:"Confere nota, move estoque e cuida de todo o almoxarifado",
     telas:["dash","agenda","ponto","leads","clientes","produtos","grupos","estEmpresa","estColab","estConsumo","notas","fornec","relat"],
-    acoes:["entradaNF","moverEstoque","almoxarifado","editarProdutos"]}
+    acoes:["entradaNF","moverEstoque","almoxarifado","editarProdutos","encomendas"]}
 ];
 async function gravarFuncoes(){if(!db)return;try{await db.doc("config/funcoes").set({lista:funcoes});}catch(e){console.warn(e);}}
 /* a mesma gravação, mas o erro SOBE: quem muda permissão precisa saber se o banco aceitou */
@@ -64641,6 +65106,14 @@ async function migrarAcoesNovas(){
     if(["Administrador","Financeiro","Gerente"].indexOf(f.nome)>=0&&(f.acoes||[]).indexOf("verPontoEquipe")<0){
       f.acoes=(f.acoes||[]).concat(["verPontoEquipe"]);mudou=true;}
     f.verPontoEquipeV="2026-11-23";mudou=true;
+  });
+  /* v605 (25/11, regra dele): "Encomendas" nasce no Administrador e na função Almoxarifado.
+     Depois disso, a marcação se dá e se tira em Permissões. */
+  funcoes.forEach(function(f){
+    if(f.encomendasV)return;
+    if((f.nome==="Administrador"||ehPerfilAlmox(f.nome))&&(f.acoes||[]).indexOf("encomendas")<0){
+      f.acoes=(f.acoes||[]).concat(["encomendas"]);}
+    f.encomendasV="2026-11-25";mudou=true;
   });
   if(mudou)await gravarFuncoes();
 }
@@ -65021,6 +65494,8 @@ function veTela(s,quem){
   var n=quem||usuarioAtual;
   /* v563: a tela de transição do estoque é só do Administrador, sem marcação nova nenhuma */
   if(s==="estTransicao")return perfilDe(n)==="Administrador";
+  /* v605: Encomendas vai pela AÇÃO "encomendas" (o Administrador tem sempre) */
+  if(s==="estEncomendas")return podeEncomendas(n);
   /* v592: as Datas da empresa também são só do Administrador */
   if(s==="datasemp")return perfilDe(n)==="Administrador";
   /* v567: a lista da peça instalada sem venda aprovada também é só do Administrador */
@@ -69085,6 +69560,18 @@ function avisosDoTrabalho(){
         quando:hojeISO()+" "+horaVespera(),ir:function(){ir("estAfazer");}});
     });
   }
+  /* v605: encomenda atrasada — passou da previsão e a mercadoria não chegou. Quem tem a
+     permissão Encomendas vê as da empresa; o vendedor vê as dos pedidos dele. */
+  try{
+    var encAtr=(podeEncomendas()?encomendasDaEmpresa():minhasEncomendas()).filter(function(x){return encAtrasada(x.it);});
+    encAtr.slice(0,8).forEach(function(x){
+      L.push({chave:"encatraso:"+x.chave,icone:"📦",
+        titulo:"Encomenda atrasada · "+(x.it.qtd||1)+"× "+(x.it.nome||""),
+        texto:"Pedido "+(x.p.numero||"")+" · "+(x.p.cliente||"")+" · previsão era "+dataBR(x.it.enc.previsao),
+        quando:x.it.enc.previsao,
+        ir:function(){if(podeEncomendas())ir("estEncomendas");else{ir("pedidos");try{abrirPedido(x.p);}catch(e){}}}});
+    });
+  }catch(eEnc){console.warn("encomendas no sino",eEnc);}
   /* o meu orçamento que vence hoje ou amanhã */
   var am=somaDias(hj,1);
   orcamentos.filter(function(o){
@@ -70284,6 +70771,7 @@ function render(){
   desenhaTela("estInstalado",renderPecaInstalada);
   desenhaTela("estAguardando",renderPecasAguardando);
   desenhaTela("estContagem",renderContagemEstoque);
+  desenhaTela("estEncomendas",renderEncomendas);
     desenhaTela("estConsumo",renderEstConsumo);desenhaTela("estEntrada",renderEntradas);
     opcoesFinanceiro();checarAgenda();
   }catch(e){console.warn("render",e);}
