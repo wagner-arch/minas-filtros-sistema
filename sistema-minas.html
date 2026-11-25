@@ -2920,6 +2920,8 @@ img{max-width:100%}
           </div>
           <!-- INDICAÇÕES: O SALDO DO DESCONTO NO REFIL (20/11, v584) -->
           <div id="c_indicSaldo"></div>
+          <!-- CRÉDITO DO CLIENTE (25/11, v608): saldo em R$ nascido de desistência -->
+          <div id="c_credito"></div>
           <div class="grid g4" style="margin-top:16px">
             <div class="fld"><label for="c_doc" id="c_lblDoc">CPF <span class="req" id="c_reqDoc">*</span></label><input id="c_doc" placeholder="000.000.000-00"></div>
             <div class="fld" id="c_rgWrap"><label for="c_rg">Identidade (RG)</label><input id="c_rg" placeholder="MG-00.000.000"></div>
@@ -3282,6 +3284,8 @@ img{max-width:100%}
             </div>
             <!-- v606: venda sob encomenda paga com SINAL -->
             <label class="nf-chk" id="v_sinalBox" hidden><input type="checkbox" id="v_sinal"> Pagamento com sinal (o resto fica como saldo da encomenda)</label>
+            <!-- v608: o saldo de crédito do cliente -->
+            <div id="v_credCli"></div>
             <div id="o_alertaPag"></div>
           </div>
           <div class="card vstep" data-s="2" id="v_itensCard">
@@ -10168,7 +10172,9 @@ var SEED_FORMAS=[
   {nome:"Crédito Plano Premium Refil",coef:{1:1}},
   /* purificador usado dado pelo cliente como parte do pagamento: não gera título a receber e põe o usado
      no estoque do vendedor (regra do Wagner, 16/09) */
-  {nome:"Desconto de Troca",coef:{1:1}}
+  {nome:"Desconto de Troca",coef:{1:1}},
+  /* v608: crédito do cliente nascido de desistência — não gera título nem caixa, e GERA comissão */
+  {nome:"Crédito do cliente",coef:{1:1}}
 ];
 function formaPor(nome){return formasPgto.filter(function(f){return f.nome===nome;})[0]||formasPgto[0]||{nome:"",coef:{1:1}};}
 function coefDe(nome,n){var f=formaPor(nome);return f.coef[n]||null;}
@@ -11460,6 +11466,9 @@ async function carregar(){
       formasPgto.push({nome:FORMA_CREDITO,coef:{1:1}});antigo=true;}
     if(!formasPgto.some(function(f){return f.nome===FORMA_TROCA;})){
       formasPgto.push({nome:FORMA_TROCA,coef:{1:1}});antigo=true;}
+    /* v608: a forma do crédito do cliente */
+    if(!formasPgto.some(function(f){return f.nome===FORMA_CRED_CLI;})){
+      formasPgto.push({nome:FORMA_CRED_CLI,coef:{1:1}});antigo=true;}
     /* v584: a forma do desconto por indicação, como a do crédito do plano */
     if(!formasPgto.some(function(f){return f.nome===FORMA_INDIC;})){
       formasPgto.push({nome:FORMA_INDIC,coef:{1:1}});antigo=true;}
@@ -13101,6 +13110,7 @@ function renderEstrelas(c){
     " · "+ind.length+" indicad"+(ind.length===1?"o":"os")+" no total · clique para ver</button>";
   $("c_verIndic").onclick=function(){abrirIndicacoes(c);};
   try{montarSaldoIndic(c);}catch(e){}   /* v584: o saldo do desconto por indicação */
+  try{renderCreditosCli(c);}catch(eCr){}   /* v608: o crédito do cliente */
 }
 var inCli=null,inAba="ind";
 function abrirIndicacoes(c){
@@ -13430,6 +13440,69 @@ function htmlSituacaoIndic(x){
   if(x.reservada)return "<span class=\"pill p-warn\">reservada no pedido "+esc(String((x.uso&&x.uso.numero)||"—"))+"</span>";
   if(x.vencida)return "<span class=\"pill p-crit\">vencida</span>";
   return "<span class=\"pill p-ok\">válida</span>";
+}
+/* v608: o crédito do cliente na ficha — o vendedor VÊ; só Financeiro e Adm mexem */
+function renderCreditosCli(c){
+  var w=$("c_credito");if(!w)return;
+  if(!c||!c.id){w.innerHTML="";return;}
+  var lista=creditosDoCliente(c),saldo=saldoCreditoCliente(c.id),pode=podeCreditoCliente();
+  if(!lista.length&&!pode){w.innerHTML="";return;}
+  var h='<div class="sect" style="margin-top:16px"><p class="sect-t">Crédito do cliente</p>'+
+    '<div class="note'+(saldo>0.009?" ok":"")+'"><b>Saldo: '+BRL(saldo)+"</b> · vale só em "+esc(nomeLoja())+
+    ". Entra como forma de pagamento <b>Crédito do cliente</b> numa venda e <b>não</b> gera título nem lançamento no caixa.</div>";
+  if(lista.length){
+    h+='<table class="tb"><thead><tr><th>Nascido de</th><th class="num">Valor</th><th class="num">Usado</th>'+
+      '<th class="num">Devolvido</th><th class="num">Saldo</th><th></th></tr></thead><tbody>'+
+      lista.map(function(x){
+        return "<tr><td><div class=\"t-main\">"+esc(x.motivo||"—")+"</div>"+
+          '<div class="t-sub">'+esc((x.pedidoNumero?"pedido "+x.pedidoNumero+" · ":"")+(x.por||"")+" em "+(x.em||""))+"</div></td>"+
+          '<td class="num">'+BRL(x.valor)+'</td><td class="num">'+BRL(x.usado||0)+'</td><td class="num">'+BRL(x.devolvido||0)+"</td>"+
+          '<td class="num"><b>'+BRL(sobraDoCredito(x))+"</b></td>"+
+          "<td>"+(pode?'<button class="btn mut sm" type="button" data-crcaj="'+esc(x.id)+'">Ajustar</button>':"")+"</td></tr>"+
+          (((x.hist||[]).length)?'<tr><td colspan="6"><div class="t-sub">'+
+            (x.hist||[]).slice().reverse().slice(0,6).map(function(hh){
+              return esc(hh.texto+" · "+(hh.por||"")+" em "+(hh.quando||""));}).join("<br>")+"</div></td></tr>":"");
+      }).join("")+"</tbody></table>";
+  }
+  if(pode)h+='<div class="actions" style="justify-content:flex-start;margin-top:10px">'+
+    '<button class="btn sm" type="button" id="crc_novo">Lançar crédito</button>'+
+    (saldo>0.009?'<button class="btn ghost sm" type="button" id="crc_dev">Devolver em dinheiro</button>':"")+"</div>";
+  h+='<div id="crc_alerta"></div></div>';
+  w.innerHTML=h;
+  if($("crc_novo"))$("crc_novo").onclick=function(){abrirCreditoCli(c,"novo");};
+  if($("crc_dev"))$("crc_dev").onclick=function(){abrirCreditoCli(c,"dev");};
+  Array.prototype.forEach.call(w.querySelectorAll("[data-crcaj]"),function(b){
+    b.onclick=function(){abrirCreditoCli(c,"ajuste",b.getAttribute("data-crcaj"));};});
+}
+/* o quadro de lançar, devolver e ajustar */
+function abrirCreditoCli(c,modo,credId){
+  if(!podeCreditoCliente()){toast("Só o Financeiro e o Administrador mexem no crédito.");return false;}
+  var x=credId?((c.creditos||[]).filter(function(y){return y.id===credId;})[0]):null;
+  var m=quadroEnc();
+  var tit=modo==="dev"?"Devolver crédito em dinheiro":(modo==="ajuste"?"Ajustar o crédito":"Lançar crédito");
+  var cxs=daLoja(caixas).filter(function(z){return z.status!=="inativo";});
+  m.innerHTML='<div class="box" style="width:min(520px,100%)"><h3>'+esc(tit)+"</h3>"+
+    '<div class="sub">'+esc(c.nome||"")+" · saldo "+BRL(saldoCreditoCliente(c.id))+"</div>"+
+    '<div class="fld" style="margin-top:14px"><label for="crc_valor">Valor</label>'+
+      '<input id="crc_valor" inputmode="decimal" value="'+(x?brMF(+x.valor||0):"")+'"></div>'+
+    (modo==="dev"?'<div class="fld"><label for="crc_caixa">Sai do caixa</label><select id="crc_caixa">'+
+      cxs.map(function(z){return '<option value="'+esc(z.id)+'">'+esc(z.nome)+"</option>";}).join("")+"</select></div>":"")+
+    '<div class="fld"><label for="crc_motivo">Motivo</label><input id="crc_motivo" placeholder="'+
+      esc(modo==="dev"?"ex.: o cliente pediu o dinheiro de volta":(modo==="ajuste"?"por que o valor muda":"de onde veio este crédito"))+'"></div>'+
+    '<div id="crcq_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="crc_ok">'+esc(modo==="dev"?"Devolver":"Salvar")+"</button>"+
+    '<button class="btn mut" type="button" id="crc_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  $("crc_nao").onclick=function(){m.hidden=true;};
+  $("crc_ok").onclick=async function(){
+    var v=numMF($("crc_valor").value),mot=$("crc_motivo").value;
+    var r;
+    if(modo==="dev")r=await devolverCreditoDinheiro(c.id,{valor:v,caixaId:$("crc_caixa").value,motivo:mot});
+    else if(modo==="ajuste")r=await ajustarCreditoCliente(c.id,credId,v,mot);
+    else r=await criarCreditoCliente(c.id,{valor:v,motivo:mot});
+    if(r){m.hidden=true;renderCreditosCli(cliPorId(c.id)||c);}
+  };
+  return true;
 }
 function montarSaldoIndic(c){
   var w=$("c_indicSaldo");if(!w)return;
@@ -19734,6 +19807,11 @@ function addItem(){
    exemplo) vira crédito na venda do purificador novo: o purificador sai pelo
    preço de tabela, a comissão não cai e o direito é baixado no plano. */
 var FORMA_CREDITO="Crédito Plano Premium Refil",FORMA_TROCA="Desconto de Troca";
+/* v608 (25/11, regra dele): o CRÉDITO DO CLIENTE — saldo em R$ que nasce da desistência de uma
+   encomenda e volta como forma de pagamento numa venda futura. Diferente do crédito do plano,
+   a venda paga com ele GERA comissão normal (a comissão da venda desistida já foi descontada),
+   e conta na meta e no faturamento. Não gera título nem entra no caixa: o dinheiro entrou antes. */
+var FORMA_CRED_CLI="Crédito do cliente";
 /* v584: o desconto por indicação é uma forma própria, pelo mesmo caminho do crédito do plano */
 var FORMA_INDIC="Desconto de Indicação";
 /* OS de atendimento interno: o orçamento é cobrado e recebido na abertura (regra do Wagner, 20/09) */
@@ -21151,6 +21229,21 @@ function calcular(){
       ".</b> O que está repartido nas formas precisa fechar com o <b>total base da venda</b> ("+BRL(totalBase)+")."+
       "</div>" : "";
 
+  /* v608: o crédito do cliente — o vendedor vê o saldo e quanto já lançou */
+  try{
+    var wCc=$("v_credCli");
+    if(wCc){
+      var cidV=(typeof cliSel!=="undefined"&&cliSel)?cliSel.id:"";
+      var sdC=cidV?creditoClienteLivre(cidV,(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:""):0;
+      var usoC=centavos((formas||[]).reduce(function(a,f){return a+(f&&f.tipo===FORMA_CRED_CLI?(+f.valor||0):0);},0));
+      wCc.innerHTML=(sdC>0.009||usoC>0.009)
+        ?'<div class="note'+((usoC>sdC+0.009)?" crit":" ok")+'"><b>Crédito do cliente: '+BRL(sdC)+" disponível.</b>"+
+          (usoC>0.009?" Lançado nesta venda: <b>"+BRL(usoC)+"</b>.":" Para usar, escolha a forma <b>"+esc(FORMA_CRED_CLI)+"</b>.")+
+          ((usoC>sdC+0.009)?" <b>Passou do saldo.</b>":"")+
+          " Ele não gera parcela nem entra no caixa, e a comissão sai normal.</div>"
+        :"";
+    }
+  }catch(eCc){}
   /* v606: a caixinha do sinal só existe quando há item sob encomenda na venda */
   try{
     var bxS=$("v_sinalBox");
@@ -22174,6 +22267,17 @@ async function salvarPedidoAgora(){
   /* v553: com pendência, dizer qual */
   if(pendVendaForm().tem&&!pendVendaForm().texto){toast("Venda com pendência: escreva qual é a pendência.");
     irEtapa(6);try{$("v_pendTexto").focus();}catch(ePd){}return;}
+  /* v608: crédito do cliente — nunca acima do saldo livre */
+  var usoCred=centavos((formas||[]).reduce(function(a,f){return a+(f&&f.tipo===FORMA_CRED_CLI?(+f.valor||0):0);},0));
+  if(usoCred>0.009){
+    var cidC=cliSel?cliSel.id:"";
+    var livreC=cidC?creditoClienteLivre(cidC,(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:""):0;
+    if(!cidC){toast("Escolha o cliente antes de usar o crédito dele.");irEtapa(1);return;}
+    if(usoCred>livreC+0.009){
+      toast("O crédito disponível de "+(cliSel.nome||"")+" é "+BRL(livreC)+" — e a venda está usando "+BRL(usoCred)+".");
+      irEtapa(2);return;
+    }
+  }
   /* v606: com SINAL, o que falta não é erro — vira o saldo da encomenda */
   var sinalOK=sinalLigadoVenda()&&r.dif>0.009&&r.dif<(+r.total||0)-0.009;
   if(sinalLigadoVenda()&&!sinalOK&&r.dif>0.009){
@@ -25346,8 +25450,11 @@ function podeSerEncomenda(i){
 }
 function sitEnc(i){return (i&&i.enc&&i.enc.sit)||"aguardando";}
 function encAberta(i){var k=sitEnc(i);return ehEncomenda(i)&&k!=="cancelado";}
-/* esperando a mercadoria: ainda não chegou */
-function encEsperando(i){var k=sitEnc(i);return ehEncomenda(i)&&(k==="aguardando"||k==="fabrica");}
+/* esperando a mercadoria: ainda não chegou (e ainda há quantidade viva) */
+function encEsperando(i){
+  var k=sitEnc(i);
+  return ehEncomenda(i)&&(k==="aguardando"||k==="fabrica")&&qtdVivaEnc(i)>0;
+}
 function encAtrasada(i){
   return !!(ehEncomenda(i)&&sitEnc(i)==="fabrica"&&i.enc.previsao&&String(i.enc.previsao)<hojeISO());
 }
@@ -25630,7 +25737,11 @@ function renderEncomendas(){
         "<td>"+esc(x.p.cliente||"—")+"</td><td>"+esc(x.p.numero||"—")+"</td><td>"+esc(x.p.vendedor||"—")+"</td>"+
         "<td>"+esc(dataCurta(dataVendaEnc(x.p)))+"</td>"+
         "<td>"+pillEnc(it)+
-          (fsr&&podeTocar?' <button class="btn sm" type="button" data-encser1="'+esc(x.chave)+'">Informar a série</button>':"")+"</td>"+
+          (fsr&&podeTocar?' <button class="btn sm" type="button" data-encser1="'+esc(x.chave)+'">Informar a série</button>':"")+
+          /* v608: desistência e troca de produto */
+          (podeAlterarEncomenda(x.p)&&encAberta(it)&&!encEntregue(it)
+            ?' <button class="btn mut sm" type="button" data-encdes="'+esc(x.chave)+'">Desistência</button>'+
+             ' <button class="btn mut sm" type="button" data-enctro="'+esc(x.chave)+'">Trocar produto</button>':"")+"</td>"+
         "<td>"+(it.enc&&it.enc.previsao?esc(dataCurta(it.enc.previsao)):"—")+
           (podeTocar&&sitEnc(it)==="fabrica"?' <button class="btn mut sm" type="button" data-encprev="'+esc(x.chave)+'">Mudar</button>':"")+"</td>"+
         '<td class="num">'+(atr?'<span style="color:var(--crit)"><b>'+diasEncomenda(x.p)+"</b></span>":diasEncomenda(x.p))+"</td></tr>";
@@ -25659,6 +25770,10 @@ function ligarEncomendas(){
     b2.onclick=function(){abrirPrevisaoEnc(b2.getAttribute("data-encprev"));};});
   Array.prototype.forEach.call(w.querySelectorAll("[data-encser1]"),function(b3){
     b3.onclick=function(){abrirSerieUmaEnc(b3.getAttribute("data-encser1"));};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-encdes]"),function(b4){
+    b4.onclick=function(){abrirDesistenciaEnc(b4.getAttribute("data-encdes"));};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-enctro]"),function(b5){
+    b5.onclick=function(){abrirTrocaEnc(b5.getAttribute("data-enctro"));};});
 }
 /* o quadro das encomendas — um só, usado pelos dois caminhos */
 function quadroEnc(){
@@ -25727,6 +25842,182 @@ function abrirPrevisaoEnc(chave){
   };
   return true;
 }
+/* ============ v608 (25/11, regra dele): CRÉDITO DO CLIENTE ============
+   Saldo em R$ no cadastro do cliente, nascido da DESISTÊNCIA de uma encomenda, com motivo,
+   pedido de origem e histórico de cada uso. **Vale só na empresa onde nasceu.**
+   · Na venda futura entra como a forma de pagamento "Crédito do cliente": NÃO gera título nem
+     lançamento no caixa (o dinheiro já entrou antes), mas **gera comissão normal**, e conta na
+     meta e no faturamento — porque a comissão da venda desistida foi descontada.
+   · O cliente pode pedir de volta em dinheiro: o Financeiro ou o Administrador transformam o
+     saldo (todo ou parte) em devolução, escolhendo o caixa de saída, com histórico.
+   · **Só Financeiro e Administrador criam, ajustam ou devolvem.** O vendedor só usa na venda e
+     vê o saldo na ficha do cliente.
+   O crédito mora no próprio cliente (`c.creditos`), cada um com valor, usado, devolvido e o
+   histórico de cada movimento — nada se apaga. */
+function podeCreditoCliente(quem){
+  var pf=perfilDe(quem||usuarioAtual);
+  return pf==="Financeiro"||pf==="Administrador";
+}
+function creditosDoCliente(c){
+  return ((c&&c.creditos)||[]).filter(function(x){return x&&(x.loja||lojaAtual)===lojaAtual;});
+}
+function sobraDoCredito(x){
+  return centavos(Math.max(0,(+x.valor||0)-(+x.usado||0)-(+x.devolvido||0)));
+}
+function saldoCreditoCliente(cid){
+  var c=cliPorId(cid);
+  if(!c)return 0;
+  return centavos(creditosDoCliente(c).reduce(function(a,x){return a+sobraDoCredito(x);},0));
+}
+/* o que já está prometido em pedido ainda não aprovado (não deixa gastar duas vezes) */
+function creditoClientePreso(cid,exceto){
+  return centavos((pedidos||[]).reduce(function(a,p){
+    if(!p||p.loja!==lojaAtual||p.clienteId!==cid)return a;
+    if(p.id===exceto||pedidoAprovado(p)||p.status==="Cancelada"||p.cancelada)return a;
+    if(p.creditoClienteUsos)return a;   /* já consumido */
+    return a+(p.formas||[]).reduce(function(b,f){return b+(f&&f.tipo===FORMA_CRED_CLI?(+f.valor||0):0);},0);
+  },0));
+}
+function creditoClienteLivre(cid,exceto){
+  return centavos(Math.max(0,saldoCreditoCliente(cid)-creditoClientePreso(cid,exceto)));
+}
+function anotarCredito(x,texto,extra){
+  x.hist=(x.hist||[]).concat([Object.assign({texto:texto,por:usuarioAtual,quando:agoraCarimbo()},extra||{})]);
+  if(x.hist.length>60)x.hist=x.hist.slice(-60);
+}
+/* CRIAR (só Financeiro e Adm) — nasce da desistência, com motivo e pedido de origem */
+function criarCreditoCliente(){return travaSalvar("criarCreditoCliente",criarCreditoCliente__corpo,this,arguments);}
+async function criarCreditoCliente__corpo(cid,dados){
+  var d=dados||{},c=cliPorId(cid);
+  /* o crédito que NASCE da desistência vem de quem já tem a permissão de alterar a encomenda */
+  if(!d.interno&&!podeCreditoCliente()){toast("Só o Financeiro e o Administrador criam crédito do cliente.");return null;}
+  if(!c){toast("Cliente não encontrado.");return null;}
+  if(c.loja&&c.loja!==lojaAtual){toast("Este cliente é de outra empresa.");return null;}
+  var v=centavos(+d.valor||0);
+  if(!(v>0.009)){toast("Informe o valor do crédito.");return null;}
+  if(!String(d.motivo||"").trim()){toast("Escreva o motivo do crédito.");return null;}
+  var guarda=copiaReg(c);
+  var x={id:uid(),loja:lojaAtual,valor:v,usado:0,devolvido:0,
+    motivo:String(d.motivo||"").trim(),pedidoId:d.pedidoId||"",pedidoNumero:d.pedidoNumero||"",
+    em:agoraCarimbo(),por:usuarioAtual,hist:[]};
+  anotarCredito(x,"Crédito de "+BRL(v)+" criado · "+x.motivo+(x.pedidoNumero?" · pedido "+x.pedidoNumero:""));
+  c.creditos=(c.creditos||[]).concat([x]);
+  try{await gravaConf("clientes",c);}
+  catch(e){voltarReg(c,guarda);avisarRecusaBanco($("crcq_alerta")?"crcq_alerta":"crc_alerta",e,"O crédito não foi criado.");return null;}
+  toast("Crédito de "+BRL(v)+" para "+(c.nome||"")+".");
+  try{renderCreditosCli(c);}catch(e2){}
+  return x;
+}
+/* USAR na venda aprovada: baixa do mais antigo para o mais novo */
+async function usarCreditoCliente(p){
+  var v=centavos((p.formas||[]).reduce(function(a,f){return a+(f&&f.tipo===FORMA_CRED_CLI?(+f.valor||0):0);},0));
+  if(!(v>0.009)||p.creditoClienteUsos)return 0;
+  var c=cliPorId(p.clienteId);
+  if(!c)return 0;
+  var guarda=copiaReg(c),resta=v,usos=[];
+  creditosDoCliente(c).forEach(function(x){
+    if(resta<=0.009)return;
+    var pega=Math.min(sobraDoCredito(x),resta);
+    if(pega<=0.009)return;
+    x.usado=centavos((+x.usado||0)+pega);
+    resta=centavos(resta-pega);
+    anotarCredito(x,"Usado "+BRL(pega)+" no pedido "+(p.numero||""),{pedidoId:p.id,valor:pega});
+    usos.push({creditoId:x.id,valor:pega});
+  });
+  if(!usos.length)return 0;
+  try{await gravaConf("clientes",c);}
+  catch(e){voltarReg(c,guarda);throw e;}
+  p.creditoClienteUsos=usos;
+  if(resta>0.009)registrarEvento(p,"Atenção: faltou "+BRL(resta)+" de crédito do cliente para cobrir a forma de pagamento.");
+  registrarEvento(p,"Crédito do cliente usado: "+BRL(centavos(v-resta)));
+  return centavos(v-resta);
+}
+/* a venda foi cancelada ou reaberta: o crédito volta para o cliente */
+async function devolverCreditoDoPedido(p,motivo){
+  if(!p||!p.creditoClienteUsos||!p.creditoClienteUsos.length)return 0;
+  var c=cliPorId(p.clienteId);
+  if(!c)return 0;
+  var guarda=copiaReg(c),volta=0;
+  p.creditoClienteUsos.forEach(function(u){
+    var x=((c.creditos||[]).filter(function(y){return y.id===u.creditoId;})[0]);
+    if(!x)return;
+    x.usado=centavos(Math.max(0,(+x.usado||0)-(+u.valor||0)));
+    volta=centavos(volta+(+u.valor||0));
+    anotarCredito(x,"Devolvido "+BRL(u.valor)+" ao saldo · "+(motivo||"pedido "+(p.numero||"")+" cancelado"),{pedidoId:p.id});
+  });
+  if(!volta)return 0;
+  try{await gravaConf("clientes",c);}
+  catch(e){voltarReg(c,guarda);return 0;}
+  delete p.creditoClienteUsos;
+  registrarEvento(p,"Crédito do cliente devolvido ao saldo: "+BRL(volta));
+  return volta;
+}
+/* DEVOLVER EM DINHEIRO (só Financeiro e Adm): sai do caixa escolhido */
+function devolverCreditoDinheiro(){return travaSalvar("devolverCreditoDinheiro",devolverCreditoDinheiro__corpo,this,arguments);}
+async function devolverCreditoDinheiro__corpo(cid,dados){
+  if(!podeCreditoCliente()){toast("Só o Financeiro e o Administrador devolvem crédito.");return false;}
+  var d=dados||{},c=cliPorId(cid);
+  if(!c){toast("Cliente não encontrado.");return false;}
+  var v=centavos(+d.valor||0),saldo=saldoCreditoCliente(cid);
+  if(!(v>0.009)){toast("Informe o valor a devolver.");return false;}
+  if(v>saldo+0.009){toast("O saldo do cliente é "+BRL(saldo)+".");return false;}
+  if(!d.caixaId){toast("Escolha o caixa de onde o dinheiro sai.");return false;}
+  var guarda=copiaReg(c),resta=v,tirados=[];
+  creditosDoCliente(c).forEach(function(x){
+    if(resta<=0.009)return;
+    var pega=Math.min(sobraDoCredito(x),resta);
+    if(pega<=0.009)return;
+    x.devolvido=centavos((+x.devolvido||0)+pega);
+    resta=centavos(resta-pega);
+    anotarCredito(x,"Devolvido em dinheiro "+BRL(pega)+(d.motivo?" · "+d.motivo:""),{valor:pega,caixaId:d.caixaId});
+    tirados.push(x.id);
+  });
+  var cc=await centroFixo("Devolução a cliente","Vendas","saida");
+  var mv={id:uid(),loja:lojaAtual,caixaId:d.caixaId,data:d.data||hojeISO(),tipo:"saida",valor:v,hora:agoraHM(),
+    descricao:"Devolução de crédito · "+(c.nome||"")+(d.motivo?" · "+d.motivo:""),
+    nomePadrao:"Devolução a cliente",centroId:cc,clienteId:c.id,creditoCliente:true,por:usuarioAtual};
+  try{
+    await gravaConf("clientes",c);
+    await gravaConf("movs",mv);
+    movs.push(mv);
+  }catch(e){
+    voltarReg(c,guarda);
+    movs=movs.filter(function(x){return x.id!==mv.id;});
+    return avisarRecusaBanco($("crcq_alerta")?"crcq_alerta":"crc_alerta",e,"A devolução não foi registrada.");
+  }
+  toast("Devolvido "+BRL(v)+" em dinheiro para "+(c.nome||"")+".");
+  try{renderCreditosCli(c);renderCaixasMov();}catch(e2){}
+  return true;
+}
+/* AJUSTAR (só Financeiro e Adm): corrige o valor de um crédito, com motivo e histórico */
+function ajustarCreditoCliente(){return travaSalvar("ajustarCreditoCliente",ajustarCreditoCliente__corpo,this,arguments);}
+async function ajustarCreditoCliente__corpo(cid,credId,novo,motivo){
+  if(!podeCreditoCliente()){toast("Só o Financeiro e o Administrador ajustam crédito.");return false;}
+  var c=cliPorId(cid);
+  if(!c){toast("Cliente não encontrado.");return false;}
+  var x=((c.creditos||[]).filter(function(y){return y.id===credId;})[0]);
+  if(!x){toast("Crédito não encontrado.");return false;}
+  var v=centavos(+novo||0),min=centavos((+x.usado||0)+(+x.devolvido||0));
+  if(v<min-0.009){toast("O crédito já teve "+BRL(min)+" usado ou devolvido: não dá para deixar abaixo disso.");return false;}
+  if(!String(motivo||"").trim()){toast("Escreva o motivo do ajuste.");return false;}
+  var guarda=copiaReg(c),antes=centavos(+x.valor||0);
+  if(Math.abs(v-antes)<0.009)return true;
+  x.valor=v;
+  anotarCredito(x,"Valor ajustado de "+BRL(antes)+" para "+BRL(v)+" · "+String(motivo).trim(),{de:antes,para:v});
+  try{await gravaConf("clientes",c);}
+  catch(e){voltarReg(c,guarda);return avisarRecusaBanco($("crcq_alerta")?"crcq_alerta":"crc_alerta",e,"O ajuste não foi salvo.");}
+  toast("Crédito ajustado para "+BRL(v)+".");
+  try{renderCreditosCli(c);}catch(e2){}
+  return true;
+}
+window.__credClienteMF={pode:podeCreditoCliente,saldo:saldoCreditoCliente,livre:creditoClienteLivre,
+  preso:creditoClientePreso,lista:creditosDoCliente,sobra:sobraDoCredito,forma:FORMA_CRED_CLI,
+  criar:function(c,d){return criarCreditoCliente__corpo(c,d);},
+  usar:function(p){return usarCreditoCliente(p);},
+  devolverPedido:function(p,m){return devolverCreditoDoPedido(p,m);},
+  dinheiro:function(c,d){return devolverCreditoDinheiro__corpo(c,d);},
+  ajustar:function(c,i,v,m){return ajustarCreditoCliente__corpo(c,i,v,m);}};
+
 /* ============ v606 (25/11, pedido dele): SINAL, SALDO E COMISSÃO PROPORCIONAL ============
    O pedido com item sob encomenda pode ser pago por inteiro ou COM SINAL. Marcado o sinal
    (`p.sinalEnc`), as formas de pagamento são o que o cliente paga AGORA e o que falta vira um
@@ -26425,7 +26716,7 @@ function abrirSaldoEnc(p,depois){
   m.innerHTML='<div class="box" style="width:min(520px,100%)"><h3>Receber o saldo agora</h3>'+
     '<div class="sub">Pedido '+esc(p.numero||"")+" · "+esc(p.cliente||"")+" · saldo de <b>"+BRL(t.valor)+"</b></div>"+
     '<div class="fld" style="margin-top:14px"><label for="encs_forma">Forma de pagamento</label><select id="encs_forma">'+
-      porNomeAZ(formasPgto).filter(function(f){return [FORMA_TROCA,FORMA_CREDITO,FORMA_INDIC,FORMA_ORC].indexOf(f.nome)<0;})
+      porNomeAZ(formasPgto).filter(function(f){return [FORMA_TROCA,FORMA_CREDITO,FORMA_INDIC,FORMA_ORC,FORMA_CRED_CLI].indexOf(f.nome)<0;})
         .map(function(f){return "<option>"+esc(f.nome)+"</option>";}).join("")+"</select></div>"+
     '<div class="fld"><label for="encs_valor">Valor recebido</label><input id="encs_valor" inputmode="decimal" value="'+brMF(+t.valor||0)+'"></div>'+
     '<div class="fld"><label for="encs_obs">Comprovante / observação</label><input id="encs_obs" placeholder="opcional"></div>'+
@@ -26441,6 +26732,364 @@ function abrirSaldoEnc(p,depois){
   };
   return true;
 }
+/* ============ v608 (25/11, regra dele): DESISTÊNCIA E ALTERAÇÕES DA ENCOMENDA ============
+   QUEM PODE: antes da aprovação financeira, o vendedor altera e cancela como sempre; depois, só
+   o Financeiro, o Administrador ou quem tiver a permissão nova "Alterar encomenda"
+   (`podeAlterarEncomenda`) — pelo caminho de reabrir venda aprovada que já existe.
+   O QUE ACONTECE, conforme a situação (sempre com motivo e histórico; nada se apaga):
+   · aguardando → cancela e sai da lista de encomendas;
+   · pedido à fábrica → cancela; quando o produto chegar entra no estoque normal, sem reserva
+     (a marca "cancelado também com a fábrica" é só registro);
+   · chegou e reservado → solta a reserva e a série, e o produto fica livre no estoque;
+   · entregue, retirado ou instalado → NÃO se cancela aqui: vai pelo caminho de devolução/troca
+     que já existe (purificador instalado volta pelo fluxo de seminovo).
+   Dá para cancelar PARTE da quantidade e dá para TROCAR o produto (cancela a antiga, liberando a
+   reserva, e cria a nova no mesmo pedido).
+   O DINHEIRO (o Financeiro decide na hora): o valor cancelado primeiro ABATE o saldo que ainda
+   está em aberto; o que sobrar vai para "devolver tudo", "devolver com taxa de desistência" (a
+   taxa fica como receita, não sai do caixa) ou "virar crédito do cliente".
+   A COMISSÃO: o que ainda não foi pago sai do cálculo (o teto da venda cai), e o que já entrou
+   acima desse teto vira desconto no MÊS SEGUINTE, com "Desistência da encomenda · pedido N".
+   NOTA FISCAL: se a venda já tem número, fica a pendência "Emitir nota de devolução" para o
+   Financeiro, até alguém marcar que emitiu e informar o número. */
+function podeAlterarEncomenda(p,quem){
+  if(!p)return false;
+  if(p.loja!==lojaAtual)return false;
+  if(!pedidoAprovado(p))return true;   /* antes da aprovação: as regras de sempre valem */
+  var n2=quem||usuarioAtual,pf=perfilDe(n2);
+  return pf==="Financeiro"||pf==="Administrador"||podeAcao("alterarEncomenda",n2);
+}
+function qtdCanceladaEnc(i){return Math.max(0,+((i&&i.enc&&i.enc.canceladas)||0));}
+function qtdVivaEnc(i){return Math.max(0,(+(i&&i.qtd||1))-qtdCanceladaEnc(i));}
+function valorUnitEnc(i){return centavos(+(i&&i.valor)||0);}
+/* o teto da venda depois das desistências */
+function fatorCancelEnc(p){
+  var t=+(p&&p.total)||0,c=centavos(+(p&&p.encCancelado)||0);
+  if(!(t>0)||!(c>0))return 1;
+  return Math.max(0,Math.min(1,centavos(t-c)/t));
+}
+function mesSeguinteComp(loja){
+  var c=compAtual().split("-"),d=new Date(+c[0],+c[1],1);
+  return mesQueConta(loja||lojaAtual,d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"));
+}
+/* o desconto da comissão já paga a mais, no mês seguinte */
+async function descontoComissaoDesistencia(p,motivo){
+  var teto=fatorCancelEnc(p),ja=Math.min(1,fatorPagoVenda(p)+fracaoSaldoLancada(p));
+  var sobra=centavos(ja-teto);
+  if(sobra<=0.0001)return 0;
+  var base=centavos(valorComissaoCheio(p)*sobra),pts=Math.round((+p.pontos||0)*sobra*10)/10;
+  if(base<=0.009)return 0;
+  var c=mesSeguinteComp(p.loja),r=rateio(p,base,pts),feitos=0;
+  var nomes=Object.keys(r);
+  for(var i=0;i<nomes.length;i++){
+    var nm=nomes[i],papeis=[];
+    if(p.prospector===nm)papeis.push("Prospector");
+    if(p.vendedor===nm)papeis.push("Vendedor");
+    if((p.instalador||p.vendedor)===nm)papeis.push("Instalador");
+    var a={id:uid(),loja:p.loja,comp:c,colaborador:nm,papel:papeis.join(" + ")||"—",
+      valor:-centavos(r[nm].valor),pontos:-Math.round(r[nm].pontos*10)/10,
+      pedido:p.numero,pedidoId:p.id,encDesistencia:true,
+      motivo:"Desistência da encomenda · pedido "+p.numero+(motivo?" · "+motivo:""),
+      quando:agoraCarimbo(),por:usuarioAtual};
+    ajustes.push(a);
+    try{await gravaConf("ajustes",a);feitos++;}
+    catch(e){ajustes=ajustes.filter(function(x){return x.id!==a.id;});throw e;}
+  }
+  p.encDescontoComissao=(p.encDescontoComissao||[]).concat([{comp:c,fracao:sobra,valor:base,em:agoraCarimbo(),por:usuarioAtual}]);
+  registrarEvento(p,"Desistência: desconto de "+BRL(base)+" de base na comissão de "+c);
+  return feitos;
+}
+/* abate o saldo em aberto; devolve quanto sobrou para o cliente receber de volta */
+async function abaterSaldoDesistencia(p,valor){
+  var resta=centavos(valor||0);
+  var abatido=0,l=titulosSaldoEnc(p).filter(function(t){return t.status==="aberto";});
+  for(var i=0;i<l.length&&resta>0.009;i++){
+    var t=l[i],v=centavos(+t.valor||0),tira=Math.min(v,resta),antes=copiaReg(t);
+    if(tira>=v-0.009){
+      t.status="cancelado";t.canceladoPor=usuarioAtual;t.canceladoEm=agoraCarimbo();
+      t.canceladoMotivo="desistência da encomenda";
+    }else{
+      t.valor=centavos(v-tira);
+      t.vencHist=(t.vencHist||[]).concat([{de:t.vencimento,para:t.vencimento,por:usuarioAtual,
+        quando:agoraCarimbo(),motivo:"desistência da encomenda: saldo reduzido em "+BRL(tira)}]);
+    }
+    try{await gravaConf("titulos",t);abatido=centavos(abatido+tira);resta=centavos(resta-tira);}
+    catch(e){voltarReg(t,antes);throw e;}
+  }
+  return abatido;
+}
+/* CANCELAR a encomenda (toda ou parte da quantidade) */
+function cancelarEncomenda(){return travaSalvar("cancelarEncomenda",cancelarEncomenda__corpo,this,arguments);}
+async function cancelarEncomenda__corpo(chave,dados){
+  var d=dados||{},a=String(chave||"").split("|"),p=pedPorId(a[0]),ix=+a[1];
+  if(!p){toast("Pedido não encontrado.");return false;}
+  if(!podeAlterarEncomenda(p)){toast("Depois da aprovação, só o Financeiro, o Administrador ou quem tem a permissão Alterar encomenda cancela.");return false;}
+  var it=(p.itens||[])[ix];
+  if(!it||!ehEncomenda(it)){toast("Esta encomenda não está mais na tela.");return false;}
+  if(encEntregue(it)){
+    toast("Esta encomenda já foi entregue: a volta é pela devolução/troca que já existe no sistema.");
+    return false;
+  }
+  if(!String(d.motivo||"").trim()){toast("Escreva o motivo da desistência.");return false;}
+  var viva=qtdVivaEnc(it),q=Math.max(1,Math.min(viva,parseInt(d.qtd,10)||viva));
+  if(viva<=0){toast("Esta encomenda já está cancelada.");return false;}
+  try{await lerPedidoFresco(p.id,p);}catch(eL){toast("Não deu para conferir o pedido no banco.");return false;}
+  it=(p.itens||[])[ix];
+  var guarda=copiaReg(p),valorCanc=centavos(valorUnitEnc(it)*q),tudo=(q>=qtdVivaEnc(it));
+  /* 1. a marca no item e a reserva que se solta */
+  it.enc.canceladas=qtdCanceladaEnc(it)+q;
+  var soltou=Math.min(qtdResEnc(it),q);
+  if(soltou>0)it.enc.qtdRes=Math.max(0,qtdResEnc(it)-soltou);
+  if(tudo){
+    it.enc.sit="cancelado";
+    it.enc.canceladoEm=agoraCarimbo();it.enc.canceladoPor=usuarioAtual;
+    it.enc.motivoCancel=String(d.motivo).trim();
+    if(d.comFabrica)it.enc.canceladoFabrica=true;
+    if(it.serie){anotarEnc(it,"Série "+it.serie+" liberada no cancelamento");delete it.serie;}
+    delete it.enc.local;
+  }
+  anotarEnc(it,"Cancelado "+q+" de "+(it.qtd||1)+" · "+String(d.motivo).trim()+
+    (d.comFabrica?" · cancelado também com a fábrica":"")+(soltou?" · reserva liberada ("+soltou+")":""),{sit:sitEnc(it)});
+  p.encCancelado=centavos((+p.encCancelado||0)+valorCanc);
+  registrarEvento(p,"Desistência da encomenda: "+q+"× "+(it.nome||"")+" · "+BRL(valorCanc)+" · "+String(d.motivo).trim());
+  /* 2. a nota fiscal já emitida vira pendência para o Financeiro */
+  if(nfDoPedido(p)&&!p.notaDevolucao){
+    p.notaDevolucaoPend=(p.notaDevolucaoPend||[]).concat([{qtd:q,item:it.nome||"",valor:valorCanc,
+      motivo:String(d.motivo).trim(),em:agoraCarimbo(),por:usuarioAtual,nf:nfDoPedido(p)}]);
+  }
+  try{await gravaConf("pedidos",p);}
+  catch(e){voltarReg(p,guarda);return avisarRecusaBanco("enccan_alerta",e,"O cancelamento não foi salvo.");}
+  /* 3. o dinheiro: primeiro abate o saldo em aberto */
+  var abatido=0;
+  try{abatido=await abaterSaldoDesistencia(p,valorCanc);}
+  catch(eS){setTimeout(function(){toast("Atenção: o saldo em aberto não foi abatido ("+motivoBanco(eS)+"). Acerte no Contas a Receber.");},2600);}
+  var sobra=centavos(valorCanc-abatido),feito="";
+  if(sobra>0.009){
+    var taxa=centavos(+d.taxa||0);
+    if(taxa>sobra)taxa=sobra;
+    var devolver=centavos(sobra-taxa);
+    if(d.destino==="credito"){
+      var cr=await criarCreditoCliente(p.clienteId,{valor:devolver,interno:true,
+        motivo:"Desistência da encomenda · pedido "+p.numero+(taxa>0.009?" (taxa de "+BRL(taxa)+" retida)":""),
+        pedidoId:p.id,pedidoNumero:p.numero});
+      feito=cr?("virou crédito do cliente de "+BRL(devolver)):"";
+      if(!cr)setTimeout(function(){toast("Atenção: o crédito do cliente não foi criado. Lance na ficha do cliente.");},2600);
+    }else if(devolver>0.009){
+      if(!d.caixaId){setTimeout(function(){toast("Atenção: escolha o caixa da devolução — o dinheiro não foi devolvido.");},2600);}
+      else{
+        var cc=await centroFixo("Devolução a cliente","Vendas","saida");
+        var mv={id:uid(),loja:p.loja,caixaId:d.caixaId,data:d.data||hojeISO(),tipo:"saida",valor:devolver,hora:agoraHM(),
+          descricao:"Devolução da desistência · pedido "+p.numero+" · "+(p.cliente||"")+
+            (taxa>0.009?" · taxa de desistência retida "+BRL(taxa):""),
+          nomePadrao:"Devolução a cliente",centroId:cc,clienteId:p.clienteId,pedidoId:p.id,desistenciaEnc:true,por:usuarioAtual};
+        try{await gravaConf("movs",mv);movs.push(mv);feito="devolvido "+BRL(devolver)+" em dinheiro";}
+        catch(eM){setTimeout(function(){toast("Atenção: a devolução não foi lançada no caixa ("+motivoBanco(eM)+").");},2600);}
+      }
+    }
+    if(taxa>0.009){
+      registrarEvento(p,"Taxa de desistência retida: "+BRL(taxa)+" (fica como receita)");
+      p.encTaxaDesistencia=centavos((+p.encTaxaDesistencia||0)+taxa);
+    }
+  }
+  /* 4. a comissão já paga a mais vira desconto no mês seguinte */
+  var nAj=0;
+  try{nAj=await descontoComissaoDesistencia(p,String(d.motivo).trim());}
+  catch(eC){setTimeout(function(){toast("Atenção: o desconto da comissão não foi lançado ("+motivoBanco(eC)+").");},2600);}
+  try{await gravaConf("pedidos",p);}catch(e2){console.warn("desistência",e2);}
+  try{esquecerReservaSerie();renderEncomendas();renderPedDet();renderReceber();renderCaixasMov();}catch(e3){}
+  toast("Desistência registrada: "+q+"× "+(it.nome||"")+
+    (abatido>0.009?" · "+BRL(abatido)+" abatido do saldo":"")+
+    (feito?" · "+feito:"")+
+    (nAj?" · comissão descontada no mês seguinte":"")+".");
+  return true;
+}
+/* TROCAR O PRODUTO: cancela a encomenda antiga (sem mexer no dinheiro) e cria a nova no mesmo pedido */
+function trocarProdutoEnc(){return travaSalvar("trocarProdutoEnc",trocarProdutoEnc__corpo,this,arguments);}
+async function trocarProdutoEnc__corpo(chave,novoPid,motivo){
+  var a=String(chave||"").split("|"),p=pedPorId(a[0]),ix=+a[1];
+  if(!p){toast("Pedido não encontrado.");return false;}
+  if(!podeAlterarEncomenda(p)){toast("Depois da aprovação, só quem tem a permissão Alterar encomenda troca o produto.");return false;}
+  var it=(p.itens||[])[ix],np=prodPorId(novoPid);
+  if(!it||!ehEncomenda(it)){toast("Esta encomenda não está mais na tela.");return false;}
+  if(encEntregue(it)){toast("Esta encomenda já foi entregue: use a devolução/troca que já existe.");return false;}
+  if(!np){toast("Escolha o produto novo.");return false;}
+  if(!podeSerEncomenda({pid:np.id,nome:np.nome})){toast("Este produto não pode ser vendido sob encomenda.");return false;}
+  if(!String(motivo||"").trim()){toast("Escreva o motivo da troca.");return false;}
+  try{await lerPedidoFresco(p.id,p);}catch(eL){toast("Não deu para conferir o pedido no banco.");return false;}
+  it=(p.itens||[])[ix];
+  var guarda=copiaReg(p),q=qtdVivaEnc(it);
+  if(q<=0){toast("Esta encomenda já está cancelada.");return false;}
+  /* a antiga sai (a reserva e a série voltam) */
+  it.enc.canceladas=qtdCanceladaEnc(it)+q;
+  it.enc.sit="cancelado";it.enc.canceladoEm=agoraCarimbo();it.enc.canceladoPor=usuarioAtual;
+  it.enc.motivoCancel="trocado por "+(np.nome||"")+" · "+String(motivo).trim();
+  it.enc.qtdRes=0;
+  if(it.serie)delete it.serie;
+  delete it.enc.local;
+  anotarEnc(it,"Trocado por "+(np.nome||"")+" · "+String(motivo).trim(),{sit:"cancelado"});
+  /* a nova entra no MESMO pedido, com o mesmo valor */
+  var novo=JSON.parse(JSON.stringify(it));
+  novo.pid=np.id;novo.nome=np.nome;novo.cod=np.cod||"";
+  novo.qtd=q;novo.vinculo="enc-"+uid();
+  delete novo.serie;
+  novo.enc=novaEncItem();
+  anotarEnc(novo,"Encomenda nascida da troca de "+(it.nome||"")+" · "+String(motivo).trim());
+  p.itens.push(novo);
+  registrarEvento(p,"Encomenda trocada: "+q+"× "+(it.nome||"")+" → "+(np.nome||"")+" · "+String(motivo).trim());
+  try{await gravaConf("pedidos",p);}
+  catch(e){voltarReg(p,guarda);return avisarRecusaBanco("enct_alerta",e,"A troca não foi salva.");}
+  try{esquecerReservaSerie();renderEncomendas();renderPedDet();}catch(e2){}
+  toast("Produto trocado: a encomenda nova entrou no mesmo pedido, aguardando pedido à fábrica.");
+  return true;
+}
+/* a nota de devolução que o Financeiro ainda precisa emitir */
+function pedidosComNotaDevolucao(){
+  return (pedidos||[]).filter(function(p){
+    return p&&p.loja===lojaAtual&&!ehTeste(p)&&(p.notaDevolucaoPend||[]).length&&!p.notaDevolucao;});
+}
+function marcarNotaDevolucao(){return travaSalvar("marcarNotaDevolucao",marcarNotaDevolucao__corpo,this,arguments);}
+async function marcarNotaDevolucao__corpo(pid,numero){
+  if(!podeNotaFiscalVenda()){toast("Só o Financeiro e o Administrador informam a nota de devolução.");return false;}
+  var p=pedPorId(pid);
+  if(!p||p.loja!==lojaAtual){toast("Este pedido é de outra empresa.");return false;}
+  var num=String(numero||"").trim();
+  if(!num){toast("Informe o número da nota de devolução.");return false;}
+  var guarda=copiaReg(p);
+  p.notaDevolucao={numero:num,por:usuarioAtual,em:agoraCarimbo(),
+    itens:(p.notaDevolucaoPend||[]).slice()};
+  registrarEvento(p,"Nota de devolução emitida: "+num);
+  try{await gravaConf("pedidos",p);}
+  catch(e){voltarReg(p,guarda);return avisarRecusaBanco("encnd_alerta",e,"A nota de devolução não foi salva.");}
+  toast("Nota de devolução "+num+" registrada.");
+  try{renderSino();renderPedDet();renderEncomendas();}catch(e2){}
+  return true;
+}
+function abrirDesistenciaEnc(chave){
+  var a=String(chave||"").split("|"),p=pedPorId(a[0]),ix=+a[1];
+  if(!p){toast("Pedido não encontrado.");return false;}
+  var it=(p.itens||[])[ix];
+  if(!it||!ehEncomenda(it)){toast("Esta encomenda não está mais na tela.");return false;}
+  if(!podeAlterarEncomenda(p)){toast("Depois da aprovação, só o Financeiro, o Administrador ou quem tem a permissão Alterar encomenda mexe na encomenda.");return false;}
+  if(encEntregue(it)){
+    var m0=quadroEnc();
+    m0.innerHTML='<div class="box" style="width:min(520px,100%)"><h3>Encomenda já entregue</h3>'+
+      '<div class="note warn" style="margin-top:12px"><b>'+esc(rotuloSitEnc(sitEnc(it)))+".</b> A volta de uma encomenda que já está com o cliente é pela "+
+      "<b>devolução/troca</b> que o sistema já tem — purificador instalado volta pelo fluxo de seminovo. "+
+      "Nada aqui cancela o que já foi entregue.</div>"+
+      '<div class="actions"><button class="btn mut" type="button" id="encd_fechar">Fechar</button></div></div>';
+    m0.hidden=false;$("encd_fechar").onclick=function(){m0.hidden=true;};
+    return false;
+  }
+  var viva=qtdVivaEnc(it),saldoAb=saldoEncAberto(p);
+  var cxs=daLoja(caixas).filter(function(z){return z.status!=="inativo";});
+  var m=quadroEnc();
+  function desenhar(){
+    var q=Math.max(1,Math.min(viva,parseInt(($("encd_qtd")||{}).value,10)||viva));
+    var vc=centavos(valorUnitEnc(it)*q),abate=Math.min(vc,saldoAb),sobra=centavos(vc-abate);
+    m.innerHTML='<div class="box" style="width:min(600px,100%)"><h3>Desistência da encomenda</h3>'+
+      '<div class="sub">'+esc((it.nome||""))+" · pedido "+esc(p.numero||"")+" · "+esc(p.cliente||"")+"</div>"+
+      '<div class="t-sub" style="margin-top:6px">'+esc(textoSitEnc(it))+" · "+viva+" na venda"+
+        (qtdCanceladaEnc(it)?" · "+qtdCanceladaEnc(it)+" já cancelada(s)":"")+"</div>"+
+      (viva>1?'<div class="fld" style="margin-top:12px"><label for="encd_qtd">Quantas unidades o cliente desistiu</label>'+
+        '<input type="number" id="encd_qtd" min="1" max="'+viva+'" value="'+q+'"></div>'
+        :"")+
+      '<div class="fld"><label for="encd_motivo">Motivo da desistência</label><input id="encd_motivo" placeholder="o que o cliente disse"></div>'+
+      (sitEnc(it)==="fabrica"?'<label class="nf-chk"><input type="checkbox" id="encd_fab"> Cancelado também com a fábrica (só registro)</label>':"")+
+      '<div class="note" style="margin-top:12px"><b>Dinheiro: '+BRL(vc)+"</b>"+
+        (abate>0.009?"<br>"+BRL(abate)+" abate o <b>saldo em aberto</b> deste pedido.":"")+
+        (sobra>0.009?"<br><b>"+BRL(sobra)+"</b> o cliente já pagou — escolha o que fazer com esse valor.":"<br>Nada a devolver: o cliente ainda não tinha pago este valor.")+"</div>"+
+      (sobra>0.009
+        ?'<div class="fld"><label for="encd_destino">O que fazer com '+BRL(sobra)+"</label><select id=\"encd_destino\">"+
+          '<option value="devolver">Devolver tudo em dinheiro</option>'+
+          '<option value="taxa">Devolver com taxa de desistência</option>'+
+          '<option value="credito">Virar crédito do cliente</option></select></div>'+
+          '<div id="encd_campos"></div>'
+        :"")+
+      '<div id="enccan_alerta"></div>'+
+      '<div class="actions"><button class="btn" type="button" id="encd_ok">Registrar a desistência</button>'+
+      '<button class="btn mut" type="button" id="encd_nao">Cancelar</button></div></div>';
+    if($("encd_qtd"))$("encd_qtd").onchange=desenhar;
+    $("encd_nao").onclick=function(){m.hidden=true;};
+    function campos(){
+      var w=$("encd_campos");if(!w)return;
+      var dst=($("encd_destino")||{}).value||"devolver";
+      w.innerHTML=(dst==="taxa"?'<div class="fld"><label for="encd_taxa">Taxa de desistência (fica como receita)</label>'+
+          '<input id="encd_taxa" inputmode="decimal" placeholder="0,00"></div>':"")+
+        (dst==="credito"?'<p class="help">O valor vira saldo na ficha do cliente, para usar numa venda futura desta empresa.</p>'
+          :'<div class="fld"><label for="encd_caixa">Sai do caixa</label><select id="encd_caixa">'+
+            cxs.map(function(z){return '<option value="'+esc(z.id)+'">'+esc(z.nome)+"</option>";}).join("")+"</select></div>");
+    }
+    if($("encd_destino")){$("encd_destino").onchange=campos;campos();}
+    $("encd_ok").onclick=async function(){
+      var ok=await cancelarEncomenda(chave,{qtd:q,motivo:($("encd_motivo")||{}).value,
+        comFabrica:!!(($("encd_fab")||{}).checked),
+        destino:(($("encd_destino")||{}).value||"devolver"),
+        taxa:numMF(($("encd_taxa")||{}).value||0),
+        caixaId:(($("encd_caixa")||{}).value||"")});
+      if(ok){m.hidden=true;try{renderEncomendas();renderPedDet();}catch(e){}}
+    };
+  }
+  desenhar();
+  m.hidden=false;
+  return true;
+}
+/* trocar o produto da encomenda */
+function abrirTrocaEnc(chave){
+  var a=String(chave||"").split("|"),p=pedPorId(a[0]),ix=+a[1];
+  if(!p)return false;
+  var it=(p.itens||[])[ix];
+  if(!it||!ehEncomenda(it)){toast("Esta encomenda não está mais na tela.");return false;}
+  if(!podeAlterarEncomenda(p)){toast("Depois da aprovação, só quem tem a permissão Alterar encomenda troca o produto.");return false;}
+  var m=quadroEnc();
+  var ps=(produtos||[]).filter(function(x){
+    return (x.status||"ativo")==="ativo"&&x.id!==it.pid&&podeSerEncomenda({pid:x.id,nome:x.nome});})
+    .sort(function(x,y){return String(x.nome||"").localeCompare(String(y.nome||""),"pt-BR");}).slice(0,400);
+  m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Trocar o produto da encomenda</h3>'+
+    '<div class="sub">'+esc(qtdVivaEnc(it)+"× "+(it.nome||""))+" · pedido "+esc(p.numero||"")+"</div>"+
+    '<div class="note" style="margin-top:12px">A encomenda antiga é cancelada (a reserva e a série voltam) e a nova entra <b>no mesmo pedido</b>, com o mesmo valor, aguardando o pedido à fábrica. O dinheiro da venda não muda.</div>'+
+    '<div class="fld" style="margin-top:12px"><label for="enct_prod">Produto novo</label><select id="enct_prod">'+
+      '<option value="">— escolha —</option>'+ps.map(function(x){
+        return '<option value="'+esc(x.id)+'">'+esc((x.cod?x.cod+" · ":"")+(x.nome||""))+"</option>";}).join("")+"</select></div>"+
+    '<div class="fld"><label for="enct_motivo">Motivo da troca</label><input id="enct_motivo" placeholder="ex.: o cliente preferiu outra cor"></div>'+
+    '<div id="enct_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="enct_ok">Trocar</button>'+
+    '<button class="btn mut" type="button" id="enct_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  $("enct_nao").onclick=function(){m.hidden=true;};
+  $("enct_ok").onclick=async function(){
+    var ok=await trocarProdutoEnc(chave,$("enct_prod").value,$("enct_motivo").value);
+    if(ok){m.hidden=true;try{renderEncomendas();renderPedDet();}catch(e){}}
+  };
+  return true;
+}
+/* o quadro da nota de devolução */
+function abrirNotaDevolucaoEnc(pid){
+  var p=pedPorId(pid);
+  if(!p){toast("Pedido não encontrado.");return false;}
+  if(!podeNotaFiscalVenda()){toast("Só o Financeiro e o Administrador informam a nota de devolução.");return false;}
+  var m=quadroEnc();
+  m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Nota de devolução</h3>'+
+    '<div class="sub">Pedido '+esc(p.numero||"")+" · "+esc(p.cliente||"")+" · nota fiscal "+esc(nfDoPedido(p)||"—")+"</div>"+
+    '<div class="note warn" style="margin-top:12px"><b>Emitir nota de devolução/cancelamento.</b> Quem emite é o Financeiro; aqui fica só o registro de que saiu.</div>'+
+    '<div class="sect"><p class="sect-t">O que foi desistido</p>'+(p.notaDevolucaoPend||[]).map(function(x){
+      return '<div class="t-sub">'+esc(x.qtd+"× "+(x.item||"")+" · "+BRL(x.valor)+" · "+(x.motivo||"")+" · "+(x.por||"")+" em "+(x.em||""))+"</div>";}).join("")+"</div>"+
+    '<div class="fld"><label for="encnd_num">Número da nota de devolução</label><input id="encnd_num" placeholder="Ex.: 12345"></div>'+
+    '<div id="encnd_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="encnd_ok">Nota de devolução emitida</button>'+
+    '<button class="btn mut" type="button" id="encnd_nao">Fechar</button></div></div>';
+  m.hidden=false;
+  $("encnd_nao").onclick=function(){m.hidden=true;};
+  $("encnd_ok").onclick=async function(){
+    var ok=await marcarNotaDevolucao(p.id,$("encnd_num").value);
+    if(ok){m.hidden=true;try{renderSino();renderEncomendas();}catch(e){}}
+  };
+  return true;
+}
+window.__encDesistMF={pode:podeAlterarEncomenda,cancelar:function(c,d){return cancelarEncomenda__corpo(c,d);},
+  trocar:function(c,p2,m){return trocarProdutoEnc__corpo(c,p2,m);},viva:qtdVivaEnc,cancelada:qtdCanceladaEnc,
+  fator:fatorCancelEnc,desconto:function(p,m){return descontoComissaoDesistencia(p,m);},
+  notaPend:pedidosComNotaDevolucao,notaOk:function(p,n2){return marcarNotaDevolucao__corpo(p,n2);},
+  mesSeguinte:mesSeguinteComp,abater:function(p,v){return abaterSaldoDesistencia(p,v);}};
 window.__encEntregaMF={jeito:jeitoEnc,rotulo:rotuloJeitoEnc,entregue:encEntregue,pode:podeEntregarEnc,
   trava:travaPagamentoEnc,quem:quemRecebeEnc,jeitos:JEITOS_ENC,balcao:saldoNoBalcao,
   salvarJeito:function(c,d){return salvarJeitoEnc__corpo(c,d);},
@@ -28323,6 +28972,8 @@ async function cancelarPedido__corpo(p,motivo){
     p.status="Cancelada";p.encerrada=false;p.reabertura=null;
     /* v584: pedido cancelado devolve as indicações ao saldo do cliente */
     try{await mudarStatusIndicacoes(p,"fora","indicações devolvidas ao saldo pelo cancelamento");}catch(eMc){console.warn("indicações",eMc);}
+    /* v608: pedido cancelado devolve o crédito do cliente ao saldo dele */
+    try{await devolverCreditoDoPedido(p,"pedido "+p.numero+" cancelado");}catch(eCv){console.warn("crédito do cliente",eCv);}
     p.canceladaPor=usuarioAtual;p.canceladaEm=hojeISO();p.motivoCancelamento=motivo.trim();
     await gravarPedido(p);
     /* v577: o PIX e o dinheiro que entraram no caixa na aprovação são ESTORNADOS (nada se apaga) */
@@ -36249,6 +36900,7 @@ async function gerarReceberDoPedido(p){
   (p.formas||[]).forEach(function(f){
     var v=+f.valor||0;if(v<=0)return;
     if(f.tipo===FORMA_CREDITO)return;   /* já tratado acima: não gera parcela a receber */
+    if(f.tipo===FORMA_CRED_CLI)return;  /* v608: o crédito do cliente é dinheiro que já entrou */
     if(f.tipo===FORMA_TROCA)return;     /* o cliente pagou com o purificador usado: não há dinheiro a receber */
     if(f.tipo===FORMA_INDIC)return;     /* v584: desconto por indicação é desconto, não dinheiro a receber */
     if(f.tipo===FORMA_ORC)return;       /* o orçamento entrou no caixa na abertura da OS */
@@ -42475,7 +43127,7 @@ var CHAVE_CALC="mf_calc";
 /* as formas que são dinheiro que cai. Desconto de Troca, crédito do plano, desconto de indicação
    e adiantamento do orçamento são abatimentos: não se cobra o cliente por eles. */
 function calcFormasLista(){
-  var fora=[FORMA_TROCA,FORMA_CREDITO,FORMA_INDIC,FORMA_ORC];
+  var fora=[FORMA_TROCA,FORMA_CREDITO,FORMA_INDIC,FORMA_ORC,FORMA_CRED_CLI];
   return (formasPgto||[]).filter(function(f){
     return f&&f.nome&&fora.indexOf(f.nome)<0;});
 }
@@ -50001,7 +50653,7 @@ async function cobrarOrcamentoOS(o){
 /* formas que o cliente pode usar para pagar o orçamento na hora (as internas ficam de fora) */
 function formasDoOrcamento(){
   return porNomeAZ(formasPgto).filter(function(f){
-    return [FORMA_CREDITO,FORMA_TROCA,FORMA_ORC,FORMA_INDIC].indexOf(f.nome)<0;});
+    return [FORMA_CREDITO,FORMA_TROCA,FORMA_ORC,FORMA_INDIC,FORMA_CRED_CLI].indexOf(f.nome)<0;});
 }
 /* o valor que entra na comissão é o DEPRECIADO pela forma escolhida (regra do Wagner, 21/09) */
 function depreciadoOrcamento(valor,forma,parc){
@@ -58485,6 +59137,10 @@ function renderPedDet(){
         ? ' <button class="btn ghost sm" type="button" data-encrec="'+idx+'">'+
           (encEntregue(i)?"Ver a entrega":"Como o cliente recebe")+"</button>"
         : "")+
+      /* v608: desistência pela ficha do pedido */
+      (encAberta(i)&&!encEntregue(i)&&podeAlterarEncomenda(p)
+        ? ' <button class="btn mut sm" type="button" data-encdes="'+idx+'">Desistência</button>':"")+
+      (qtdCanceladaEnc(i)?' <span class="pill p-mut">'+qtdCanceladaEnc(i)+" cancelada(s)</span>":"")+
       ' <button class="btn ghost sm" type="button" data-enczap="'+idx+'">Enviar situação ao cliente</button>');
     ti.innerHTML+='<tr><td><div class="t-main"><span class="pd-nome" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+"</span></div>"+
       (subI.length?'<div class="t-sub">'+subI.join(" · ")+"</div>":"")+"</td>"+
@@ -58773,6 +59429,8 @@ function ligarPedDet(){
     b.onclick=function(){enviarSituacaoEnc(p.id,+b.getAttribute("data-enczap"));};});
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-encrec]"),function(b){
     b.onclick=function(){abrirRecebimentoEnc(p.id+"|"+b.getAttribute("data-encrec"));};});
+  Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-encdes]"),function(b){
+    b.onclick=function(){abrirDesistenciaEnc(p.id+"|"+b.getAttribute("data-encdes"));};});
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-pi]"),function(el){
     el.onchange=function(){
       pedRasc.sujo=true;
@@ -59121,6 +59779,9 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm,cxFormas){
     p.encerrada=true;p.status="Aprovada";p.devolucaoFin=null;
     /* v584: aprovado, o direito é baixado de vez */
     try{await mudarStatusIndicacoes(p,"usada","indicações baixadas na aprovação");}catch(eMi){console.warn("indicações",eMi);}
+    /* v608: o crédito do cliente é baixado na aprovação */
+    try{await usarCreditoCliente(p);}
+    catch(eCc){setTimeout(function(){toast("Atenção: o crédito do cliente do pedido "+p.numero+" não foi baixado ("+motivoBanco(eCc)+").");},2600);}
     /* 05/11: o texto diz de onde a baixa saiu DE VERDADE, e não o estoque do instalador */
     var locsB={};baixou.forEach(function(b){locsB[b.local]=1;});
     registrarEvento(p,"Recebimento aprovado · "+BRL(p.total)+" · baixa no estoque de "+
@@ -59899,7 +60560,7 @@ function cabecalhoEmpresaDoc(){
    garantir. Formas internas (troca, crédito do plano, adiantamento da OS) não contam — elas
    não são dinheiro a receber. */
 function vendaAPrazo(p){
-  var internas=[FORMA_TROCA,FORMA_CREDITO,FORMA_ORC,FORMA_INDIC];
+  var internas=[FORMA_TROCA,FORMA_CREDITO,FORMA_ORC,FORMA_INDIC,FORMA_CRED_CLI];
   return (p.formas||[]).some(function(f){
     if(!f)return false;
     if(internas.indexOf(f.tipo)>=0)return false;
@@ -65886,7 +66547,10 @@ var ACOES=[
   ["alterarProspector","Alterar o prospector do pedido (fica registrado no histórico)"],
   /* v605 (25/11, regra dele): a tela Encomendas e o pedido à fábrica. Nasce na função
      Almoxarifado; o Administrador tem sempre. O vendedor não precisa: ele acompanha pelo pedido. */
-  ["encomendas","Ver e tocar as encomendas (venda sob encomenda)"]
+  ["encomendas","Ver e tocar as encomendas (venda sob encomenda)"],
+  /* v608 (25/11, regra dele): alterar ou cancelar encomenda DEPOIS da aprovação financeira.
+     Antes da aprovação o vendedor altera e cancela como sempre. */
+  ["alterarEncomenda","Alterar ou cancelar encomenda depois da aprovação financeira"]
 ];
 var TODAS_TELAS=GRUPOS_TELA.reduce(function(a,g){return a.concat(g.telas.map(function(t){return t[0];}));},[]);
 /* as telas do dia a dia, que as funções padrão recebem. NÃO é o grupo do menu: o grupo
@@ -65905,7 +66569,7 @@ var SEED_FUNCOES=[
   /* o Financeiro VÊ TUDO, mas nas Configurações só olha (Etapa 2, regra dele de 23/10) */
   {nome:"Financeiro",desc:"Vê tudo; nas Configurações, só olha",
     telas:TODAS_TELAS.slice(),
-    acoes:["verTudo","aprovarFinanceiro","reabrirVenda","baixarTitulos","exportar","verPontoEquipe"]},
+    acoes:["verTudo","aprovarFinanceiro","reabrirVenda","baixarTitulos","exportar","verPontoEquipe","alterarEncomenda"]},
   {nome:"Gerente",desc:"Acompanha a equipe e aprova desconto",
     telas:TELAS_OPERACAO.concat(["estEmpresa","faturamento","fatur","metasop"]),
     acoes:["verTudo","aprovarDesconto","editarMetas","exportar","alterarProspector","verPontoEquipe"]},
@@ -65957,6 +66621,13 @@ async function migrarAcoesNovas(){
     if((f.nome==="Administrador"||ehPerfilAlmox(f.nome))&&(f.acoes||[]).indexOf("encomendas")<0){
       f.acoes=(f.acoes||[]).concat(["encomendas"]);}
     f.encomendasV="2026-11-25";mudou=true;
+  });
+  /* v608: "Alterar encomenda" nasce no Administrador e no Financeiro */
+  funcoes.forEach(function(f){
+    if(f.alterarEncV)return;
+    if(["Administrador","Financeiro"].indexOf(f.nome)>=0&&(f.acoes||[]).indexOf("alterarEncomenda")<0){
+      f.acoes=(f.acoes||[]).concat(["alterarEncomenda"]);}
+    f.alterarEncV="2026-11-25";mudou=true;
   });
   if(mudou)await gravarFuncoes();
 }
@@ -70415,6 +71086,17 @@ function avisosDoTrabalho(){
         ir:function(){if(podeEncomendas())ir("estEncomendas");else{ir("pedidos");try{abrirPedido(x.p);}catch(e){}}}});
     });
   }catch(eEnc){console.warn("encomendas no sino",eEnc);}
+  /* v608: nota de devolução a emitir, para o Financeiro e o Administrador */
+  try{
+    if(podeNotaFiscalVenda())pedidosComNotaDevolucao().slice(0,8).forEach(function(p){
+      L.push({chave:"encnotadev:"+p.id,icone:"🧾",
+        titulo:"Emitir nota de devolução · pedido "+(p.numero||""),
+        texto:(p.cliente||"")+" · nota fiscal "+(nfDoPedido(p)||"—")+" · "+
+          (p.notaDevolucaoPend||[]).map(function(x){return x.qtd+"× "+(x.item||"");}).join(", "),
+        quando:((p.notaDevolucaoPend||[])[0]||{}).em||hojeISO(),
+        ir:function(){abrirNotaDevolucaoEnc(p.id);}});
+    });
+  }catch(eNd){console.warn("nota de devolução",eNd);}
   /* o meu orçamento que vence hoje ou amanhã */
   var am=somaDias(hj,1);
   orcamentos.filter(function(o){
