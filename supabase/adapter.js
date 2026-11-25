@@ -127,6 +127,11 @@
   }
   var CAMPO_LOJA = {
     clientes: "loja",
+    /* v610 (25/11, regra dele): o EMPRÉSTIMO ENTRE EMPRESAS é o único registro que as duas
+       empresas enxergam juntas — ele guarda a empresa de origem e a de destino dentro do
+       próprio documento (de.loja / para.loja), então grava loja NULL, como os produtos.
+       Fora dessa tela, Minas Filtros e WF continuam totalmente separadas. */
+    emprestimos: null,
     /* CATÁLOGO ÚNICO (29/10): Minas Filtros e WF vendem os mesmos produtos, com os mesmos
        preços e códigos. Produto não tem empresa — grava loja NULL e vale para as duas.
        O ESTOQUE continua por empresa (movest, requisicoes e custodia são "loja"). */

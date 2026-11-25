@@ -2080,6 +2080,8 @@ body.trava-ponto .app{grid-template-columns:minmax(0,1fr)!important}
 /* v543: entrada de notas — ações, menu, conferência, histórico */
 .nf-acoes{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .nf-ac-th{text-align:right}
+/* v610: os botões do empréstimo quebram linha e ficam à direita, no computador e no celular */
+.emp-acoes{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .nf-mais{display:none;font-size:18px;line-height:1;padding:4px 12px}
 .btn.nf-perigo{background:#B3261E;border-color:#B3261E;color:#fff}
 .btn.nf-perigo-l{background:transparent;border:1px solid #D9A3A0;color:#B3261E}
@@ -2164,6 +2166,9 @@ tr.nf-cancelada td.nf-ac-td{opacity:1}
   background:var(--card);color:var(--muted,inherit);font-size:15px;line-height:1;cursor:pointer}
 .nf-lapis:hover{border-color:var(--acc);color:var(--acc)}
 .nf-chk{display:flex;align-items:center;gap:9px;margin-top:12px;font-size:15px}
+/* v610: rótulo comprido quebra linha sem empurrar a caixinha */
+.nf-chk>span{flex:1 1 auto;min-width:0}
+.nf-chk input{flex:0 0 auto}
 .nf-chk input{width:18px;height:18px}
 .nf-filtro{display:inline-flex;align-items:center;gap:7px;font-size:14px;white-space:nowrap}
 .nf-filtro input{width:18px;height:18px}
@@ -2645,6 +2650,7 @@ img{max-width:100%}
     <button data-s="estAguardando">Peças aguardando aprovação</button>
     <button data-s="estContagem">Contagem do estoque</button>
     <button data-s="estEncomendas">Encomendas</button>
+    <button data-s="estEmprestimos">Empréstimos entre empresas</button>
     <button data-s="estInstalado">Peça instalada sem venda aprovada</button>
     <button data-s="estConsumo">Uso e consumo</button>
     <button data-s="ferramentas">Ferramentas</button>
@@ -5303,6 +5309,37 @@ img{max-width:100%}
           <div class="fld"><label for="paBusca">Buscar</label><input id="paBusca" placeholder="produto, cliente, pedido ou série"></div>
         </div>
         <div id="paCorpo"></div>
+      </div>
+    </section>
+
+    <!-- EMPRÉSTIMOS ENTRE EMPRESAS (25/11, v610): a única tela que mostra as duas juntas -->
+    <section class="screen" id="s-estEmprestimos" hidden>
+      <div class="cab">
+        <div>
+          <h2>Empréstimos entre empresas</h2>
+          <div class="sub">Produto que uma empresa levou da outra. Aqui fica <b>o que cada uma deve</b>, a devolução e o acerto como compra. <b>É a única tela que mostra as duas empresas juntas</b> — e só os empréstimos.</div>
+        </div>
+      </div>
+      <div id="empResumo"></div>
+      <div class="card">
+        <div class="chips pil" id="empAbas" style="margin:4px 0 10px">
+          <button type="button" data-empa="aberto" aria-pressed="true">Em aberto</button>
+          <button type="button" data-empa="acertado" aria-pressed="false">Acertados</button>
+          <button type="button" data-empa="hist" aria-pressed="false">Histórico</button>
+        </div>
+        <div class="grid g4">
+          <div class="fld"><label for="empDir">Direção</label><select id="empDir"></select></div>
+          <div class="fld"><label for="empProd">Produto</label><select id="empProd"></select></div>
+          <div class="fld"><label for="empDe">De</label><input type="date" id="empDe"></div>
+          <div class="fld"><label for="empAte">Até</label><input type="date" id="empAte"></div>
+        </div>
+        <div class="toolbar" style="padding:10px 0">
+          <span class="count" id="empCount"></span><span class="sp"></span>
+          <button class="btn" type="button" id="empNovo">Novo empréstimo</button>
+          <button class="btn ghost" type="button" id="empAntigo">Lançar empréstimo antigo</button>
+        </div>
+        <div id="emp_alerta"></div>
+        <div id="empCorpo"></div>
       </div>
     </section>
 
@@ -10008,7 +10045,7 @@ img{max-width:100%}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- banco de dados do teste real (v133, 17/09): Supabase + adaptador que imita o banco antigo -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="supabase/adapter.js?v=573"></script>
+<script src="supabase/adapter.js?v=610"></script>
 <script>
 (function(){
 "use strict";
@@ -10528,7 +10565,9 @@ var LEITURAS_BOOT=[
   ["equipamentos",30000],["usados",500],["veiculos",100],["abastecimentos",2000],["manutveic",1000],
   ["posses",500],["vistorias",500],["multas",500],["rascunhos",300],
   ["prestadores",300],["servprest",200],["remunprest",3000],["recibosprest",1000],
-  ["custodia",1000],["sucatatroca",1000]
+  ["custodia",1000],["sucatatroca",1000],
+  /* v610: os empréstimos entre as empresas (coleção das duas, loja nula) */
+  ["emprestimos",500]
 ];
 /* um lugar só para o teto de cada coleção */
 function tetoBoot(c){
@@ -11711,6 +11750,9 @@ async function carregar(){
       recibosPrest=cz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
       var kz=await jaPedido("col:custodia",function(){return col("custodia").limit(tetoBoot("custodia")).get();});
       custodia=kz.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
+      /* v610: empréstimos entre empresas — vêm das duas, porque o documento não tem empresa */
+      var ez=await jaPedido("col:emprestimos",function(){return col("emprestimos").limit(tetoBoot("emprestimos")).get();});
+      emprestimos=ez.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;});
     }catch(ePz){console.warn("prestadores",ePz);}
     var ng=await jaPedido("col:negocios",function(){return col("negocios").limit(tetoBoot("negocios")).get();});
     negocios=ng.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o;})
@@ -25439,7 +25481,12 @@ function responsavelVenda(p){
 /* o que sai do estoque na venda: os itens vendidos e os produtos usados na instalação */
 /* v605: o item SOB ENCOMENDA não tem estoque na venda — não reserva, não baixa, não requisita e
    não entra nas travas de negativo. Ele entra no estoque quando a mercadoria chega (Parte 2). */
-function itensDeEstoque(p){return (p.itens||[]).concat(p.materiaisInstalacao||[]).filter(function(i){return !ehPlano(i)&&!ehServico(i)&&!ehEncomenda(i);});}
+function itensDeEstoque(p){
+  /* v610: a venda ENTRE EMPRESAS é o acerto de um empréstimo — o produto já saiu do estoque
+     quando foi emprestado, então ela não baixa nada de novo. */
+  if(p&&p.entreEmpresas)return [];
+  return (p.itens||[]).concat(p.materiaisInstalacao||[]).filter(function(i){return !ehPlano(i)&&!ehServico(i)&&!ehEncomenda(i);});
+}
 
 /* ============ v605 (25/11, pedido dele): VENDA SOB ENCOMENDA — PARTE 1 ============
    O produto é vendido ANTES de chegar da fábrica. No pedido, cada item pode ser marcado
@@ -28678,7 +28725,9 @@ function formasCreditoDaVenda(p){
     return (ehFormaCredito(f.tipo)||(p.promCredito&&/promiss/i.test(String(f.tipo||""))))&&(+f.valor||0)>0;
   }).map(function(f){return f.tipo;});
 }
-function vendaPedeCredito(p){return formasCreditoDaVenda(p).length>0;}
+/* v610: o acerto de empréstimo é venda ENTRE AS EMPRESAS — não há risco de crédito de cliente.
+   Ele segue só a aprovação financeira normal, sem o aviso nem o status de crédito. */
+function vendaPedeCredito(p){return !(p&&p.entreEmpresas)&&formasCreditoDaVenda(p).length>0;}
 /* quem aprova credito: o DEPARTAMENTO FINANCEIRO. A conta e pelo PERFIL, nao pela acao
    aprovarFinanceiro — ela pode ser dada a outra funcao, e a regra dele nomeia o posto. */
 var PERFIS_CREDITO=["Financeiro","Administrador"];
@@ -33386,14 +33435,17 @@ function renderEstSaldo(){
   $("sdCartoes").innerHTML=lista.length?lista.map(function(x){
     return '<div class="sd-card'+(x.s<0?" neg":"")+'"'+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+'><div class="nm"><b>'+esc(x.p.nome||"")+"</b><span>"+esc(x.p.cod||"")+"</span>"+locHtml(x.p)+
       (x.r?'<div class="sd-res">'+x.r+" reservado(s)"+(x.i?" · "+x.i+" instalado(s), aguardando aprovação":"")+
-        (textoReservaEnc(x.p.id,loc)?" · "+esc(textoReservaEnc(x.p.id,loc)):"")+"</div>":"")+'</div><div class="sd-qtd '+cls(x.s)+'">'+x.s+"</div></div>";}).join("")
+        (textoReservaEnc(x.p.id,loc)?" · "+esc(textoReservaEnc(x.p.id,loc)):"")+"</div>":"")+
+      /* v610: produto que entrou por empréstimo da outra empresa */
+      (textoDividaProduto(x.p.id)?'<div class="sd-res">'+esc(textoDividaProduto(x.p.id))+"</div>":"")+'</div><div class="sd-qtd '+cls(x.s)+'">'+x.s+"</div></div>";}).join("")
     :'<div class="empty"><div class="big">Nenhum produto</div>'+(q?"Nada com essa busca.":"Este estoque está vazio.")+"</div>";
   $("sdHead").innerHTML="<tr><th>Produto</th><th>Código</th>"+(comLoc?"<th>Localização</th>":"")+"<th class=\"num\">Quantidade</th><th class=\"num\">Reservado</th>"+(custo?'<th class="num">Valor</th>':"")+"</tr>";
   $("sdBody").innerHTML=lista.length?lista.map(function(x){
     return "<tr"+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+"><td>"+esc(x.p.nome||"")+"</td><td>"+esc(x.p.cod||"")+"</td>"+(comLoc?"<td>"+locHtml(x.p)+"</td>":"")+'<td class="num"><b class="'+cls(x.s)+'">'+x.s+"</b></td>"+
       '<td class="num">'+(x.r?'<span class="pill p-res">'+x.r+" reservado(s)</span>":"—")+
         (x.i?'<div class="t-sub">'+x.i+" instalado(s), aguardando aprovação</div>":"")+
-        (textoReservaEnc(x.p.id,loc)?'<div class="t-sub">'+esc(textoReservaEnc(x.p.id,loc))+"</div>":"")+"</td>"+
+        (textoReservaEnc(x.p.id,loc)?'<div class="t-sub">'+esc(textoReservaEnc(x.p.id,loc))+"</div>":"")+
+        (textoDividaProduto(x.p.id)?'<div class="t-sub">'+esc(textoDividaProduto(x.p.id))+"</div>":"")+"</td>"+
       (custo?'<td class="num">'+BRL(x.saldo*custoTotalDe(x.p))+"</td>":"")+"</tr>";}).join("")
     :'<tr><td colspan="5"><div class="empty"><div class="big">Nenhum produto</div></div></td></tr>';
   Array.prototype.forEach.call(document.querySelectorAll("#s-estSaldo [data-sdloc]"),function(b){b.onclick=function(ev){ev.stopPropagation();pedirLocalNF(b.getAttribute("data-sdloc"));};});
@@ -41702,6 +41754,7 @@ function renderDarEntrada(){
     (n.semNota?"<br>Entrada sem nota · motivo: "+esc(n.motivoSemNota||"")+fotoReciboNota(n):"");
   /* chegou menos (ou mais) do que a nota: o estoque vai pelo conferido, as contas pelo total da nota */
   var dv=(n.itens||[]).filter(function(i){return i.pid&&(i.qtdConf==null?i.qtd:i.qtdConf)!==i.qtd;});
+  try{montarAcertoNF(n);}catch(eAc){}   /* v610: nota que é acerto de empréstimo */
   $("df_aviso").innerHTML=avisoFornecSumiuNF(n)+(dv.length?'<div class="note warn"><b>Chegou diferente do que a nota diz em '+dv.length+" item(ns):</b> "+
     dv.map(function(i){return esc(i.nome)+" (nota "+i.qtd+", chegou "+(i.qtdConf==null?i.qtd:i.qtdConf)+")";}).join(" · ")+
     ".<br>O estoque entra pelo que <b>chegou</b>; as contas são geradas pelo <b>total da nota</b> ("+BRL(tot)+"). Cobre a diferença do fornecedor.</div>":"");
@@ -42960,7 +43013,13 @@ async function confirmarConfNF2__corpo(n){
         det.push({campo:"Divergência em "+dq+" de "+nomeProdNF(it.pid,it.nome)+": "+x.div.obs+" (não entrou; o Financeiro resolve)",de:null,para:null});
       }
     }
-    if(x.q>0){
+    /* v610: nota que é o ACERTO de um empréstimo não sobe estoque de novo — o produto já entrou
+       quando foi emprestado. O contas a pagar e o custo seguem normais. */
+    if(x.q>0&&nc.acertoEmprestimo){
+      it.recebido=(+it.recebido||0)+x.q;
+      det.push({campo:"Acerto do empréstimo "+(nc.acertoEmprestimo.numero||"")+": "+x.q+" de "+nomeProdNF(it.pid,it.nome)+" conferidos sem subir estoque"});
+    }
+    else if(x.q>0){
       var mid="nfr-"+n.id+"-"+x.k+"-"+rn;
       var me={id:mid,loja:n.loja,produtoId:it.pid,qtd:x.q,origem:"fornecedor",destino:locDestinoNF(it),doc:docN,
         obs:"Conferência "+rn+(x.obs?" · "+x.obs:""),centroId:it.destino==="consumo"?(it.centroId||""):"",data:hoje,por:quem,em:new Date().toISOString(),notaId:n.id,conferencia:rn};
@@ -43018,6 +43077,19 @@ async function confirmarConfNF2__corpo(n){
   toast("Conferência registrada"+(subiu?": o estoque subiu":"")+(fal?" · falta receber "+fal:"")+(dv?" · divergência em "+dv+" unidade(s): o Financeiro foi avisado":"")+
     (resEnc.length?" · "+resEnc.length+" encomenda(s) reservada(s) para quem já comprou":"")+".");
   if(resEnc.length)try{avisarSerieEnc();}catch(eSe){}
+  /* v610: a empresa deve este produto à outra? oferece devolver agora */
+  try{
+    if(!nc.acertoEmprestimo){
+      var devEmp=[];
+      r.L.filter(function(x){return x.q>0;}).forEach(function(x){
+        var itn=nc.itens[x.k];
+        var dv=dividaDoProduto(itn.pid);
+        if(dv.length)devEmp.push({pid:itn.pid,nome:nomeProdNF(itn.pid,itn.nome),chegou:x.q,
+          local:locDestinoNF(itn),divida:dv});
+      });
+      if(devEmp.length)setTimeout(function(){abrirDevolverDaNota(devEmp);},900);
+    }
+  }catch(eDv){console.warn("devolução pela nota",eDv);}
   try{agendarEstNovas();renderProdutos();opcoesProduto();renderSino();}catch(eR){}
   abrirConferencia(n);
   return true;
@@ -46873,6 +46945,8 @@ function valorDepreciadoPedido(p){return centavos(valorDepreciadoCheio(p)*fatorP
 function valorComissaoCheio(p){return Math.max(0,valorDepreciadoCheio(p)-freteLojaDe(p));}
 function valorDepreciadoCheio(p){
   if(ehTeste(p))return 0;       /* treinamento não soma em meta nem em faturamento (v376) */
+  /* v610: venda entre as empresas (acerto de empréstimo) não é venda de ninguém */
+  if(p&&p.entreEmpresas)return 0;
   var d=+(p.depreciado!=null?p.depreciado:p.base)||0,a=p.descontoAutorizado;
   /* venda abaixo da tabela: o depreciado dos itens abaixo entra pela tabela que o Administrador escolheu
      ao autorizar (100%, 70%, campanha 50% ou sem comissão) — regra do Wagner, 16/09 */
@@ -54616,6 +54690,898 @@ async function registrarManut__corpo(){
 /* equipamentos de clientes guardados na loja ou com o tecnico - FORA do estoque de produtos:
    nao e produto, nao tem valor, nao entra em inventario nem na DRE (regra dele, 05/10) */
 var custodia=[];
+var emprestimos=[];   /* v610: empréstimo de produtos entre a Minas Filtros e a WF */
+/* ============ v610 (25/11, regra dele): EMPRÉSTIMO DE PRODUTOS ENTRE AS EMPRESAS ============
+   As duas empresas emprestam produto uma para a outra (o almoxarifado leva produto da WF para
+   vender na Minas Filtros, por exemplo). Antes isso não tinha registro: o estoque de quem
+   emprestou ficava com saldo a mais e ninguém sabia o que uma devia à outra.
+   · Só quem tem a função ALMOXARIFADO **e acesso às duas empresas**, e o Administrador
+     (`podeEmprestimo`, conferido na tela E dentro de cada função).
+   · Esta é a ÚNICA tela que mostra as duas empresas juntas, e só os registros de empréstimo:
+     a coleção `emprestimos` grava loja NULA e cada documento diz a empresa de origem e a de
+     destino. Fora dela, Minas Filtros e WF continuam totalmente separadas.
+   · O empréstimo baixa no estoque de origem e entra no de destino NA HORA, sem aceite, com o
+     documento "Empréstimo N" em cada movimento. Purificador leva a SÉRIE junto: ela passa para
+     a empresa de destino, com histórico de onde veio.
+   · NÃO gera nota fiscal, título, comissão, meta nem faturamento.
+   · A dívida fica no próprio empréstimo: emprestado − devolvido − acertado.
+   · O acerto vira COMPRA entre as lojas: quem emprestou faz um pedido de venda para a outra
+     empresa (marcado `entreEmpresas`), que não baixa estoque de novo, não gera comissão e fica
+     fora da meta e do faturamento; a nota de entrada do outro lado também não sobe estoque. */
+var LOCAIS_EMPRESTIMO=[LOC_EMPRESA];   /* almoxarifado; a Loja entra com a empresa no nome */
+var DIAS_EMPRESTIMO_AVISO=30;          /* v610: aviso no sino a partir daqui */
+function temAmbasEmpresas(quem){
+  var u=usuarioPor(quem||usuarioAtual);
+  return !!(u&&u.ambas===true);
+}
+function podeEmprestimo(quem){
+  var q=quem||usuarioAtual,pf=perfilDe(q);
+  if(pf==="Administrador")return true;
+  return ehPerfilAlmox(pf)&&temAmbasEmpresas(q);
+}
+function podeAcertarEmprestimo(quem){
+  var pf=perfilDe(quem||usuarioAtual);
+  return pf==="Administrador"||pf==="Financeiro";
+}
+function outraLojaDe(l){return (l||lojaAtual)==="mf"?"wf":"mf";}
+function locaisDaLoja(loja){
+  return LOCAIS_EMPRESTIMO.concat([locLoja(loja)]);
+}
+/* ---------- o estoque da OUTRA empresa, lido só quando esta tela precisa ---------- */
+var EST_OUTRA={loja:"",movs:[],series:[],em:0,erro:""};
+async function carregarEstoqueOutra(loja){
+  if(!loja||loja===lojaAtual)return null;
+  if(EST_OUTRA.loja===loja&&Date.now()-EST_OUTRA.em<120000)return EST_OUTRA;
+  if(!db||!modoBanco()){
+    EST_OUTRA={loja:loja,em:Date.now(),erro:"",
+      movs:(movEst||[]).filter(function(m){return m.loja===loja;}),
+      series:(seriesCad||[]).filter(function(d){return d.loja===loja;})};
+    return EST_OUTRA;
+  }
+  try{
+    var m=await col("movest").limit(30000).get({loja:loja});
+    var r=await col("series").limit(30000).get({loja:loja});
+    EST_OUTRA={loja:loja,em:Date.now(),erro:"",
+      movs:(m.docs||[]).map(function(d){var o=d.data()||{};o.id=d.id;return o;}),
+      series:(r.docs||[]).map(function(d){var o=d.data()||{};o.id=d.id;return o;})};
+  }catch(e){
+    EST_OUTRA={loja:loja,em:Date.now(),movs:[],series:[],erro:motivoBanco(e)};
+  }
+  return EST_OUTRA;
+}
+function movsDaLojaEmp(loja){
+  if(loja===lojaAtual)return movEst||[];
+  return (EST_OUTRA.loja===loja)?EST_OUTRA.movs:[];
+}
+function seriesDaLojaEmp(loja){
+  if(loja===lojaAtual)return seriesCad||[];
+  return (EST_OUTRA.loja===loja)?EST_OUTRA.series:[];
+}
+function saldoEmpresaEmp(pid,local,loja){
+  var s2=0;
+  movsDaLojaEmp(loja).forEach(function(m){
+    if(m.loja!==loja||m.produtoId!==pid)return;
+    if(m.destino===local)s2+=(+m.qtd||0);
+    if(m.origem===local)s2-=(+m.qtd||0);
+  });
+  return s2;
+}
+function seriesLivresEmp(pid,local,loja){
+  return seriesDaLojaEmp(loja).filter(function(d){
+    return d&&d.loja===loja&&d.produtoId===pid&&d.situacao==="estoque"&&d.local===local&&
+      (loja!==lojaAtual||!serieOcupada(d.serieNorm));});
+}
+/* ---------- a conta da dívida ---------- */
+function itensEmprestimo(e){return (e&&e.itens)||[];}
+function devolvidoDoItem(e,pid){
+  return ((e&&e.devolucoes)||[]).reduce(function(a,d){
+    return a+((d.itens||[]).filter(function(i){return i.pid===pid;})
+      .reduce(function(b,i){return b+(+i.qtd||0);},0));},0);
+}
+function acertadoDoItem(e,pid){
+  return (((e&&e.acerto)||{}).itens||[]).filter(function(i){return i.pid===pid;})
+    .reduce(function(a,i){return a+(+i.qtd||0);},0);
+}
+function devidoDoItem(e,it){
+  return Math.max(0,(+it.qtd||0)-devolvidoDoItem(e,it.pid)-acertadoDoItem(e,it.pid));
+}
+function devidoEmprestimo(e){
+  return itensEmprestimo(e).reduce(function(a,it){return a+devidoDoItem(e,it);},0);
+}
+function emprestimoAberto(e){
+  return !!e&&e.status!=="cancelado"&&devidoEmprestimo(e)>0;
+}
+function situacaoEmprestimo(e){
+  if(!e)return "";
+  if(e.status==="cancelado")return "Cancelado";
+  if(devidoEmprestimo(e)<=0)return e.acerto?"Acertado como compra":"Devolvido";
+  return "Em aberto";
+}
+function emprestimosDaDupla(filtro){
+  var f=filtro||{};
+  return (emprestimos||[]).filter(function(e){
+    if(!e)return false;
+    if(f.direcao&&((e.de||{}).loja+"-"+(e.para||{}).loja)!==f.direcao)return false;
+    if(f.pid&&!itensEmprestimo(e).some(function(i){return i.pid===f.pid;}))return false;
+    if(f.de&&String(e.data||"")<f.de)return false;
+    if(f.ate&&String(e.data||"")>f.ate)return false;
+    if(f.situacao==="aberto"&&!emprestimoAberto(e))return false;
+    if(f.situacao==="acertado"&&(emprestimoAberto(e)||e.status==="cancelado"))return false;
+    if(f.situacao==="cancelado"&&e.status!=="cancelado")return false;
+    return true;
+  }).sort(function(a,b){return String(b.data||"").localeCompare(String(a.data||""))||(+b.numero||0)-(+a.numero||0);});
+}
+/* o que uma empresa deve à outra, por produto */
+function resumoEmprestimos(deLoja,paraLoja){
+  var m={},ordem=[];
+  (emprestimos||[]).forEach(function(e){
+    if(!emprestimoAberto(e))return;
+    if((e.de||{}).loja!==deLoja||(e.para||{}).loja!==paraLoja)return;
+    itensEmprestimo(e).forEach(function(it){
+      var d=devidoDoItem(e,it);
+      if(d<=0)return;
+      if(!m[it.pid]){m[it.pid]={pid:it.pid,nome:it.nome||"",cod:it.cod||"",qtd:0,valor:0,nums:[]};ordem.push(it.pid);}
+      var p=prodPorId(it.pid);
+      m[it.pid].qtd+=d;
+      m[it.pid].valor+=d*(p?custoTotalDe(p):0);
+      if(m[it.pid].nums.indexOf(e.numero)<0)m[it.pid].nums.push(e.numero);
+    });
+  });
+  return ordem.map(function(k){return m[k];});
+}
+/* quanto a empresa ABERTA deve de um produto à outra (para o aviso da nota e do saldo) */
+function dividaDoProduto(pid,loja){
+  var l=loja||lojaAtual,out=[];
+  (emprestimos||[]).forEach(function(e){
+    if(!emprestimoAberto(e))return;
+    if((e.para||{}).loja!==l)return;   /* quem RECEBEU deve */
+    itensEmprestimo(e).forEach(function(it){
+      if(it.pid!==pid)return;
+      var d=devidoDoItem(e,it);
+      if(d>0)out.push({emp:e,item:it,qtd:d});
+    });
+  });
+  return out;
+}
+function textoDividaProduto(pid){
+  var l=dividaDoProduto(pid);
+  if(!l.length)return "";
+  var q=l.reduce(function(a,x){return a+x.qtd;},0);
+  return "emprestado da "+nomeLojaId((l[0].emp.de||{}).loja)+" · "+q+" a devolver (empréstimo "+
+    l.map(function(x){return x.emp.numero;}).join(", ")+")";
+}
+function proximoNumeroEmp(){
+  var mx=0;
+  (emprestimos||[]).forEach(function(e){var k=parseInt(e&&e.numero,10);if(k>mx)mx=k;});
+  return mx+1;
+}
+function anotarEmp(e,texto){
+  e.hist=(e.hist||[]).concat([{texto:texto,por:usuarioAtual,quando:agoraCarimbo()}]);
+  if(e.hist.length>80)e.hist=e.hist.slice(-80);
+}
+/* ---------- gravar o empréstimo (tudo junto: movimentos, séries e a dívida) ---------- */
+function movEmprestimo(id,loja,pid,qtd,origem,destino,doc,obs,serie){
+  return {id:id,loja:loja,produtoId:pid,qtd:qtd,origem:origem,destino:destino,doc:doc,
+    obs:obs||"",data:hojeISO(),por:usuarioAtual,em:new Date().toISOString(),
+    emprestimo:true,serie:serie||""};
+}
+function criarEmprestimo(){return travaSalvar("criarEmprestimo",criarEmprestimo__corpo,this,arguments);}
+async function criarEmprestimo__corpo(d){
+  var o=d||{};
+  if(!podeEmprestimo()){toast("Só o almoxarifado com acesso às duas empresas e o Administrador lançam empréstimo.");return null;}
+  if(!o.deLoja||!o.paraLoja||o.deLoja===o.paraLoja){toast("O empréstimo é sempre entre as DUAS empresas.");return null;}
+  if(!o.deLocal||!o.paraLocal){toast("Escolha o estoque de origem e o de destino.");return null;}
+  var itens=(o.itens||[]).filter(function(i){return i&&i.pid&&(+i.qtd||0)>0;});
+  if(!itens.length){toast("Ponha ao menos um produto, com quantidade.");return null;}
+  var data=String(o.data||hojeISO()).slice(0,10);
+  /* o saldo da origem é conferido no banco antes de gravar (duas pessoas ao mesmo tempo) */
+  if(o.deLoja!==lojaAtual)await carregarEstoqueOutra(o.deLoja);
+  var num=proximoNumeroEmp(),doc="Empréstimo "+num,lista=[],avisos=[];
+  var e={id:uid(),numero:num,data:data,antigo:!!o.antigo,
+    de:{loja:o.deLoja,local:o.deLocal},para:{loja:o.paraLoja,local:o.paraLocal},
+    obs:String(o.obs||"").trim(),status:"aberto",itens:[],devolucoes:[],
+    criadoEm:agoraCarimbo(),criadoPor:usuarioAtual,hist:[]};
+  var serDocs=[];
+  itens.forEach(function(i,ix){
+    var p=prodPorId(i.pid)||{},q=+i.qtd||0;
+    var disp=saldoEmpresaEmp(i.pid,o.deLocal,o.deLoja);
+    var baixa=q,semSaldo=0;
+    if(disp<q){
+      /* a baixa nunca deixa o saldo negativo: baixa só até zero e registra a diferença */
+      baixa=Math.max(0,disp);semSaldo=q-baixa;
+      avisos.push((p.nome||"")+": o "+nomeLocal(o.deLocal)+" da "+nomeLojaId(o.deLoja)+" tem "+disp+" e o empréstimo é de "+q);
+    }
+    var it={pid:i.pid,nome:p.nome||i.nome||"",cod:p.cod||i.cod||"",qtd:q,
+      series:(i.series||[]).slice(),jaNoDestino:!!i.jaNoDestino,
+      baixado:baixa,semSaldo:semSaldo};
+    e.itens.push(it);
+    if(baixa>0)lista.push({colecao:"movest",obj:movEmprestimo("emp-"+e.id+"-s"+ix,o.deLoja,i.pid,baixa,o.deLocal,"emprestimo:"+o.paraLoja,doc,
+      "Empréstimo para "+nomeLojaId(o.paraLoja)+(semSaldo?" · origem sem saldo no sistema ("+semSaldo+")":""),(i.series||[])[0]||"")});
+    if(!it.jaNoDestino)lista.push({colecao:"movest",obj:movEmprestimo("emp-"+e.id+"-e"+ix,o.paraLoja,i.pid,q,"emprestimo:"+o.deLoja,o.paraLocal,doc,
+      "Empréstimo vindo da "+nomeLojaId(o.deLoja),(i.series||[])[0]||"")});
+    /* a série passa para a empresa de destino, com histórico */
+    (i.series||[]).forEach(function(sn){
+      var dc=seriesDaLojaEmp(o.deLoja).filter(function(x){return x.serieNorm===normSerie(sn);})[0];
+      if(!dc)return;
+      var c2=copiaReg(dc);
+      c2.loja=o.paraLoja;c2.local=o.paraLocal;
+      c2.hist=(c2.hist||[]).concat([{texto:doc+": veio da "+nomeLojaId(o.deLoja)+" para a "+nomeLojaId(o.paraLoja),
+        por:usuarioAtual,quando:agoraCarimbo()}]);
+      serDocs.push({orig:dc,novo:c2});
+      lista.push({colecao:"series",obj:c2});
+    });
+  });
+  anotarEmp(e,(o.antigo?"Empréstimo antigo lançado":"Empréstimo lançado")+": "+
+    e.itens.map(function(i){return i.qtd+"× "+(i.nome||"");}).join(", ")+
+    " · da "+nomeLojaId(o.deLoja)+" para a "+nomeLojaId(o.paraLoja)+
+    (avisos.length?" · "+avisos.join(" · "):""));
+  lista.push({colecao:"emprestimos",obj:e});
+  try{await gravaJuntosConf(lista);}
+  catch(er){return avisarRecusaBanco($("empqn_alerta")?"empqn_alerta":"emp_alerta",er,"O empréstimo não foi lançado: nada mudou no estoque.");}
+  emprestimos.push(e);
+  lista.forEach(function(x){
+    if(x.colecao==="movest"){if(x.obj.loja===lojaAtual)movEst.push(x.obj);else if(EST_OUTRA.loja===x.obj.loja)EST_OUTRA.movs.push(x.obj);}
+  });
+  serDocs.forEach(function(x){voltarReg(x.orig,x.novo);});
+  try{esquecerReservaSerie();agendarEstNovas();}catch(e2){}
+  toast("Empréstimo "+num+" lançado"+(avisos.length?" · com aviso de saldo":"")+".");
+  return e;
+}
+/* ---------- devolver (pode ser parcial) ---------- */
+function devolverEmprestimo(){return travaSalvar("devolverEmprestimo",devolverEmprestimo__corpo,this,arguments);}
+async function devolverEmprestimo__corpo(id,dados){
+  var o=dados||{},e=(emprestimos||[]).filter(function(x){return x.id===id;})[0];
+  if(!e){toast("Empréstimo não encontrado.");return false;}
+  if(!podeEmprestimo()){toast("Só o almoxarifado com acesso às duas empresas e o Administrador devolvem.");return false;}
+  if(e.status==="cancelado"){toast("Este empréstimo foi cancelado.");return false;}
+  var itens=(o.itens||[]).filter(function(i){return i&&i.pid&&(+i.qtd||0)>0;});
+  if(!itens.length){toast("Informe o que está sendo devolvido.");return false;}
+  var quem=(e.para||{}).loja,paraQuem=(e.de||{}).loja;
+  var localSai=o.localSai||(e.para||{}).local,localEntra=o.localEntra||(e.de||{}).local;
+  if(quem!==lojaAtual)await carregarEstoqueOutra(quem);
+  var doc="Devolução do empréstimo "+e.numero,lista=[],serDocs=[];
+  var dev={em:agoraCarimbo(),por:usuarioAtual,obs:String(o.obs||"").trim(),itens:[]};
+  var erro="";
+  itens.forEach(function(i,ix){
+    var it=itensEmprestimo(e).filter(function(x){return x.pid===i.pid;})[0];
+    if(!it){erro=erro||"Produto que não está neste empréstimo.";return;}
+    var q=Math.min(+i.qtd||0,devidoDoItem(e,it));
+    if(q<=0){erro=erro||"Este produto já foi devolvido ou acertado.";return;}
+    var disp=saldoEmpresaEmp(i.pid,localSai,quem);
+    if(disp<q){erro=erro||("O "+nomeLocal(localSai)+" da "+nomeLojaId(quem)+" tem "+disp+" de "+(it.nome||"")+".");return;}
+    dev.itens.push({pid:i.pid,qtd:q,series:(i.series||[]).slice()});
+    lista.push({colecao:"movest",obj:movEmprestimo("dev-"+e.id+"-"+(e.devolucoes||[]).length+"-s"+ix,quem,i.pid,q,localSai,"emprestimo:"+paraQuem,doc,
+      "Devolução para a "+nomeLojaId(paraQuem),(i.series||[])[0]||"")});
+    lista.push({colecao:"movest",obj:movEmprestimo("dev-"+e.id+"-"+(e.devolucoes||[]).length+"-e"+ix,paraQuem,i.pid,q,"emprestimo:"+quem,localEntra,doc,
+      "Devolução vinda da "+nomeLojaId(quem),(i.series||[])[0]||"")});
+    (i.series||[]).forEach(function(sn){
+      var dc=seriesDaLojaEmp(quem).filter(function(x){return x.serieNorm===normSerie(sn);})[0];
+      if(!dc)return;
+      var c2=copiaReg(dc);
+      c2.loja=paraQuem;c2.local=localEntra;
+      c2.hist=(c2.hist||[]).concat([{texto:doc+": voltou para a "+nomeLojaId(paraQuem),por:usuarioAtual,quando:agoraCarimbo()}]);
+      serDocs.push({orig:dc,novo:c2});
+      lista.push({colecao:"series",obj:c2});
+    });
+  });
+  if(erro){toast(erro);return false;}
+  if(!dev.itens.length){toast("Nada a devolver.");return false;}
+  var antes=copiaReg(e);
+  e.devolucoes=(e.devolucoes||[]).concat([dev]);
+  anotarEmp(e,"Devolução: "+dev.itens.map(function(i){
+    var it=itensEmprestimo(e).filter(function(x){return x.pid===i.pid;})[0];
+    return i.qtd+"× "+((it&&it.nome)||"");}).join(", ")+(dev.obs?" · "+dev.obs:""));
+  if(devidoEmprestimo(e)<=0)e.status="devolvido";
+  lista.push({colecao:"emprestimos",obj:e});
+  try{await gravaJuntosConf(lista);}
+  catch(er){voltarReg(e,antes);return avisarRecusaBanco($("empqd_alerta")?"empqd_alerta":"emp_alerta",er,"A devolução não foi gravada.");}
+  lista.forEach(function(x){
+    if(x.colecao==="movest"){if(x.obj.loja===lojaAtual)movEst.push(x.obj);else if(EST_OUTRA.loja===x.obj.loja)EST_OUTRA.movs.push(x.obj);}
+  });
+  serDocs.forEach(function(x){voltarReg(x.orig,x.novo);});
+  try{esquecerReservaSerie();agendarEstNovas();renderEmprestimos();}catch(e2){}
+  toast("Devolução registrada no empréstimo "+e.numero+".");
+  return true;
+}
+/* ---------- acertar como compra ---------- */
+function acertarEmprestimo(){return travaSalvar("acertarEmprestimo",acertarEmprestimo__corpo,this,arguments);}
+async function acertarEmprestimo__corpo(id,dados){
+  var o=dados||{},e=(emprestimos||[]).filter(function(x){return x.id===id;})[0];
+  if(!e){toast("Empréstimo não encontrado.");return false;}
+  if(!podeAcertarEmprestimo()){toast("Só o Administrador e o Financeiro acertam o empréstimo como compra.");return false;}
+  if(e.status==="cancelado"){toast("Este empréstimo foi cancelado.");return false;}
+  if(e.acerto){toast("Este empréstimo já foi acertado.");return false;}
+  var vende=(e.de||{}).loja,compra=(e.para||{}).loja;
+  if(vende!==lojaAtual){toast("Para acertar, abra a empresa que emprestou ("+nomeLojaId(vende)+") no alto da tela.");return false;}
+  var itens=(o.itens||[]).filter(function(i){return i&&i.pid&&(+i.qtd||0)>0;});
+  if(!itens.length){toast("Escolha o que entra na compra.");return false;}
+  /* a outra empresa como cliente (com o CNPJ e o endereço dos Dados da Empresa dela) */
+  try{await lerDadosOutraEmpresa(compra);}catch(eD){}
+  var cli=clienteDaOutraEmpresa(compra);
+  if(!cli){toast("Não achei nem consegui criar o cadastro da "+nomeLojaId(compra)+" como cliente.");return false;}
+  var linhas=[],total=0;
+  itens.forEach(function(i){
+    var it=itensEmprestimo(e).filter(function(x){return x.pid===i.pid;})[0];
+    if(!it)return;
+    var q=Math.min(+i.qtd||0,devidoDoItem(e,it));
+    if(q<=0)return;
+    var p=prodPorId(i.pid)||{};
+    var vu=centavos(+i.valor>0?+i.valor:custoTotalDe(p));
+    total=centavos(total+vu*q);
+    linhas.push({pid:i.pid,nome:it.nome||p.nome||"",cod:it.cod||p.cod||"",qtd:q,valor:vu,
+      valorBase:vu,valorTabela:vu,garantia:"Bronze",vinculo:"emp-"+e.id+"-"+i.pid,enc:null});
+  });
+  if(!linhas.length){toast("Nada a acertar.");return false;}
+  var ped={id:uid(),loja:vende,numero:(await numeroNovo("pedido",pedidos,20801)),
+    data:hojeISO(),hora:agoraHM(),cliente:cli.nome,clienteId:cli.id,
+    prospector:"",vendedor:usuarioAtual,instalador:"",respInstalacao:"",
+    itens:linhas,formas:[{tipo:(o.forma||"Boleto Loja"),valor:total,parc:1}],
+    total:total,depreciado:total,base:total,pontos:0,modelo:"base",totalBase:total,acrescimo:0,
+    frete:0,descontoGeral:0,descontoEspecial:0,obs:"Acerto do empréstimo "+e.numero+" com a "+nomeLojaId(compra),
+    entreEmpresas:{emprestimoId:e.id,numero:e.numero,de:vende,para:compra},
+    status:"Aguardando aprovação financeira",encerrada:false,criadoEm:hojeISO(),criadoPor:usuarioAtual,eventos:[]};
+  var antes=copiaReg(e);
+  e.acerto={pedidoId:ped.id,numero:ped.numero,em:agoraCarimbo(),por:usuarioAtual,
+    itens:linhas.map(function(l){return {pid:l.pid,qtd:l.qtd,valor:l.valor};}),total:total,aprovado:false};
+  anotarEmp(e,"Acerto como compra: pedido "+ped.numero+" para a "+nomeLojaId(compra)+" · "+BRL(total)+
+    " · a dívida é abatida quando o pedido for aprovado");
+  try{await gravaJuntosConf([{colecao:"pedidos",obj:ped},{colecao:"emprestimos",obj:e}]);}
+  catch(er){voltarReg(e,antes);return avisarRecusaBanco($("empqa_alerta")?"empqa_alerta":"emp_alerta",er,"O acerto não foi gravado.");}
+  pedidos.push(ped);
+  registrarEvento(ped,"Pedido de acerto do empréstimo "+e.numero+" com a "+nomeLojaId(compra)+
+    " · não baixa estoque, não gera comissão e fica fora da meta");
+  try{await gravaConf("pedidos",ped);}catch(e3){}
+  try{renderEmprestimos();renderPedidos();}catch(e2){}
+  toast("Pedido "+ped.numero+" criado para a "+nomeLojaId(compra)+". Ele segue a aprovação financeira.");
+  return ped;
+}
+/* os Dados da Empresa da OUTRA loja (só para montar o cadastro de cliente do acerto) */
+var DADOS_OUTRA={loja:"",dados:null};
+async function lerDadosOutraEmpresa(loja){
+  if(!loja)return null;
+  if(DADOS_OUTRA.loja===loja)return DADOS_OUTRA.dados;
+  var d=null;
+  if(loja===lojaAtual)d=EMPRESA;
+  else if(db&&modoBanco()){
+    try{
+      var g=await db.doc("config/"+(loja==="mf"?"empresa":loja+":empresa")).get();
+      if(g&&g.exists)d=g.data()||null;
+    }catch(e){console.warn("dados da outra empresa",e);}
+  }
+  DADOS_OUTRA={loja:loja,dados:d};
+  return d;
+}
+/* a outra empresa como cliente da que vende */
+function clienteDaOutraEmpresa(loja){
+  var nome=nomeLojaId(loja);
+  var c=(clientes||[]).filter(function(x){
+    return x.loja===lojaAtual&&(x.empresaIrma===loja||String(x.nome||"").toUpperCase()===String(nome).toUpperCase());})[0];
+  if(c)return c;
+  var dd=(DADOS_OUTRA.loja===loja&&DADOS_OUTRA.dados)||{};
+  c={id:"cli-emp-"+loja,loja:lojaAtual,nome:(dd.razao||dd.nome||nome),tipo:"Pessoa Jurídica",
+    doc:dd.cnpj||"",tel:dd.fone||dd.tel||"",email:dd.email||"",
+    rua:dd.endereco||dd.rua||"",num:dd.num||"",bairro:dd.bairro||"",
+    cidade:dd.cidade||"",uf:dd.uf||"",cep:dd.cep||"",
+    origem:"",obs:"Cadastro da outra empresa, criado para o acerto de empréstimo entre as lojas.",
+    criadoEm:hojeISO(),criadoPor:usuarioAtual,empresaIrma:loja};
+  clientes.push(c);
+  try{gravaConf("clientes",c);}catch(e){}
+  return c;
+}
+/* a aprovação do pedido de acerto abate a dívida */
+async function abaterAcertoEmprestimo(p){
+  if(!p||!p.entreEmpresas)return false;
+  var e=(emprestimos||[]).filter(function(x){return x.id===p.entreEmpresas.emprestimoId;})[0];
+  if(!e||!e.acerto||e.acerto.aprovado)return false;
+  var antes=copiaReg(e);
+  e.acerto.aprovado=true;e.acerto.aprovadoEm=agoraCarimbo();
+  if(devidoEmprestimo(e)<=0)e.status="acertado";
+  anotarEmp(e,"Pedido "+p.numero+" aprovado: a dívida foi abatida"+(e.status==="acertado"?" e o empréstimo está acertado":""));
+  try{await gravaConf("emprestimos",e);}
+  catch(er){voltarReg(e,antes);return false;}
+  try{renderEmprestimos();}catch(e2){}
+  return true;
+}
+/* ---------- cancelar o empréstimo lançado errado ---------- */
+function cancelarEmprestimo(){return travaSalvar("cancelarEmprestimo",cancelarEmprestimo__corpo,this,arguments);}
+async function cancelarEmprestimo__corpo(id,motivo){
+  var e=(emprestimos||[]).filter(function(x){return x.id===id;})[0];
+  if(!e){toast("Empréstimo não encontrado.");return false;}
+  if(!podeEmprestimo()){toast("Só o almoxarifado com acesso às duas empresas e o Administrador cancelam.");return false;}
+  if(e.status==="cancelado"){toast("Este empréstimo já está cancelado.");return false;}
+  if(e.acerto){toast("Este empréstimo já virou compra: cancele o pedido do acerto primeiro.");return false;}
+  if((e.devolucoes||[]).length){toast("Este empréstimo já teve devolução: cancele desfazendo a devolução antes.");return false;}
+  var mot=String(motivo||"").trim();
+  if(mot.length<3){toast("Escreva o motivo do cancelamento.");return false;}
+  /* desfaz os movimentos: o contrário de cada um, nada se apaga */
+  var lista=[],doc="Cancelamento do empréstimo "+e.numero;
+  itensEmprestimo(e).forEach(function(it,ix){
+    if(+it.baixado>0)lista.push({colecao:"movest",obj:movEmprestimo("empc-"+e.id+"-s"+ix,(e.de||{}).loja,it.pid,+it.baixado,
+      "emprestimo:"+(e.para||{}).loja,(e.de||{}).local,doc,"Cancelamento: o produto volta para a origem","")});
+    if(!it.jaNoDestino)lista.push({colecao:"movest",obj:movEmprestimo("empc-"+e.id+"-e"+ix,(e.para||{}).loja,it.pid,+it.qtd||0,
+      (e.para||{}).local,"emprestimo:"+(e.de||{}).loja,doc,"Cancelamento: o produto sai do destino","")});
+  });
+  var antes=copiaReg(e);
+  e.status="cancelado";e.canceladoPor=usuarioAtual;e.canceladoEm=agoraCarimbo();e.motivoCancel=mot;
+  anotarEmp(e,"Cancelado: "+mot);
+  lista.push({colecao:"emprestimos",obj:e});
+  try{await gravaJuntosConf(lista);}
+  catch(er){voltarReg(e,antes);return avisarRecusaBanco($("empqc_alerta")?"empqc_alerta":"emp_alerta",er,"O cancelamento não foi gravado.");}
+  lista.forEach(function(x){
+    if(x.colecao==="movest"){if(x.obj.loja===lojaAtual)movEst.push(x.obj);else if(EST_OUTRA.loja===x.obj.loja)EST_OUTRA.movs.push(x.obj);}
+  });
+  try{agendarEstNovas();renderEmprestimos();}catch(e2){}
+  toast("Empréstimo "+e.numero+" cancelado e os movimentos desfeitos.");
+  return true;
+}
+/* ===== v610: a nota de entrada que é o ACERTO de um empréstimo =====
+   Quando o fornecedor da nota é a OUTRA empresa, o lançamento oferece ligar a nota ao
+   empréstimo: a nota gera o contas a pagar normalmente, mas NÃO sobe estoque de novo — o
+   produto já entrou quando foi emprestado. */
+function fornecedorEhOutraEmpresa(n){
+  var f=fornecPor(n&&n.fornecedorId);
+  if(!f)return "";
+  var outra=outraLojaDe(lojaAtual);
+  var nomeO=String(nomeLojaId(outra)||"").toUpperCase();
+  var doc=soDigitos(f.doc||"");
+  var alvo=String(f.nome||"").toUpperCase()+" "+String(f.fantasia||"").toUpperCase();
+  if(f.empresaIrma===outra)return outra;
+  if(nomeO&&alvo.indexOf(nomeO)>=0)return outra;
+  /* pelo CNPJ dos Dados da Empresa, quando já foram lidos */
+  if(doc&&DADOS_OUTRA.loja===outra&&DADOS_OUTRA.dados&&soDigitos(DADOS_OUTRA.dados.cnpj||"")===doc)return outra;
+  return "";
+}
+function montarAcertoNF(n){
+  var w=$("df_quadro");if(!w||!n)return;
+  var outra=fornecedorEhOutraEmpresa(n);
+  var ja=w.querySelector("#df_empAcerto");
+  if(!outra){if(ja)ja.parentNode.removeChild(ja);return;}
+  var abertos=emprestimosDaDupla({situacao:"aberto"}).filter(function(e){
+    return (e.de||{}).loja===outra&&(e.para||{}).loja===lojaAtual;});
+  var h='<div class="note warn" id="df_empAcerto"><b>Esta nota é da '+esc(nomeLojaId(outra))+".</b> "+
+    (abertos.length
+      ?'Se ela for o <b>acerto de um empréstimo</b>, ligue a nota aqui: o contas a pagar nasce normalmente e o estoque <b>não sobe de novo</b>.'+
+       '<div class="fld" style="margin-top:8px"><label for="df_empSel">Acerto de empréstimo</label><select id="df_empSel">'+
+       '<option value="">— não é acerto —</option>'+abertos.map(function(e){
+         return '<option value="'+esc(e.id)+'"'+((n.acertoEmprestimo&&n.acertoEmprestimo.id===e.id)?" selected":"")+">"+
+           esc("Empréstimo "+e.numero+" · "+dataBR(e.data)+" · "+itensEmprestimo(e).map(function(i){return i.nome;}).join(", "))+"</option>";}).join("")+
+       "</select></div>"
+      :"Não há empréstimo em aberto dela para esta empresa.")+"</div>";
+  if(ja)ja.outerHTML=h;else w.insertAdjacentHTML("afterbegin",h);
+  var sel=$("df_empSel");
+  if(sel)sel.onchange=async function(){
+    var id=sel.value,e=(emprestimos||[]).filter(function(x){return x.id===id;})[0];
+    var antes=copiaReg(n);
+    if(e)n.acertoEmprestimo={id:e.id,numero:e.numero,loja:outra};
+    else delete n.acertoEmprestimo;
+    try{await gravaConf("notas",n);toast(e?("Nota ligada ao empréstimo "+e.numero+": o estoque não sobe de novo."):"Ligação desfeita.");}
+    catch(er){voltarReg(n,antes);avisarRecusaBanco("df_aviso",er,"A ligação não foi salva.");}
+  };
+}
+/* ===== v610: a nota trouxe um produto que a empresa DEVE à outra ===== */
+function abrirDevolverDaNota(lista){
+  if(!podeEmprestimo())return false;
+  var L=(lista||[]).filter(function(x){return x&&x.divida&&x.divida.length;});
+  if(!L.length)return false;
+  var est={};
+  var m=quadroEnc();
+  function desenhar(){
+    m.innerHTML='<div class="box" style="width:min(620px,100%)"><h3>Devolver o que foi emprestado?</h3>'+
+      '<div class="sub">Chegou produto que a '+esc(nomeLoja())+" deve à outra empresa.</div>"+
+      L.map(function(x,ix){
+        var dv=x.divida[0],emp=dv.emp,deve=x.divida.reduce(function(a,y){return a+y.qtd;},0);
+        var sug=Math.min(x.chegou,deve);
+        var q=est[x.pid]==null?sug:est[x.pid];
+        var p=prodPorId(x.pid),serie=p&&controlaSerie(p);
+        var livres=serie?seriesLivresEmp(x.pid,x.local,lojaAtual):[];
+        return '<div class="sect" style="margin-top:10px">'+
+          '<div class="note"><b>A '+esc(nomeLoja())+" deve "+deve+" de "+esc(x.nome)+" à "+
+            esc(nomeLojaId((emp.de||{}).loja))+"</b> (empréstimo "+esc(emp.numero)+"). Chegaram "+x.chegou+".</div>"+
+          '<div class="grid g2"><div class="fld"><label for="dvn_q'+ix+'">Devolver agora</label>'+
+            '<input type="number" min="0" max="'+Math.min(x.chegou,deve)+'" id="dvn_q'+ix+'" data-dvnq="'+esc(x.pid)+'" value="'+q+'"></div>'+
+          '<div class="fld"><label for="dvn_l'+ix+'">Entra no estoque da '+esc(nomeLojaId((emp.de||{}).loja))+"</label>"+
+            '<select id="dvn_l'+ix+'" data-dvnl="'+esc(x.pid)+'">'+
+            locaisDaLoja((emp.de||{}).loja).map(function(l){return '<option value="'+esc(l)+'"'+(l===(emp.de||{}).local?" selected":"")+">"+esc(nomeLocal(l))+"</option>";}).join("")+
+            "</select></div></div>"+
+          (serie?'<div class="fld"><label for="dvn_s'+ix+'">Séries que voltam (as que acabaram de entrar)</label>'+
+            '<select id="dvn_s'+ix+'" data-dvns="'+esc(x.pid)+'" multiple size="'+Math.min(5,Math.max(2,livres.length||2))+'">'+
+            livres.map(function(d){return '<option value="'+esc(d.serieNorm)+'">'+esc(d.serie||d.serieNorm)+"</option>";}).join("")+
+            "</select></div>":"")+"</div>";
+      }).join("")+
+      '<div id="dvn_alerta"></div>'+
+      '<div class="actions"><button class="btn" type="button" id="dvn_ok">Devolver agora</button>'+
+      '<button class="btn mut" type="button" id="dvn_nao">Agora não</button></div></div>';
+    $("dvn_nao").onclick=function(){m.hidden=true;toast("A dívida continua em aberto — o aviso volta na próxima nota deste produto.");};
+    Array.prototype.forEach.call(m.querySelectorAll("[data-dvnq]"),function(el){
+      el.onchange=function(){est[el.getAttribute("data-dvnq")]=Math.max(0,parseInt(el.value,10)||0);};});
+    $("dvn_ok").onclick=async function(){
+      var feitos=0;
+      for(var i=0;i<L.length;i++){
+        var x=L[i],dv=x.divida[0],emp=dv.emp;
+        var q=est[x.pid]==null?Math.min(x.chegou,x.divida.reduce(function(a,y){return a+y.qtd;},0)):est[x.pid];
+        if(q<=0)continue;
+        var selL=m.querySelector('[data-dvnl="'+x.pid+'"]'),selS=m.querySelector('[data-dvns="'+x.pid+'"]');
+        var ser=selS?[].filter.call(selS.options,function(o){return o.selected;}).map(function(o){return o.value;}):[];
+        var ok=await devolverEmprestimo(emp.id,{itens:[{pid:x.pid,qtd:q,series:ser}],
+          localSai:x.local,localEntra:(selL&&selL.value)||(emp.de||{}).local,
+          obs:"devolvido na entrada da nota"});
+        if(ok)feitos++;
+      }
+      m.hidden=true;
+      if(feitos)toast("Devolução registrada pela entrada da nota.");
+    };
+  }
+  (async function(){
+    var outra=((L[0].divida[0].emp.de)||{}).loja;
+    if(outra&&outra!==lojaAtual)await carregarEstoqueOutra(outra);
+    desenhar();m.hidden=false;
+  })();
+  return true;
+}
+/* ---------- os quadros ---------- */
+var EMP_NOVO={antigo:false,deLoja:"",deLocal:"",paraLoja:"",paraLocal:"",data:"",obs:"",itens:[]};
+function produtosEmprestimo(){
+  return (produtos||[]).filter(function(p){
+    return (p.status||"ativo")==="ativo"&&!produtoDeSistema(p)&&!ehProdutoSucata(p);})
+    .sort(function(a,b){return String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR");}).slice(0,600);
+}
+function abrirEmprestimo(antigo){
+  if(!podeEmprestimo()){toast("Só o almoxarifado com acesso às duas empresas e o Administrador lançam empréstimo.");return false;}
+  var outra=outraLojaDe(lojaAtual);
+  EMP_NOVO={antigo:!!antigo,deLoja:outra,deLocal:LOC_EMPRESA,paraLoja:lojaAtual,paraLocal:LOC_EMPRESA,
+    data:hojeISO(),obs:"",itens:[{pid:"",qtd:1,series:[],jaNoDestino:false}]};
+  var m=quadroEnc();
+  function linhaItem(i,ix){
+    var p=prodPorId(i.pid),serie=p&&controlaSerie(p);
+    var disp=i.pid?saldoEmpresaEmp(i.pid,EMP_NOVO.deLocal,EMP_NOVO.deLoja):0;
+    var livres=(i.pid&&serie)?seriesLivresEmp(i.pid,EMP_NOVO.deLocal,EMP_NOVO.deLoja):[];
+    return '<div class="sect" style="margin-top:10px"><div class="grid g3">'+
+      '<div class="fld" style="grid-column:span 2"><label for="empi_p'+ix+'">Produto</label>'+
+        '<select id="empi_p'+ix+'" data-empip="'+ix+'"><option value="">— escolha —</option>'+
+        produtosEmprestimo().map(function(x){
+          return '<option value="'+esc(x.id)+'"'+(x.id===i.pid?" selected":"")+">"+esc((x.cod?x.cod+" · ":"")+(x.nome||""))+"</option>";}).join("")+
+        "</select></div>"+
+      '<div class="fld"><label for="empi_q'+ix+'">Quantidade</label>'+
+        '<input type="number" min="1" step="1" id="empi_q'+ix+'" data-empiq="'+ix+'" value="'+(i.qtd||1)+'"></div></div>'+
+      (i.pid?'<div class="t-sub">Disponível no '+esc(nomeLocal(EMP_NOVO.deLocal))+" da "+esc(nomeLojaId(EMP_NOVO.deLoja))+": <b>"+disp+"</b>"+
+        ((+i.qtd||0)>disp?' · <span class="pill p-crit">a origem não tem tudo isso</span>':"")+"</div>":"")+
+      (serie?'<div class="fld" style="margin-top:8px"><label for="empi_s'+ix+'">Séries ('+(i.qtd||1)+")</label>"+
+        '<select id="empi_s'+ix+'" data-empis="'+ix+'" multiple size="'+Math.min(5,Math.max(2,livres.length||2))+'">'+
+        livres.map(function(d){return '<option value="'+esc(d.serieNorm)+'"'+((i.series||[]).indexOf(d.serieNorm)>=0?" selected":"")+">"+esc(d.serie||d.serieNorm)+"</option>";}).join("")+
+        "</select>"+(livres.length?"":'<p class="help">Nenhuma série livre nesse estoque.</p>')+"</div>":"")+
+      (EMP_NOVO.antigo?'<label class="nf-chk"><input type="checkbox" data-empij="'+ix+'"'+(i.jaNoDestino?" checked":"")+
+        "><span>Este produto <b>já está no estoque de destino</b> (não dar entrada de novo)</span></label>":"")+
+      (EMP_NOVO.itens.length>1?'<div class="actions" style="justify-content:flex-start"><button class="btn mut sm" type="button" data-empirm="'+ix+'">Tirar este produto</button></div>':"")+
+      "</div>";
+  }
+  function desenhar(){
+    m.innerHTML='<div class="box" style="width:min(680px,100%)"><h3>'+(EMP_NOVO.antigo?"Lançar empréstimo antigo":"Novo empréstimo entre empresas")+"</h3>"+
+      '<div class="sub">O produto sai do estoque de uma empresa e entra no da outra, na hora. Não gera nota, título, comissão nem meta.</div>'+
+      (EMP_NOVO.antigo?'<div class="note warn" style="margin-top:10px">Empréstimo que <b>já aconteceu</b>: escolha a data de quando foi. Se o produto já estiver no estoque de destino, marque o item — aí só a origem baixa.</div>':"")+
+      '<div class="grid g2" style="margin-top:12px">'+
+        '<div class="fld"><label for="emp_de">Empresa de origem</label><select id="emp_de">'+
+          LOJAS.map(function(l){return '<option value="'+esc(l.id)+'"'+(l.id===EMP_NOVO.deLoja?" selected":"")+">"+esc(l.nome)+"</option>";}).join("")+"</select></div>"+
+        '<div class="fld"><label for="emp_delocal">Estoque de origem</label><select id="emp_delocal">'+
+          locaisDaLoja(EMP_NOVO.deLoja).map(function(l){return '<option value="'+esc(l)+'"'+(l===EMP_NOVO.deLocal?" selected":"")+">"+esc(nomeLocal(l))+"</option>";}).join("")+"</select></div>"+
+        '<div class="fld"><label for="emp_para">Empresa de destino</label><select id="emp_para" disabled>'+
+          '<option>'+esc(nomeLojaId(EMP_NOVO.paraLoja))+"</option></select></div>"+
+        '<div class="fld"><label for="emp_paralocal">Estoque de destino</label><select id="emp_paralocal">'+
+          locaisDaLoja(EMP_NOVO.paraLoja).map(function(l){return '<option value="'+esc(l)+'"'+(l===EMP_NOVO.paraLocal?" selected":"")+">"+esc(nomeLocal(l))+"</option>";}).join("")+"</select></div>"+
+        '<div class="fld"><label for="emp_data">Data</label><input type="date" id="emp_data" value="'+esc(EMP_NOVO.data)+'"'+(EMP_NOVO.antigo?"":' max="'+esc(hojeISO())+'"')+"></div>"+
+        '<div class="fld"><label for="emp_obs">Observação</label><input id="emp_obs" value="'+esc(EMP_NOVO.obs)+'" placeholder="opcional"></div>'+
+      "</div>"+
+      '<div id="emp_itens">'+EMP_NOVO.itens.map(linhaItem).join("")+"</div>"+
+      '<div class="actions" style="justify-content:flex-start"><button class="btn ghost sm" type="button" id="emp_mais">+ outro produto</button></div>'+
+      (EST_OUTRA.erro?'<div class="note crit">Não deu para ler o estoque da outra empresa: '+esc(EST_OUTRA.erro)+"</div>":"")+
+      '<div id="empqn_alerta"></div>'+
+      '<div class="actions"><button class="btn" type="button" id="emp_ok">'+(EMP_NOVO.antigo?"Lançar o empréstimo antigo":"Lançar o empréstimo")+"</button>"+
+      '<button class="btn mut" type="button" id="emp_nao">Cancelar</button></div></div>';
+    $("emp_nao").onclick=function(){m.hidden=true;};
+    $("emp_de").onchange=async function(){
+      EMP_NOVO.deLoja=$("emp_de").value;
+      EMP_NOVO.paraLoja=outraLojaDe(EMP_NOVO.deLoja);
+      EMP_NOVO.deLocal=LOC_EMPRESA;EMP_NOVO.paraLocal=LOC_EMPRESA;
+      if(EMP_NOVO.deLoja!==lojaAtual)await carregarEstoqueOutra(EMP_NOVO.deLoja);
+      desenhar();
+    };
+    $("emp_delocal").onchange=function(){EMP_NOVO.deLocal=$("emp_delocal").value;desenhar();};
+    $("emp_paralocal").onchange=function(){EMP_NOVO.paraLocal=$("emp_paralocal").value;};
+    $("emp_data").onchange=function(){EMP_NOVO.data=$("emp_data").value;};
+    $("emp_obs").oninput=function(){EMP_NOVO.obs=$("emp_obs").value;};
+    $("emp_mais").onclick=function(){EMP_NOVO.itens.push({pid:"",qtd:1,series:[],jaNoDestino:false});desenhar();};
+    Array.prototype.forEach.call(m.querySelectorAll("[data-empip]"),function(el){
+      el.onchange=function(){EMP_NOVO.itens[+el.getAttribute("data-empip")].pid=el.value;
+        EMP_NOVO.itens[+el.getAttribute("data-empip")].series=[];desenhar();};});
+    Array.prototype.forEach.call(m.querySelectorAll("[data-empiq]"),function(el){
+      el.onchange=function(){EMP_NOVO.itens[+el.getAttribute("data-empiq")].qtd=Math.max(1,parseInt(el.value,10)||1);desenhar();};});
+    Array.prototype.forEach.call(m.querySelectorAll("[data-empis]"),function(el){
+      el.onchange=function(){EMP_NOVO.itens[+el.getAttribute("data-empis")].series=
+        [].filter.call(el.options,function(o){return o.selected;}).map(function(o){return o.value;});};});
+    Array.prototype.forEach.call(m.querySelectorAll("[data-empij]"),function(el){
+      el.onchange=function(){EMP_NOVO.itens[+el.getAttribute("data-empij")].jaNoDestino=el.checked;};});
+    Array.prototype.forEach.call(m.querySelectorAll("[data-empirm]"),function(el){
+      el.onclick=function(){EMP_NOVO.itens.splice(+el.getAttribute("data-empirm"),1);desenhar();};});
+    $("emp_ok").onclick=async function(){
+      var e=await criarEmprestimo({antigo:EMP_NOVO.antigo,deLoja:EMP_NOVO.deLoja,deLocal:EMP_NOVO.deLocal,
+        paraLoja:EMP_NOVO.paraLoja,paraLocal:EMP_NOVO.paraLocal,data:EMP_NOVO.data,obs:EMP_NOVO.obs,
+        itens:EMP_NOVO.itens});
+      if(e){m.hidden=true;renderEmprestimos();}
+    };
+  }
+  (async function(){
+    if(EMP_NOVO.deLoja!==lojaAtual)await carregarEstoqueOutra(EMP_NOVO.deLoja);
+    desenhar();m.hidden=false;
+  })();
+  return true;
+}
+/* devolver */
+function abrirDevolucaoEmp(id){
+  var e=(emprestimos||[]).filter(function(x){return x.id===id;})[0];
+  if(!e)return false;
+  if(!podeEmprestimo()){toast("Só o almoxarifado com acesso às duas empresas e o Administrador devolvem.");return false;}
+  var quem=(e.para||{}).loja,paraQuem=(e.de||{}).loja;
+  var est={localSai:(e.para||{}).local,localEntra:(e.de||{}).local,itens:{},series:{}};
+  var m=quadroEnc();
+  function desenhar(){
+    m.innerHTML='<div class="box" style="width:min(640px,100%)"><h3>Devolver · empréstimo '+esc(e.numero)+"</h3>"+
+      '<div class="sub">A '+esc(nomeLojaId(quem))+" devolve para a "+esc(nomeLojaId(paraQuem))+". Pode ser parcial.</div>"+
+      '<div class="grid g2" style="margin-top:12px">'+
+        '<div class="fld"><label for="empd_sai">Sai do estoque</label><select id="empd_sai">'+
+          locaisDaLoja(quem).map(function(l){return '<option value="'+esc(l)+'"'+(l===est.localSai?" selected":"")+">"+esc(nomeLocal(l))+"</option>";}).join("")+"</select></div>"+
+        '<div class="fld"><label for="empd_entra">Entra no estoque</label><select id="empd_entra">'+
+          locaisDaLoja(paraQuem).map(function(l){return '<option value="'+esc(l)+'"'+(l===est.localEntra?" selected":"")+">"+esc(nomeLocal(l))+"</option>";}).join("")+"</select></div>"+
+      "</div>"+
+      itensEmprestimo(e).map(function(it,ix){
+        var dev=devidoDoItem(e,it);
+        if(dev<=0)return "";
+        var p=prodPorId(it.pid),serie=p&&controlaSerie(p);
+        var livres=serie?seriesLivresEmp(it.pid,est.localSai,quem):[];
+        var q=est.itens[it.pid]==null?dev:est.itens[it.pid];
+        return '<div class="sect" style="margin-top:10px"><p class="sect-t">'+esc(it.nome||"")+"</p>"+
+          '<div class="t-sub">A devolver: <b>'+dev+"</b> · no "+esc(nomeLocal(est.localSai))+" da "+esc(nomeLojaId(quem))+
+            " há "+saldoEmpresaEmp(it.pid,est.localSai,quem)+"</div>"+
+          '<div class="fld"><label for="empd_q'+ix+'">Quantas voltam agora</label>'+
+            '<input type="number" min="0" max="'+dev+'" id="empd_q'+ix+'" data-empdq="'+esc(it.pid)+'" value="'+q+'"></div>'+
+          (serie?'<div class="fld"><label for="empd_s'+ix+'">Séries que voltam (pode ser outra)</label>'+
+            '<select id="empd_s'+ix+'" data-empds="'+esc(it.pid)+'" multiple size="'+Math.min(5,Math.max(2,livres.length||2))+'">'+
+            livres.map(function(d){return '<option value="'+esc(d.serieNorm)+'">'+esc(d.serie||d.serieNorm)+"</option>";}).join("")+
+            "</select></div>":"")+"</div>";
+      }).join("")+
+      '<div class="fld"><label for="empd_obs">Observação</label><input id="empd_obs" placeholder="opcional"></div>'+
+      '<div id="empqd_alerta"></div>'+
+      '<div class="actions"><button class="btn" type="button" id="empd_ok">Registrar a devolução</button>'+
+      '<button class="btn mut" type="button" id="empd_nao">Cancelar</button></div></div>';
+    $("empd_nao").onclick=function(){m.hidden=true;};
+    $("empd_sai").onchange=function(){est.localSai=$("empd_sai").value;desenhar();};
+    $("empd_entra").onchange=function(){est.localEntra=$("empd_entra").value;};
+    Array.prototype.forEach.call(m.querySelectorAll("[data-empdq]"),function(el){
+      el.onchange=function(){est.itens[el.getAttribute("data-empdq")]=Math.max(0,parseInt(el.value,10)||0);};});
+    Array.prototype.forEach.call(m.querySelectorAll("[data-empds]"),function(el){
+      el.onchange=function(){est.series[el.getAttribute("data-empds")]=
+        [].filter.call(el.options,function(o){return o.selected;}).map(function(o){return o.value;});};});
+    $("empd_ok").onclick=async function(){
+      var itens=itensEmprestimo(e).map(function(it){
+        var q=est.itens[it.pid]==null?devidoDoItem(e,it):est.itens[it.pid];
+        return {pid:it.pid,qtd:q,series:est.series[it.pid]||[]};
+      }).filter(function(i){return i.qtd>0;});
+      var ok=await devolverEmprestimo(e.id,{itens:itens,localSai:est.localSai,localEntra:est.localEntra,obs:$("empd_obs").value});
+      if(ok){m.hidden=true;renderEmprestimos();}
+    };
+  }
+  (async function(){
+    if(quem!==lojaAtual)await carregarEstoqueOutra(quem);
+    desenhar();m.hidden=false;
+  })();
+  return true;
+}
+/* acertar como compra */
+function abrirAcertoEmp(id){
+  var e=(emprestimos||[]).filter(function(x){return x.id===id;})[0];
+  if(!e)return false;
+  if(!podeAcertarEmprestimo()){toast("Só o Administrador e o Financeiro acertam como compra.");return false;}
+  var vende=(e.de||{}).loja,compra=(e.para||{}).loja,est={itens:{},valores:{},forma:"Boleto Loja"};
+  var m=quadroEnc();
+  function desenhar(){
+    var total=0;
+    var linhas=itensEmprestimo(e).map(function(it,ix){
+      var dev=devidoDoItem(e,it);
+      if(dev<=0)return "";
+      var p=prodPorId(it.pid)||{};
+      var q=est.itens[it.pid]==null?dev:est.itens[it.pid];
+      var v=est.valores[it.pid]==null?centavos(custoTotalDe(p)):est.valores[it.pid];
+      total=centavos(total+q*v);
+      return '<div class="sect" style="margin-top:10px"><p class="sect-t">'+esc(it.nome||"")+"</p>"+
+        '<div class="grid g2"><div class="fld"><label for="empa_q'+ix+'">Quantidade (até '+dev+")</label>"+
+          '<input type="number" min="0" max="'+dev+'" id="empa_q'+ix+'" data-empaq="'+esc(it.pid)+'" value="'+q+'"></div>'+
+        '<div class="fld"><label for="empa_v'+ix+'">Valor por unidade</label>'+
+          '<input id="empa_v'+ix+'" inputmode="decimal" data-empav="'+esc(it.pid)+'" value="'+brMF(v)+'"></div></div>'+
+        '<div class="t-sub">Sugerido pelo custo do produto'+(podeVerCusto()?": "+BRL(custoTotalDe(p)):"")+"</div></div>";
+    }).join("");
+    m.innerHTML='<div class="box" style="width:min(640px,100%)"><h3>Acertar como compra · empréstimo '+esc(e.numero)+"</h3>"+
+      '<div class="sub">A '+esc(nomeLojaId(vende))+" vende para a "+esc(nomeLojaId(compra))+
+        ". O pedido <b>não baixa estoque de novo</b>, não gera comissão e fica fora da meta.</div>"+
+      (vende!==lojaAtual?'<div class="note crit" style="margin-top:12px"><b>Para acertar, abra a '+esc(nomeLojaId(vende))+"</b> no alto da tela: o pedido é dela.</div>":"")+
+      linhas+
+      '<div class="fld"><label for="empa_forma">Forma de pagamento do pedido</label><select id="empa_forma">'+
+        porNomeAZ(formasPgto).filter(function(f){return [FORMA_TROCA,FORMA_CREDITO,FORMA_INDIC,FORMA_ORC,FORMA_CRED_CLI].indexOf(f.nome)<0;})
+          .map(function(f){return '<option'+(f.nome===est.forma?" selected":"")+">"+esc(f.nome)+"</option>";}).join("")+"</select></div>"+
+      '<div class="note">Total do pedido: <b>'+BRL(total)+"</b> · o financeiro aprova e emite a nota fiscal.</div>"+
+      '<div id="empqa_alerta"></div>'+
+      '<div class="actions">'+(vende===lojaAtual?'<button class="btn" type="button" id="empa_ok">Gerar o pedido de venda</button>':"")+
+      '<button class="btn mut" type="button" id="empa_nao">'+(vende===lojaAtual?"Cancelar":"Fechar")+"</button></div></div>";
+    $("empa_nao").onclick=function(){m.hidden=true;};
+    Array.prototype.forEach.call(m.querySelectorAll("[data-empaq]"),function(el){
+      el.onchange=function(){est.itens[el.getAttribute("data-empaq")]=Math.max(0,parseInt(el.value,10)||0);desenhar();};});
+    Array.prototype.forEach.call(m.querySelectorAll("[data-empav]"),function(el){
+      el.onchange=function(){est.valores[el.getAttribute("data-empav")]=numMF(el.value);desenhar();};});
+    if($("empa_forma"))$("empa_forma").onchange=function(){est.forma=$("empa_forma").value;};
+    if($("empa_ok"))$("empa_ok").onclick=async function(){
+      var itens=itensEmprestimo(e).map(function(it){
+        var q=est.itens[it.pid]==null?devidoDoItem(e,it):est.itens[it.pid];
+        return {pid:it.pid,qtd:q,valor:est.valores[it.pid]};
+      }).filter(function(i){return i.qtd>0;});
+      var ped=await acertarEmprestimo(e.id,{itens:itens,forma:est.forma});
+      if(ped){m.hidden=true;renderEmprestimos();}
+    };
+  }
+  desenhar();m.hidden=false;
+  return true;
+}
+/* cancelar e histórico */
+function abrirCancelaEmp(id){
+  var e=(emprestimos||[]).filter(function(x){return x.id===id;})[0];
+  if(!e)return false;
+  var m=quadroEnc();
+  m.innerHTML='<div class="box" style="width:min(520px,100%)"><h3>Cancelar o empréstimo '+esc(e.numero)+"</h3>"+
+    '<div class="sub">'+esc(itensEmprestimo(e).map(function(i){return i.qtd+"× "+(i.nome||"");}).join(", "))+"</div>"+
+    '<div class="note warn" style="margin-top:12px">Nada se apaga: os movimentos são <b>desfeitos</b> com um movimento contrário, e o empréstimo fica como cancelado, com o motivo.</div>'+
+    '<div class="fld"><label for="empc_motivo">Motivo</label><input id="empc_motivo" placeholder="por que foi lançado errado"></div>'+
+    '<div id="empqc_alerta"></div>'+
+    '<div class="actions"><button class="btn nf-perigo" type="button" id="empc_ok">Cancelar o empréstimo</button>'+
+    '<button class="btn mut" type="button" id="empc_nao">Voltar</button></div></div>';
+  m.hidden=false;
+  $("empc_nao").onclick=function(){m.hidden=true;};
+  $("empc_ok").onclick=async function(){
+    var ok=await cancelarEmprestimo(e.id,$("empc_motivo").value);
+    if(ok){m.hidden=true;renderEmprestimos();}
+  };
+  return true;
+}
+function abrirHistEmp(id){
+  var e=(emprestimos||[]).filter(function(x){return x.id===id;})[0];
+  if(!e)return false;
+  var m=quadroEnc();
+  m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Empréstimo '+esc(e.numero)+"</h3>"+
+    '<div class="sub">'+esc(dataBR(e.data))+" · "+esc(nomeLojaId((e.de||{}).loja))+" → "+esc(nomeLojaId((e.para||{}).loja))+
+      " · "+esc(situacaoEmprestimo(e))+"</div>"+
+    (e.obs?'<div class="t-sub" style="margin-top:8px">'+esc(e.obs)+"</div>":"")+
+    '<div class="sect"><p class="sect-t">Histórico</p>'+
+      ((e.hist||[]).slice().reverse().map(function(h){
+        return '<div class="t-sub">'+esc(h.texto||"")+" · "+esc(h.por||"")+" em "+esc(h.quando||"")+"</div>";}).join("")||'<div class="t-sub">—</div>')+
+    "</div>"+
+    '<div class="actions"><button class="btn mut" type="button" id="emph_nao">Fechar</button></div></div>';
+  m.hidden=false;
+  $("emph_nao").onclick=function(){m.hidden=true;};
+  return true;
+}
+/* ---------- a tela ---------- */
+var empAba="aberto";
+function montarFiltrosEmp(){
+  var sd=$("empDir");
+  if(sd&&!sd.options.length){
+    var a=LOJAS[0]&&LOJAS[0].id,b=LOJAS[1]&&LOJAS[1].id;
+    sd.innerHTML='<option value="">As duas direções</option>'+
+      '<option value="'+esc(a+"-"+b)+'">'+esc(nomeLojaId(a)+" → "+nomeLojaId(b))+"</option>"+
+      '<option value="'+esc(b+"-"+a)+'">'+esc(nomeLojaId(b)+" → "+nomeLojaId(a))+"</option>";
+  }
+  var sp=$("empProd");
+  if(sp){
+    var antes=sp.value,vis={},ops=[];
+    (emprestimos||[]).forEach(function(e){
+      itensEmprestimo(e).forEach(function(i){
+        if(!i.pid||vis[i.pid])return;vis[i.pid]=1;
+        ops.push({id:i.pid,nome:(i.cod?i.cod+" · ":"")+(i.nome||"")});});
+    });
+    ops.sort(function(x,y){return String(x.nome).localeCompare(String(y.nome),"pt-BR");});
+    sp.innerHTML='<option value="">Todos</option>'+ops.map(function(o){
+      return '<option value="'+esc(o.id)+'">'+esc(o.nome)+"</option>";}).join("");
+    if(antes)sp.value=antes;
+  }
+}
+function htmlResumoEmp(){
+  var a=LOJAS[0]&&LOJAS[0].id,b=LOJAS[1]&&LOJAS[1].id;
+  function bloco(de,para){
+    var l=resumoEmprestimos(de,para);
+    var tot=l.reduce(function(x,y){return x+y.valor;},0);
+    return '<div class="sect"><p class="sect-t">A '+esc(nomeLojaId(para))+" deve à "+esc(nomeLojaId(de))+"</p>"+
+      (l.length
+        /* v610: no celular a tabela rola de lado (.tw) em vez de espremer o nome do produto */
+        ?'<div class="tw cartoes"><table><thead><tr><th>Produto</th><th class="num">A devolver</th>'+
+          (podeVerCusto()?'<th class="num">Valor de custo</th>':"")+"<th>Empréstimos</th></tr></thead><tbody>"+
+          l.map(function(x){
+            return '<tr><td data-r="Produto"><div>'+esc(x.nome)+(x.cod?'<div class="t-sub">'+esc(x.cod)+"</div>":"")+"</div></td>"+
+              '<td class="num" data-r="A devolver"><b>'+x.qtd+"</b></td>"+
+              (podeVerCusto()?'<td class="num" data-r="Valor de custo">'+BRL(x.valor)+"</td>":"")+
+              '<td data-r="Empréstimos">'+esc(x.nums.join(" · "))+"</td></tr>";}).join("")+
+          "</tbody></table></div>"+(podeVerCusto()?'<div class="t-sub" style="margin-top:6px">Total de custo: <b>'+BRL(tot)+"</b></div>":"")
+        :'<div class="note ok">Nada a devolver.</div>')+"</div>";
+  }
+  return '<div class="grid g2" style="margin-top:18px">'+bloco(a,b)+bloco(b,a)+"</div>";
+}
+function renderEmprestimos(){
+  var b=$("empCorpo");if(!b)return;
+  montarFiltrosEmp();
+  var ab=$("empAbas");
+  if(ab)Array.prototype.forEach.call(ab.querySelectorAll("[data-empa]"),function(x){
+    x.setAttribute("aria-pressed",String(x.getAttribute("data-empa")===empAba));});
+  if($("empResumo"))$("empResumo").innerHTML=htmlResumoEmp();
+  var f={direcao:($("empDir")||{}).value||"",pid:($("empProd")||{}).value||"",
+    de:($("empDe")||{}).value||"",ate:($("empAte")||{}).value||"",
+    situacao:(empAba==="hist"?"":empAba)};
+  var L=emprestimosDaDupla(f);
+  if(empAba==="aberto")L=L.filter(emprestimoAberto);
+  if(empAba==="acertado")L=L.filter(function(e){return !emprestimoAberto(e)&&e.status!=="cancelado";});
+  $("empCount").textContent=L.length+(L.length===1?" empréstimo":" empréstimos");
+  if($("empNovo"))$("empNovo").hidden=!podeEmprestimo();
+  if($("empAntigo"))$("empAntigo").hidden=!podeEmprestimo();
+  b.innerHTML=L.length
+    ?'<div class="tw cartoes"><table><thead><tr><th>Nº</th><th>Data</th><th>De → Para</th><th>Itens</th>'+
+      '<th class="num">A devolver</th><th>Situação</th><th class="nf-ac-th">Ações</th></tr></thead><tbody>'+
+      L.map(function(e){
+        var dev=devidoEmprestimo(e),sit=situacaoEmprestimo(e),ab2=emprestimoAberto(e);
+        return '<tr><td data-r="Nº"><div><b>'+esc(e.numero)+"</b>"+(e.antigo?'<div class="t-sub">lançado depois</div>':"")+"</div></td>"+
+          '<td data-r="Data">'+esc(dataBR(e.data))+"</td>"+
+          '<td data-r="De → Para"><div>'+esc(nomeLojaId((e.de||{}).loja))+" → "+esc(nomeLojaId((e.para||{}).loja))+
+            '<div class="t-sub">'+esc(nomeLocal((e.de||{}).local))+" → "+esc(nomeLocal((e.para||{}).local))+"</div></div></td>"+
+          '<td data-r="Itens"><div>'+itensEmprestimo(e).map(function(i){
+            return esc(i.qtd+"× "+(i.nome||""))+(devidoDoItem(e,i)!==i.qtd?' <span class="t-sub">('+devidoDoItem(e,i)+" a devolver)</span>":"")+
+              (i.jaNoDestino?' <span class="pill p-mut">já estava no destino</span>':"")+
+              (+i.semSaldo>0?' <span class="pill p-crit">origem sem saldo no sistema ('+i.semSaldo+")</span>":"")+
+              ((i.series||[]).length?'<div class="t-sub">série '+esc((i.series||[]).join(", "))+"</div>":"");
+            }).join("<br>")+"</div></td>"+
+          '<td class="num" data-r="A devolver"><b>'+dev+"</b></td>"+
+          '<td data-r="Situação"><div><span class="pill '+(sit==="Em aberto"?"p-warn":(sit==="Cancelado"?"p-mut":"p-ok"))+'">'+esc(sit)+"</span>"+
+            (e.acerto?'<div class="t-sub">pedido '+esc(e.acerto.numero)+(e.acerto.aprovado?" · aprovado":" · aguardando aprovação")+"</div>":"")+"</div></td>"+
+          '<td class="nf-ac-td" data-r="Ações"><div class="emp-acoes">'+
+            (ab2&&podeEmprestimo()?'<button class="btn mut sm" type="button" data-empdev="'+esc(e.id)+'">Devolver</button> ':"")+
+            (ab2&&podeAcertarEmprestimo()&&!e.acerto?'<button class="btn mut sm" type="button" data-empace="'+esc(e.id)+'">Acertar como compra</button> ':"")+
+            (ab2&&podeEmprestimo()&&!e.acerto&&!(e.devolucoes||[]).length?'<button class="btn mut sm" type="button" data-empcan="'+esc(e.id)+'">Cancelar</button> ':"")+
+            '<button class="btn mut sm" type="button" data-emphis="'+esc(e.id)+'">Histórico</button></div></td></tr>';
+      }).join("")+"</tbody></table></div>"
+    :'<div class="note ok">Nenhum empréstimo com estes filtros.</div>';
+  ligarEmprestimos();
+}
+function ligarEmprestimos(){
+  var ab=$("empAbas");
+  if(ab&&!ab.__ligado){ab.__ligado=true;
+    Array.prototype.forEach.call(ab.querySelectorAll("[data-empa]"),function(x){
+      x.onclick=function(){empAba=x.getAttribute("data-empa");renderEmprestimos();};});}
+  ["empDir","empProd","empDe","empAte"].forEach(function(id){
+    var e=$(id);if(!e||e.__ligado)return;e.__ligado=true;e.onchange=renderEmprestimos;});
+  if($("empNovo")&&!$("empNovo").__ligado){$("empNovo").__ligado=true;$("empNovo").onclick=function(){abrirEmprestimo(false);};}
+  if($("empAntigo")&&!$("empAntigo").__ligado){$("empAntigo").__ligado=true;$("empAntigo").onclick=function(){abrirEmprestimo(true);};}
+  var w=$("empCorpo");if(!w)return;
+  Array.prototype.forEach.call(w.querySelectorAll("[data-empdev]"),function(x){
+    x.onclick=function(){abrirDevolucaoEmp(x.getAttribute("data-empdev"));};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-empace]"),function(x){
+    x.onclick=function(){abrirAcertoEmp(x.getAttribute("data-empace"));};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-empcan]"),function(x){
+    x.onclick=function(){abrirCancelaEmp(x.getAttribute("data-empcan"));};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-emphis]"),function(x){
+    x.onclick=function(){abrirHistEmp(x.getAttribute("data-emphis"));};});
+}
+window.__emprestimoMF={pode:podeEmprestimo,podeAcerto:podeAcertarEmprestimo,ambas:temAmbasEmpresas,
+  render:function(){return renderEmprestimos();},aba:function(a){empAba=a;renderEmprestimos();},
+  criar:function(d){return criarEmprestimo__corpo(d);},
+  devolver:function(i,d){return devolverEmprestimo__corpo(i,d);},
+  acertar:function(i,d){return acertarEmprestimo__corpo(i,d);},
+  cancelar:function(i,m){return cancelarEmprestimo__corpo(i,m);},
+  abater:function(p){return abaterAcertoEmprestimo(p);},clienteOutra:clienteDaOutraEmpresa,
+  outra:outraLojaDe,lista:emprestimosDaDupla,resumo:resumoEmprestimos,aberto:emprestimoAberto,
+  devido:devidoEmprestimo,devidoItem:devidoDoItem,situacao:situacaoEmprestimo,
+  divida:dividaDoProduto,textoDivida:textoDividaProduto,saldo:saldoEmpresaEmp,
+  seriesLivres:seriesLivresEmp,carregarOutra:function(l){return carregarEstoqueOutra(l);},
+  locais:locaisDaLoja,proximo:proximoNumeroEmp};
 
 /* ---------- configuracao (Dados da Empresa > Ordens de Servico) ---------- */
 var OS_CFG_PADRAO={horaIni:"08:00",horaFim:"18:00",sabado:false,garantiaMao:90,taxaOrc:50,diasAbandono:90};
@@ -59553,9 +60519,13 @@ function renderPedDet(){
     '<div class="kpis" style="margin-top:18px">'+
     (verRemun?'<div class="kpi"><div class="l">Depreciado</div><div class="v">'+BRL(r.dep)+"</div></div>"+
               '<div class="kpi"><div class="l">Base de comissão</div><div class="v">'+BRL(r.base)+"</div></div>":"")+
-    '<div class="kpi"><div class="l">'+(p.status==="Cancelada"?"Era do estoque de ":(vendaPendente(p)?"Reservado no estoque de ":"Baixado do estoque de "))+
+    /* v610: o pedido do acerto de empréstimo não mexe em estoque nenhum — o produto já saiu
+       quando foi emprestado. No lugar do quadro de estoque, a ficha diz isso. */
+    (p.entreEmpresas
+      ?'<div class="kpi"><div class="l">Acerto de empréstimo</div><div class="v" style="font-size:16px">o estoque não mexe</div></div></div>'
+      :'<div class="kpi"><div class="l">'+(p.status==="Cancelada"?"Era do estoque de ":(vendaPendente(p)?"Reservado no estoque de ":"Baixado do estoque de "))+
       esc(nomeLocal(localDaVenda(p)))+'</div><div class="v">'+
-      pedRasc.itens.reduce(function(a,i){return a+(i.qtd||1);},0)+" un.</div></div></div>"+
+      pedRasc.itens.reduce(function(a,i){return a+(i.qtd||1);},0)+" un.</div></div></div>")+
     ((p.arquivos||[]).length?'<div style="margin-top:14px"><div class="t-sub"><b>Anexos da venda</b> — toque para ver</div>'+htmlAnexosMini(p)+"</div>":"")+
     /* Retirada de estoque: na consulta do pedido só aparece quando ainda ATRAPALHA — pendente do
        responsável pelo estoque ou recusada —, porque é ela que trava a aprovação do financeiro
@@ -59638,6 +60608,7 @@ function renderPedDet(){
        stp.indexOf("desconto")>=0?"Venda abaixo da tabela: o Administrador precisa autorizar e escolher a tabela da comissão antes de seguir."+
          (p.solicitacaoDesconto?"<br>Motivo de "+esc(p.solicitacaoDesconto.por)+": "+esc(p.solicitacaoDesconto.motivo):""):
        stp.indexOf("instalação")>=0?"Abra a instalação para ver a venda, incluir o que foi usado a mais, escrever as observações e finalizar — a venda vai para a Aprovação Financeira.":
+       p.entreEmpresas?"Acerto de empréstimo entre as empresas: o estoque não mexe e não há comissão. O financeiro aprova e emite a nota fiscal; as parcelas nascem na aprovação.":
        "O estoque está só reservado. A baixa, as parcelas e a comissão acontecem quando o financeiro aprovar o recebimento.")+
       (ed?"<br><b>Dá para editar esta venda até o financeiro aprovar</b> — depois disso ela trava. Toque em "+
           "<b>Editar o pedido</b>: ele volta às sete etapas, com tudo preenchido, inclusive a assinatura do cliente."
@@ -59686,7 +60657,8 @@ function renderPedDet(){
         (p.assinaturaLink.quando?" em "+esc(dataBR(String(p.assinaturaLink.quando).slice(0,16).replace("T"," "))):"")+
         (p.assinaturaLink.nome?" · "+esc(p.assinaturaLink.nome):"")+
         (p.assinaturaLink.doc?" · "+esc(p.assinaturaLink.doc):"")+".":"")+"</div>";
-  else if(p.encerrada||p.status)
+  /* v610: acerto de empréstimo é entre as duas empresas — não há cliente para assinar */
+  else if((p.encerrada||p.status)&&!p.entreEmpresas)
     av+='<div class="note warn"><b>Sem assinatura do cliente.</b> Abra o <b>PDF da venda</b> e use "Coletar assinatura do cliente", '+
       'ou mande o <b>Link para o cliente assinar</b> — ele assina pelo celular e a assinatura volta para cá.</div>';
   if(p.instalacaoAgora&&!p.instalacao)
@@ -60132,6 +61104,9 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm,cxFormas){
     p.encerrada=true;p.status="Aprovada";p.devolucaoFin=null;
     /* v584: aprovado, o direito é baixado de vez */
     try{await mudarStatusIndicacoes(p,"usada","indicações baixadas na aprovação");}catch(eMi){console.warn("indicações",eMi);}
+    /* v610: o pedido de acerto abate a dívida do empréstimo */
+    try{if(p.entreEmpresas)await abaterAcertoEmprestimo(p);}
+    catch(eAe){console.warn("acerto do empréstimo",eAe);}
     /* v608: o crédito do cliente é baixado na aprovação */
     try{await usarCreditoCliente(p);}
     catch(eCc){setTimeout(function(){toast("Atenção: o crédito do cliente do pedido "+p.numero+" não foi baixado ("+motivoBanco(eCc)+").");},2600);}
@@ -66856,7 +67831,10 @@ var GRUPOS_TELA=[
     ["estEmpresa","Estoques · visão completa (Demandas do Estoque, Saldo, Histórico, Inventário, Recuperações)"],
     ["estConsumo","Uso e consumo"],["ferramentas","Ferramentas"],
     /* v605: a tela das vendas sob encomenda — quem vê é quem tem a AÇÃO "Encomendas" */
-    ["estEncomendas","Encomendas (venda sob encomenda)"]]},
+    ["estEncomendas","Encomendas (venda sob encomenda)"],
+    /* v610: a tela do empréstimo entre as empresas — quem vê é o almoxarifado com acesso às
+       duas empresas e o Administrador (regra fixa, fora da marcação) */
+    ["estEmprestimos","Empréstimos entre empresas"]]},
   {g:"Gestão Administrativa",telas:[["fin","Aprovação Financeira"],["fornec","Cadastro Fornecedores"],
     ["caixas","Caixas"],["concil","Conciliação"],["pagar","Contas a Pagar"],["receber","Contas a Receber"],
     ["notas","Entrada de Notas Fiscais"],["faturamento","Faturamento"],["fluxo","Fluxo de Caixa"],
@@ -67363,6 +68341,10 @@ function veTela(s,quem){
   if(s==="estTransicao")return perfilDe(n)==="Administrador";
   /* v605: Encomendas vai pela AÇÃO "encomendas" (o Administrador tem sempre) */
   if(s==="estEncomendas")return podeEncomendas(n);
+  /* v610: Empréstimos entre empresas — só o almoxarifado com as DUAS empresas e o Adm */
+  /* v610: o almoxarifado com as duas empresas e o Administrador trabalham a tela inteira;
+     o Financeiro entra só para acertar como compra (os outros botões já não aparecem para ele) */
+  if(s==="estEmprestimos")return podeEmprestimo(n)||podeAcertarEmprestimo(n);
   /* v592: as Datas da empresa também são só do Administrador */
   if(s==="datasemp")return perfilDe(n)==="Administrador";
   /* v567: a lista da peça instalada sem venda aprovada também é só do Administrador */
@@ -71439,6 +72421,20 @@ function avisosDoTrabalho(){
         ir:function(){if(podeEncomendas())ir("estEncomendas");else{ir("pedidos");try{abrirPedido(x.p);}catch(e){}}}});
     });
   }catch(eEnc){console.warn("encomendas no sino",eEnc);}
+  /* v610: empréstimo entre empresas em aberto há mais de 30 dias */
+  try{
+    if(podeEmprestimo()){
+      var limite=somaDias(hojeISO(),-DIAS_EMPRESTIMO_AVISO);
+      emprestimosDaDupla({situacao:"aberto"}).filter(function(e){return String(e.data||"")<=limite;})
+        .slice(0,8).forEach(function(e){
+          L.push({chave:"empvelho:"+e.id,icone:"🔁",
+            titulo:"Empréstimo "+e.numero+" em aberto há mais de "+DIAS_EMPRESTIMO_AVISO+" dias",
+            texto:"A "+nomeLojaId((e.para||{}).loja)+" deve "+devidoEmprestimo(e)+" item(ns) à "+
+              nomeLojaId((e.de||{}).loja)+" · "+itensEmprestimo(e).map(function(i){return i.nome;}).join(", "),
+            quando:e.data,ir:function(){ir("estEmprestimos");}});
+        });
+    }
+  }catch(eEm){console.warn("empréstimos no sino",eEm);}
   /* v608: nota de devolução a emitir, para o Financeiro e o Administrador */
   try{
     if(podeNotaFiscalVenda())pedidosComNotaDevolucao().slice(0,8).forEach(function(p){
@@ -72650,6 +73646,7 @@ function render(){
   desenhaTela("estAguardando",renderPecasAguardando);
   desenhaTela("estContagem",renderContagemEstoque);
   desenhaTela("estEncomendas",renderEncomendas);
+  desenhaTela("estEmprestimos",renderEmprestimos);
   desenhaTela("notas",function(){try{ligarAbasNF();mostrarAbaNF();}catch(eAb){}});
     desenhaTela("estConsumo",renderEstConsumo);desenhaTela("estEntrada",renderEntradas);
     opcoesFinanceiro();checarAgenda();
