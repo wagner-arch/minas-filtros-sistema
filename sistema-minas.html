@@ -18907,25 +18907,37 @@ async function aplicarPlanoAvulso(ped){
   }
   return feitos;
 }
+/* v611: o campo "Número de série" aparece conforme o PRODUTO escolhido — a regra saiu de dentro
+   do sincronizarValor para cá, porque a troca do estoque (sair de "Sob encomenda") precisa dela */
+function mostrarSerieConformeProduto(){
+  var p=prodPorId($("v_prod")?$("v_prod").value:"");
+  if(!$("v_serie"))return;
+  if(!p){
+    $("v_serie").value="";$("v_serie").disabled=true;$("v_serie").placeholder="escolha o produto";
+    if($("v_serieWrap"))$("v_serieWrap").hidden=vendaNova();
+    return;
+  }
+  /* número de série só para os grupos marcados em Configurações › Planos de Garantia › Número de série */
+  var sg=pedeSerieProduto(p);
+  if($("v_serieWrap"))$("v_serieWrap").hidden=!sg;
+  /* v517 (tela nova): o número de série só aparece em purificador (ou quando o produto o exige) */
+  try{if(sg&&vendaNova()&&!ehPurificador({pid:p.id,nome:p.nome})&&String(p.serie)!=="sim")$("v_serieWrap").hidden=true;}catch(eSn){}
+  $("v_serie").disabled=!sg;
+  if(!sg)$("v_serie").value="";
+  $("v_serie").placeholder=!sg?"este produto não pede série":(String(p.serie)==="sim"?"obrigatório":"leia o código ou digite");
+}
 function sincronizarValor(){
   var p=prodPorId($("v_prod").value);
   if($("v_valor"))$("v_valor").__manual=false;
-  if(p){$("v_valor").value=brMF(precoPelaForma(precoTabela(p),qtdDoForm(),tabelaTotalVenda(true)));notaPrecoForma(p);
-    /* número de série só para os grupos marcados em Configurações › Planos de Garantia › Número de série */
-    var sg=pedeSerieProduto(p);
-    if($("v_serieWrap"))$("v_serieWrap").hidden=!sg;
-    /* v517 (tela nova): o número de série só aparece em purificador (ou quando o produto o exige) */
-    try{if(sg&&vendaNova()&&!ehPurificador({pid:p.id,nome:p.nome})&&String(p.serie)!=="sim")$("v_serieWrap").hidden=true;}catch(eSn){}
-    $("v_serie").disabled=!sg;
-    if(!sg)$("v_serie").value="";
-    $("v_serie").placeholder=!sg?"este produto não pede série":(String(p.serie)==="sim"?"obrigatório":"leia o código ou digite");}
-  else{$("v_valor").value="";$("v_serie").value="";$("v_serie").disabled=true;$("v_serie").placeholder="escolha o produto";
-    if($("v_serieWrap"))$("v_serieWrap").hidden=vendaNova();
+  mostrarSerieConformeProduto();
+  if(p){$("v_valor").value=brMF(precoPelaForma(precoTabela(p),qtdDoForm(),tabelaTotalVenda(true)));notaPrecoForma(p);}
+  else{$("v_valor").value="";
     try{$("v_precoNota").innerHTML="";mostrarValorFinal(null);}catch(e){}}
   ajustarEquipItem();
   try{montarPlanoAvulso();}catch(ePa){console.warn("plano avulso",ePa);}
   /* de qual estoque este item sai, com o saldo de cada um (23/10) */
   try{opcoesEstoqueItem();notaEstoqueItem();}catch(e){}
+  try{ajustarSelecaoSerieVenda();}catch(e){}   /* v611: encomenda esconde a série */
   try{renderEndDoEquipVenda();}catch(e){}
   opcoesGarantia();
   notaGarantia();
@@ -19646,6 +19658,15 @@ function ajustarSelecaoSerieVenda(){
   var sel=$("v_serieSel"),inp=$("v_serie"),nota=$("v_serieNota");
   if(!sel||!inp||!nota)return;
   var p=prodPorId($("v_prod")?$("v_prod").value:"");
+  /* v611 (pedido dele): com "Sob encomenda" escolhido não há série para informar — ela só
+     existe quando o produto chega da fábrica. O campo sai da frente e o que já tinha sido
+     digitado é apagado; voltando para outro estoque, tudo volta ao normal. */
+  if(encEscolhidaNoForm()){
+    inp.value="";sel.hidden=true;inp.hidden=false;
+    nota.innerHTML="A série é escolhida quando o produto chegar.";nota.hidden=false;
+    var wS=$("v_serieWrap");if(wS)wS.hidden=true;
+    return;
+  }
   function livre(){sel.hidden=true;inp.hidden=false;inp.readOnly=false;}
   if(!p||!controlaSerie(p)){livre();nota.hidden=true;return;}
   if(!seriesLidas){
@@ -19699,6 +19720,9 @@ function addItem(){
   var p=prodPorId($("v_prod").value);
   if(!p){toast("Escolha o produto.");try{$("v_prod_busca").focus();}catch(e){}return;}
   if(p.grupo==="Planos")return addPlanoAvulso(p);
+  /* v611: "Sob encomenda" escolhido no campo do estoque — o item não sai de estoque nenhum e
+     a série só existe quando o produto chegar da fábrica */
+  var ehEncForm=encEscolhidaNoForm();
   var gar=$("v_gar").value, serie=pedeSerieProduto(p)?$("v_serie").value.trim():"", qtd=parseInt($("v_qtd").value,10)||0;
   if(!(qtd>=1)){toast("Informe a quantidade.");try{$("v_qtd").focus();}catch(e){}return;}
   var equipId=($("v_equip")&&!$("v_equipWrap").hidden)?$("v_equip").value:"";
@@ -19728,7 +19752,7 @@ function addItem(){
   }
   /* série: continua sendo pedida, mas NÃO trava a venda (regra do Wagner, 18/09: "tem que ser
      simples"). Só o item com plano de garantia exige mesmo — o plano é amarrado pela série. */
-  if(!aparelhoAcompanhadoProd(p)&&String(p.serie)==="sim"&&pedeSerieProduto(p)&&!serie){
+  if(!ehEncForm&&!aparelhoAcompanhadoProd(p)&&String(p.serie)==="sim"&&pedeSerieProduto(p)&&!serie){
     var gar=$("v_gar")?$("v_gar").value:"";
     var comPlano=!!(gar&&gar!=="Bronze"&&planoDaGarantia(gar));
     if(comPlano){toast("Com plano "+gar+", o número de série é obrigatório — é por ele que o plano fica amarrado ao aparelho.");return;}
@@ -19738,8 +19762,9 @@ function addItem(){
      venda" do almoxarifado. Com o estoque negativo permitido, o item sai do estoque escolhido
      e ele fica negativo; a reposição é pedida depois da aprovação financeira. Desligado, o
      item não entra. (A janela de 14/09 e a retirada antiga continuam só para o histórico.) */
-  var faltaEst=faltaEstoqueVenda(p,qtd),avisoNegItem="";
-  /* 03/11: na regra nova a venda não fica negativa — o estoque é conferido na revisão */
+  /* v611: escolhido "Sob encomenda" no campo de estoque, o item nem passa por aqui — ele não
+     sai de estoque nenhum, então não há saldo que falte nem negativo para avisar */
+  var faltaEst=ehEncForm?0:faltaEstoqueVenda(p,qtd),avisoNegItem="";
   if(faltaEst>0&&(!regraNovaEstoque()||localItemForm()===LOC_EMPRESA)){
     var locF=localItemForm();
     var ficaF=saldoEm(p.id,locF)-((reservasDe(locF)[p.id])||0)-noCarrinhoDe(p.id,locF)-qtd;
@@ -19822,13 +19847,21 @@ function addItem(){
   }catch(eGa){console.warn("garantia da OS",eGa);}
   /* de qual estoque sai cada linha que acabou de entrar (23/10). O item do PLANO e o
      SERVIÇO ficam de fora: eles não têm estoque. */
+  /* v611: a escolha "Sob encomenda" vale para o que acabou de entrar — o produto principal e
+     o que vem junto com ele. Plano e serviço nunca viram encomenda, e o marcador já recusa. */
+  var nomesEnc=[];
+  if(ehEncForm)for(var ie=idxAntes;ie<itens.length;ie++){
+    var itE=itens[ie];
+    if(!itE||ehPlano(itE)||ehServico(itE))continue;
+    if(marcarItemEncomenda(itE,true))nomesEnc.push((itE.qtd||1)+"× "+itE.nome);
+  }
   var locEst=localItemForm(),euEst=euNoEstoque();
   var estAuto=regraNovaEstoque()&&String(($("v_estoque")||{}).value||"meu")==="meu";
   var precisaAut=!estAuto&&precisaAutorizacaoEstoque(locEst,euEst);
   var pedeAut=[];
   for(var ia=idxAntes;ia<itens.length;ia++){
     var itA=itens[ia];
-    if(!itA||ehPlano(itA)||ehServico(itA))continue;
+    if(!itA||ehPlano(itA)||ehServico(itA)||ehEncomenda(itA))continue;   /* v611 */
     if(regraNovaEstoque()){
       /* 03/11: o item novo fica marcado; no "Automático" o estoque é decidido na revisão */
       itA.estNovo=true;
@@ -19858,9 +19891,14 @@ function addItem(){
   }
   $("v_serie").value="";$("v_local").value="";zerarPerguntaPlano();zerarCobertaPlano();render();
   limparInclusao("v_prod","v_qtd",["v_valor"]);
+  /* v611: o campo do estoque volta ao padrão para o próximo item — a escolha "Sob encomenda"
+     é de um item, não fica pendurada para o seguinte */
+  try{var sE=$("v_estoque");if(sE&&sE.value===EST_SOB_ENCOMENDA)sE.value="meu";
+    opcoesEstoqueItem();notaEstoqueItem();}catch(eE){}
   ajustarEquipItem();
   try{renderEndDoEquipVenda();}catch(e){}
-  if(nomesJuntos.length)toast(p.nome+" vem com "+nomesJuntos.join(" e ")+
+  if(nomesEnc.length)toast(nomesEnc.join(" e ")+" entrou SOB ENCOMENDA: não sai do estoque agora.");
+  else if(nomesJuntos.length)toast(p.nome+" vem com "+nomesJuntos.join(" e ")+
     " — já estão na lista. Se o cliente não quiser, é só remover.");
   else if(msgPlano)toast(msgPlano);
 }
@@ -21389,9 +21427,10 @@ function calcular(){
         seloEstoqueItem(i)+
         /* v605: SOB ENCOMENDA — o item é vendido antes de chegar da fábrica */
         (ehEncomenda(i)?" "+pillEnc(i):"")+
-        (podeSerEncomenda(i)
-          ? ' <button class="btn ghost sm" type="button" data-encmk="'+idx+'">'+
-            (ehEncomenda(i)?"Tirar de sob encomenda":"Sob encomenda")+"</button>"
+        /* v611 (pedido dele): a encomenda se escolhe ANTES de adicionar, no campo "Sai de qual
+           estoque". Na linha fica só o desfazer, para corrigir erro. */
+        (ehEncomenda(i)
+          ? ' <button class="btn ghost sm" type="button" data-encmk="'+idx+'">Tirar de sob encomenda</button>'
           : "")+
         /* produto composto (v248): diz de onde a linha veio, para o vendedor saber o que pode tirar */
         (i.vemCom?' · <span class="pill p-acc">vem com '+esc(i.vemComNome||"o produto principal")+"</span>":"")+
@@ -24201,7 +24240,9 @@ function podeAutorizarEstoque(loc,quem){
 /* o estoque escolhido no campo "Sai de" da linha do item; "meu" é o de quem entrega */
 function localItemForm(){
   var e=$("v_estoque"),v=e?String(e.value||""):"";
-  if(!v||v==="meu")return regraNovaEstoque()?estoquePadraoVenda():localVendaForm();
+  /* v611: "enc" (sob encomenda) não é estoque nenhum — o item nem passa pela máquina do
+     estoque. Vale o padrão, para nenhuma conta antiga receber um local que não existe. */
+  if(!v||v==="meu"||v===EST_SOB_ENCOMENDA)return regraNovaEstoque()?estoquePadraoVenda():localVendaForm();
   return v;
 }
 /* Autorizar ou recusar a saída do estoque. Autorizando, a saída é lançada na Aprovação
@@ -25111,8 +25152,65 @@ function rotuloEstoqueVenda(loc,vend,ins,comInst){
   }
   return nomeLocal(loc);
 }
+/* ===== v611 (25/11, pedido dele): "Sob encomenda" se escolhe ANTES de adicionar o item, no
+   mesmo campo de onde ele sai — "Sai de qual estoque". Era só um botão na linha, depois de
+   adicionado; agora é a última opção da lista, e o item já entra marcado. O botão da linha
+   continua, para marcar ou desmarcar depois. ===== */
+var EST_SOB_ENCOMENDA="enc";
+function produtoDoFormVenda(){
+  var sel=$("v_prod");
+  return sel?prodPorId(sel.value):null;
+}
+/* o produto escolhido no formulário pode ser encomenda? */
+function formPodeEncomenda(){
+  var p=produtoDoFormVenda();
+  if(!p)return false;
+  if(p.grupo==="Planos")return false;
+  return podeSerEncomenda({pid:p.id,nome:p.nome,cod:p.cod});
+}
+/* v611: TODOS os estoques da empresa aberta — almoxarifado, Loja e as caixinhas dos
+   colaboradores. Não é a lista da tela Saldo (aquela depende de quem está olhando): aqui
+   interessa se existe a peça em algum lugar da empresa. */
+function locaisDaEmpresaEst(){
+  var L=[LOC_EMPRESA,locLoja(lojaAtual)];
+  try{colabsComEstoque().forEach(function(nm){var l=locColab(nm);if(L.indexOf(l)<0)L.push(l);});}catch(e){}
+  return L;
+}
+function semEstoqueNaEmpresa(pid){
+  if(!pid)return false;
+  return locaisDaEmpresaEst().every(function(l){return (saldoEm(pid,l)||0)<=0;});
+}
+function encEscolhidaNoForm(){
+  var e=$("v_estoque");
+  return !!(e&&String(e.value||"")===EST_SOB_ENCOMENDA&&formPodeEncomenda());
+}
+/* acrescenta (ou tira) a opção no fim da lista, seja qual for o caminho que a montou */
+function opcaoEncomendaEst(){
+  var s=$("v_estoque");if(!s)return;
+  var ja=null;
+  Array.prototype.forEach.call(s.options,function(o){if(o.value===EST_SOB_ENCOMENDA)ja=o;});
+  if(!formPodeEncomenda()){
+    if(ja){var era=(s.value===EST_SOB_ENCOMENDA);ja.parentNode.removeChild(ja);if(era)s.value="meu";}
+    return;
+  }
+  if(!ja){
+    ja=document.createElement("option");
+    ja.value=EST_SOB_ENCOMENDA;ja.textContent="Sob encomenda (ainda não chegou da fábrica)";
+    s.appendChild(ja);
+  }
+  /* o campo aparece mesmo quando a venda tem instalação: senão não haveria onde escolher
+     a encomenda, que não sai de estoque nenhum */
+  var w=$("v_estoqueWrap");if(w&&w.hidden)w.hidden=false;
+}
 /* monta o campo "Sai de qual estoque": o meu, o da loja aberta e os dos colegas */
 function opcoesEstoqueItem(){
+  var antEnc=(($("v_estoque")||{}).value===EST_SOB_ENCOMENDA);
+  opcoesEstoqueItem__base();
+  opcaoEncomendaEst();
+  if(antEnc&&formPodeEncomenda()){try{$("v_estoque").value=EST_SOB_ENCOMENDA;}catch(e){}
+    var w=$("v_estoqueWrap");if(w)w.hidden=false;}
+}
+function opcoesEstoqueItem__base(){
   var s=$("v_estoque");if(!s)return;
   var ant=String(s.value||""),eu=euNoEstoque();
   s.innerHTML="";
@@ -25186,8 +25284,18 @@ function notaEstoqueItem(){
     el.innerHTML="Plano e serviço não têm estoque — este campo não vale para eles.";
     return;
   }
+  /* v611: escolhida a encomenda, não há saldo nenhum a mostrar — o produto vem da fábrica */
+  if(encEscolhidaNoForm()){
+    el.innerHTML="<b>O item entra como encomenda: não precisa ter estoque.</b>";
+    return;
+  }
+  /* v611: a peça não existe em lugar nenhum da empresa — só avisa; quem escolhe é o vendedor */
+  var semEst=(formPodeEncomenda()&&semEstoqueNaEmpresa(p.id))
+    ? '<div class="note warn" style="margin:6px 0"><b>Sem estoque na empresa.</b> Se for vender assim, escolha "Sob encomenda".</div>'
+    : "";
   var ops=[],s=$("v_estoque");
   if(s)Array.prototype.forEach.call(s.options,function(o){
+    if(o.value===EST_SOB_ENCOMENDA){if(!o.__base)o.__base=o.textContent;o.textContent=o.__base;return;}
     var lc=(o.value==="meu")?(regraNovaEstoque()?estoquePadraoVenda():localVendaForm()):o.value;
     var disp=saldoEm(p.id,lc)-((reservasDe(lc)[p.id])||0)-noCarrinhoDe(p.id,lc);
     /* o saldo vai no próprio texto da opção (30/10): "Meu estoque · 0 · Guilherme · 3" */
@@ -25206,7 +25314,7 @@ function notaEstoqueItem(){
   if(regraNovaEstoque()&&loc!==LOC_EMPRESA){
     /* v595: estoque que quem vende tem permissão sai DIRETO — nunca volta a autorização de terceiro */
     var avI=avisoEntregaVenda(loc);
-    el.innerHTML=linha+"<br>"+textoEstItemNovo(loc,String((s&&s.value)||"meu")==="meu",aut&&!origemPermitidaVenda(loc),dono)+
+    el.innerHTML=semEst+linha+"<br>"+textoEstItemNovo(loc,String((s&&s.value)||"meu")==="meu",aut&&!origemPermitidaVenda(loc),dono)+
       (avI?"<br><b>"+esc(avI)+"</b>":"");
     return;
   }
@@ -25218,7 +25326,7 @@ function notaEstoqueItem(){
           :" — a reposição será pedida ao almoxarifado depois da aprovação.")
         : "Não tem saldo: o estoque negativo está desligado. Escolha um estoque com saldo.")+"</div>";
   }
-  el.innerHTML=linha+avNeg+"<br>"+(aut
+  el.innerHTML=semEst+linha+avNeg+"<br>"+(aut
     ? ('<span class="pill p-warn">precisa de autorização</span> '+
        (dono?esc(dono)+" responde por este estoque e vai receber o pedido quando a venda for salva"+
              (responsaveisDoEstoque(loc).length>1?" — o primeiro que responder decide.":".")
@@ -25229,6 +25337,8 @@ function notaEstoqueItem(){
 /* "vai ficar −N" na linha do item do pedido em montagem (30/10) */
 function pillNegItem(i){
   if(!i||!i.pid||ehPlano(i)||ehServico(i)||i.planoCobre)return "";
+  /* v611: o item sob encomenda não sai de estoque nenhum — nada fica negativo por causa dele */
+  if(ehEncomenda(i))return "";
   /* item da regra de 03/11: nada fica negativo, de onde sai aparece na revisão */
   if(i.estNovo)return i.usoEstoque&&+i.usoEstoque.req>0?' · <span class="pill p-acc">requisição de '+i.usoEstoque.req+"</span>":"";
   var loc=i.estoque||localVendaForm();
@@ -76755,7 +76865,14 @@ function ligar(){
   $("v_prod").onchange=sincronizarValor;$("v_add").onclick=addItem;
   if($("v_paEquip"))$("v_paEquip").onchange=function(){aoEscolherAparelhoPlano(true);};
   /* o estoque de onde o item sai (23/10): trocar refaz a nota dos saldos */
-  if($("v_estoque"))$("v_estoque").onchange=function(){try{notaEstoqueItem();}catch(e){}try{ajustarSelecaoSerieVenda();}catch(e){}};
+  if($("v_estoque"))$("v_estoque").onchange=function(){
+    try{notaEstoqueItem();}catch(e){}
+    /* v611: saindo da encomenda, o campo da série volta a obedecer ao produto escolhido */
+    try{mostrarSerieConformeProduto();}catch(e){}
+    try{ajustarSelecaoSerieVenda();}catch(e){}
+    /* a localização depende da série: entrando na encomenda a série é apagada, então o
+       campo da localização tem de voltar à tela (é ele que identifica o aparelho) */
+    try{ajustarLocalItem();}catch(e){}};
   /* trocar o prospector (só quem pode): pede o motivo, que vai para o histórico (30/10) */
   if($("v_prosp"))$("v_prosp").addEventListener("change",function(){
     var s=$("v_prosp");s.__manual=(s.value!==(s.__base||""));
