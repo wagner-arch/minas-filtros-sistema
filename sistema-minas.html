@@ -3280,6 +3280,8 @@ img{max-width:100%}
               <div class="r sep"><span>Depreciação do parcelamento</span><span id="o_desc">—</span></div>
               <div class="r"><span>Recebido líquido (valor presente)</span><span id="o_liq">—</span></div>
             </div>
+            <!-- v606: venda sob encomenda paga com SINAL -->
+            <label class="nf-chk" id="v_sinalBox" hidden><input type="checkbox" id="v_sinal"> Pagamento com sinal (o resto fica como saldo da encomenda)</label>
             <div id="o_alertaPag"></div>
           </div>
           <div class="card vstep" data-s="2" id="v_itensCard">
@@ -5296,7 +5298,8 @@ img{max-width:100%}
         </div>
       </div>
       <div class="card">
-        <div class="filtros">
+        <!-- v606: no computador os quatro filtros ficam lado a lado; no celular, um embaixo do outro -->
+        <div class="grid g4">
           <div class="fld"><label for="encSit">Situação</label><select id="encSit"></select></div>
           <div class="fld"><label for="encProd">Produto</label><select id="encProd"></select></div>
           <div class="fld"><label for="encBusca">Buscar</label><input id="encBusca" placeholder="produto, cliente, pedido ou vendedor"></div>
@@ -21136,6 +21139,10 @@ function calcular(){
       "paga nessa forma: esse valor entra sem juros e só o que sobrar da tabela segue pela forma "+
       "com juros. Enquanto estiver em branco, não dá para incluir itens.</div>";
   }
+  else if(sinalLigadoVenda()&&dif>0.009&&dif<totalVenda-0.009)
+    $("o_alertaPag").innerHTML='<div class="note ok"><b>Venda com sinal.</b> O cliente paga agora '+BRL(centavos(totalVenda-dif))+
+      " e ficam <b>"+BRL(dif)+"</b> como <b>saldo da encomenda</b>, no Contas a Receber, com vencimento na previsão de chegada."+
+      " A comissão, a meta e o faturamento entram proporcionais ao que foi pago; o restante entra quando o saldo for pago.</div>";
   else if(vendaNova())$("o_alertaPag").innerHTML = (totalBase>0&&dif!==0)
     ? '<div class="note crit"><b>O pagamento não bate com o total: '+(dif>0?"faltam "+BRL(dif):"sobram "+BRL(-dif))+
       ".</b> Acerte os valores das formas — o pedido só finaliza quando bater com o total ("+BRL(totalVenda)+").</div>" : "";
@@ -21144,6 +21151,15 @@ function calcular(){
       ".</b> O que está repartido nas formas precisa fechar com o <b>total base da venda</b> ("+BRL(totalBase)+")."+
       "</div>" : "";
 
+  /* v606: a caixinha do sinal só existe quando há item sob encomenda na venda */
+  try{
+    var bxS=$("v_sinalBox");
+    if(bxS){
+      var temE=(itens||[]).some(ehEncomenda);
+      bxS.hidden=!temE;
+      if(!temE&&$("v_sinal"))$("v_sinal").checked=false;
+    }
+  }catch(eSn){}
   $("c_dep").textContent=BRL(dep);
   $("c_formula").textContent=partes.length?partes.join("  +  "):"—";
   try{notaIndicacaoVenda();}catch(eNi){}
@@ -22158,7 +22174,11 @@ async function salvarPedidoAgora(){
   /* v553: com pendência, dizer qual */
   if(pendVendaForm().tem&&!pendVendaForm().texto){toast("Venda com pendência: escreva qual é a pendência.");
     irEtapa(6);try{$("v_pendTexto").focus();}catch(ePd){}return;}
-  if(r.dif!==0){toast(vendaNova()?("O pagamento não bate com o total: "+(r.dif>0?"faltam "+BRL(r.dif):"sobram "+BRL(-r.dif))+"."):"O que está repartido nas formas não fecha com o total base da venda.");irEtapa(2);return;}
+  /* v606: com SINAL, o que falta não é erro — vira o saldo da encomenda */
+  var sinalOK=sinalLigadoVenda()&&r.dif>0.009&&r.dif<(+r.total||0)-0.009;
+  if(sinalLigadoVenda()&&!sinalOK&&r.dif>0.009){
+    toast("O sinal precisa ser maior que zero e menor que o total da venda.");irEtapa(2);return;}
+  if(r.dif!==0&&!sinalOK){toast(vendaNova()?("O pagamento não bate com o total: "+(r.dif>0?"faltam "+BRL(r.dif):"sobram "+BRL(-r.dif))+"."):"O que está repartido nas formas não fecha com o total base da venda.");irEtapa(2);return;}
   /* v517 (tela nova): frete respondido com valor, e plano pago em purificador novo com o número de série */
   if(vendaNova()){
     if(freteVN.tem==="sim"&&(!freteVN.quem||!(+freteVN.valor>0))){toast("Frete: diga quem paga e o valor (ou marque que não tem frete).");irEtapa(2);return;}
@@ -22334,6 +22354,8 @@ async function salvarPedidoAgora(){
        O lançamento na remuneração dele só nasce quando ELE finaliza, com assinatura e foto. */
     prestadorId:(ehValorPrest(valorIresp())?idDoValorPrest(valorIresp()):""),
     creditoPlano:(credV>0?montarCreditoPlano(cliSel.id,credV):null)};
+  /* v606: venda sob encomenda paga com sinal — o que falta vira o saldo da encomenda */
+  ped.sinalEnc=!!(sinalLigadoVenda()&&r.dif>0.009);
   ped.assinado=!!ped.assinaturaImg;
   /* v517: quem pagou o frete (o pedido antigo, sem o campo, vale como "cliente") e, a partir de
      hoje, o frete fica fora da meta de faturamento (freteForaMeta) */
@@ -25509,8 +25531,10 @@ async function mudarPrevisaoEnc__corpo(chave,nova,motivo){
     " para "+(nv?dataBR(nv):"— sem previsão —")+(motivo?" · "+motivo:""));
   try{await gravaConf("pedidos",p);}
   catch(eG){voltarReg(p,guarda);return avisarRecusaBanco("enc_alerta",eG,"A previsão não foi salva.");}
-  toast("Previsão alterada.");
-  try{renderEncomendas();renderPedDet();}catch(e2){}
+  try{if(await ajustarVencSaldoEnc(p))toast("Previsão alterada · o vencimento do saldo acompanhou.");
+      else toast("Previsão alterada.");}
+  catch(eV){toast("Previsão alterada.");}
+  try{renderEncomendas();renderPedDet();renderReceber();}catch(e2){}
   return true;
 }
 /* o comprovante da encomenda, para o vendedor mandar se quiser (nada é enviado sozinho) */
@@ -25693,6 +25717,668 @@ function abrirPrevisaoEnc(chave){
   };
   return true;
 }
+/* ============ v606 (25/11, pedido dele): SINAL, SALDO E COMISSÃO PROPORCIONAL ============
+   O pedido com item sob encomenda pode ser pago por inteiro ou COM SINAL. Marcado o sinal
+   (`p.sinalEnc`), as formas de pagamento são o que o cliente paga AGORA e o que falta vira um
+   título a receber "Saldo da encomenda · pedido N", ligado ao pedido (`t.encSaldo`), com
+   vencimento na PREVISÃO DE CHEGADA (decisão dele) — que acompanha quando a previsão muda.
+   O financeiro aprova a venda só com o sinal e informa a nota fiscal mesmo com saldo em aberto.
+   COMISSÃO: na aprovação fica gravada a proporção paga (`p.encProporcao` = pago ÷ total), e ela
+   vale para comissão, meta e faturamento — é o `fatorPagoVenda` dentro do valor depreciado, a
+   mesma conta de sempre, só proporcional. O RESTANTE entra quando o saldo for pago e aprovado,
+   no mês desse pagamento, pelo caminho de AJUSTE que o sistema já usa (um por papel, com o
+   motivo "Saldo da encomenda · pedido N"). Nenhum segundo cálculo de comissão foi criado. */
+/* v606: a caixinha "Pagamento com sinal" da tela da venda */
+function sinalLigadoVenda(){
+  var c=$("v_sinal");
+  return !!(c&&c.checked&&(itens||[]).some(ehEncomenda));
+}
+function somaFormasPed(p){return centavos((p&&p.formas||[]).reduce(function(a,f){return a+(+f.valor||0);},0));}
+function temEncomenda(p){return ((p&&p.itens)||[]).some(ehEncomenda);}
+function temEncomendaAberta(p){return ((p&&p.itens)||[]).some(encAberta);}
+/* o que falta pagar da venda com sinal */
+function saldoEncomendaDe(p){
+  if(!p||!p.sinalEnc)return 0;
+  var v=centavos((+p.total||0)-somaFormasPed(p));
+  return v>0.009?v:0;
+}
+function tituloSaldoEnc(p){
+  if(!p)return null;
+  return titulos.filter(function(t){return t.pedidoId===p.id&&t.encSaldo&&t.status!=="cancelado";})[0]||null;
+}
+function saldoEncAberto(p){
+  var t=tituloSaldoEnc(p);
+  if(t)return t.status==="aberto"?centavos(t.valor):0;
+  /* ainda não aprovada: o saldo é o que falta nas formas */
+  return pedidoAprovado(p)?0:saldoEncomendaDe(p);
+}
+function pedidoQuitado(p){return saldoEncAberto(p)<=0.009;}
+/* a previsão de chegada mais longe entre as encomendas do pedido (vencimento do saldo) */
+function previsaoSaldoEnc(p){
+  var d="";
+  ((p&&p.itens)||[]).forEach(function(i){
+    if(!encAberta(i))return;
+    var pv=(i.enc&&i.enc.previsao)||"";
+    if(pv&&pv>d)d=pv;
+  });
+  return d||String((p&&p.data)||hojeISO()).slice(0,10);
+}
+/* o título do saldo, criado na aprovação junto com as outras parcelas */
+async function criarTituloSaldoEnc(p){
+  var v=saldoEncomendaDe(p);
+  if(!(v>0.009)||tituloSaldoEnc(p))return null;
+  var cc=await centroFixo("Venda de produto","Receitas","entrada");
+  var t={id:"encsal-"+p.id,loja:p.loja,especie:"receber",origem:"pedido",pedidoId:p.id,
+    docRef:"Pedido "+p.numero,clienteId:p.clienteId,pessoa:p.cliente,
+    descricao:"Saldo da encomenda · pedido "+p.numero,encSaldo:true,
+    centroId:cc,caixaId:"",emissao:String(p.data||hojeISO()).slice(0,10),
+    vencimento:previsaoSaldoEnc(p),valor:v,parcela:1,totalParcelas:1,
+    status:"aberto",valorPago:0,criadoEm:hojeISO(),criadoPor:usuarioAtual};
+  titulos.push(t);
+  return t;
+}
+/* a previsão mudou: o vencimento do saldo acompanha (só enquanto está em aberto) */
+async function ajustarVencSaldoEnc(p){
+  var t=tituloSaldoEnc(p);
+  if(!t||t.status!=="aberto")return false;
+  var nv=previsaoSaldoEnc(p);
+  if(!nv||nv===t.vencimento)return false;
+  var antes=copiaReg(t),de=t.vencimento;
+  t.vencimento=nv;
+  t.vencHist=(t.vencHist||[]).concat([{de:de,para:nv,por:usuarioAtual,quando:agoraCarimbo(),
+    motivo:"previsão de chegada da encomenda"}]);
+  try{await gravaConf("titulos",t);}catch(e){voltarReg(t,antes);return false;}
+  return true;
+}
+/* ---------- comissão do restante, quando o saldo é pago ---------- */
+function ajustesSaldoEnc(c,quem){
+  return (ajustes||[]).filter(function(a){
+    return a&&a.encSaldo&&a.loja===lojaAtual&&a.comp===c&&(!quem||a.colaborador===quem);});
+}
+async function comissaoDoSaldoEnc(t,dataPag){
+  if(!t||!t.encSaldo||t.especie!=="receber")return 0;
+  var p=pedPorId(t.pedidoId);
+  if(!p||p.encComissaoSaldo)return 0;
+  var falta=1-fatorPagoVenda(p);
+  if(falta<=0.0001)return 0;
+  var base=centavos(valorComissaoCheio(p)*falta),pts=Math.round((+p.pontos||0)*falta*10)/10;
+  var c=mesQueConta(p.loja,comp(String(dataPag||hojeISO()).slice(0,10)));
+  var r=rateio(p,base,pts),feitos=[];
+  var nomes=Object.keys(r);
+  for(var i=0;i<nomes.length;i++){
+    var nm=nomes[i],papeis=[];
+    if(p.prospector===nm)papeis.push("Prospector");
+    if(p.vendedor===nm)papeis.push("Vendedor");
+    if((p.instalador||p.vendedor)===nm)papeis.push("Instalador");
+    var a={id:uid(),loja:p.loja,comp:c,colaborador:nm,papel:papeis.join(" + ")||"—",
+      valor:centavos(r[nm].valor),pontos:Math.round(r[nm].pontos*10)/10,
+      pedido:p.numero,pedidoId:p.id,encSaldo:true,
+      motivo:"Saldo da encomenda · pedido "+p.numero+" pago em "+dataBR(String(dataPag||hojeISO()).slice(0,10)),
+      quando:agoraCarimbo(),por:usuarioAtual};
+    ajustes.push(a);feitos.push(a);
+    try{await gravaConf("ajustes",a);}
+    catch(e){ajustes=ajustes.filter(function(x){return x.id!==a.id;});throw e;}
+  }
+  p.encComissaoSaldo={comp:c,em:agoraCarimbo(),por:usuarioAtual,valor:base,quantos:feitos.length};
+  registrarEvento(p,"Saldo da encomenda pago: o restante da comissão entra em "+c+" ("+BRL(base)+" de base)");
+  try{await gravaConf("pedidos",p);}catch(e2){console.warn("comissão do saldo",e2);}
+  return feitos.length;
+}
+/* o que o pedido já lançou e o que ainda falta de comissão (mostrado na ficha e no relatório) */
+function textoComissaoEnc(p){
+  if(!p||p.encProporcao==null)return "";
+  var pct=Math.round(fatorPagoVenda(p)*1000)/10;
+  var cheio=valorComissaoCheio(p),ja=centavos(cheio*fatorPagoVenda(p));
+  return "Venda com sinal: entrou "+pct.toString().replace(".",",")+"% da comissão ("+BRL(ja)+" de base)"+
+    (p.encComissaoSaldo
+      ? " · o restante ("+BRL(centavos(cheio-ja))+") entrou em "+p.encComissaoSaldo.comp
+      : " · faltam "+BRL(centavos(cheio-ja))+", que entram quando o saldo for pago");
+}
+/* ============ v606: A MERCADORIA CHEGA E A ENCOMENDA FICA RESERVADA ============
+   Na Entrada de Notas, ao dar entrada num produto que tem encomenda esperando NA MESMA EMPRESA,
+   a conferência mostra "X encomendas esperando este produto" e, depois de confirmada, o sistema
+   RESERVA só a quantidade encomendada, por ordem da data da venda (a mais antiga primeiro).
+   Quem tem a permissão Encomendas pode mudar a ordem antes de confirmar (`i.enc.ordem`).
+   O que sobra entra no estoque normal, livre para venda. Chegando menos que o encomendado, a
+   reserva é parcial (`i.enc.qtdRes`) e o que falta continua esperando.
+   A peça reservada NÃO pode ser vendida, requisitada nem contada como disponível: a reserva entra
+   no mesmo `reservasDe` que o resto do sistema já usa (e, por ele, no `dispAlmox`).
+   Produto com série: a série de cada unidade reservada é escolhida na conferência e fica no item
+   (a mesma `reservasDeSerie` de sempre tira a série de qualquer outra venda).
+   Nota estornada ou reaberta devolve a encomenda para "Pedido à fábrica" e avisa o vendedor. */
+function qtdResEnc(i){return Math.max(0,+((i&&i.enc&&i.enc.qtdRes)||0));}
+function faltaResEnc(i){return Math.max(0,(+(i&&i.qtd||1))-qtdResEnc(i));}
+function encChegou(i){return ehEncomenda(i)&&sitEnc(i)==="chegou";}
+/* as encomendas esperando ESTE produto, na ordem da data da venda (a ordem manual vence) */
+function encomendasEsperandoProduto(pid){
+  return encomendasDaEmpresa().filter(function(x){
+    return x.it.pid===pid&&encEsperando(x.it)&&faltaResEnc(x.it)>0;
+  }).sort(function(a,b){
+    var oa=(a.it.enc&&a.it.enc.ordem),ob=(b.it.enc&&b.it.enc.ordem);
+    if(oa!=null||ob!=null)return (oa==null?9999:+oa)-(ob==null?9999:+ob);
+    return String(dataVendaEnc(a.p)).localeCompare(String(dataVendaEnc(b.p)))||(+a.p.numero||0)-(+b.p.numero||0);
+  });
+}
+/* quantas unidades deste produto estão reservadas para encomenda naquele estoque */
+function reservadoEncomendaLocal(local){
+  var r={};
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||ehTeste(p))return;
+    (p.itens||[]).forEach(function(i){
+      if(!encChegou(i))return;
+      if(((i.enc&&i.enc.local)||"")!==local)return;
+      if(i.enc.entregueEm)return;   /* já saiu do estoque na entrega */
+      r[i.pid]=(r[i.pid]||0)+qtdResEnc(i);
+    });
+  });
+  return r;
+}
+/* quem está com esta peça reservada, para a tela de saldo */
+function encomendasReservadasDe(pid,local){
+  var out=[];
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||ehTeste(p))return;
+    (p.itens||[]).forEach(function(i,ix){
+      if(!encChegou(i)||i.pid!==pid)return;
+      if(local&&((i.enc&&i.enc.local)||"")!==local)return;
+      if(i.enc.entregueEm)return;
+      out.push({p:p,it:i,ix:ix,chave:p.id+"|"+ix});
+    });
+  });
+  return out;
+}
+function textoReservaEnc(pid,local){
+  var l=encomendasReservadasDe(pid,local);
+  if(!l.length)return "";
+  return "reservado para encomenda · "+l.map(function(x){return "pedido "+(x.p.numero||"");}).join(" · ");
+}
+/* RESERVAR o que chegou: entradas = [{pid,qtd,local}] */
+async function reservarEncomendasChegada(entradas,notaId){
+  var porPed={},tocados=[],res=[];
+  (entradas||[]).forEach(function(e){
+    var resta=+e.qtd||0;
+    if(!(resta>0)||!e.pid)return;
+    encomendasEsperandoProduto(e.pid).forEach(function(x){
+      if(resta<=0)return;
+      var falta=faltaResEnc(x.it),q=Math.min(falta,resta);
+      if(q<=0)return;
+      resta-=q;
+      x.it.enc.qtdRes=qtdResEnc(x.it)+q;
+      x.it.enc.local=e.local||LOC_EMPRESA;
+      if(notaId)x.it.enc.notaId=notaId;
+      if(faltaResEnc(x.it)<=0){
+        x.it.enc.sit="chegou";
+        x.it.enc.chegouEm=agoraCarimbo();
+        anotarEnc(x.it,"Chegou e ficou reservado ("+x.it.enc.qtdRes+" un.) no "+nomeLocal(x.it.enc.local),{sit:"chegou"});
+      }else{
+        anotarEnc(x.it,"Chegaram "+q+" de "+(x.it.qtd||1)+" · continua esperando o resto");
+      }
+      porPed[x.p.id]=x.p;
+      res.push({p:x.p,it:x.it,q:q,completa:faltaResEnc(x.it)<=0});
+    });
+  });
+  var ids=Object.keys(porPed);
+  for(var i=0;i<ids.length;i++){
+    var p=porPed[ids[i]];
+    var meus=res.filter(function(r){return r.p===p;});
+    registrarEvento(p,"Encomenda: chegou "+meus.map(function(r){return r.q+"× "+(r.it.nome||"");}).join(", ")+
+      (meus.every(function(r){return r.completa;})?" · reservado para esta venda":" · reserva parcial"));
+    try{await gravaConf("pedidos",p);tocados.push(p);}
+    catch(e){console.warn("reserva da encomenda",e);
+      setTimeout(function(){toast("Atenção: a reserva da encomenda do pedido "+(p.numero||"")+" não foi gravada ("+motivoBanco(e)+").");},2600);}
+  }
+  try{esquecerReservaSerie();}catch(eS){}
+  return res;
+}
+/* a nota foi estornada ou reaberta: a reserva volta para "Pedido à fábrica" */
+async function soltarEncomendasDaNota(notaId,motivo){
+  var porPed={},soltas=0;
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual)return;
+    (p.itens||[]).forEach(function(i){
+      if(!ehEncomenda(i)||((i.enc&&i.enc.notaId)||"")!==notaId)return;
+      if(i.enc.entregueEm)return;
+      i.enc.sit="fabrica";i.enc.qtdRes=0;
+      delete i.enc.local;delete i.enc.chegouEm;delete i.enc.notaId;
+      if(i.serie)delete i.serie;
+      anotarEnc(i,"Reserva desfeita: "+(motivo||"a entrada da nota foi desfeita")+" · voltou para Pedido à fábrica",{sit:"fabrica"});
+      porPed[p.id]=p;soltas++;
+    });
+  });
+  var ids=Object.keys(porPed);
+  for(var i=0;i<ids.length;i++){
+    registrarEvento(porPed[ids[i]],"Encomenda: a reserva foi desfeita ("+(motivo||"entrada da nota desfeita")+")");
+    try{await gravaConf("pedidos",porPed[ids[i]]);}catch(e){console.warn("soltar encomenda",e);}
+  }
+  try{esquecerReservaSerie();}catch(eS){}
+  if(soltas)toast(soltas+(soltas===1?" encomenda voltou":" encomendas voltaram")+" para Pedido à fábrica — o vendedor foi avisado.");
+  return soltas;
+}
+/* a série de cada encomenda reservada, escolhida na conferência */
+function encomendasSemSerie(){
+  return encomendasDaEmpresa().filter(function(x){
+    return encChegou(x.it)&&!x.it.enc.entregueEm&&controlaSeriePid(x.it.pid)&&!x.it.serie;});
+}
+function mudarSerieEnc(){return travaSalvar("mudarSerieEnc",mudarSerieEnc__corpo,this,arguments);}
+async function mudarSerieEnc__corpo(chave,serie){
+  if(!podeEncomendas()){toast("Só quem tem a permissão Encomendas escolhe a série da reserva.");return false;}
+  var a=String(chave||"").split("|"),p=pedPorId(a[0]),ix=+a[1];
+  if(!p||p.loja!==lojaAtual){toast("Esta encomenda é de outra empresa.");return false;}
+  var it=(p.itens||[])[ix];
+  if(!it||!encChegou(it)){toast("Só encomenda já reservada tem série.");return false;}
+  var sn=normSerie(serie);
+  if(!sn){toast("Informe a série.");return false;}
+  var ocup=serieOcupada(sn,p.id);
+  if(ocup){toast("A série "+sn+" já está no pedido "+((ocup.pedido||{}).numero||"")+".");return false;}
+  var livres=seriesLivresDoLocal(it.pid,(it.enc&&it.enc.local)||LOC_EMPRESA,p.id).map(function(d){return d.serieNorm;});
+  if(livres.indexOf(sn)<0){toast("Esta série não está livre no "+nomeLocal((it.enc&&it.enc.local)||LOC_EMPRESA)+".");return false;}
+  try{await lerPedidoFresco(p.id,p);}catch(eL){toast("Não deu para conferir o pedido no banco.");return false;}
+  it=(p.itens||[])[ix];
+  var guarda=copiaReg(p),antes=it.serie||"";
+  it.serie=sn;
+  anotarEnc(it,"Série "+sn+" reservada para esta encomenda"+(antes?" (era "+antes+")":""),{de:antes,para:sn});
+  registrarEvento(p,"Encomenda "+(it.nome||"")+": série "+sn+" reservada");
+  try{await gravaConf("pedidos",p);}
+  catch(e){voltarReg(p,guarda);return avisarRecusaBanco("enc_alerta",e,"A série não foi salva.");}
+  try{esquecerReservaSerie();renderEncomendas();}catch(e2){}
+  toast("Série "+sn+" reservada.");
+  return true;
+}
+/* o aviso na linha da conferência: quantas encomendas esperam este produto */
+function avisoEncomendasNF(it,pode){
+  if(!it||!it.pid)return "";
+  var fila=encomendasEsperandoProduto(it.pid);
+  if(!fila.length)return "";
+  var q=fila.reduce(function(a,x){return a+faltaResEnc(x.it);},0);
+  return '<div class="note warn" style="padding:6px 10px;margin:6px 0">'+
+    "<b>"+fila.length+(fila.length===1?" encomenda esperando":" encomendas esperando")+" este produto</b> ("+q+" unidade"+(q===1?"":"s")+
+    ") · o que chegar fica reservado da mais antiga para a mais nova"+
+    (pode&&podeEncomendas()&&fila.length>1?' <button class="btn mut sm" type="button" data-encord="'+esc(it.pid)+'">Mudar a ordem</button>':"")+
+    "</div>";
+}
+/* mudar a ordem da fila de um produto, antes de confirmar a conferência */
+function abrirOrdemEnc(pid){
+  if(!podeEncomendas()){toast("Só quem tem a permissão Encomendas muda a ordem.");return false;}
+  var fila=encomendasEsperandoProduto(pid);
+  if(fila.length<2){toast("Só há uma encomenda esperando este produto.");return false;}
+  var ordem=fila.map(function(x){return x.chave;});
+  var m=quadroEnc();
+  function desenhar(){
+    m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Ordem de atendimento</h3>'+
+      '<div class="sub">'+esc((fila[0].it.nome)||"")+" · quem chegar primeiro na lista é atendido primeiro</div>"+
+      '<div class="sect">'+ordem.map(function(ch,i){
+        var x=fila.filter(function(y){return y.chave===ch;})[0];
+        return '<div class="t-sub" style="display:flex;align-items:center;gap:8px;padding:4px 0">'+
+          "<b>"+(i+1)+"º</b> <span style=\"flex:1\">"+esc((x.it.qtd||1)+"× "+(x.p.cliente||"")+" · pedido "+(x.p.numero||"")+" · venda "+dataCurta(dataVendaEnc(x.p)))+"</span>"+
+          (i>0?'<button class="btn mut sm" type="button" data-encup="'+i+'">↑</button>':"")+
+          (i<ordem.length-1?'<button class="btn mut sm" type="button" data-encdn="'+i+'">↓</button>':"")+"</div>";
+      }).join("")+"</div>"+
+      '<div id="encord_alerta"></div>'+
+      '<div class="actions"><button class="btn" type="button" id="encord_ok">Salvar a ordem</button>'+
+      '<button class="btn mut" type="button" id="encord_nao">Cancelar</button></div></div>';
+    Array.prototype.forEach.call(m.querySelectorAll("[data-encup]"),function(b){
+      b.onclick=function(){var i=+b.getAttribute("data-encup");var t=ordem[i-1];ordem[i-1]=ordem[i];ordem[i]=t;desenhar();};});
+    Array.prototype.forEach.call(m.querySelectorAll("[data-encdn]"),function(b){
+      b.onclick=function(){var i=+b.getAttribute("data-encdn");var t=ordem[i+1];ordem[i+1]=ordem[i];ordem[i]=t;desenhar();};});
+    $("encord_nao").onclick=function(){m.hidden=true;};
+    $("encord_ok").onclick=async function(){
+      var ok=await salvarOrdemEnc(ordem);
+      if(ok){m.hidden=true;try{if(notaConf)renderConfNF2(notaConf);}catch(e){}}
+    };
+  }
+  desenhar();
+  m.hidden=false;
+  return true;
+}
+function salvarOrdemEnc(){return travaSalvar("salvarOrdemEnc",salvarOrdemEnc__corpo,this,arguments);}
+async function salvarOrdemEnc__corpo(ordem){
+  if(!podeEncomendas()){toast("Só quem tem a permissão Encomendas muda a ordem.");return false;}
+  var porPed={},k=0;
+  (ordem||[]).forEach(function(ch,i){
+    var a=String(ch).split("|"),p=pedPorId(a[0]);
+    if(!p||p.loja!==lojaAtual)return;
+    var it=(p.itens||[])[+a[1]];
+    if(!it||!ehEncomenda(it))return;
+    if(it.enc.ordem===i+1)return;
+    it.enc.ordem=i+1;
+    anotarEnc(it,"Ordem de atendimento: "+(i+1)+"º");
+    porPed[p.id]=p;k++;
+  });
+  var ids=Object.keys(porPed);
+  for(var j=0;j<ids.length;j++){
+    try{await gravaConf("pedidos",porPed[ids[j]]);}
+    catch(e){return avisarRecusaBanco("encord_alerta",e,"A ordem não foi salva.");}
+  }
+  if(k)toast("Ordem de atendimento salva.");
+  return true;
+}
+/* depois de reservar: pedir a série de cada encomenda de produto com série */
+function avisarSerieEnc(){
+  var faltam=encomendasSemSerie();
+  if(!faltam.length)return false;
+  var m=quadroEnc();
+  m.innerHTML='<div class="box" style="width:min(560px,100%)"><h3>Série de cada encomenda</h3>'+
+    '<div class="sub">O que chegou ficou reservado. Escolha a série de cada aparelho — ela sai de qualquer outra venda na hora.</div>'+
+    '<div class="sect">'+faltam.map(function(x,i){
+      var loc=(x.it.enc&&x.it.enc.local)||LOC_EMPRESA;
+      var livres=seriesLivresDoLocal(x.it.pid,loc,x.p.id);
+      return '<div class="fld"><label for="encser'+i+'">'+esc((x.it.nome||"")+" · pedido "+(x.p.numero||"")+" · "+(x.p.cliente||""))+"</label>"+
+        '<select id="encser'+i+'" data-encser="'+esc(x.chave)+'"><option value="">— escolher depois —</option>'+
+        livres.map(function(d){return '<option value="'+esc(d.serieNorm)+'">'+esc(d.serie||d.serieNorm)+"</option>";}).join("")+
+        "</select>"+(livres.length?"":'<p class="help">Nenhuma série livre no '+esc(nomeLocal(loc))+" — informe as séries do estoque e volte aqui pela tela Encomendas.</p>")+"</div>";
+    }).join("")+"</div>"+
+    '<div id="encser_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="encser_ok">Salvar as séries</button>'+
+    '<button class="btn mut" type="button" id="encser_nao">Agora não</button></div></div>';
+  m.hidden=false;
+  $("encser_nao").onclick=function(){m.hidden=true;};
+  $("encser_ok").onclick=async function(){
+    var sel=m.querySelectorAll("[data-encser]"),feitos=0;
+    for(var i=0;i<sel.length;i++){
+      var v=sel[i].value;
+      if(!v)continue;
+      var ok=await mudarSerieEnc(sel[i].getAttribute("data-encser"),v);
+      if(ok)feitos++;
+    }
+    m.hidden=true;
+    if(feitos)toast(feitos+(feitos===1?" série reservada.":" séries reservadas."));
+  };
+  return true;
+}
+/* ============ v606: COMO O CLIENTE RECEBE A ENCOMENDA, E A TRAVA DO PAGAMENTO ============
+   Por item sob encomenda já reservado, quem recebe escolhe (e pode trocar depois, com histórico):
+   · instalação — segue o caminho de sempre (data, instalador, a peça vai para quem instala);
+   · entrega — data agendada e responsável, com uma ATIVIDADE na agenda dele;
+   · retirada pelo cliente;
+   · retirada por terceiro — nome completo e CPF obrigatórios, com o CPF validado.
+   Na hora da retirada quem está marcado ASSINA na tela (a mesma assinatura do sistema). Se vier o
+   cliente no lugar do terceiro (ou o contrário), o botão "Trocar para o cliente" troca quem retira
+   e registra no histórico quem estava marcado e quem retirou de verdade.
+   TRAVA: entrega, retirada ou instalação SÓ com o pedido QUITADO. Com saldo em aberto a tela
+   mostra o saldo e o botão "Receber o saldo agora": quem está entregando registra a forma, o
+   valor e o comprovante; o saldo registrado LIBERA a entrega e o pagamento vai para a aprovação
+   do financeiro, que escolhe o caixa, como qualquer recebimento. Sem conseguir registrar, não
+   libera — vale igual no modo sem internet.
+   O ESTOQUE baixa só no momento da retirada, da entrega ou da instalação, pela regra de sempre. */
+var TIPO_ENTREGA_ENC="Entrega de encomenda";
+var JEITOS_ENC=[["instalacao","Instalação"],["entrega","Entrega"],["retirada","Retirada pelo cliente"],["terceiro","Retirada por terceiro"]];
+function rotuloJeitoEnc(k){var r=JEITOS_ENC.filter(function(x){return x[0]===k;})[0];return r?r[1]:"";}
+function jeitoEnc(i){return (i&&i.enc&&i.enc.receber&&i.enc.receber.tipo)||"";}
+function encEntregue(i){return !!(i&&i.enc&&i.enc.entregueEm);}
+function podeEntregarEnc(p,i){return !!(encChegou(i)&&!encEntregue(i)&&pedidoQuitado(p));}
+/* o que a tela diz quando falta pagar */
+function travaPagamentoEnc(p){
+  var v=saldoEncAberto(p);
+  if(v<=0.009)return "";
+  return "Saldo em aberto de "+BRL(v)+": a entrega só sai com o pedido quitado.";
+}
+/* quem está marcado para receber */
+function quemRecebeEnc(p,i){
+  var r=(i&&i.enc&&i.enc.receber)||{};
+  if(r.tipo==="terceiro")return (r.nome||"")+(r.cpf?" · CPF "+r.cpf:"");
+  if(r.tipo==="entrega")return "entrega por "+(r.resp||"—")+(r.data?" em "+dataBR(r.data):"");
+  if(r.tipo==="instalacao")return "instalação"+(r.data?" em "+dataBR(r.data):"")+(r.resp?" · "+r.resp:"");
+  return p.cliente||"o cliente";
+}
+/* gravar o jeito de receber */
+function salvarJeitoEnc(){return travaSalvar("salvarJeitoEnc",salvarJeitoEnc__corpo,this,arguments);}
+async function salvarJeitoEnc__corpo(chave,dados){
+  var d=dados||{},a=String(chave||"").split("|"),p=pedPorId(a[0]),ix=+a[1];
+  if(!p||p.loja!==lojaAtual){toast("Esta encomenda é de outra empresa.");return false;}
+  if(!(podeEncomendas()||deMim(p,CAMPOS_PED)||pode("aprovarFinanceiro"))){toast("Só quem participa da venda ou quem cuida das encomendas muda isso.");return false;}
+  var it=(p.itens||[])[ix];
+  if(!it||!ehEncomenda(it)){toast("Esta encomenda não está mais na tela.");return false;}
+  if(encEntregue(it)){toast("Esta encomenda já foi entregue.");return false;}
+  if(!d.tipo){toast("Escolha como o cliente recebe.");return false;}
+  if(d.tipo==="terceiro"){
+    if(!String(d.nome||"").trim()){toast("Informe o nome completo de quem vai retirar.");return false;}
+    if(!cpfValido(d.cpf)){toast("O CPF de quem retira não é válido.");return false;}
+  }
+  if(d.tipo==="entrega"&&(!d.data||!d.resp)){toast("Informe a data e o responsável pela entrega.");return false;}
+  try{await lerPedidoFresco(p.id,p);}catch(eL){toast("Não deu para conferir o pedido no banco.");return false;}
+  it=(p.itens||[])[ix];
+  var guarda=copiaReg(p),antes=jeitoEnc(it);
+  it.enc.receber={tipo:d.tipo,nome:String(d.nome||"").trim(),cpf:String(d.cpf||"").trim(),
+    data:d.data||"",resp:d.resp||"",obs:String(d.obs||"").trim(),por:usuarioAtual,em:agoraCarimbo()};
+  anotarEnc(it,"Como o cliente recebe: "+rotuloJeitoEnc(d.tipo)+
+    (d.tipo==="terceiro"?" · "+it.enc.receber.nome+" · CPF "+it.enc.receber.cpf:"")+
+    (d.data?" · "+dataBR(d.data):"")+(d.resp?" · "+d.resp:"")+(antes&&antes!==d.tipo?" (era "+rotuloJeitoEnc(antes)+")":""));
+  registrarEvento(p,"Encomenda "+(it.nome||"")+": "+rotuloJeitoEnc(d.tipo)+
+    (d.tipo==="terceiro"?" por "+it.enc.receber.nome:"")+(d.data?" em "+dataBR(d.data):""));
+  try{await gravaConf("pedidos",p);}
+  catch(e){voltarReg(p,guarda);return avisarRecusaBanco("encr_alerta",e,"Não foi salvo.");}
+  /* entrega agendada: uma atividade na agenda de quem entrega */
+  if(d.tipo==="entrega"&&d.data&&d.resp){
+    try{await criarAtividadeEntregaEnc(p,it,d);}catch(eA){console.warn("agenda da entrega",eA);}
+  }
+  toast("Guardado: "+rotuloJeitoEnc(d.tipo)+".");
+  try{renderPedDet();renderEncomendas();}catch(e2){}
+  return true;
+}
+async function criarAtividadeEntregaEnc(p,it,d){
+  var id="encent-"+p.id+"-"+(it.vinculo||it.pid||"");
+  if(atendimentos.some(function(a){return a.id===id;}))return null;
+  var a={id:id,loja:p.loja,clienteId:p.clienteId,cliente:p.cliente||"",tel:(cliPorId(p.clienteId)||{}).tel||"",
+    natureza:"atividade",tipo:TIPO_ENTREGA_ENC,data:d.data,inicio:d.hora||"09:00",colaborador:d.resp,
+    obs:"Entrega da encomenda · "+(it.qtd||1)+"× "+(it.nome||"")+" · pedido "+(p.numero||""),
+    pedidoId:p.id,encomenda:true,criadoEm:agoraCarimbo(),criadoPor:usuarioAtual,status:"",historico:[]};
+  atendimentos.push(a);
+  try{await gravaConf("atendimentos",a);}
+  catch(e){atendimentos=atendimentos.filter(function(x){return x.id!==a.id;});throw e;}
+  return a;
+}
+/* REGISTRAR a entrega, a retirada ou a instalação: baixa o estoque e guarda a assinatura */
+function registrarEntregaEnc(){return travaSalvar("registrarEntregaEnc",registrarEntregaEnc__corpo,this,arguments);}
+async function registrarEntregaEnc__corpo(chave,dados){
+  var d=dados||{},a=String(chave||"").split("|"),p=pedPorId(a[0]),ix=+a[1];
+  if(!p||p.loja!==lojaAtual){toast("Esta encomenda é de outra empresa.");return false;}
+  var it=(p.itens||[])[ix];
+  if(!it||!encChegou(it)){toast("Esta encomenda ainda não chegou.");return false;}
+  if(encEntregue(it)){toast("Esta encomenda já foi entregue.");return false;}
+  /* TRAVA: só com o pedido quitado */
+  if(!pedidoQuitado(p)){
+    if($("encr_alerta"))$("encr_alerta").innerHTML='<div class="note crit"><b>'+esc(travaPagamentoEnc(p))+
+      "</b> Use <b>Receber o saldo agora</b> para registrar o pagamento e liberar.</div>";
+    toast(travaPagamentoEnc(p));
+    return false;
+  }
+  var jt=jeitoEnc(it);
+  if(!jt){toast("Escolha primeiro como o cliente recebe.");return false;}
+  if((jt==="retirada"||jt==="terceiro")&&!d.assinatura){toast("Quem retira precisa assinar na tela.");return false;}
+  try{await lerPedidoFresco(p.id,p);}catch(eL){toast("Não deu para conferir o pedido no banco.");return false;}
+  it=(p.itens||[])[ix];
+  if(encEntregue(it)){toast("Esta encomenda acabou de ser entregue por outra pessoa.");return false;}
+  var guarda=copiaReg(p);
+  var loc=(it.enc&&it.enc.local)||LOC_EMPRESA,q=+(it.qtd||1);
+  /* o estoque baixa agora, pela regra de sempre */
+  var mv={id:"encbx-"+p.id+"-"+ix,loja:p.loja,produtoId:it.pid,qtd:q,origem:loc,destino:"cliente",
+    doc:"Pedido "+(p.numero||""),obs:"Encomenda "+rotuloJeitoEnc(jt)+" · "+(p.cliente||""),
+    data:hojeISO(),por:usuarioAtual,em:new Date().toISOString(),pedidoId:p.id,encomenda:true,serie:it.serie||""};
+  it.enc.entregueEm=agoraCarimbo();
+  it.enc.entreguePor=usuarioAtual;
+  it.enc.sit=(jt==="instalacao")?"instalado":(jt==="entrega"?"entregue":"retirado");
+  it.enc.recebidoPor=d.quemRetirou||quemRecebeEnc(p,it);
+  if(d.assinatura)it.enc.assinatura=d.assinatura;
+  if(d.trocouParaCliente){
+    it.enc.trocaRetirada={de:(it.enc.receber&&it.enc.receber.nome)||"",para:p.cliente||"",por:usuarioAtual,em:agoraCarimbo()};
+    anotarEnc(it,"Quem retirou foi o CLIENTE no lugar de "+((it.enc.receber&&it.enc.receber.nome)||"quem estava marcado"));
+  }
+  anotarEnc(it,rotuloSitEnc(it.enc.sit)+" · recebido por "+(it.enc.recebidoPor||"")+" · entregue por "+usuarioAtual,{sit:it.enc.sit});
+  registrarEvento(p,"Encomenda "+(it.nome||"")+": "+rotuloSitEnc(it.enc.sit).toLowerCase()+
+    " · recebido por "+(it.enc.recebidoPor||"")+" · baixa no estoque de "+nomeLocal(loc));
+  try{
+    await gravaConf("pedidos",p);
+    await gravaConf("movest",mv);
+    movEst.push(mv);
+  }catch(e){
+    voltarReg(p,guarda);
+    movEst=movEst.filter(function(x){return x.id!==mv.id;});
+    return avisarRecusaBanco("encr_alerta",e,"A entrega não foi registrada e o estoque não baixou.");
+  }
+  try{esquecerReservaSerie();agendarEstNovas();renderPedDet();renderEncomendas();}catch(e2){}
+  toast(rotuloSitEnc(it.enc.sit)+" · o estoque baixou.");
+  return true;
+}
+/* RECEBER O SALDO AGORA: quem entrega registra; o financeiro aprova e escolhe o caixa */
+function receberSaldoEnc(){return travaSalvar("receberSaldoEnc",receberSaldoEnc__corpo,this,arguments);}
+async function receberSaldoEnc__corpo(pid,dados){
+  var d=dados||{},p=pedPorId(pid);
+  if(!p||p.loja!==lojaAtual){toast("Este pedido é de outra empresa.");return false;}
+  var t=tituloSaldoEnc(p);
+  if(!t||t.status!=="aberto"){toast("Este pedido não tem saldo em aberto.");return false;}
+  var v=centavos(+d.valor||0);
+  if(!(v>0.009)){toast("Informe o valor recebido.");return false;}
+  if(v<centavos(t.valor)-0.009){toast("O valor precisa fechar o saldo de "+BRL(t.valor)+".");return false;}
+  if(!d.forma){toast("Informe a forma de pagamento.");return false;}
+  var antes=copiaReg(t);
+  t.saldoRecebidoBalcao={forma:d.forma,valor:v,obs:String(d.obs||"").trim(),por:usuarioAtual,em:agoraCarimbo()};
+  t.formaTipo=t.formaTipo||d.forma;
+  try{await gravaConf("titulos",t);}
+  catch(e){voltarReg(t,antes);return avisarRecusaBanco("encs_alerta",e,"O recebimento do saldo não foi registrado.");}
+  registrarEvento(p,"Saldo da encomenda recebido no balcão por "+usuarioAtual+" · "+d.forma+" · "+BRL(v)+
+    " · aguardando o financeiro escolher o caixa");
+  try{await gravaConf("pedidos",p);}catch(e2){console.warn("saldo no balcão",e2);}
+  try{renderReceber();renderPedDet();renderEncomendas();}catch(e3){}
+  toast("Saldo registrado: a entrega está liberada. O financeiro confirma o caixa no Contas a Receber.");
+  return true;
+}
+/* o título do saldo recebido no balcão, esperando o financeiro */
+function saldoNoBalcao(t){return !!(t&&t.encSaldo&&t.status==="aberto"&&t.saldoRecebidoBalcao);}
+var encSigFeita=false;
+function ligarAssinaturaEnc(){
+  var c=$("enc_sig");if(!c)return;
+  var x=c.getContext("2d"),desenhando=false;
+  x.lineWidth=3;x.lineCap="round";x.lineJoin="round";x.strokeStyle="#16202B";
+  function pos(e){var r=c.getBoundingClientRect(),t=e.touches?e.touches[0]:e;
+    return {x:(t.clientX-r.left)*(c.width/r.width),y:(t.clientY-r.top)*(c.height/r.height)};}
+  function ini(e){e.preventDefault();desenhando=true;var q=pos(e);x.beginPath();x.moveTo(q.x,q.y);}
+  function mov(e){if(!desenhando)return;e.preventDefault();var q=pos(e);x.lineTo(q.x,q.y);x.stroke();encSigFeita=true;}
+  function fim(){desenhando=false;}
+  c.addEventListener("mousedown",ini);c.addEventListener("mousemove",mov);window.addEventListener("mouseup",fim);
+  c.addEventListener("touchstart",ini,{passive:false});c.addEventListener("touchmove",mov,{passive:false});
+  c.addEventListener("touchend",fim);
+}
+function abrirRecebimentoEnc(chave){
+  var a=String(chave||"").split("|"),p=pedPorId(a[0]),ix=+a[1];
+  if(!p){toast("Pedido não encontrado.");return false;}
+  var it=(p.itens||[])[ix];
+  if(!it||!ehEncomenda(it)){toast("Esta encomenda não está mais na tela.");return false;}
+  var m=quadroEnc();
+  var trocou=false;
+  function desenhar(){
+    var jt=jeitoEnc(it),r=(it.enc&&it.enc.receber)||{},sld=saldoEncAberto(p),t=tituloSaldoEnc(p);
+    encSigFeita=false;
+    m.innerHTML='<div class="box" style="width:min(620px,100%)"><h3>Como o cliente recebe</h3>'+
+      '<div class="sub">'+esc((it.qtd||1)+"× "+(it.nome||""))+" · pedido "+esc(p.numero||"")+" · "+esc(p.cliente||"")+"</div>"+
+      '<div class="t-sub" style="margin-top:6px">'+esc(textoSitEnc(it))+(it.serie?" · série "+esc(it.serie):"")+
+        ((it.enc&&it.enc.local)?" · no "+esc(nomeLocal(it.enc.local)):"")+"</div>"+
+      (encEntregue(it)
+        ?'<div class="note ok" style="margin-top:12px"><b>'+esc(rotuloSitEnc(sitEnc(it)))+".</b> Recebido por "+
+          esc(it.enc.recebidoPor||"")+" em "+esc(it.enc.entregueEm||"")+" · entregue por "+esc(it.enc.entreguePor||"")+
+          (it.enc.assinatura?'<br><img alt="Assinatura" src="'+it.enc.assinatura+'" style="max-height:90px;background:#fff;border-radius:8px;margin-top:8px">':"")+"</div>"
+        :'<div class="fld" style="margin-top:14px"><label for="encr_tipo">Jeito de receber</label><select id="encr_tipo">'+
+          '<option value="">— escolha —</option>'+JEITOS_ENC.map(function(j){
+            return '<option value="'+j[0]+'"'+(jt===j[0]?" selected":"")+">"+esc(j[1])+"</option>";}).join("")+"</select></div>"+
+          '<div id="encr_campos"></div>'+
+          '<div class="actions" style="justify-content:flex-start"><button class="btn mut sm" type="button" id="encr_salvar">Guardar o jeito de receber</button></div>'+
+          (sld>0.009
+            ?'<div class="note crit" style="margin-top:12px"><b>'+esc(travaPagamentoEnc(p))+"</b>"+
+              (saldoNoBalcao(t)?"<br>Saldo já registrado no balcão por "+esc(t.saldoRecebidoBalcao.por||"")+" ("+esc(t.saldoRecebidoBalcao.forma||"")+" · "+BRL(t.saldoRecebidoBalcao.valor)+") — esperando o financeiro.":"")+
+              '<div class="actions" style="justify-content:flex-start;margin-top:8px"><button class="btn sm" type="button" id="encr_saldo">Receber o saldo agora</button></div></div>'
+            :'<div class="note ok" style="margin-top:12px"><b>Pedido quitado.</b> A entrega está liberada.</div>'+
+             ((jt==="retirada"||jt==="terceiro")
+               ?'<div class="sect"><p class="sect-t">Assinatura de quem retira</p>'+
+                 '<canvas id="enc_sig" width="900" height="220" style="width:100%;border:1px solid var(--line);border-radius:10px;background:#fff;touch-action:none"></canvas>'+
+                 '<div class="actions" style="justify-content:flex-start"><button class="btn mut sm" type="button" id="encr_limpar">Limpar</button>'+
+                 (jt==="terceiro"?'<button class="btn ghost sm" type="button" id="encr_trocar">Trocar para o cliente</button>':"")+"</div>"+
+                 '<p class="help" id="encr_quem">Quem retira: '+esc(quemRecebeEnc(p,it))+"</p></div>"
+               :"")+
+             '<div class="actions" style="justify-content:flex-start"><button class="btn" type="button" id="encr_ok">Registrar '+
+               esc(jt==="instalacao"?"a instalação":(jt==="entrega"?"a entrega":"a retirada"))+"</button></div>"))+
+      '<div id="encr_alerta"></div>'+
+      '<div class="actions"><button class="btn mut" type="button" id="encr_fechar">Fechar</button></div></div>';
+    $("encr_fechar").onclick=function(){m.hidden=true;};
+    if(encEntregue(it))return;
+    function campos(){
+      var tp=$("encr_tipo").value,h="";
+      if(tp==="terceiro")h='<div class="grid g2"><div class="fld"><label for="encr_nome">Nome completo de quem retira</label>'+
+        '<input id="encr_nome" value="'+esc(r.nome||"")+'"></div>'+
+        '<div class="fld"><label for="encr_cpf">CPF</label><input id="encr_cpf" inputmode="numeric" value="'+esc(r.cpf||"")+'"></div></div>';
+      else if(tp==="entrega"||tp==="instalacao"){
+        var ent=(tp==="entrega"),sug=ent?(r.resp||usuarioAtual):(r.resp||p.instalador||usuarioAtual);
+        h='<div class="grid g2"><div class="fld"><label for="encr_data">Data da '+(ent?"entrega":"instalação")+"</label>"+
+          '<input type="date" id="encr_data" value="'+esc(r.data||"")+'"></div>'+
+          '<div class="fld"><label for="encr_resp">Quem '+(ent?"entrega":"instala")+'</label><select id="encr_resp">'+
+          EQUIPE.map(function(x){return '<option'+(sug===x?" selected":"")+">"+esc(x)+"</option>";}).join("")+"</select></div></div>"+
+          (ent?'<p class="help">Entra como atividade na agenda de quem entrega.</p>':"");
+      }
+      $("encr_campos").innerHTML=h;
+    }
+    $("encr_tipo").onchange=campos;campos();
+    $("encr_salvar").onclick=async function(){
+      var ok=await salvarJeitoEnc(chave,{tipo:$("encr_tipo").value,
+        nome:($("encr_nome")||{}).value,cpf:($("encr_cpf")||{}).value,
+        data:($("encr_data")||{}).value,resp:($("encr_resp")||{}).value});
+      if(ok){it=(pedPorId(p.id).itens||[])[ix];desenhar();}
+    };
+    if($("encr_saldo"))$("encr_saldo").onclick=function(){abrirSaldoEnc(p,function(){it=(pedPorId(p.id).itens||[])[ix];desenhar();});};
+    if($("enc_sig"))ligarAssinaturaEnc();
+    if($("encr_limpar"))$("encr_limpar").onclick=function(){var c=$("enc_sig");if(c)c.getContext("2d").clearRect(0,0,c.width,c.height);encSigFeita=false;};
+    if($("encr_trocar"))$("encr_trocar").onclick=function(){
+      trocou=true;
+      if($("encr_quem"))$("encr_quem").innerHTML="Quem retira: <b>"+esc(p.cliente||"o cliente")+"</b> (no lugar de "+esc(r.nome||"quem estava marcado")+")";
+      toast("Quem retira passou a ser o cliente — fica registrado no histórico.");
+    };
+    if($("encr_ok"))$("encr_ok").onclick=async function(){
+      var jt2=jeitoEnc(it);
+      var ass=((jt2==="retirada"||jt2==="terceiro")&&encSigFeita)?assinaturaParaDoc("enc_sig",true):"";
+      var ok=await registrarEntregaEnc(chave,{assinatura:ass,trocouParaCliente:trocou,
+        quemRetirou:trocou?(p.cliente||""):quemRecebeEnc(p,it)});
+      if(ok){it=(pedPorId(p.id).itens||[])[ix];desenhar();}
+    };
+  }
+  desenhar();
+  m.hidden=false;
+  return true;
+}
+/* o quadro do "Receber o saldo agora" */
+function abrirSaldoEnc(p,depois){
+  var t=tituloSaldoEnc(p);
+  if(!t||t.status!=="aberto"){toast("Este pedido não tem saldo em aberto.");return false;}
+  var m=quadroEnc();
+  m.innerHTML='<div class="box" style="width:min(520px,100%)"><h3>Receber o saldo agora</h3>'+
+    '<div class="sub">Pedido '+esc(p.numero||"")+" · "+esc(p.cliente||"")+" · saldo de <b>"+BRL(t.valor)+"</b></div>"+
+    '<div class="fld" style="margin-top:14px"><label for="encs_forma">Forma de pagamento</label><select id="encs_forma">'+
+      porNomeAZ(formasPgto).filter(function(f){return [FORMA_TROCA,FORMA_CREDITO,FORMA_INDIC,FORMA_ORC].indexOf(f.nome)<0;})
+        .map(function(f){return "<option>"+esc(f.nome)+"</option>";}).join("")+"</select></div>"+
+    '<div class="fld"><label for="encs_valor">Valor recebido</label><input id="encs_valor" inputmode="decimal" value="'+brMF(+t.valor||0)+'"></div>'+
+    '<div class="fld"><label for="encs_obs">Comprovante / observação</label><input id="encs_obs" placeholder="opcional"></div>'+
+    '<div class="note">O financeiro confirma o caixa no Contas a Receber, como em qualquer recebimento.</div>'+
+    '<div id="encs_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="encs_ok">Registrar o saldo</button>'+
+    '<button class="btn mut" type="button" id="encs_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  $("encs_nao").onclick=function(){m.hidden=true;if(depois)depois();};
+  $("encs_ok").onclick=async function(){
+    var ok=await receberSaldoEnc(p.id,{forma:$("encs_forma").value,valor:numMF($("encs_valor").value),obs:$("encs_obs").value});
+    if(ok){m.hidden=true;if(depois)depois();}
+  };
+  return true;
+}
+window.__encEntregaMF={jeito:jeitoEnc,rotulo:rotuloJeitoEnc,entregue:encEntregue,pode:podeEntregarEnc,
+  trava:travaPagamentoEnc,quem:quemRecebeEnc,jeitos:JEITOS_ENC,balcao:saldoNoBalcao,
+  salvarJeito:function(c,d){return salvarJeitoEnc__corpo(c,d);},
+  registrar:function(c,d){return registrarEntregaEnc__corpo(c,d);},
+  saldo:function(p,d){return receberSaldoEnc__corpo(p,d);}};
+window.__encChegadaMF={esperando:encomendasEsperandoProduto,reservar:function(e,id){return reservarEncomendasChegada(e,id);},
+  soltar:function(id,m){return soltarEncomendasDaNota(id,m);},reservado:reservadoEncomendaLocal,
+  deQuem:encomendasReservadasDe,texto:textoReservaEnc,semSerie:encomendasSemSerie,
+  serie:function(c,s2){return mudarSerieEnc__corpo(c,s2);},qtdRes:qtdResEnc,falta:faltaResEnc,chegou:encChegou};
+window.__encSaldoMF={saldo:saldoEncomendaDe,aberto:saldoEncAberto,titulo:tituloSaldoEnc,
+  quitado:pedidoQuitado,fator:fatorPagoVenda,cheio:valorComissaoCheio,previsao:previsaoSaldoEnc,
+  comissaoSaldo:function(t,d){return comissaoDoSaldoEnc(t,d);},ajustes:ajustesSaldoEnc,
+  texto:textoComissaoEnc,temEnc:temEncomenda,somaFormas:somaFormasPed,
+  criarTitulo:function(p){return criarTituloSaldoEnc(p);},venc:function(p){return ajustarVencSaldoEnc(p);}};
 window.__encomendaMF={ehEnc:ehEncomenda,pode:podeSerEncomenda,sit:sitEnc,texto:textoSitEnc,
   marcar:marcarItemEncomenda,lista:encomendasDaEmpresa,porProduto:encomendasPorProduto,
   atrasada:encAtrasada,dias:diasEncomenda,permissao:podeEncomendas,minhas:minhasEncomendas,
@@ -27299,6 +27985,11 @@ function reservasDe(local,excluirId,soEntregues){
     Object.keys(pede).forEach(function(pid){pede[pid]-=(ar[pid+"|"+local]||0);});
     Object.keys(pede).forEach(function(pid){r[pid]=(r[pid]||0)+Math.max(0,pede[pid]-(saiu[pid]||0));});
   });
+  /* v606: o que chegou e está reservado para uma encomenda não está disponível para ninguém */
+  try{
+    var re=reservadoEncomendaLocal(local);
+    Object.keys(re).forEach(function(pid){r[pid]=(r[pid]||0)+re[pid];});
+  }catch(eRe){}
   Object.keys(pend).forEach(function(pid){
     var livre=Math.max(0,saldoEm(pid,local)-(r[pid]||0));
     if(Math.min(pend[pid],livre)>0)r[pid]=(r[pid]||0)+Math.min(pend[pid],livre);});
@@ -31943,13 +32634,15 @@ function renderEstSaldo(){
     return '<div class="sd-loc">📍 '+esc(l||"sem localização")+(mudaLoc?' <button type="button" class="btn mut sm" data-sdloc="'+esc(p.id)+'" aria-label="Mudar a localização">Mudar</button>':"")+"</div>";}
   $("sdCartoes").innerHTML=lista.length?lista.map(function(x){
     return '<div class="sd-card'+(x.s<0?" neg":"")+'"'+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+'><div class="nm"><b>'+esc(x.p.nome||"")+"</b><span>"+esc(x.p.cod||"")+"</span>"+locHtml(x.p)+
-      (x.r?'<div class="sd-res">'+x.r+" reservado(s)"+(x.i?" · "+x.i+" instalado(s), aguardando aprovação":"")+"</div>":"")+'</div><div class="sd-qtd '+cls(x.s)+'">'+x.s+"</div></div>";}).join("")
+      (x.r?'<div class="sd-res">'+x.r+" reservado(s)"+(x.i?" · "+x.i+" instalado(s), aguardando aprovação":"")+
+        (textoReservaEnc(x.p.id,loc)?" · "+esc(textoReservaEnc(x.p.id,loc)):"")+"</div>":"")+'</div><div class="sd-qtd '+cls(x.s)+'">'+x.s+"</div></div>";}).join("")
     :'<div class="empty"><div class="big">Nenhum produto</div>'+(q?"Nada com essa busca.":"Este estoque está vazio.")+"</div>";
   $("sdHead").innerHTML="<tr><th>Produto</th><th>Código</th>"+(comLoc?"<th>Localização</th>":"")+"<th class=\"num\">Quantidade</th><th class=\"num\">Reservado</th>"+(custo?'<th class="num">Valor</th>':"")+"</tr>";
   $("sdBody").innerHTML=lista.length?lista.map(function(x){
     return "<tr"+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+"><td>"+esc(x.p.nome||"")+"</td><td>"+esc(x.p.cod||"")+"</td>"+(comLoc?"<td>"+locHtml(x.p)+"</td>":"")+'<td class="num"><b class="'+cls(x.s)+'">'+x.s+"</b></td>"+
       '<td class="num">'+(x.r?'<span class="pill p-res">'+x.r+" reservado(s)</span>":"—")+
-        (x.i?'<div class="t-sub">'+x.i+" instalado(s), aguardando aprovação</div>":"")+"</td>"+
+        (x.i?'<div class="t-sub">'+x.i+" instalado(s), aguardando aprovação</div>":"")+
+        (textoReservaEnc(x.p.id,loc)?'<div class="t-sub">'+esc(textoReservaEnc(x.p.id,loc))+"</div>":"")+"</td>"+
       (custo?'<td class="num">'+BRL(x.saldo*custoTotalDe(x.p))+"</td>":"")+"</tr>";}).join("")
     :'<tr><td colspan="5"><div class="empty"><div class="big">Nenhum produto</div></div></td></tr>';
   Array.prototype.forEach.call(document.querySelectorAll("#s-estSaldo [data-sdloc]"),function(b){b.onclick=function(ev){ev.stopPropagation();pedirLocalNF(b.getAttribute("data-sdloc"));};});
@@ -35108,7 +35801,11 @@ function linhaTitulo(t,especie){
       (t.antecipada?'<div class="t-sub"><span class="pill p-acc">antecipado</span> cai '+BRL(liquidoEsperado(t))+
         " em "+esc((caixas.filter(function(z){return z.id===t.caixaId;})[0]||{}).nome||"conta não informada")+"</div>":"")+
       /* v577: a nota fiscal da venda aparecia aqui embaixo; v604: virou coluna própria, com o lápis */
-      (t.recebidoNaAprovacao?' <span class="pill p-ok">recebido na aprovação</span>':"")+"</td>"+
+      (t.recebidoNaAprovacao?' <span class="pill p-ok">recebido na aprovação</span>':"")+
+      /* v606: o saldo da encomenda já recebido no balcão, esperando o financeiro escolher o caixa */
+      (saldoNoBalcao(t)?'<div class="t-sub"><span class="pill p-warn">recebido no balcão</span> '+
+        esc(t.saldoRecebidoBalcao.forma||"")+" · "+BRL(t.saldoRecebidoBalcao.valor)+" · por "+esc(t.saldoRecebidoBalcao.por||"")+
+        " — confirme o caixa na baixa</div>":"")+"</td>"+
       "<td>"+celulaNF(t,null,"titulo")+"</td>"+
       "<td>"+(t.antecipada?(t.totalParcelas>1?t.totalParcelas+"× no cartão":"única"):(t.totalParcelas>1?(t.parcela+"/"+t.totalParcelas):"única"))+"</td>"
     : "<td>"+esc(t.pessoa||"—")+"</td><td>"+esc(descricaoTitulo(t)||"—")+
@@ -35508,6 +36205,9 @@ async function gerarReceberDoPedido(p){
       titulos.push(t);gerados.push(t);
     }
   });
+  /* v606: o que falta da venda com sinal vira o "Saldo da encomenda · pedido N" */
+  try{var ts=await criarTituloSaldoEnc(p);if(ts)gerados.push(ts);}
+  catch(eS){console.warn("saldo da encomenda",eS);}
   for(var k=0;k<gerados.length;k++)await grava("titulos",gerados[k]);
   return gerados;
 }
@@ -35837,7 +36537,14 @@ async function confirmarBaixa__corpo(){
     renderReceber();renderPagar();return false;
   }
   $("baixaModal").hidden=true;bxTit=null;bxCxs=[];
-  toast((linhasCx.length>1?"Baixa registrada em "+linhasCx.length+" caixas.":"Baixa registrada e lançada no caixa.")+(restante?" O restante de "+BRL(restante.valor)+" continua em aberto.":""));
+  /* v606: saldo da encomenda pago → o restante da comissão entra no mês deste pagamento */
+  var nCom=0;
+  if(t0.encSaldo&&t0.status==="pago"){
+    try{nCom=await comissaoDoSaldoEnc(t0,data);}
+    catch(eCm){setTimeout(function(){toast("Atenção: o restante da comissão do saldo não foi lançado ("+motivoBanco(eCm)+"). Lance como ajuste.");},2600);}
+  }
+  toast((linhasCx.length>1?"Baixa registrada em "+linhasCx.length+" caixas.":"Baixa registrada e lançada no caixa.")+(restante?" O restante de "+BRL(restante.valor)+" continua em aberto.":"")+
+    (nCom?" O restante da comissão entrou para "+nCom+(nCom===1?" pessoa":" pessoas")+".":""));
   renderReceber();renderPagar();renderCaixasMov();renderCadCaixas();renderFluxo();
   return true;
 }
@@ -41055,7 +41762,10 @@ function renderConfNF2(n){
       /* v598: o nome que veio na nota fica embaixo, pequeno */
       ((it.nomeNota&&it.nomeNota!==it.nome)?'<div class="t-sub">Na nota: '+esc(it.nomeNota)+"</div>":"")+
       '<div class="t-sub">'+dest+
-        (podeVerCusto()&&veValoresNF()?" · custo "+BRL(lc.custoFinal)+" por unidade":"")+'</div><div class="nf-pills">'+sit+"</div></td>"+
+        (podeVerCusto()&&veValoresNF()?" · custo "+BRL(lc.custoFinal)+" por unidade":"")+"</div>"+
+      /* v606: encomendas esperando este produto, na ordem em que vão ser atendidas */
+      avisoEncomendasNF(it,pode)+
+      '<div class="nf-pills">'+sit+"</div></td>"+
       '<td class="num">'+it.qtd+'</td><td class="num">'+(+it.recebido||0)+"</td>"+
       '<td class="num">'+(fecha?"—":'<input type="number" min="0" max="'+f+'" step="1" style="max-width:90px" data-c2q="'+k+'" value="'+d.q+'">')+"</td>"+
       "<td>"+(fecha?esc(localProdNF(it.pid)||"—"):'<input data-c2l="'+k+'" value="'+esc(d.local)+'" placeholder="rua / prateleira" style="min-width:110px">')+"</td>"+
@@ -41066,6 +41776,7 @@ function renderConfNF2(n){
           '<input type="file" accept="image/*" capture="environment" data-c2f="'+k+'">'+(d.foto?'<span class="pill p-ok">foto anexada</span>':'<span class="t-sub">foto obrigatória</span>')+"</div>":""))+"</td></tr>";
   }).join("");
   function liga(sel,f){Array.prototype.forEach.call(b.querySelectorAll(sel),f);}
+  liga("[data-encord]",function(el){el.onclick=function(){abrirOrdemEnc(el.getAttribute("data-encord"));};});
   liga("[data-c2q]",function(el){el.oninput=function(){var it=n.itens[+el.getAttribute("data-c2q")];it.__c2.q=Math.max(0,parseInt(el.value,10)||0);resumoConfNF2(n);};});
   liga("[data-c2dq]",function(el){el.oninput=function(){var it=n.itens[+el.getAttribute("data-c2dq")];it.__c2.divQ=Math.max(0,parseInt(el.value,10)||0);resumoConfNF2(n);};});
   liga("[data-c2l]",function(el){el.oninput=function(){n.itens[+el.getAttribute("data-c2l")].__c2.local=el.value;};});
@@ -41217,7 +41928,16 @@ async function confirmarConfNF2__corpo(n){
   catch(e){avisarRecusaBanco("cf_alerta",e,"Nada entrou no estoque: a nota e os produtos continuam como estavam.");return false;}
   depois.forEach(function(f){f();});
   var fal=faltaNotaNF(n),dv=divNotaNF(n),subiu=r.L.some(function(x){return x.q>0;});
-  toast("Conferência registrada"+(subiu?": o estoque subiu":"")+(fal?" · falta receber "+fal:"")+(dv?" · divergência em "+dv+" unidade(s): o Financeiro foi avisado":"")+".");
+  /* v606: o que chegou atende as encomendas que esperavam, da mais antiga para a mais nova */
+  var resEnc=[];
+  try{
+    var entradas=r.L.filter(function(x){return x.q>0;}).map(function(x){
+      var itn=nc.itens[x.k];return {pid:itn.pid,qtd:x.q,local:locDestinoNF(itn)};});
+    if(entradas.length)resEnc=await reservarEncomendasChegada(entradas,n.id);
+  }catch(eEn){console.warn("reserva das encomendas",eEn);}
+  toast("Conferência registrada"+(subiu?": o estoque subiu":"")+(fal?" · falta receber "+fal:"")+(dv?" · divergência em "+dv+" unidade(s): o Financeiro foi avisado":"")+
+    (resEnc.length?" · "+resEnc.length+" encomenda(s) reservada(s) para quem já comprou":"")+".");
+  if(resEnc.length)try{avisarSerieEnc();}catch(eSe){}
   try{agendarEstNovas();renderProdutos();opcoesProduto();renderSino();}catch(eR){}
   abrirConferencia(n);
   return true;
@@ -41398,6 +42118,8 @@ async function desfazerTudoNF(n,mot,acao,novoStatus,extra){
   try{await gravaJuntosConf(g.lista);}
   catch(e){avisarRecusaBanco("nfac_alerta",e,"Nada foi desfeito: o estoque, o custo e a nota continuam como estavam.");return false;}
   g.depois.forEach(function(f){f();});
+  /* v606: a reserva da encomenda volta para "Pedido à fábrica" e o vendedor é avisado */
+  try{await soltarEncomendasDaNota(n.id,acao.toLowerCase());}catch(eEn){console.warn("soltar encomendas",eEn);}
   try{agendarEstNovas();renderProdutos();opcoesProduto();renderSino();}catch(eR){}
   return true;
 }
@@ -45057,7 +45779,17 @@ function abaRemuneracao(k){
   $("fat_comp").hidden=(k!=="extrato");
 }
 /* ================= REMUNERAÇÃO DO COLABORADOR (extrato do mês, regras do Wagner, 12/09) ================= */
-function valorDepreciadoPedido(p){
+/* v606: a venda sob encomenda paga com SINAL conta proporcional ao que o cliente pagou —
+   na comissão, na meta e no faturamento. A proporção fica gravada na aprovação (p.encProporcao)
+   e NÃO muda depois: o restante entra no mês em que o saldo for pago, como ajuste. */
+function fatorPagoVenda(p){
+  if(!p||p.encProporcao==null)return 1;
+  var f=+p.encProporcao;
+  return (f>=0&&f<1)?f:1;
+}
+function valorDepreciadoPedido(p){return centavos(valorDepreciadoCheio(p)*fatorPagoVenda(p));}
+function valorComissaoCheio(p){return Math.max(0,valorDepreciadoCheio(p)-freteLojaDe(p));}
+function valorDepreciadoCheio(p){
   if(ehTeste(p))return 0;       /* treinamento não soma em meta nem em faturamento (v376) */
   var d=+(p.depreciado!=null?p.depreciado:p.base)||0,a=p.descontoAutorizado;
   /* venda abaixo da tabela: o depreciado dos itens abaixo entra pela tabela que o Administrador escolheu
@@ -46850,9 +47582,11 @@ function realizadoMetas(quem,de,ate){
     vendas:vds.length,
     /* regra do Wagner (12/09): faturamento da meta = valor depreciado pela forma de pagamento, dividido pela posição
        (prospector 20 · vendedor 60 · instalador 20); a equipe toda soma o depreciado inteiro de cada venda */
-    faturamento:Math.round(vds.reduce(function(a,p){
+    /* v606: o saldo da encomenda pago no mês entra na meta como entrou na comissão */
+    faturamento:Math.round((vds.reduce(function(a,p){
       if(!quem)return a+valorDepreciadoPedido(p);
-      return a+posicoesNaVenda(p,quem).reduce(function(t,x){return t+x.v;},0);},0)*100)/100
+      return a+posicoesNaVenda(p,quem).reduce(function(t,x){return t+x.v;},0);},0)+
+      ajustesSaldoEnc(comp(de),quem).reduce(function(a,x){return a+(+x.valor||0);},0))*100)/100
   };
 }
 function metaProporcional(quem,de,ate){
@@ -57669,6 +58403,11 @@ function renderPedDet(){
     if(i.estoque)subI.push(seloEstoqueItem(i).replace(/^ /,""));
     /* v605: a situação da encomenda, com o botão de mandar a situação ao cliente */
     if(ehEncomenda(i))subI.push(pillEnc(i)+
+      /* v606: chegou e está reservado — o jeito de receber e a entrega */
+      (encChegou(i)||encEntregue(i)
+        ? ' <button class="btn ghost sm" type="button" data-encrec="'+idx+'">'+
+          (encEntregue(i)?"Ver a entrega":"Como o cliente recebe")+"</button>"
+        : "")+
       ' <button class="btn ghost sm" type="button" data-enczap="'+idx+'">Enviar situação ao cliente</button>');
     ti.innerHTML+='<tr><td><div class="t-main"><span class="pd-nome" data-nomeprod title="'+esc(i.nome)+'">'+esc(i.nome)+"</span></div>"+
       (subI.length?'<div class="t-sub">'+subI.join(" · ")+"</div>":"")+"</td>"+
@@ -57836,6 +58575,18 @@ function renderPedDet(){
     if(pode("aprovarFinanceiro")||ehGestor())
       ac+='<button class="btn mut" type="button" id="pd_cancelar">Cancelar venda</button>';
   }
+  /* v606: venda sob encomenda com sinal — o saldo e a comissão proporcional */
+  try{
+    var sldF=saldoEncAberto(p),tSF=tituloSaldoEnc(p);
+    if(p.sinalEnc||sldF>0.009||p.encProporcao!=null){
+      av+='<div class="note'+(sldF>0.009?" warn":" ok")+'"><b>Venda sob encomenda com sinal.</b> '+
+        (sldF>0.009
+          ? "Saldo em aberto de <b>"+BRL(sldF)+"</b> — a entrega só sai com o pedido quitado."+
+            (saldoNoBalcao(tSF)?" <b>Saldo já recebido no balcão</b> ("+esc(tSF.saldoRecebidoBalcao.forma||"")+" · "+BRL(tSF.saldoRecebidoBalcao.valor)+"), esperando o financeiro confirmar o caixa.":"")
+          : "Pedido quitado.")+
+        (verRemun&&textoComissaoEnc(p)?"<br>"+esc(textoComissaoEnc(p)):"")+"</div>";
+    }
+  }catch(eSf){}
   if(p.assinaturaImg)
     av+='<div class="note'+(p.alteradaAposAssinatura?" warn":" ok")+'"><b>Assinatura do cliente guardada.</b>'+
       '<div style="margin:8px 0"><img src="'+p.assinaturaImg+'" alt="Assinatura do cliente" '+
@@ -57943,6 +58694,8 @@ function ligarPedDet(){
   /* v605: o comprovante da encomenda, para o vendedor mandar se quiser (nada vai sozinho) */
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-enczap]"),function(b){
     b.onclick=function(){enviarSituacaoEnc(p.id,+b.getAttribute("data-enczap"));};});
+  Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-encrec]"),function(b){
+    b.onclick=function(){abrirRecebimentoEnc(p.id+"|"+b.getAttribute("data-encrec"));};});
   Array.prototype.forEach.call($("pd_itens").querySelectorAll("[data-pi]"),function(el){
     el.onchange=function(){
       pedRasc.sujo=true;
@@ -58046,7 +58799,9 @@ function ligarPedDet(){
   on("pd_salvar",async function(){
     var r=recalcPedido(pedRasc.itens,pedRasc.formas,fatorDesc(p),+p.descontoGeral||0,freteLojaDe(p),!!p.creditoForaBase);
     if(!pedRasc.itens.length){toast("A venda precisa de ao menos um item.");return;}
-    if(r.dif!==0){toast("A soma das formas não bate com o total.");return;}
+    /* v606: venda com sinal — o que falta é o saldo da encomenda, não um erro */
+    var sinalP=!!p.sinalEnc&&r.dif>0.009&&r.dif<(+r.total||0)-0.009;
+    if(r.dif!==0&&!sinalP){toast("A soma das formas não bate com o total.");return;}
     /* v548: vencimento da 1ª parcela nunca antes do dia da venda */
     var eV1p=erroVenc1(pedRasc.formas,p.data);
     if(eV1p){toast(eV1p);return;}
@@ -58274,6 +59029,17 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm,cxFormas){
       p.creditoAprovadoHora=agoraHM();
       p.creditoFormas=formasCreditoDaVenda(p);
       registrarEvento(p,"Crédito aprovado por "+usuarioAtual+" · "+p.creditoFormas.join(" e "));
+    }
+    /* v606: venda com sinal — a proporção paga fica gravada e vale para comissão, meta e
+       faturamento; o restante entra no mês em que o saldo for pago */
+    if(p.encProporcao==null){
+      var sldE=saldoEncomendaDe(p),totE=+p.total||0;
+      if(sldE>0.009&&totE>0){
+        p.encProporcao=Math.max(0,Math.min(1,centavos(totE-sldE)/totE));
+        registrarEvento(p,"Aprovada com SINAL de "+BRL(centavos(totE-sldE))+" · saldo de "+BRL(sldE)+
+          " no Contas a Receber · comissão, meta e faturamento entram proporcionais ("+
+          (Math.round(p.encProporcao*1000)/10).toString().replace(".",",")+"%)");
+      }
     }
     p.encerrada=true;p.status="Aprovada";p.devolucaoFin=null;
     /* v584: aprovado, o direito é baixado de vez */
