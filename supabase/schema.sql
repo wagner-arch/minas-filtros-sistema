@@ -617,9 +617,11 @@ declare
     'create unique index if not exists ux_docs_orcamentos_numero on public.docs (loja, (data->>''numero'')) where colecao = ''orcamentos'' and (data->>''numero'') is not null',
     -- ordem de servico: um numero por loja
     'create unique index if not exists ux_docs_ordens_numero on public.docs (loja, (data->>''numero'')) where colecao = ''ordens'' and (data->>''numero'') is not null',
-    -- nota de fornecedor: o mesmo numero so entra uma vez por fornecedor
-    -- (substitui o ix_docs_notas_forn_numero, que era so um indice de busca)
-    'create unique index if not exists ux_docs_notas_forn_numero on public.docs (loja, (data->>''fornecedorId''), (data->>''numero'')) where colecao = ''notas'' and (data->>''numero'') is not null',
+    -- nota de fornecedor: o mesmo numero so entra uma vez por fornecedor ATIVO (v609, 25/11)
+    -- (substitui o ux_docs_notas_forn_numero, que barrava relancar uma nota cancelada:
+    --  a tela ja ignora cancelada e estornada, e agora o banco tambem)
+    'drop index if exists ux_docs_notas_forn_numero',
+    'create unique index if not exists ux_docs_notas_forn_numero_ativa on public.docs (loja, (data->>''fornecedorId''), (data->>''numero'')) where colecao = ''notas'' and (data->>''numero'') is not null and coalesce(data->>''status'','''') not in (''cancelada'',''estornada'')',
     -- equipamento: numero de serie nao se repete na loja
     -- (substitui o ix_docs_equipamentos_serie)
     'create unique index if not exists ux_docs_equip_serie on public.docs (loja, (data->>''serie'')) where colecao = ''equipamentos'' and nullif(data->>''serie'','''') is not null',
