@@ -25375,7 +25375,9 @@ function classeSitEnc(i){
 function pillEnc(i){
   if(!ehEncomenda(i))return "";
   return '<span class="pill '+classeSitEnc(i)+'">'+esc(textoSitEnc(i))+"</span>"+
-    (encAtrasada(i)?' <span class="pill p-crit">atrasada</span>':"");
+    (encAtrasada(i)?' <span class="pill p-crit">atrasada</span>':"")+
+    /* v607 */
+    (faltaSerieEnc(i)?' <span class="pill p-crit">falta a série</span>':"");
 }
 /* a marcação no item — só mexe no item; quem grava é o pedido */
 function novaEncItem(){
@@ -25587,6 +25589,11 @@ function renderEncomendas(){
   var nAtr=todas.filter(function(x){return encAtrasada(x.it);}).length;
   var h='<div class="note">As encomendas de <b>'+esc(nomeLoja())+'</b>. Marcar o pedido à fábrica e mudar a previsão '+
     'ficam no histórico do pedido, e o vendedor acompanha pela ficha dele.</div>';
+  /* v607: reserva sem série escolhida — não sai para o cliente enquanto faltar */
+  var semSer=encomendasSemSerie();
+  if(semSer.length)h+='<div class="note crit"><b>'+semSer.length+(semSer.length===1?" reserva está sem série":" reservas estão sem série")+
+    ".</b> O aparelho não pode ser entregue, retirado nem instalado enquanto a série não for informada: "+
+    esc(semSer.map(function(x){return (x.it.nome||"")+" · pedido "+(x.p.numero||"");}).join(" · "))+"</div>";
   h+='<div class="kpis" style="margin:12px 0">'+
     ["aguardando","fabrica","chegou"].map(function(k){
       return '<div class="kpi"><div class="l">'+esc(rotuloSitEnc(k))+'</div><div class="v">'+(cont[k]||0)+"</div></div>";}).join("")+
@@ -25614,15 +25621,16 @@ function renderEncomendas(){
     "<th>Produto</th><th class=\"num\">Qtd</th><th>Cliente</th><th>Pedido</th><th>Vendedor</th>"+
     "<th>Venda</th><th>Situação</th><th>Previsão</th><th class=\"num\">Dias</th></tr></thead><tbody>"+
     L.map(function(x){
-      var it=x.it,atr=encAtrasada(it);
-      return "<tr"+(atr?' class="it-abaixo"':"")+">"+
+      var it=x.it,atr=encAtrasada(it),fsr=faltaSerieEnc(it);
+      return "<tr"+((atr||fsr)?' class="it-abaixo"':"")+">"+
         (podeTocar?'<td>'+(encEsperando(it)?'<input type="checkbox" class="enc-mc" data-enck="'+esc(x.chave)+'"'+
           (encMarcadas[x.chave]?" checked":"")+">":"")+"</td>":"")+
         "<td>"+(it.cod?"<code>"+esc(it.cod)+"</code> · ":"")+esc(it.nome||"")+"</td>"+
         '<td class="num">'+(it.qtd||1)+"</td>"+
         "<td>"+esc(x.p.cliente||"—")+"</td><td>"+esc(x.p.numero||"—")+"</td><td>"+esc(x.p.vendedor||"—")+"</td>"+
         "<td>"+esc(dataCurta(dataVendaEnc(x.p)))+"</td>"+
-        "<td>"+pillEnc(it)+"</td>"+
+        "<td>"+pillEnc(it)+
+          (fsr&&podeTocar?' <button class="btn sm" type="button" data-encser1="'+esc(x.chave)+'">Informar a série</button>':"")+"</td>"+
         "<td>"+(it.enc&&it.enc.previsao?esc(dataCurta(it.enc.previsao)):"—")+
           (podeTocar&&sitEnc(it)==="fabrica"?' <button class="btn mut sm" type="button" data-encprev="'+esc(x.chave)+'">Mudar</button>':"")+"</td>"+
         '<td class="num">'+(atr?'<span style="color:var(--crit)"><b>'+diasEncomenda(x.p)+"</b></span>":diasEncomenda(x.p))+"</td></tr>";
@@ -25649,6 +25657,8 @@ function ligarEncomendas(){
   };
   Array.prototype.forEach.call(w.querySelectorAll("[data-encprev]"),function(b2){
     b2.onclick=function(){abrirPrevisaoEnc(b2.getAttribute("data-encprev"));};});
+  Array.prototype.forEach.call(w.querySelectorAll("[data-encser1]"),function(b3){
+    b3.onclick=function(){abrirSerieUmaEnc(b3.getAttribute("data-encser1"));};});
 }
 /* o quadro das encomendas — um só, usado pelos dois caminhos */
 function quadroEnc(){
@@ -25742,13 +25752,19 @@ function saldoEncomendaDe(p){
   var v=centavos((+p.total||0)-somaFormasPed(p));
   return v>0.009?v:0;
 }
+/* v607: o saldo pode ser pago EM MAIS DE UMA VEZ — a baixa parcial parte o título, e aí há mais
+   de um "Saldo da encomenda" do mesmo pedido (o pago e o restante). Tudo conta a lista inteira. */
+function titulosSaldoEnc(p){
+  if(!p)return [];
+  return titulos.filter(function(t){return t.pedidoId===p.id&&t.encSaldo&&t.status!=="cancelado";});
+}
 function tituloSaldoEnc(p){
-  if(!p)return null;
-  return titulos.filter(function(t){return t.pedidoId===p.id&&t.encSaldo&&t.status!=="cancelado";})[0]||null;
+  var l=titulosSaldoEnc(p);
+  return l.filter(function(t){return t.status==="aberto";})[0]||l[0]||null;
 }
 function saldoEncAberto(p){
-  var t=tituloSaldoEnc(p);
-  if(t)return t.status==="aberto"?centavos(t.valor):0;
+  var l=titulosSaldoEnc(p);
+  if(l.length)return centavos(l.reduce(function(a,t){return a+(t.status==="aberto"?(+t.valor||0):0);},0));
   /* ainda não aprovada: o saldo é o que falta nas formas */
   return pedidoAprovado(p)?0:saldoEncomendaDe(p);
 }
@@ -25777,31 +25793,44 @@ async function criarTituloSaldoEnc(p){
   titulos.push(t);
   return t;
 }
-/* a previsão mudou: o vencimento do saldo acompanha (só enquanto está em aberto) */
+/* a previsão mudou: o vencimento do saldo acompanha (todos os que estão em aberto) */
 async function ajustarVencSaldoEnc(p){
-  var t=tituloSaldoEnc(p);
-  if(!t||t.status!=="aberto")return false;
-  var nv=previsaoSaldoEnc(p);
-  if(!nv||nv===t.vencimento)return false;
-  var antes=copiaReg(t),de=t.vencimento;
-  t.vencimento=nv;
-  t.vencHist=(t.vencHist||[]).concat([{de:de,para:nv,por:usuarioAtual,quando:agoraCarimbo(),
-    motivo:"previsão de chegada da encomenda"}]);
-  try{await gravaConf("titulos",t);}catch(e){voltarReg(t,antes);return false;}
-  return true;
+  var nv=previsaoSaldoEnc(p),mudou=0;
+  var l=titulosSaldoEnc(p).filter(function(t){return t.status==="aberto"&&nv&&nv!==t.vencimento;});
+  for(var i=0;i<l.length;i++){
+    var t=l[i],antes=copiaReg(t),de=t.vencimento;
+    t.vencimento=nv;
+    t.vencHist=(t.vencHist||[]).concat([{de:de,para:nv,por:usuarioAtual,quando:agoraCarimbo(),
+      motivo:"previsão de chegada da encomenda"}]);
+    try{await gravaConf("titulos",t);mudou++;}catch(e){voltarReg(t,antes);}
+  }
+  return mudou>0;
 }
 /* ---------- comissão do restante, quando o saldo é pago ---------- */
 function ajustesSaldoEnc(c,quem){
   return (ajustes||[]).filter(function(a){
     return a&&a.encSaldo&&a.loja===lojaAtual&&a.comp===c&&(!quem||a.colaborador===quem);});
 }
+/* o quanto da comissão já entrou depois da aprovação (0 a 1) */
+function fracaoSaldoLancada(p){
+  var x=p&&p.encComissaoSaldo;
+  if(!x)return 0;
+  if(x.fracao!=null)return Math.max(0,Math.min(1,+x.fracao||0));
+  return Math.max(0,1-fatorPagoVenda(p));   /* v606: lançava tudo de uma vez */
+}
+/* v607: cada pagamento do saldo lança a SUA parte da comissão, no mês dele, e a soma nunca
+   passa de 100% da venda (aprovação + pagamentos do saldo). */
 async function comissaoDoSaldoEnc(t,dataPag){
   if(!t||!t.encSaldo||t.especie!=="receber")return 0;
   var p=pedPorId(t.pedidoId);
-  if(!p||p.encComissaoSaldo)return 0;
-  var falta=1-fatorPagoVenda(p);
-  if(falta<=0.0001)return 0;
-  var base=centavos(valorComissaoCheio(p)*falta),pts=Math.round((+p.pontos||0)*falta*10)/10;
+  if(!p)return 0;
+  var total=+p.total||0;
+  var falta=Math.max(0,1-fatorPagoVenda(p)-fracaoSaldoLancada(p));
+  if(falta<=0.0001||total<=0)return 0;
+  /* a parte paga AGORA: o principal deste título (a baixa parcial já reduziu o valor dele) */
+  var fr=Math.min(falta,centavos(+t.valor||0)/total);
+  if(fr<=0.0001)return 0;
+  var base=centavos(valorComissaoCheio(p)*fr),pts=Math.round((+p.pontos||0)*fr*10)/10;
   var c=mesQueConta(p.loja,comp(String(dataPag||hojeISO()).slice(0,10)));
   var r=rateio(p,base,pts),feitos=[];
   var nomes=Object.keys(r);
@@ -25819,20 +25848,26 @@ async function comissaoDoSaldoEnc(t,dataPag){
     try{await gravaConf("ajustes",a);}
     catch(e){ajustes=ajustes.filter(function(x){return x.id!==a.id;});throw e;}
   }
-  p.encComissaoSaldo={comp:c,em:agoraCarimbo(),por:usuarioAtual,valor:base,quantos:feitos.length};
-  registrarEvento(p,"Saldo da encomenda pago: o restante da comissão entra em "+c+" ("+BRL(base)+" de base)");
+  var jaF=fracaoSaldoLancada(p),jaV=(p.encComissaoSaldo&&+p.encComissaoSaldo.valor)||0;
+  p.encComissaoSaldo={comp:c,em:agoraCarimbo(),por:usuarioAtual,
+    valor:centavos(jaV+base),fracao:Math.min(1,jaF+fr),quantos:feitos.length,
+    partes:((p.encComissaoSaldo&&p.encComissaoSaldo.partes)||[]).concat([
+      {comp:c,fracao:fr,valor:base,em:agoraCarimbo(),por:usuarioAtual,titulo:t.id}])};
+  registrarEvento(p,"Saldo da encomenda pago ("+BRL(centavos(+t.valor||0))+"): a comissão desta parte entra em "+c+
+    " ("+BRL(base)+" de base · "+(Math.round(fr*1000)/10).toString().replace(".",",")+"% da venda)");
   try{await gravaConf("pedidos",p);}catch(e2){console.warn("comissão do saldo",e2);}
   return feitos.length;
 }
 /* o que o pedido já lançou e o que ainda falta de comissão (mostrado na ficha e no relatório) */
 function textoComissaoEnc(p){
   if(!p||p.encProporcao==null)return "";
-  var pct=Math.round(fatorPagoVenda(p)*1000)/10;
-  var cheio=valorComissaoCheio(p),ja=centavos(cheio*fatorPagoVenda(p));
-  return "Venda com sinal: entrou "+pct.toString().replace(".",",")+"% da comissão ("+BRL(ja)+" de base)"+
-    (p.encComissaoSaldo
-      ? " · o restante ("+BRL(centavos(cheio-ja))+") entrou em "+p.encComissaoSaldo.comp
-      : " · faltam "+BRL(centavos(cheio-ja))+", que entram quando o saldo for pago");
+  var cheio=valorComissaoCheio(p);
+  var fAp=fatorPagoVenda(p),fSl=fracaoSaldoLancada(p),fJa=Math.min(1,fAp+fSl);
+  var pct=Math.round(fJa*1000)/10,falta=centavos(cheio*Math.max(0,1-fJa));
+  return "Venda com sinal: já entrou "+pct.toString().replace(".",",")+"% da comissão ("+BRL(centavos(cheio*fJa))+" de base)"+
+    (fSl>0?" · "+(p.encComissaoSaldo.partes||[]).map(function(x){
+      return BRL(x.valor)+" em "+x.comp;}).join(" + "):"")+
+    (falta>0.009?" · faltam "+BRL(falta)+", que entram quando o resto do saldo for pago":" · nada mais a lançar");
 }
 /* ============ v606: A MERCADORIA CHEGA E A ENCOMENDA FICA RESERVADA ============
    Na Entrada de Notas, ao dar entrada num produto que tem encomenda esperando NA MESMA EMPRESA,
@@ -25846,6 +25881,11 @@ function textoComissaoEnc(p){
    Produto com série: a série de cada unidade reservada é escolhida na conferência e fica no item
    (a mesma `reservasDeSerie` de sempre tira a série de qualquer outra venda).
    Nota estornada ou reaberta devolve a encomenda para "Pedido à fábrica" e avisa o vendedor. */
+/* v607: purificador reservado sem série escolhida — a reserva fica "falta a série", em destaque
+   na tela Encomendas, e a entrega, a retirada e a instalação ficam travadas até informar. */
+function faltaSerieEnc(i){
+  return !!(i&&ehEncomenda(i)&&sitEnc(i)==="chegou"&&!i.enc.entregueEm&&controlaSeriePid(i.pid)&&!i.serie);
+}
 function qtdResEnc(i){return Math.max(0,+((i&&i.enc&&i.enc.qtdRes)||0));}
 function faltaResEnc(i){return Math.max(0,(+(i&&i.qtd||1))-qtdResEnc(i));}
 function encChegou(i){return ehEncomenda(i)&&sitEnc(i)==="chegou";}
@@ -25970,6 +26010,9 @@ async function mudarSerieEnc__corpo(chave,serie){
   if(!sn){toast("Informe a série.");return false;}
   var ocup=serieOcupada(sn,p.id);
   if(ocup){toast("A série "+sn+" já está no pedido "+((ocup.pedido||{}).numero||"")+".");return false;}
+  /* v607: nem em outro item DESTE pedido */
+  var dentro=(p.itens||[]).some(function(o,k){return k!==ix&&normSerie(o&&o.serie)===sn;});
+  if(dentro){toast("A série "+sn+" já está em outro item deste pedido.");return false;}
   var livres=seriesLivresDoLocal(it.pid,(it.enc&&it.enc.local)||LOC_EMPRESA,p.id).map(function(d){return d.serieNorm;});
   if(livres.indexOf(sn)<0){toast("Esta série não está livre no "+nomeLocal((it.enc&&it.enc.local)||LOC_EMPRESA)+".");return false;}
   try{await lerPedidoFresco(p.id,p);}catch(eL){toast("Não deu para conferir o pedido no banco.");return false;}
@@ -26052,6 +26095,33 @@ async function salvarOrdemEnc__corpo(ordem){
   if(k)toast("Ordem de atendimento salva.");
   return true;
 }
+/* v607: informar a série de UMA reserva, pela tela Encomendas */
+function abrirSerieUmaEnc(chave){
+  if(!podeEncomendas()){toast("Só quem tem a permissão Encomendas escolhe a série da reserva.");return false;}
+  var a=String(chave||"").split("|"),p=pedPorId(a[0]),it=p?(p.itens||[])[+a[1]]:null;
+  if(!it||!encChegou(it)){toast("Esta reserva não está mais na tela.");return false;}
+  var loc=(it.enc&&it.enc.local)||LOC_EMPRESA,livres=seriesLivresDoLocal(it.pid,loc,p.id);
+  var m=quadroEnc();
+  m.innerHTML='<div class="box" style="width:min(520px,100%)"><h3>Série reservada</h3>'+
+    '<div class="sub">'+esc((it.qtd||1)+"× "+(it.nome||""))+" · pedido "+esc(p.numero||"")+" · "+esc(p.cliente||"")+"</div>"+
+    '<div class="note crit" style="margin-top:12px"><b>Enquanto a série não for informada, o aparelho não sai.</b> A entrega, a retirada e a instalação ficam travadas.</div>'+
+    '<div class="fld" style="margin-top:12px"><label for="encs1_serie">Série livre no '+esc(nomeLocal(loc))+'</label><select id="encs1_serie">'+
+      '<option value="">— escolher —</option>'+livres.map(function(d){
+        return '<option value="'+esc(d.serieNorm)+'">'+esc(d.serie||d.serieNorm)+"</option>";}).join("")+"</select>"+
+      (livres.length?"":'<p class="help">Nenhuma série livre neste estoque: informe as séries do estoque e volte aqui.</p>')+"</div>"+
+    '<div id="encs1_alerta"></div>'+
+    '<div class="actions"><button class="btn" type="button" id="encs1_ok">Reservar a série</button>'+
+    '<button class="btn mut" type="button" id="encs1_nao">Cancelar</button></div></div>';
+  m.hidden=false;
+  $("encs1_nao").onclick=function(){m.hidden=true;};
+  $("encs1_ok").onclick=async function(){
+    var v=$("encs1_serie").value;
+    if(!v){toast("Escolha a série.");return;}
+    var ok=await mudarSerieEnc(chave,v);
+    if(ok){m.hidden=true;renderEncomendas();}
+  };
+  return true;
+}
 /* depois de reservar: pedir a série de cada encomenda de produto com série */
 function avisarSerieEnc(){
   var faltam=encomendasSemSerie();
@@ -26105,7 +26175,7 @@ var JEITOS_ENC=[["instalacao","Instalação"],["entrega","Entrega"],["retirada",
 function rotuloJeitoEnc(k){var r=JEITOS_ENC.filter(function(x){return x[0]===k;})[0];return r?r[1]:"";}
 function jeitoEnc(i){return (i&&i.enc&&i.enc.receber&&i.enc.receber.tipo)||"";}
 function encEntregue(i){return !!(i&&i.enc&&i.enc.entregueEm);}
-function podeEntregarEnc(p,i){return !!(encChegou(i)&&!encEntregue(i)&&pedidoQuitado(p));}
+function podeEntregarEnc(p,i){return !!(encChegou(i)&&!encEntregue(i)&&pedidoQuitado(p)&&!faltaSerieEnc(i));}
 /* o que a tela diz quando falta pagar */
 function travaPagamentoEnc(p){
   var v=saldoEncAberto(p);
@@ -26180,6 +26250,12 @@ async function registrarEntregaEnc__corpo(chave,dados){
     if($("encr_alerta"))$("encr_alerta").innerHTML='<div class="note crit"><b>'+esc(travaPagamentoEnc(p))+
       "</b> Use <b>Receber o saldo agora</b> para registrar o pagamento e liberar.</div>";
     toast(travaPagamentoEnc(p));
+    return false;
+  }
+  /* v607: purificador sem a série escolhida não sai */
+  if(faltaSerieEnc(it)){
+    if($("encr_alerta"))$("encr_alerta").innerHTML='<div class="note crit"><b>Falta a série deste aparelho.</b> Informe a série reservada na tela Encomendas antes de entregar.</div>';
+    toast("Falta a série deste aparelho: informe antes de entregar.");
     return false;
   }
   var jt=jeitoEnc(it);
@@ -26370,16 +26446,17 @@ window.__encEntregaMF={jeito:jeitoEnc,rotulo:rotuloJeitoEnc,entregue:encEntregue
   salvarJeito:function(c,d){return salvarJeitoEnc__corpo(c,d);},
   registrar:function(c,d){return registrarEntregaEnc__corpo(c,d);},
   saldo:function(p,d){return receberSaldoEnc__corpo(p,d);}};
-window.__encChegadaMF={esperando:encomendasEsperandoProduto,reservar:function(e,id){return reservarEncomendasChegada(e,id);},
+window.__encChegadaMF={esperando:encomendasEsperandoProduto,faltaSerie:faltaSerieEnc,reservar:function(e,id){return reservarEncomendasChegada(e,id);},
   soltar:function(id,m){return soltarEncomendasDaNota(id,m);},reservado:reservadoEncomendaLocal,
   deQuem:encomendasReservadasDe,texto:textoReservaEnc,semSerie:encomendasSemSerie,
   serie:function(c,s2){return mudarSerieEnc__corpo(c,s2);},qtdRes:qtdResEnc,falta:faltaResEnc,chegou:encChegou};
 window.__encSaldoMF={saldo:saldoEncomendaDe,aberto:saldoEncAberto,titulo:tituloSaldoEnc,
+  titulos:titulosSaldoEnc,fracaoLancada:fracaoSaldoLancada,
   quitado:pedidoQuitado,fator:fatorPagoVenda,cheio:valorComissaoCheio,previsao:previsaoSaldoEnc,
   comissaoSaldo:function(t,d){return comissaoDoSaldoEnc(t,d);},ajustes:ajustesSaldoEnc,
   texto:textoComissaoEnc,temEnc:temEncomenda,somaFormas:somaFormasPed,
   criarTitulo:function(p){return criarTituloSaldoEnc(p);},venc:function(p){return ajustarVencSaldoEnc(p);}};
-window.__encomendaMF={ehEnc:ehEncomenda,pode:podeSerEncomenda,sit:sitEnc,texto:textoSitEnc,
+window.__encomendaMF={ehEnc:ehEncomenda,pode:podeSerEncomenda,sit:sitEnc,texto:textoSitEnc,pill:pillEnc,
   marcar:marcarItemEncomenda,lista:encomendasDaEmpresa,porProduto:encomendasPorProduto,
   atrasada:encAtrasada,dias:diasEncomenda,permissao:podeEncomendas,minhas:minhasEncomendas,
   fabrica:function(ch,d){return marcarFabricaEnc__corpo(ch,d);},
