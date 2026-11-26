@@ -852,6 +852,7 @@ body.tn .tv-so{display:none!important}
   .fld{display:flex;flex-direction:column}
   .fld label{font-size:13.5px;font-weight:600;color:var(--ink-2);margin-bottom:6px}
   .fld label .req{color:var(--crit);margin-left:2px}
+  .fld label .opc{color:var(--ink-3);font-weight:400;margin-left:4px}
   /* caixa de seleção com rótulo ao lado: sem isto o checkbox herda o width:100% dos campos
      e ocupa meia janela, empurrando o texto (relato dele na janela de importar produtos, 02/10) */
   .chk{display:flex;gap:10px;align-items:flex-start;margin:10px 0;font-size:13.5px;line-height:1.45;color:var(--ink);cursor:pointer}
@@ -2165,6 +2166,20 @@ tr.nf-cancelada td.nf-ac-td{opacity:1}
 .nf-lapis{min-width:32px;min-height:32px;padding:0 7px;border:1px solid var(--line);border-radius:9px;
   background:var(--card);color:var(--muted,inherit);font-size:15px;line-height:1;cursor:pointer}
 .nf-lapis:hover{border-color:var(--acc);color:var(--acc)}
+/* v612: data que se DIGITA (dd/mm/aaaa), com o calendário ao lado no botão */
+.dtbr{display:flex;gap:6px;align-items:center;position:relative}
+.dtbr>input[type="text"]{flex:1 1 auto;min-width:11ch}
+/* o botão do calendário é estreito de propósito: numa coluna de 150px o que importa é
+   caber a data digitada inteira (v612) */
+.dtbr>.dtbr-cal{flex:0 0 auto;padding:9px 8px;font-size:15px;line-height:1}
+.dtbr>.dtbr-nat{position:absolute;left:0;bottom:0;width:1px;height:1px;padding:0;margin:0;
+  border:0;opacity:0;pointer-events:none}
+/* no Novo atendimento a coluna de 150px não cabe a data digitada + o calendário: este campo
+   ocupa duas colunas (v612) */
+#at_nascWrap{grid-column:span 2}
+.dtbr-aviso{margin-top:4px}
+.dtbr-aviso.dtbr-ruim{color:var(--crit);font-weight:600}
+.dtbr-aviso.dtbr-atencao{color:var(--warn);font-weight:600}
 .nf-chk{display:flex;align-items:center;gap:9px;margin-top:12px;font-size:15px}
 /* v610: rótulo comprido quebra linha sem empurrar a caixinha */
 .nf-chk>span{flex:1 1 auto;min-width:0}
@@ -3639,8 +3654,8 @@ img{max-width:100%}
         <div class="card">
           <div class="ca-passo"><span class="n">1</span><h2>Produtos da venda</h2></div>
           <p class="ca-help">O valor que precisa <b>cair para a empresa</b> em cada produto, à vista. O produto pode vir do cadastro ou ser digitado à mão.</p>
+          <div class="actions" style="justify-content:flex-start;margin:0 0 10px"><button class="btn ghost sm" type="button" id="caAddProd">+ Adicionar produto</button></div>
           <div id="caProds"></div>
-          <div class="actions" style="justify-content:flex-start"><button class="btn ghost sm" type="button" id="caAddProd">+ Adicionar produto</button></div>
         </div>
         <div class="card">
           <div class="ca-passo"><span class="n">2</span><h2>Como o cliente vai pagar</h2></div>
@@ -4706,6 +4721,10 @@ img{max-width:100%}
             <div class="fld"><label for="at_sexo">Sexo <span class="req" id="at_reqSexo">*</span></label>
               <select id="at_sexo"><option value="">— escolha —</option><option>Feminino</option><option>Masculino</option></select></div>
             <div class="fld"><label for="at_doc">CPF / CNPJ</label><input id="at_doc"></div>
+            <!-- v612 (25/11, pedido dele): a data de nascimento entra JÁ NO ATENDIMENTO. Sem ela o
+                 cadastro nascia incompleto e a venda parava depois pedindo para voltar. Empresa
+                 não tem nascimento (mesma regra da ficha do cliente). -->
+            <div class="fld" id="at_nascWrap"><label for="at_nasc_br" id="at_lblNasc">Data de nascimento <span class="opc" id="at_dicaNasc">(se souber)</span></label><input id="at_nasc" type="date"></div>
             <div class="fld"><label for="at_cidade">Cidade <span class="req">*</span></label><input id="at_cidade" placeholder="Cidade ou CEP"></div>
             <div class="fld"><label for="at_uf">Estado</label><input id="at_uf" maxlength="2" placeholder="MG"></div>
             <div class="fld"><label for="at_colab">Atendido por</label><select id="at_colab"></select></div>
@@ -12894,6 +12913,7 @@ function abrirCliente(c){
   opcoesTipoAt("c_tipoAt");$("c_tipoAt").value="";
   $("c_tipoAtWrap").hidden=!!(c||voltaAtend);
   CAMPOS_CLI.forEach(function(k){var el=$("c_"+k);if(el)el.value=v[k]||"";});
+  ["c_nasc","c_conjnasc"].forEach(sincDataBR);   /* v612 */
   try{renderCaixaTeste(c);}catch(eT){}   /* a caixa do cliente de teste (v376) */
   /* cadastro antigo gravado com "Outro" ou "Prefere não informar": a opção não existe mais
      (20/09), então o valor entra na lista só para este cadastro — assim ninguém apaga o que
@@ -34629,6 +34649,114 @@ function mostrarFacial(){
     : '<div class="note warn"><b>Sem foto facial.</b> A pessoa consegue bater o ponto, e a imagem do momento fica gravada, '+
       "mas não há com o que comparar. Cadastre a foto para a conferência funcionar.</div>";
 }
+/* ===== v612 (25/11, pedido dele): DATA DE NASCIMENTO SE DIGITA, dd/mm/aaaa =====
+   Era só o calendário do aparelho, que abre no dia de hoje: para achar 1974 a pessoa tinha de
+   voltar ano por ano. Agora o campo é de DIGITAR, com as barras entrando sozinhas, teclado de
+   números no celular, e o calendário continua ao lado, no botão.
+   O campo de verdade (type="date") continua existindo com o MESMO id e o MESMO formato do banco
+   (aaaa-mm-dd): nada do que já está gravado muda, e nenhum lugar que lê o campo precisou mudar.
+   Uma função só monta todos: cliente, cônjuge, colaborador, filhos e o Novo atendimento. */
+var IDADE_MAXIMA_AVISO=110;
+function soDigitosData(t){return String(t||"").replace(/[^0-9]/g,"").slice(0,8);}
+function mascaraDataBR(t){
+  var d=soDigitosData(t);
+  if(d.length<=2)return d;
+  if(d.length<=4)return d.slice(0,2)+"/"+d.slice(2);
+  return d.slice(0,2)+"/"+d.slice(2,4)+"/"+d.slice(4);
+}
+/* dd/mm/aaaa → aaaa-mm-dd, conferindo que a data EXISTE (31/02 não passa) */
+function dataBRParaISO(t){
+  var d=soDigitosData(t);
+  if(d.length!==8)return "";
+  var dia=+d.slice(0,2),mes=+d.slice(2,4),ano=+d.slice(4);
+  if(mes<1||mes>12||dia<1||ano<1900)return "";
+  var dt=new Date(ano,mes-1,dia);
+  if(dt.getFullYear()!==ano||dt.getMonth()!==mes-1||dt.getDate()!==dia)return "";
+  return ano+"-"+String(mes).padStart(2,"0")+"-"+String(dia).padStart(2,"0");
+}
+function isoParaDataBR(iso){
+  var m=String(iso||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m?(m[3]+"/"+m[2]+"/"+m[1]):"";
+}
+/* o que a tela diz de cada data digitada: vazia, errada, no futuro ou gente demais */
+function conferirNascBR(txt,opc){
+  var o=opc||{},t=String(txt||"").trim();
+  if(!t)return {iso:"",erro:"",aviso:""};
+  if(soDigitosData(t).length<8)return {iso:"",erro:"Faltam números: a data é dd/mm/aaaa.",aviso:""};
+  var iso=dataBRParaISO(t);
+  if(!iso)return {iso:"",erro:"Esta data não existe. Confira o dia e o mês.",aviso:""};
+  if(!o.aceitaFuturo&&iso>hojeISO())return {iso:"",erro:"A data não pode ser no futuro.",aviso:""};
+  var id=idadeDe(iso);
+  if(id!=null&&id>IDADE_MAXIMA_AVISO)
+    return {iso:iso,erro:"",aviso:"Confira: isso dá "+id+" anos."};
+  return {iso:iso,erro:"",aviso:(id!=null&&id>=0?id+" anos":"")};
+}
+/* monta o campo digitável em cima de um <input type="date"> que já existe na tela.
+   O id do campo não muda: quem lê continua lendo $("<id>").value em aaaa-mm-dd. */
+function ligarDataBR(id,opc){
+  var nat=document.getElementById(id);
+  if(!nat||nat.__dataBR)return null;
+  var o=opc||{};
+  nat.__dataBR=true;
+  var cx=document.createElement("div");cx.className="dtbr";
+  var txt=document.createElement("input");
+  txt.type="text";txt.id=id+"_br";txt.inputMode="numeric";txt.autocomplete="off";
+  txt.placeholder="dd/mm/aaaa";txt.maxLength=10;
+  txt.setAttribute("aria-label",o.rotulo||"Data, no formato dia, mês e ano");
+  var bt=document.createElement("button");
+  bt.type="button";bt.className="btn mut sm dtbr-cal";bt.textContent="📅";
+  bt.title="Abrir o calendário";bt.setAttribute("aria-label","Abrir o calendário");
+  var aviso=document.createElement("div");aviso.className="help dtbr-aviso";aviso.id=id+"_aviso";
+  nat.parentNode.insertBefore(cx,nat);
+  cx.appendChild(txt);cx.appendChild(nat);cx.appendChild(bt);
+  cx.parentNode.insertBefore(aviso,cx.nextSibling);
+  nat.classList.add("dtbr-nat");
+  var euMesmo=false;   /* escrevendo no campo do banco por causa do que foi digitado */
+  function dizer(r){
+    aviso.className="help dtbr-aviso"+(r.erro?" dtbr-ruim":(r.aviso&&r.iso&&/Confira/.test(r.aviso)?" dtbr-atencao":""));
+    aviso.textContent=r.erro||r.aviso||"";
+  }
+  function doTexto(fecha){
+    var antes=txt.value;
+    txt.value=mascaraDataBR(txt.value);
+    if(txt.value!==antes){try{txt.setSelectionRange(txt.value.length,txt.value.length);}catch(e){}}
+    var vazio=!txt.value.trim();
+    var r=conferirNascBR(txt.value,o);
+    if(!fecha&&!vazio&&soDigitosData(txt.value).length<8){dizer({erro:"",aviso:""});return;}
+    dizer(r);
+    var novo=vazio?"":r.iso;
+    if(nat.value!==novo){
+      euMesmo=true;
+      nat.value=novo;
+      try{nat.dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}
+      euMesmo=false;
+    }
+    if(typeof o.aoMudar==="function")try{o.aoMudar(novo);}catch(e){}
+  }
+  txt.addEventListener("input",function(){doTexto(false);});
+  txt.addEventListener("blur",function(){doTexto(true);});
+  /* veio do calendário: o texto acompanha. O que foi DIGITADO não passa por aqui — senão a
+     data errada apagaria o que a pessoa está escrevendo e o aviso sumiria junto. */
+  nat.addEventListener("change",function(){
+    if(euMesmo)return;
+    var esperado=isoParaDataBR(nat.value);
+    if(esperado!==txt.value){txt.value=esperado;dizer(conferirNascBR(esperado,o));}
+  });
+  bt.onclick=function(){
+    try{if(nat.showPicker){nat.showPicker();return;}}catch(e){}
+    try{nat.focus();nat.click();}catch(e){}
+  };
+  /* o que já estava gravado aparece digitado */
+  txt.value=isoParaDataBR(nat.value);
+  if(txt.value)dizer(conferirNascBR(txt.value,o));
+  nat.__sincDataBR=function(){txt.value=isoParaDataBR(nat.value);dizer(conferirNascBR(txt.value,o));};
+  return txt;
+}
+/* o campo foi preenchido por dentro (abrir um cadastro, limpar a tela): o texto acompanha */
+function sincDataBR(id){
+  var e=document.getElementById(id);
+  if(e&&e.__sincDataBR)try{e.__sincDataBR();}catch(x){}
+}
 function idadeDe(nasc){
   if(!nasc)return null;
   var n=new Date(nasc+"T00:00:00"),h=new Date();
@@ -35106,6 +35234,7 @@ function abrirUsuario(i){
   try{ligarPermUsuario();montarPermUsuario(u);}catch(e){console.warn("permissões do usuário",e);}
   ajustarBotoesUsuario();
   CAMPOS_US.forEach(function(k){var e=$("u_"+k);if(e)e.value=u[k]||"";});
+  sincDataBR("u_nasc");   /* v612 */
   try{ajustarConjuge();}catch(e){}
   ["salario","vr","assiduidade","desempenho"].forEach(function(k){$("u_"+k).value=(u[k]!=null?u[k]:"");});
   var j=jornadaDe(u.nome||"");
@@ -35172,7 +35301,10 @@ function renderFilhos(){
   Array.prototype.forEach.call(b.querySelectorAll("[data-fn]"),function(el){
     el.onchange=function(){usFilhos[+el.getAttribute("data-fn")].nome=el.value.trim();};});
   Array.prototype.forEach.call(b.querySelectorAll("[data-fd]"),function(el){
-    el.onchange=function(){usFilhos[+el.getAttribute("data-fd")].nasc=el.value;renderFilhos();};});
+    el.onchange=function(){usFilhos[+el.getAttribute("data-fd")].nasc=el.value;renderFilhos();};
+    /* v612: aqui a data também se digita */
+    if(!el.id)el.id="u_filho_nasc_"+el.getAttribute("data-fd");
+    try{ligarDataBR(el.id,{rotulo:"Nascimento do filho"});}catch(e){}});
   Array.prototype.forEach.call(b.querySelectorAll("[data-frm]"),function(bt){
     bt.onclick=function(){usFilhos.splice(+bt.getAttribute("data-frm"),1);renderFilhos();};});
 }
@@ -43801,9 +43933,11 @@ function ligarCalcProds(){
     try{ligarListinha("caBusca"+k,"caSug"+k,null,null);}catch(e){console.warn("listinha da calculadora",e);}
   });
   Array.prototype.forEach.call(w.querySelectorAll("[data-caqtd]"),function(el){el.oninput=function(){
-    var i=CALC.itens[+el.getAttribute("data-caqtd")];if(i)i.qtd=Math.max(1,parseInt(el.value,10)||1);renderCalcConf();};});
+    var i=CALC.itens[+el.getAttribute("data-caqtd")];if(i)i.qtd=Math.max(1,parseInt(el.value,10)||1);
+    pintarFormasAuto();renderCalcConf();};});
   Array.prototype.forEach.call(w.querySelectorAll("[data-caliq]"),function(el){
-    el.oninput=function(){var i=CALC.itens[+el.getAttribute("data-caliq")];if(i)i.liq=centavos(numMF(el.value)||0);renderCalcConf();};
+    el.oninput=function(){var i=CALC.itens[+el.getAttribute("data-caliq")];if(i)i.liq=centavos(numMF(el.value)||0);
+      pintarFormasAuto();renderCalcConf();};
     el.onchange=function(){renderCalc();};});
   Array.prototype.forEach.call(w.querySelectorAll("[data-catroca]"),function(b){b.onclick=function(){
     var i=CALC.itens[+b.getAttribute("data-catroca")];if(!i)return;
@@ -43841,7 +43975,8 @@ function ligarCalcFormas(){
   Array.prototype.forEach.call(w.querySelectorAll("[data-cafp]"),function(sl){sl.onchange=function(){
     var x=CALC.pgs[+sl.getAttribute("data-cafp")];if(x)x.parc=+sl.value||1;renderCalc();};});
   Array.prototype.forEach.call(w.querySelectorAll("[data-cafl]"),function(el){
-    el.oninput=function(){var x=CALC.pgs[+el.getAttribute("data-cafl")];if(x)x.liq=centavos(numMF(el.value)||0);renderCalcConf();};
+    el.oninput=function(){var x=CALC.pgs[+el.getAttribute("data-cafl")];
+      if(x){x.liq=centavos(numMF(el.value)||0);x.auto=false;}renderCalcConf();};
     el.onchange=function(){renderCalc();};});
   Array.prototype.forEach.call(w.querySelectorAll("[data-cafrm]"),function(b){b.onclick=function(){
     CALC.pgs.splice(+b.getAttribute("data-cafrm"),1);renderCalc();};});
@@ -43917,6 +44052,7 @@ function renderCalc(){
   if(!$("caProds"))return;
   if(!CALC.itens.length)CALC.itens=[calcItemNovo()];
   if(!CALC.pgs.length)CALC.pgs=[calcFormaNova()];
+  calcAcertarAuto();
   renderCalcProds();renderCalcFormas();renderCalcConf();renderCalcCoefs();
   ligarCalc();
   Array.prototype.forEach.call($("caAbas").querySelectorAll("[data-caa]"),function(b){
@@ -43925,18 +44061,52 @@ function renderCalc(){
   $("caTabCoef").hidden=CALC.aba!=="coef";
 }
 function calcItemNovo(){return {pid:"",nome:"",qtd:1,liq:0};}
-function calcFormaNova(){var d=calcFormaPadrao();return {forma:d.forma,parc:d.parc,liq:0};}
-function calcNovo(){CALC.itens=[calcItemNovo()];CALC.pgs=[calcFormaNova()];renderCalc();}
-function calcAddProd(){CALC.itens.push(calcItemNovo());renderCalc();}
-function calcAddForma(){
-  var f=calcFormaNova();
-  f.liq=Math.max(0,centavos(calcTotLiq()-calcTotDist()));
-  CALC.pgs.push(f);renderCalc();
+/* A FORMA NASCE "SOZINHA" (regra dele, 25/11): enquanto ninguém digitar um valor nela, ela vale
+   a soma dos produtos incluídos acima — com uma forma só, o campo é o total da venda. Quem digita
+   assume o valor à mão (auto=false) e a forma para de acompanhar; é assim que a venda se divide
+   em mais de uma forma. Havendo mais de uma forma sozinha, quem fica com o resto é a última. */
+function calcFormaNova(){var d=calcFormaPadrao();return {forma:d.forma,parc:d.parc,liq:0,auto:true};}
+function calcAcertarAuto(){
+  var autos=[],fixo=0;
+  CALC.pgs.forEach(function(x){
+    if(x&&x.auto)autos.push(x);else fixo+=(+((x||{}).liq)||0);
+  });
+  if(!autos.length)return false;
+  var mudou=false,resto=Math.max(0,centavos(calcTotLiq()-centavos(fixo)));
+  autos.forEach(function(x,k){
+    var v=(k===autos.length-1)?resto:0;
+    if(centavos(+x.liq||0)!==v){x.liq=v;mudou=true;}
+  });
+  return mudou;
 }
+/* o valor mudou por causa dos produtos: escreve no campo da forma sem redesenhar a tela,
+   senão quem está digitando o preço do produto perde o cursor */
+function pintarFormasAuto(){
+  if(!calcAcertarAuto())return;
+  var w=$("caFormas");if(!w)return;
+  Array.prototype.forEach.call(w.querySelectorAll("[data-cafl]"),function(el){
+    var x=CALC.pgs[+el.getAttribute("data-cafl")];if(!x||!x.auto)return;
+    var v=(+x.liq||0)>0?brMF(x.liq):"";
+    if(el.value!==v)el.value=v;
+  });
+}
+function calcNovo(){CALC.itens=[calcItemNovo()];CALC.pgs=[calcFormaNova()];renderCalc();}
+function calcAddProd(){
+  CALC.itens.push(calcItemNovo());renderCalc();
+  /* o botão ficou em cima: sem isto, o produto novo nasce fora da tela */
+  try{
+    var w=$("caProds"),ls=w?w.querySelectorAll(".ca-linha"):null;
+    if(ls&&ls.length){
+      ls[ls.length-1].scrollIntoView({block:"center",behavior:"smooth"});
+      var b=$("caBusca"+(CALC.itens.length-1));if(b)b.focus({preventScroll:true});
+    }
+  }catch(e){}
+}
+function calcAddForma(){CALC.pgs.push(calcFormaNova());renderCalc();}
+/* o botão devolve a última forma ao automático — o resto cai nela sozinho */
 function calcFaltaUltima(){
   if(!CALC.pgs.length)return;
-  var u=CALC.pgs[CALC.pgs.length-1],outras=centavos(calcTotDist()-(+u.liq||0));
-  u.liq=Math.max(0,centavos(calcTotLiq()-outras));renderCalc();
+  CALC.pgs[CALC.pgs.length-1].auto=true;renderCalc();
 }
 var calcLigado=false;
 function ligarCalc(){
@@ -43960,7 +44130,9 @@ function calcLer(){
     var o=JSON.parse(t);
     if(!o||o.loja!==lojaAtual||o.u!==usuarioAtual)return false;
     if(!(o.itens&&o.itens.length&&o.pgs&&o.pgs.length))return false;
-    CALC.itens=o.itens;CALC.pgs=o.pgs;return true;
+    CALC.itens=o.itens;CALC.pgs=o.pgs;
+    CALC.pgs.forEach(function(x){if(x&&typeof x.auto!=="boolean")x.auto=!((+x.liq||0)>0);});
+    return true;
   }catch(e){return false;}
 }
 function calcCopiar(){
@@ -67127,6 +67299,7 @@ function abrirAtend(a){
   var v=a||{};
   $("at_nome").value=v.cliente||"";$("at_tel").value=v.tel||"";$("at_doc").value=v.doc||"";
   $("at_cidade").value=v.cidade||"";$("at_sexo").value=v.sexo||"";$("at_uf").value=v.uf||"";
+  if($("at_nasc")){$("at_nasc").value=v.nasc||"";try{sincDataBR("at_nasc");}catch(e){}}   /* v612 */
   ["cep","rua","num","comp","bairro","ref"].forEach(function(k){$("at_"+k).value=v[k]||"";});
   $("at_tipoend").value=v.tipoend||"urbano";$("at_geo").value=v.geo||"";
   $("at_geo").__escolhido=v.geo||"";$("at_geo").__geoExato=(v.geoOrigem==="exato")?(v.geo||""):"";
@@ -67314,6 +67487,10 @@ function aplicarTipoPessoaAt(travado){
   var fs=$("at_sexo")?$("at_sexo").closest(".fld"):null;
   if(fs)fs.hidden=pj;
   if(pj&&$("at_sexo"))$("at_sexo").value="";
+  /* v612: nem nascimento — empresa tem data de fundação, que não se pede no atendimento */
+  var fn=$("at_nascWrap");
+  if(fn)fn.hidden=pj;
+  if(pj&&$("at_nasc")){$("at_nasc").value="";try{sincDataBR("at_nasc");}catch(e){}}
   var aj=$("at_tipoAjuda");
   if(aj)aj.textContent=!tipoPessoaAt?"Escolha para o sistema pedir os campos certos."
     :(pj?("Cadastro de empresa: o documento é o CNPJ e o sexo não se aplica."+(travado?" Vem do cadastro.":""))
@@ -67334,6 +67511,7 @@ function preencherCliente(c){
   marcarTipoPessoaAt(c.tipo||"Pessoa Física",true);
   $("at_nome").value=c.nome||"";$("at_tel").value=c.tel||"";$("at_doc").value=c.doc||"";
   $("at_cidade").value=c.cidade||"";$("at_sexo").value=c.sexo||"";
+  if($("at_nasc")){$("at_nasc").value=c.nasc||"";try{sincDataBR("at_nasc");}catch(e){}}   /* v612 */
   ["cep","rua","num","comp","bairro","ref"].forEach(function(k){$("at_"+k).value=c[k]||"";});
   $("at_tipoend").value=c.tipoend||"urbano";$("at_geo").value=c.geo||"";
   $("at_geo").__escolhido=c.geo||"";$("at_geo").__geoExato=(c.geoOrigem==="exato")?(c.geo||""):"";
@@ -67357,6 +67535,7 @@ function abrirLeadCompleto(){
   var d={nome:$("at_nome").value.trim(),tel:$("at_tel").value.trim(),
     doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
     uf:$("at_uf").value.trim().toUpperCase(),sexo:$("at_sexo").value,
+    nasc:($("at_nasc")?$("at_nasc").value:""),   /* v612 */
     cep:$("at_cep").value.trim(),rua:$("at_rua").value.trim(),num:$("at_num").value.trim(),bairro:$("at_bairro").value.trim(),
     comp:$("at_comp").value.trim(),ref:$("at_ref").value.trim(),
     tipoend:$("at_tipoend").value||"urbano",geo:$("at_geo").value.trim(),
@@ -67601,7 +67780,9 @@ async function salvarAtend__corpo(){
   var leadNovo=null;
   if(!clienteVinc){
     /* obrigatórios do lead: nome e sobrenome, telefone e cidade.
-       CPF, identidade, nascimento, sexo e endereço ficam para quando virar cliente. */
+       CPF, identidade e endereço ficam para quando virar cliente. A data de nascimento tem campo
+       aqui desde a v612, mas NÃO é obrigatória (regra dele, 25/11): quem conseguir a data já
+       deixa o cadastro completo; quem não conseguir não fica preso no atendimento. */
     var faltaLead=[];
     /* tipo de pessoa é a primeira escolha e é obrigatória (regra dele, 02/10): é ela que decide
        se o cadastro é de pessoa (nome e sobrenome, CPF, sexo) ou de empresa (razão social, CNPJ) */
@@ -67612,6 +67793,15 @@ async function salvarAtend__corpo(){
     if(!$("at_origem").value)faltaLead.push("origem");
     /* sexo obrigatório no cadastro (regra dele, 20/09); empresa não tem */
     if(!pjAt&&!$("at_sexo").value)faltaLead.push("sexo");
+    /* v612: a data de nascimento é opcional no lead. Vazia, passa. Mas o que foi digitado errado
+       (data que não existe, data no futuro) não entra no cadastro calado: aí sim trava. */
+    if(!pjAt){
+      var txtN=($("at_nasc_br")&&$("at_nasc_br").value)||"";
+      if(txtN.replace(/\D/g,"")){
+        var rN=conferirNascBR(txtN);
+        if(!rN.iso)faltaLead.push("data de nascimento ("+(rN.erro||"data inválida").toLowerCase().replace(/\.$/,"")+")");
+      }
+    }
     /* veio por indicação: sem dizer quem indicou, o indicador não ganha a estrela */
     if(ehOrigemIndicacao($("at_origem").value)&&!$("at_indicado").value)faltaLead.push("quem indicou");
     if(faltaLead.length){
@@ -67652,7 +67842,7 @@ async function salvarAtend__corpo(){
     }
   if(!clienteVinc){
     var c={id:uid(),loja:lojaAtual,codigo:(await codigoClienteNovo()),tipo:(tipoPessoaAt||"Pessoa Física"),
-      nome:nome,sexo:$("at_sexo").value,tel:tel,
+      nome:nome,sexo:$("at_sexo").value,tel:tel,nasc:($("at_nasc")?$("at_nasc").value:""),   /* v612 */
       doc:$("at_doc").value.trim(),cidade:$("at_cidade").value.trim(),
       uf:$("at_uf").value.trim().toUpperCase(),origem:$("at_origem").value,origemEm:iso(new Date()),
       cep:$("at_cep").value.trim(),rua:$("at_rua").value.trim(),num:$("at_num").value.trim(),bairro:$("at_bairro").value.trim(),
@@ -67686,8 +67876,10 @@ async function salvarAtend__corpo(){
   }
   /* endereço digitado no atendimento completa o que o cadastro ainda não tem */
   var endMudou=false;
-  ["cep","rua","num","comp","bairro","ref","uf","tipoend","geo"].forEach(function(k){
-    var v=$("at_"+k).value.trim();if(k==="uf")v=v.toUpperCase();
+  /* v612: a data de nascimento entra nessa mesma regra — só preenche o que falta, nunca troca */
+  ["cep","rua","num","comp","bairro","ref","uf","tipoend","geo","nasc"].forEach(function(k){
+    var el=$("at_"+k);if(!el)return;
+    var v=el.value.trim();if(k==="uf")v=v.toUpperCase();
     if(v&&!clienteVinc[k]){clienteVinc[k]=v;endMudou=true;}
   });
   if(endMudou&&clienteVinc.geo&&clienteVinc.geo===$("at_geo").value.trim()){
@@ -75654,6 +75846,13 @@ function ligar(){
     ir("cfgmetas");var sq=$("cmQuem");renderCfgMetas();sq.value=n;renderCfgMetas();
     toast("Metas de "+n+".");};
   ["u_nasc","u_admissao"].forEach(function(id){$(id).onchange=notaIdade;});
+  /* v612: as datas de nascimento passam a ser DIGITÁVEIS (dd/mm/aaaa), com o calendário ao lado */
+  try{
+    ligarDataBR("c_nasc",{rotulo:"Data de nascimento"});
+    ligarDataBR("c_conjnasc",{rotulo:"Nascimento do cônjuge"});
+    ligarDataBR("u_nasc",{rotulo:"Nascimento"});
+    ligarDataBR("at_nasc",{rotulo:"Data de nascimento"});
+  }catch(eDB){console.warn("campo de data",eDB);}
   $("u_temfilhos").onchange=toggleFilhos;
   $("u_zerarSenha").onclick=async function(){
     if(!editandoUs){toast("Salve o colaborador primeiro.");return;}
