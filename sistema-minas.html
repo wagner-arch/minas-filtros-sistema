@@ -24385,6 +24385,42 @@ function podeAutorizarEstoque(loc,quem){
   if(ehAlmox(q))return true;
   return respondePeloEstoque(q,loc);
 }
+/* v617: a aba Autorizações aparece para quem é responsável por algum estoque QUE PRECISA
+   autorizar. Na visão completa ela existe sempre. Na visão do colaborador ela só aparece
+   quando há algo esperando a decisão dele — inclusive sobre a PRÓPRIA caixinha, porque desde
+   a v535 quem decide a saída do estoque de alguém é o dono dele. Sem nada pendente, a tela
+   dele fica limpa: saldo e demandas, como ele pediu. */
+/* tem alguma linha para esta pessoa na aba Autorizações? É a MESMA conta que a aba usa para
+   montar a lista: o que espera a decisão dela (inclusive sobre a própria caixinha, porque
+   desde a v535 quem decide a saída do estoque de alguém é o dono) e o que ela mesma pediu. */
+function temAutorizacaoParaMim(quem){
+  var eu=quem||euNoEstoque(),n=0;
+  try{
+    n+=autorizacoesEstoque().filter(function(x){
+      if(!x||!x.aut)return false;
+      if(x.aut.status==="pendente"&&podeAutorizarEstoque(x.aut.local,eu))return true;
+      return x.aut.pedidaPor===eu||podeAutorizarEstoque(x.aut.local,eu);
+    }).length;
+  }catch(e){}
+  try{
+    var meus=meusLocaisEst(quem);
+    n+=pedidosAoEstoqueGeralVisiveis().filter(function(r){return meus.indexOf(localDaReq(r))>=0;}).length;
+  }catch(e2){}
+  return n>0;
+}
+function podeAutorizarAlgumEstoque(quem){
+  try{
+    if(visaoCompletaEst())return true;
+    if(podeAcao("autorizarEstoque",quem))return true;
+    if(ehAlmox(quem))return true;
+    /* na visão do colaborador a aba só existe quando HÁ o que ver nela — o que espera a decisão
+       dele (inclusive sobre a própria caixinha, que desde a v535 é ele quem decide) e o que ele
+       mesmo pediu ao almoxarifado. Sem nada pendente, a tela dele fica como ele pediu: saldo e
+       demandas. */
+    return temAutorizacaoParaMim(quem);
+  }catch(e){return false;}
+}
+window.__abaAutMF={pode:podeAutorizarAlgumEstoque,tem:temAutorizacaoParaMim};
 /* o estoque escolhido no campo "Sai de" da linha do item; "meu" é o de quem entrega */
 function localItemForm(){
   var e=$("v_estoque"),v=e?String(e.value||""):"";
@@ -32958,8 +32994,34 @@ async function confirmarReposicaoItens__corpo(){
    só os estoques deles: o próprio e os marcados na ficha (a Loja, quando respondem por ela).
    O vendedor nunca vê custo nem valor aqui. Nada aqui grava sozinho: os botões chamam as funções
    que já existem (com a trava e o aviso de gravação). */
+/* ====== DUAS VISÕES DO ESTOQUE (26/11, v617, pedido dele) ======
+   VISÃO COMPLETA — função Almoxarifado (com o substituto do estoquista), Administrador, Gerente
+   e o Financeiro, que por regra de 26/10 vê todas as telas: escolhe o estoque de qualquer
+   colaborador e vê tudo — cartões, custo, valor, "No almoxarifado", "Separado para encomenda",
+   "Saiu, aguardando aprovação" e o histórico.
+   VISÃO DO COLABORADOR — todos os outros: só o próprio estoque e os que ele responde (os
+   marcados na ficha dele), lista simples de Produto e Quantidade, sem cartões, sem custo nem
+   valor, sem "No almoxarifado" e sem "Saiu, aguardando aprovação". Ficam as Requisições a
+   receber, as Devoluções dele e os botões de requisitar e devolver; "Autorizações" só aparece
+   para quem responde por algum estoque. O histórico é só o dele e não tem valores.
+   A trava NÃO é só a tela: `podeVerEstoque` decide, e as duas telas recusam um estoque de fora
+   da lista mesmo que alguém force o valor do seletor. */
 function visaoCompletaEst(){return veTela("estEmpresa");}
+/* este estoque é meu de ver? (na visão completa, todos; na do colaborador, só os dele) */
+function podeVerEstoque(loc,quem){
+  if(!loc)return false;
+  if(visaoCompletaEst())return true;
+  try{return meusLocaisEst(quem).indexOf(loc)>=0;}catch(e){return false;}
+}
+/* o estoque que a tela pode mostrar: o pedido, se for dele; senão, o primeiro que ele pode ver */
+function estoqueQuePosso(loc,lista){
+  var L=lista&&lista.length?lista:(visaoCompletaEst()?[]:meusLocaisEst());
+  if(loc&&podeVerEstoque(loc))return loc;
+  return L[0]||"";
+}
 window.__visaoCompletaEstMF=function(){return visaoCompletaEst();};
+window.__visaoEstMF={completa:visaoCompletaEst,pode:podeVerEstoque,meus:function(q){return meusLocaisEst(q);},
+  posso:estoqueQuePosso};
 /* os estoques da visão leve: o meu, a Loja que eu respondo e os marcados na minha ficha */
 function meusLocaisEst(){
   var eu=euNoEstoque(),out=[locColab(eu)];
@@ -33747,14 +33809,18 @@ function renderEstSaldo(){
   if(_estPadraoSd){_estPadraoSd=false;if(estPadraoAdmin()&&L.indexOf(locColab(euNoEstoque()))>=0)sel.value=locColab(euNoEstoque());}
   if(!sel.value&&L.length)sel.value=L[0];
   $("sdQuemWrap").hidden=(L.length<2);
-  var loc=sel.value||L[0]||"";
+  /* v617: nem forçando o valor do seletor o colaborador lê outro estoque */
+  var loc=estoqueQuePosso(sel.value||L[0]||"",L);
+  if(sel.value!==loc)sel.value=loc;
+  var leveSd=!visaoCompletaEst();
   $("sdSub").textContent=loc?(loc===LOC_EMPRESA?"Almoxarifado":nomeLocal(loc)):"";
   var q=semAcento(String($("sdBusca").value||"")).toLowerCase().trim();
-  var res=loc?reservasDe(loc):{},custo=podeVerCusto();
+  var res=loc?reservasDe(loc):{},custo=podeVerCusto()&&!leveSd;
   /* v616: a coluna "Reservado" saiu. No lugar, "Saiu, aguardando aprovação" — o que já foi
      entregue ou instalado e a venda ainda não foi aprovada. É SÓ INFORMAÇÃO: não desconta do
      disponível (o único desconto que sobrou é a separação de encomenda, que vem em res). */
-  var saiu=loc?saiuAguardandoAprov(loc):{};
+  /* v617: a coluna informativa é da visão completa; o colaborador vê só o que tem */
+  var saiu=(loc&&!leveSd)?saiuAguardandoAprov(loc):{};
   var lista=produtos.filter(function(p){
     if((p.status||"ativo")!=="ativo")return false;
     var s=saldoEm(p.id,loc),r=res[p.id]||0;if(!s&&!r)return false;
@@ -33775,22 +33841,24 @@ function renderEstSaldo(){
     return '<div class="sd-card'+(x.s<0?" neg":"")+'"'+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+'><div class="nm"><b>'+esc(x.p.nome||"")+"</b><span>"+esc(x.p.cod||"")+"</span>"+locHtml(x.p)+
       (x.r?'<div class="sd-res">'+x.r+" separado(s) para encomenda"+
         (textoReservaEnc(x.p.id,loc)?" · "+esc(textoReservaEnc(x.p.id,loc)):"")+"</div>":"")+
-      /* v616: só informa, não desconta */
-      (x.i?'<div class="sd-saiu">'+x.i+" saiu, aguardando aprovação"+
+      /* v616: só informa, não desconta · v617: só na visão completa */
+      ((x.i&&!leveSd)?'<div class="sd-saiu">'+x.i+" saiu, aguardando aprovação"+
         (x.peds.length?' <span class="t-sub">'+esc(x.peds.map(function(d){return "pedido "+d.numero;}).join(" · "))+"</span>":"")+"</div>":"")+
       /* v610: produto que entrou por empréstimo da outra empresa */
       (textoDividaProduto(x.p.id)?'<div class="sd-res">'+esc(textoDividaProduto(x.p.id))+"</div>":"")+'</div><div class="sd-qtd '+cls(x.s)+'">'+x.s+"</div></div>";}).join("")
     :'<div class="empty"><div class="big">Nenhum produto</div>'+(q?"Nada com essa busca.":"Este estoque está vazio.")+"</div>";
   /* v616: no lugar de "Reservado", a coluna informativa "Saiu, aguardando aprovação" */
-  $("sdHead").innerHTML="<tr><th>Produto</th><th>Código</th>"+(comLoc?"<th>Localização</th>":"")+"<th class=\"num\">Quantidade</th><th>Saiu, aguardando aprovação</th>"+(custo?'<th class="num">Valor</th>':"")+"</tr>";
+  $("sdHead").innerHTML="<tr><th>Produto</th><th>Código</th>"+(comLoc?"<th>Localização</th>":"")+"<th class=\"num\">Quantidade</th>"+
+    (leveSd?"":"<th>Saiu, aguardando aprovação</th>")+(custo?'<th class="num">Valor</th>':"")+"</tr>";
   $("sdBody").innerHTML=lista.length?lista.map(function(x){
     return "<tr"+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+"><td>"+esc(x.p.nome||"")+"</td><td>"+esc(x.p.cod||"")+"</td>"+(comLoc?"<td>"+locHtml(x.p)+"</td>":"")+'<td class="num"><b class="'+cls(x.s)+'">'+x.s+"</b></td>"+
-      "<td>"+(x.i?'<span class="pill p-warn">'+x.i+"</span>"+
+      /* v617: a coluna informativa é só da visão completa */
+      (leveSd?"":"<td>"+(x.i?'<span class="pill p-warn">'+x.i+"</span>"+
           (x.peds.length?'<div class="t-sub">'+esc(x.peds.map(function(d){return "pedido "+d.numero+" ("+(d.cliente||"")+", "+dataBR(d.data)+")";}).join(" · "))+"</div>":"")
         :"—")+
         (x.r?'<div class="t-sub">'+x.r+" separado(s) para encomenda</div>":"")+
         (textoReservaEnc(x.p.id,loc)?'<div class="t-sub">'+esc(textoReservaEnc(x.p.id,loc))+"</div>":"")+
-        (textoDividaProduto(x.p.id)?'<div class="t-sub">'+esc(textoDividaProduto(x.p.id))+"</div>":"")+"</td>"+
+        (textoDividaProduto(x.p.id)?'<div class="t-sub">'+esc(textoDividaProduto(x.p.id))+"</div>":"")+"</td>")+
       (custo?'<td class="num">'+BRL(x.saldo*custoTotalDe(x.p))+"</td>":"")+"</tr>";}).join("")
     :'<tr><td colspan="5"><div class="empty"><div class="big">Nenhum produto</div></div></td></tr>';
   Array.prototype.forEach.call(document.querySelectorAll("#s-estSaldo [data-sdloc]"),function(b){b.onclick=function(ev){ev.stopPropagation();pedirLocalNF(b.getAttribute("data-sdloc"));};});
@@ -33903,7 +33971,8 @@ function ajustarTextosEC(){
   /* a aba Autorizações é só de produto — ferramenta tem o caminho dela */
   var bAut=ab.querySelector('[data-t="aut"]');
   if(bAut){
-    bAut.hidden=ferr;
+    bAut.hidden=ferr||!podeAutorizarAlgumEstoque();
+    if(bAut.hidden&&ecAba==="aut")ecAba="meu";
     var nAut=0;try{
       var vq0=$("ecQuem")?String($("ecQuem").value||""):"",lq0=ehLocalLoja(vq0)?vq0:locColab(vq0);
       nAut=autorizacoesParaMim().length+(podeAprovarRetirada()?pedidosAoEstoqueGeral().filter(function(r){return localDaReq(r)===lq0;}).length:0);
@@ -33966,12 +34035,19 @@ function renderEstColab(){
   var sq=$("ecQuem"),euEst=euNoEstoque(),atual=sq.value;
   /* quem não é da gestão vê o próprio estoque e os Estoques de Loja que ele responde */
   /* a gestão e o almoxarifado (28/10) veem o estoque de todos */
-  var verTodosEst=ehGestor()||ehAlmox();
-  var lista=verTodosEst?colabsComEstoque():[euEst];
+  /* v617: a visão COMPLETA é a mesma porta da tela Saldo — Almoxarifado (com o substituto),
+     Administrador, Gerente e o Financeiro. Os outros só veem os estoques DELES: o próprio, os
+     Estoques de Loja que respondem e os marcados na ficha (`meusLocaisEst`). */
+  var verTodosEst=visaoCompletaEst();
+  var leve=!verTodosEst;
+  var meus=[];try{meus=meusLocaisEst();}catch(eMl){meus=[locColab(euEst)];}
+  var lista=verTodosEst?colabsComEstoque()
+    :meus.filter(function(l){return l.indexOf("colab:")===0;}).map(function(l){return l.slice(6);});
   /* só a empresa aberta: desde a v394 o sistema trabalha numa empresa de cada vez, e o Estoque
      da Loja da outra apareceria sempre vazio aqui dentro */
-  var lojasEst=(verTodosEst?LOJAS:lojasQueRespondo(euEst)).filter(function(l){return l.id===lojaAtual;})
-    .map(function(l){return locLoja(l.id);});
+  var lojasEst=verTodosEst
+    ?LOJAS.filter(function(l){return l.id===lojaAtual;}).map(function(l){return locLoja(l.id);})
+    :meus.filter(function(l){return ehLocalLoja(l)&&lojaDoLocal(l)===lojaAtual;});
   sq.innerHTML="";
   lojasEst.forEach(function(lc){
     var o=document.createElement("option");o.value=lc;
@@ -33992,6 +34068,14 @@ function renderEstColab(){
   if(atual&&valores.indexOf(atual)>=0)sq.value=atual;
   else if(valores.indexOf(euEst)>=0)sq.value=euEst;
   else if(valores.length)sq.value=valores[0];
+  /* v617: a trava não é só a tela — forçar o valor do seletor não abre o estoque de outro */
+  if(leve){
+    var alvo=ehLocalLoja(sq.value||"")?(sq.value||""):locColab(sq.value||"");
+    if(!podeVerEstoque(alvo)){
+      sq.value=(valores.indexOf(euEst)>=0?euEst:(valores[0]||""));
+      if(atual)toast("Você vê só o seu estoque e os que você responde.");
+    }
+  }
   /* é estoque de loja ou de pessoa? quem fica vazio na loja, porque ali o dono é a loja */
   var vSel=sq.value||"",ehLoja=ehLocalLoja(vSel);
   /* o botao da contagem segue o estoque escolhido (e nao so o tipo, como no ajustarTextosEC) */
@@ -33999,6 +34083,12 @@ function renderEstColab(){
   if(btCg)btCg.hidden=(ecTipo==="ferr")||!ehLoja||!podeContarInv()||!!invAbertoDe(vSel);
   var loc=ehLoja?vSel:locColab(vSel),quem=ehLoja?"":vSel;
   /* o número da aba Autorizações é o do estoque escolhido (28/10) */
+  /* v617: quem não responde por estoque de outro não tem o que autorizar */
+  try{
+    var btAut=$("ecAbas")&&$("ecAbas").querySelector('[data-t="aut"]');
+    if(btAut){btAut.hidden=(ecTipo==="ferr")||!podeAutorizarAlgumEstoque();
+      if(btAut.hidden&&ecAba==="aut"){ecAba="meu";}}
+  }catch(eBa){}
   try{var bgA=$("ecAutBadge");if(bgA){
     var nA=autorizacoesParaMim().length+(podeAprovarRetirada()?pedidosAoEstoqueGeral().filter(function(r){return localDaReq(r)===loc;}).length:0);
     bgA.textContent=nA||"";bgA.hidden=!nA||ecTipo==="ferr";}}catch(eBg){}
@@ -34018,7 +34108,9 @@ function renderEstColab(){
   $("ecResumo").textContent=ehLoja
     ? nomeLocal(loc)+" · "+(respEstoqueLoja(lojaDoLocal(loc))||"sem responsável")
     : quem+" · "+perfilDe(quem);
-  $("ecKpis").innerHTML=
+  /* v617: na visão do colaborador a tela é uma lista simples — sem cartões de resumo */
+  if($("ecKpis"))$("ecKpis").hidden=leve;
+  $("ecKpis").innerHTML=leve?"":
     '<div class="kpi"><div class="l">Itens diferentes</div><div class="v">'+comigo.length+"</div></div>"+
     '<div class="kpi"><div class="l">Unidades</div><div class="v">'+unid+"</div></div>"+
     '<div class="kpi"><div class="l">Separado para encomenda</div><div class="v">'+
@@ -34038,7 +34130,10 @@ function renderEstColab(){
 
   var h=$("ecHead"),b=$("ecBody");b.innerHTML="";
   if(ecAba==="meu"){
-    h.innerHTML="<th>Produto</th><th class=\"num\">Comigo</th><th class=\"num\">Separado para encomenda</th><th class=\"num\">Disponível</th><th>Saiu, aguardando aprovação</th><th class=\"num\">No almoxarifado</th>"+(podeVerCusto()?"<th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th>":"")+"<th></th>";
+    /* v617: a visão do colaborador é só Produto e Quantidade (mais o botão de devolver) */
+    h.innerHTML=leve
+      ?"<th>Produto</th><th class=\"num\">Quantidade</th><th></th>"
+      :"<th>Produto</th><th class=\"num\">Comigo</th><th class=\"num\">Separado para encomenda</th><th class=\"num\">Disponível</th><th>Saiu, aguardando aprovação</th><th class=\"num\">No almoxarifado</th>"+(podeVerCusto()?"<th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th>":"")+"<th></th>";
     var l1=comigo.filter(function(p){return !q||(p.nome||"").toLowerCase().indexOf(q)>=0||(p.cod||"").toLowerCase().indexOf(q)>=0;})
       .sort(function(a,b2){return (a.nome||"").localeCompare(b2.nome||"","pt-BR");});
     $("ecCount").textContent=l1.length+(l1.length===1?" produto":" produtos");
@@ -34048,6 +34143,13 @@ function renderEstColab(){
     l1.forEach(function(p){
       var s=saldoEm(p.id,loc),rs=reserv[p.id]||0,dp=s-rs;
       var utRow=(ehProdutoSucata(p)&&s>0)?usadoTrocaDoColab(quem):null;
+      if(leve){
+        b.innerHTML+='<tr><td><div class="t-main">'+esc(p.nome)+'</div><div class="t-sub"><code>'+esc(p.cod)+"</code>"+
+          (utRow?' <span class="pill '+(utRow.atrasado?"p-crit":"p-warn")+'">'+(utRow.atrasado?"atrasado: devolver hoje":"devolver ao almoxarifado amanhã")+"</span>":"")+"</div></td>"+
+          '<td class="num"><b class="'+(s<0?"q-neg":(s?"q-tem":"q-zero"))+'">'+s+"</b></td>"+
+          '<td class="num">'+(s>0?'<button class="btn mut sm" type="button" data-ecd="'+p.id+'">Devolver</button>':"")+"</td></tr>";
+        return;
+      }
       b.innerHTML+='<tr><td><div class="t-main">'+esc(p.nome)+'</div><div class="t-sub"><code>'+esc(p.cod)+"</code>"+
         (utRow?' <span class="pill '+(utRow.atrasado?"p-crit":"p-warn")+'">'+(utRow.atrasado?"atrasado: devolver hoje":"devolver ao almoxarifado amanhã")+"</span>":"")+"</div></td>"+
         '<td class="num"><b>'+s+'</b></td><td class="num">'+(rs||"—")+"</td>"+
