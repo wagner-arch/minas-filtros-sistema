@@ -795,6 +795,10 @@ body.tn .tv-so{display:none!important}
   .q-tem{color:var(--ok)}.q-zero{color:var(--ink-3)}.q-neg{color:var(--crit)}
   .sd-card.neg{border:2px solid var(--crit)}
   .sd-res{color:var(--warn);font-weight:600;font-size:12.5px}
+  /* 26/11 (v616): só informa o que já saiu e espera aprovação; não desconta nada */
+  .sd-saiu{color:var(--ink-3);font-size:12.5px;margin-top:2px}
+  .iv-saiu{margin:8px 0}
+  .sd-saiu .t-sub{display:block}
   .est-barra{display:flex;gap:10px;margin-top:12px}
   .hs-dia{font-weight:700;margin:14px 0 6px;font-size:14px}
   .hs-lin{display:flex;gap:10px;align-items:baseline;border-bottom:1px solid var(--line);padding:7px 0;font-size:13.5px;flex-wrap:wrap}
@@ -29010,43 +29014,97 @@ function saidasLiquidas(p){
   return Object.keys(m).filter(function(k){return m[k]>0;}).map(function(k){
     var i=k.indexOf("|");return {pid:k.slice(0,i),local:k.slice(i+1),qtd:m[k]};});
 }
-/* reservas das vendas ainda não aprovadas, no estoque de um local: {produtoId: qtd} */
-/* soEntregues (inventário, 03/11): só as vendas cujo produto já saiu de verdade — sem instalação
-   esperando para ser feita (balcão, ou instalação já feita) */
+/* ====== ACABOU A RESERVA (26/11/2026, v616 — decisão dele) ======
+   Pedido feito, salvo, agendado ou aguardando aprovação NÃO reserva peça nenhuma. Quem precisa da
+   peça para uma venda futura requisita antes, para a própria caixinha. O saldo só baixa na
+   aprovação (com instalação, na conclusão dela), como já era.
+   Então o DISPONÍVEL de qualquer estoque passou a ser o saldo do sistema menos uma coisa só: a
+   separação de ENCOMENDA (v606), em que a peça que chegou é do cliente que pagou o sinal.
+   A funcao reservasDe continua existindo, com o mesmo nome e a mesma forma, porque meio sistema a chama
+   — o que mudou é o que ela devolve. A regra antiga (reserva calculada a partir dos pedidos, com
+   a autorização pendente e a requisição a receber) está no histórico, em v616. Nada foi gravado:
+   a reserva sempre foi CALCULADA, então ela deixou de valer sozinha.
+   Os parametros excluirId e soEntregues ficam para não quebrar quem chama; nenhum dos dois
+   muda mais o resultado. Quem quer saber o que já saiu e espera aprovação usa
+   saiuAguardandoAprov, que é informativo e NÃO desconta do disponível. */
 function reservasDe(local,excluirId,soEntregues){
-  var r={},aRec=reqVendaAReceber(),pend={};
-  pedidos.forEach(function(p){
-    /* v567: a venda aprovada que ainda espera a instalação NÃO baixou o estoque — a peça continua
-       no saldo de quem instala e tem de continuar reservada, senão outro pedido usaria a mesma. */
-    if(p.loja!==lojaAtual||(!vendaPendente(p)&&(podeBaixarPedido(p)||p.status==="Cancelada"||p.cancelado)))return;
-    if(excluirId&&p.id===excluirId)return;
-    if(soEntregues&&p.instalacao&&!p.instaladoEm)return;
-    var saiu={},pede={};
-    /* o que já saiu deste pedido NAQUELE estoque, e o que ele ainda pede dali */
-    saidasLiquidas(p).forEach(function(s){if(s.local===local)saiu[s.pid]=(saiu[s.pid]||0)+s.qtd;});
-    itensDeEstoque(p).forEach(function(it){
-      if(it.baixaDispensada)return;   /* v565: já está com o cliente, não reserva nada */
-      if(localDoItemVenda(p,it)!==local)return;
-      /* v535: esperando a decisão do dono, reserva só até o que ele tem disponível (nunca acima do saldo) */
-      if(it.autEstoque&&it.autEstoque.status==="pendente"&&autUsaRegraNova(p,it.autEstoque)){
-        if(!(saidasLiquidas(p).some(function(s){return s.local===local&&s.pid===it.pid;})))pend[it.pid]=(pend[it.pid]||0)+(+(it.qtd||1));
-        return;}
-      pede[it.pid]=(pede[it.pid]||0)+(it.qtd||1);});
-    /* o que vem do almoxarifado pela requisição desta venda ainda não está no estoque: não reserva (03/11) */
-    var ar=aRec[p.id]||{};
-    Object.keys(pede).forEach(function(pid){pede[pid]-=(ar[pid+"|"+local]||0);});
-    Object.keys(pede).forEach(function(pid){r[pid]=(r[pid]||0)+Math.max(0,pede[pid]-(saiu[pid]||0));});
-  });
-  /* v606: o que chegou e está reservado para uma encomenda não está disponível para ninguém */
+  var r={};
   try{
     var re=reservadoEncomendaLocal(local);
     Object.keys(re).forEach(function(pid){r[pid]=(r[pid]||0)+re[pid];});
   }catch(eRe){}
-  Object.keys(pend).forEach(function(pid){
-    var livre=Math.max(0,saldoEm(pid,local)-(r[pid]||0));
-    if(Math.min(pend[pid],livre)>0)r[pid]=(r[pid]||0)+Math.min(pend[pid],livre);});
   return r;
 }
+/* ====== O QUE JÁ SAIU E ESPERA APROVAÇÃO (v616) ======
+   Venda não aprovada cuja peça já saiu de verdade: balcão (entregue na hora) ou instalação já
+   concluída. É só informação — não desconta do disponível, mas desconta do ESPERADO da contagem,
+   porque a peça não está mais na prateleira. Devolve {pid:{qtd, peds:[{numero,cliente,data,qtd}]}}. */
+function saiuAguardandoAprov(local){
+  var m={},aRec=reqVendaAReceber();
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||ehTeste(p)||p.rascunho)return;
+    if(p.status==="Cancelada"||p.cancelado)return;
+    if(pedidoAprovado(p))return;
+    /* já saiu? com instalação, só depois de concluída; sem instalação, saiu no balcão */
+    if(p.instalacao&&!p.instaladoEm)return;
+    var saiu={},pede={};
+    saidasLiquidas(p).forEach(function(x){if(x.local===local)saiu[x.pid]=(saiu[x.pid]||0)+x.qtd;});
+    itensDeEstoque(p).forEach(function(it){
+      if(it.baixaDispensada||it.pecaRecolhida||it.baixaSemAprovacao)return;
+      if(localDoItemVenda(p,it)!==local)return;
+      pede[it.pid]=(pede[it.pid]||0)+(+(it.qtd||1));
+    });
+    var ar=aRec[p.id]||{};
+    Object.keys(pede).forEach(function(pid){
+      /* o que ainda vem do almoxarifado por causa desta venda não saiu daqui */
+      var q=pede[pid]-(ar[pid+"|"+local]||0)-(saiu[pid]||0);
+      if(!(q>0))return;
+      var o=m[pid]||(m[pid]={qtd:0,peds:[]});
+      o.qtd+=q;
+      o.peds.push({numero:p.numero||"",cliente:p.cliente||"",
+        data:diaDe(p.instaladoEm||p.data),qtd:q,id:p.id});
+    });
+  });
+  return m;
+}
+/* as outras vendas pendentes que estão usando este produto neste estoque — para a aprovação
+   travada dizer onde a peça foi parar */
+var DIAS_OLHAR_VENDAS=90;   /* até onde olhar para trás ao explicar onde a peça foi parar */
+function vendasPendentesDoProduto(pid,local,excluirId){
+  var out=[],limite=somaDias(hojeISO(),-DIAS_OLHAR_VENDAS);
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||ehTeste(p)||p.rascunho)return;
+    if(p.status==="Cancelada"||p.cancelado)return;
+    if(excluirId&&p.id===excluirId)return;
+    var saiu=0;
+    saidasLiquidas(p).forEach(function(x){if(x.local===local&&x.pid===pid)saiu+=x.qtd;});
+    var pede=0;
+    itensDeEstoque(p).forEach(function(it){
+      if(it.baixaDispensada||it.pecaRecolhida)return;
+      if(it.pid!==pid||localDoItemVenda(p,it)!==local)return;
+      pede+=(+(it.qtd||1));
+    });
+    var falta=pede-saiu;
+    /* a venda que AINDA precisa da peça e a que JÁ a levou explicam, as duas, onde ela está */
+    if(falta>0){
+      out.push({numero:p.numero||"",cliente:p.cliente||"",data:diaDe(p.data),qtd:falta,
+        situacao:(p.instaladoEm&&!p.aprovado)?"instalada, aguardando aprovação":(p.status||"pendente"),id:p.id});
+      return;
+    }
+    if(saiu>0&&String(p.data||"").slice(0,10)>=limite)
+      out.push({numero:p.numero||"",cliente:p.cliente||"",data:diaDe(p.data),qtd:saiu,
+        situacao:"já baixou o estoque",id:p.id});
+  });
+  return out.sort(function(a,b){return String(a.data).localeCompare(String(b.data));});
+}
+function textoVendasPendentes(l){
+  if(!l||!l.length)return "";
+  return l.map(function(x){return "pedido "+x.numero+" ("+(x.cliente||"sem cliente")+", "+dataBR(x.data)+
+    (x.qtd>1?", "+x.qtd+"×":"")+(x.situacao?", "+x.situacao:"")+")";}).join(" · ");
+}
+window.__saiuAprovMF={lista:saiuAguardandoAprov,pendentes:vendasPendentesDoProduto,
+  html:function(pid,l){return htmlSaiuAprovProduto(pid,l);},
+  texto:textoVendasPendentes,reservas:function(l){return reservasDe(l);}};
 /* deixa o estoque igual aos itens do pedido: baixa o que falta do local da venda,
    devolve o que sobrou para onde saiu. Devolve o que foi baixado agora. */
 async function ajustarBaixa(p,docBaixa,docEstorno){
@@ -29745,8 +29803,13 @@ function nomeEstoqueInv(l){return l&&String(l).indexOf("colab:")===0?"Estoque de
    Esse número fica guardado em cada registro (sis) e a aprovação lança só a diferença: venda,
    requisição ou devolução feita DEPOIS da contagem do produto não conta duas vezes. */
 function baseInv(local){
-  var b={vend:{},sai:{},chega:[],saindo:[]};
-  try{b.vend=reservasDe(local,null,true);}catch(e){}
+  /* v616: o esperado desconta TODAS as vendas que já saíram e esperam aprovação (antes vinha da
+     reserva, que podia deixar uma de fora), mais o separado e a devolução ainda não aceitos */
+  var b={vend:{},sai:{},chega:[],saindo:[],vendPed:{}};
+  try{
+    var sa=saiuAguardandoAprov(local);
+    Object.keys(sa).forEach(function(pid){b.vend[pid]=sa[pid].qtd;b.vendPed[pid]=sa[pid].peds;});
+  }catch(e){}
   requisicoes.forEach(function(r){
     if(r.loja!==lojaAtual)return;
     var sep=r.tipo==="requisicao"&&r.status==="separada",dev=r.tipo==="devolucao"&&r.status==="pendente";
@@ -29766,12 +29829,29 @@ function sisInv(b,pid,local){return saldoEm(pid,local)-(b.vend[pid]||0)-(b.sai[p
 function entSisInv(b,pid,local){
   var o={sis:sisInv(b,pid,local)},v=b.vend[pid]||0,f=b.sai[pid]||0;
   if(v||f){o.saldo=saldoEm(pid,local);if(v)o.vendEnt=v;if(f)o.fora=f;}
+  /* v616: fica gravado QUAIS vendas foram descontadas, para a aprovação mostrar */
+  if(v&&b.vendPed&&b.vendPed[pid])o.peds=b.vendPed[pid].map(function(d){
+    return {numero:d.numero,cliente:d.cliente,data:d.data,qtd:d.qtd};});
   return o;
+}
+/* v616 (26/11, regra dele): na contagem, ao lado do produto, as vendas que já saíram daquele
+   estoque e ainda não foram aprovadas — com o total. Quem conta confere: se a venda não saiu de
+   verdade, ele conta a peça e a diferença aparece. */
+function htmlSaiuAprovProduto(pid,local){
+  if(!pid||!local)return "";
+  var o=(saiuAguardandoAprov(local)||{})[pid];
+  if(!o||!o.qtd)return "";
+  return '<div class="note iv-saiu"><b>Saiu, aguardando aprovação: '+o.qtd+" unidade(s)</b><div class=\"t-sub\">"+
+    o.peds.map(function(d){return "pedido "+esc(d.numero)+" ("+esc(d.cliente||"sem cliente")+", "+esc(dataBR(d.data))+
+      (d.qtd>1?", "+d.qtd+"×":"")+")";}).join(" · ")+
+    "</div><div class=\"t-sub\">Confira: se alguma dessas peças ainda estiver aqui, conte-a — o sistema mostra a diferença.</div></div>";
 }
 function explicaSisInv(it,f){
   var l=it[f]||[],e=l[l.length-1];
   if(!e||(!e.vendEnt&&!e.fora))return "";
-  return '<div class="t-sub">'+(+e.saldo||0)+" no estoque"+(e.vendEnt?" − "+e.vendEnt+" vendido esperando aprovação":"")+
+  return '<div class="t-sub">'+(+e.saldo||0)+" no estoque"+
+    (e.vendEnt?" − "+e.vendEnt+" vendido esperando aprovação"+
+      (e.peds&&e.peds.length?" ("+esc(e.peds.map(function(d){return "pedido "+d.numero;}).join(", "))+")":""):"")+
     (e.fora?" − "+e.fora+" separado ou devolvido, ainda não aceito":"")+"</div>";
 }
 /* o quadro "NÃO conte" de quem conta: só o que está a caminho, nunca o saldo */
@@ -31957,12 +32037,16 @@ function ivJaDesenhar(){
   if(!inv||!(inv.status==="contagem"||inv.status==="recontagem")){w.innerHTML="";return;}
   var fase=faseInvAtual(inv),pid=$("iv_prod").value;
   if(ivJaPend&&ivJaPend.pid!==pid)ivJaPend=null;
+  /* v616: as vendas deste produto que já saíram deste estoque e esperam aprovação */
+  var saiuH="";
+  try{saiuH=htmlSaiuAprovProduto(pid,inv.local);}catch(eSa){}
   var r=pid?ivJaResumo(inv,pid,fase):{n:0};
-  if(!r.n){w.innerHTML="";ivJaPend=null;return;}
+  if(!r.n){w.innerHTML=saiuH;ivJaPend=null;return;}
+  if(saiuH)w.innerHTML=saiuH;
   var pal=fase==="c2"?"recontado":"contado";
-  if(!ivJaPend){w.innerHTML='<div class="iv-ja-l">Já '+pal+": "+r.tot+" unidade(s)"+(r.n>1?" em "+r.n+" registros":"")+".</div>";return;}
+  if(!ivJaPend){w.innerHTML=saiuH+'<div class="iv-ja-l">Já '+pal+": "+r.tot+" unidade(s)"+(r.n>1?" em "+r.n+" registros":"")+".</div>";return;}
   var q=ivJaPend.qtd;
-  w.innerHTML='<div class="note warn iv-ja"><b>Este produto já foi '+pal+":</b> "+r.tot+" unidade(s)"+
+  w.innerHTML=saiuH+'<div class="note warn iv-ja"><b>Este produto já foi '+pal+":</b> "+r.tot+" unidade(s)"+
     (r.n>1?" em "+r.n+" registros":"")+" ("+r.l.map(function(e){return (+e.qtd||0)+" por "+esc(e.por||"")+" em "+esc(e.quando||"");}).join("; ")+
     "). Agora você digitou <b>"+q+"</b>. O que fazer?"+
     '<div class="actions"><button class="btn sm" type="button" id="iv_jaSomar">Somar (outro lugar) — o total fica '+(r.tot+q)+"</button>"+
@@ -32520,20 +32604,18 @@ function estoquesNegativos(somenteLocal){
       if(somenteLocal&&l!==somenteLocal)return;
       var k=m.produtoId+"|"+l;saldo[k]=(saldo[k]||0)+par[1]*(+m.qtd||0);});
   });
-  /* o que as vendas pendentes reservam em cada estoque */
-  var res={},pedsRes={},aRecN=reqVendaAReceber();
-  pedidos.forEach(function(p){
-    if(p.loja!==lojaAtual||!vendaPendente(p))return;
-    var arP=JSON.parse(JSON.stringify(aRecN[p.id]||{}));
-    var sai={};saidasLiquidas(p).forEach(function(x){sai[x.pid+"|"+x.local]=(sai[x.pid+"|"+x.local]||0)+x.qtd;});
-    itensDeEstoque(p).forEach(function(it){
-      var l=localDoItemVenda(p,it);
-      if(l.indexOf("colab:")!==0&&!ehLocalLoja(l))return;
-      if(somenteLocal&&l!==somenteLocal)return;
-      var k=it.pid+"|"+l,q=Math.max(0,(it.qtd||1)-(sai[k]||0));
-      var tira=Math.min(arP[k]||0,q);arP[k]=(arP[k]||0)-tira;q-=tira;if(!q)return;
-      res[k]=(res[k]||0)+q;(pedsRes[k]=pedsRes[k]||[]).push(p.numero);
-    });
+  /* v616 (26/11): acabou a reserva — venda pendente NÃO desconta mais. O que ainda desconta é só
+     a separação de encomenda. Os pedidos que já saíram e esperam aprovação ficam só como
+     informação na linha, nunca na conta. */
+  var res={},pedsRes={},cacheEnc={},cacheSaiu={};
+  function encDe(l){return cacheEnc[l]||(cacheEnc[l]=(function(){try{return reservadoEncomendaLocal(l);}catch(e){return {};}})());}
+  function saiuDe(l){return cacheSaiu[l]||(cacheSaiu[l]=(function(){try{return saiuAguardandoAprov(l);}catch(e){return {};}})());}
+  Object.keys(saldo).forEach(function(k){
+    var c0=k.indexOf("|"),pid0=k.slice(0,c0),l0=k.slice(c0+1);
+    var e=encDe(l0)[pid0]||0;
+    if(e)res[k]=(res[k]||0)+e;
+    var sa=saiuDe(l0)[pid0];
+    if(sa&&sa.peds&&sa.peds.length)pedsRes[k]=sa.peds.map(function(d){return d.numero;});
   });
   Object.keys(res).forEach(function(k){if(!(k in saldo))saldo[k]=0;});
   var out=[];
@@ -32573,11 +32655,11 @@ function htmlNegativosDoEstoque(loc){
   var l=estoquesNegativos(loc);if(!l.length)return "";
   return '<div class="note warn" style="margin:8px 0"><b>'+l.length+(l.length===1?" produto negativo":" produtos negativos")+
     " neste estoque</b> — a venda saiu sem saldo e a reposição do almoxarifado devolve o que saiu:<br>"+
-    l.map(function(x){return esc(x.nome)+": <b>"+x.fica+"</b>"+(x.reservado?" (contando "+x.reservado+" de venda a aprovar)":"")+" · "+htmlReposNeg(x);}).join("<br>")+
+    l.map(function(x){return esc(x.nome)+": <b>"+x.fica+"</b>"+(x.reservado?" (contando "+x.reservado+" separado(s) para encomenda)":"")+" · "+htmlReposNeg(x);}).join("<br>")+
     "</div>";
 }
 function renderEstoquesNegativos(h,b,q){
-  h.innerHTML='<th>Estoque</th><th>Produto</th><th class="num">Saldo hoje</th><th class="num">Reservado</th><th class="num">Fica</th><th>De onde veio · reposição</th>';
+  h.innerHTML='<th>Estoque</th><th>Produto</th><th class="num">Saldo hoje</th><th class="num">Separado para encomenda</th><th class="num">Fica</th><th>De onde veio · reposição</th>';
   var l=estoquesNegativos().filter(function(x){
     return !q||(x.nome+" "+x.cod+" "+nomeLocal(x.local)+" "+x.pedidosPendentes.join(" ")+" "+
       x.reposicoes.map(function(r){return r.pedidoNumero||"";}).join(" ")).toLowerCase().indexOf(q)>=0;});
@@ -33669,15 +33751,18 @@ function renderEstSaldo(){
   $("sdSub").textContent=loc?(loc===LOC_EMPRESA?"Almoxarifado":nomeLocal(loc)):"";
   var q=semAcento(String($("sdBusca").value||"")).toLowerCase().trim();
   var res=loc?reservasDe(loc):{},custo=podeVerCusto();
-  /* v567: parte do reservado já está na casa do cliente, esperando a venda ser aprovada */
-  var inst=loc?instaladoAguardandoAprov(loc):{};
+  /* v616: a coluna "Reservado" saiu. No lugar, "Saiu, aguardando aprovação" — o que já foi
+     entregue ou instalado e a venda ainda não foi aprovada. É SÓ INFORMAÇÃO: não desconta do
+     disponível (o único desconto que sobrou é a separação de encomenda, que vem em res). */
+  var saiu=loc?saiuAguardandoAprov(loc):{};
   var lista=produtos.filter(function(p){
     if((p.status||"ativo")!=="ativo")return false;
     var s=saldoEm(p.id,loc),r=res[p.id]||0;if(!s&&!r)return false;
     if(!q)return true;
     return semAcento(String(p.nome||"")).toLowerCase().indexOf(q)>=0||String(p.cod||"").toLowerCase().indexOf(q)>=0;
   /* o número grande é o que está LIVRE: saldo menos o reservado (ex.: 0 com 1 reservado = −1) */
-  }).map(function(p){var r0=res[p.id]||0;return {p:p,s:saldoEm(p.id,loc)-r0,r:r0,i:inst[p.id]||0,saldo:saldoEm(p.id,loc)};})
+  }).map(function(p){var r0=res[p.id]||0,sa=saiu[p.id]||null;
+    return {p:p,s:saldoEm(p.id,loc)-r0,r:r0,i:(sa?sa.qtd:0),peds:(sa?sa.peds:[]),saldo:saldoEm(p.id,loc)};})
     .sort(function(a,b){return (a.s<0?0:1)-(b.s<0?0:1)||ordAZ(a.p.nome||"",b.p.nome||"");});
   $("sdCount").textContent=lista.length+" produto(s)";
   var nNeg=lista.filter(function(x){return x.s<0;}).length;
@@ -33688,16 +33773,22 @@ function renderEstSaldo(){
     return '<div class="sd-loc">📍 '+esc(l||"sem localização")+(mudaLoc?' <button type="button" class="btn mut sm" data-sdloc="'+esc(p.id)+'" aria-label="Mudar a localização">Mudar</button>':"")+"</div>";}
   $("sdCartoes").innerHTML=lista.length?lista.map(function(x){
     return '<div class="sd-card'+(x.s<0?" neg":"")+'"'+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+'><div class="nm"><b>'+esc(x.p.nome||"")+"</b><span>"+esc(x.p.cod||"")+"</span>"+locHtml(x.p)+
-      (x.r?'<div class="sd-res">'+x.r+" reservado(s)"+(x.i?" · "+x.i+" instalado(s), aguardando aprovação":"")+
+      (x.r?'<div class="sd-res">'+x.r+" separado(s) para encomenda"+
         (textoReservaEnc(x.p.id,loc)?" · "+esc(textoReservaEnc(x.p.id,loc)):"")+"</div>":"")+
+      /* v616: só informa, não desconta */
+      (x.i?'<div class="sd-saiu">'+x.i+" saiu, aguardando aprovação"+
+        (x.peds.length?' <span class="t-sub">'+esc(x.peds.map(function(d){return "pedido "+d.numero;}).join(" · "))+"</span>":"")+"</div>":"")+
       /* v610: produto que entrou por empréstimo da outra empresa */
       (textoDividaProduto(x.p.id)?'<div class="sd-res">'+esc(textoDividaProduto(x.p.id))+"</div>":"")+'</div><div class="sd-qtd '+cls(x.s)+'">'+x.s+"</div></div>";}).join("")
     :'<div class="empty"><div class="big">Nenhum produto</div>'+(q?"Nada com essa busca.":"Este estoque está vazio.")+"</div>";
-  $("sdHead").innerHTML="<tr><th>Produto</th><th>Código</th>"+(comLoc?"<th>Localização</th>":"")+"<th class=\"num\">Quantidade</th><th class=\"num\">Reservado</th>"+(custo?'<th class="num">Valor</th>':"")+"</tr>";
+  /* v616: no lugar de "Reservado", a coluna informativa "Saiu, aguardando aprovação" */
+  $("sdHead").innerHTML="<tr><th>Produto</th><th>Código</th>"+(comLoc?"<th>Localização</th>":"")+"<th class=\"num\">Quantidade</th><th>Saiu, aguardando aprovação</th>"+(custo?'<th class="num">Valor</th>':"")+"</tr>";
   $("sdBody").innerHTML=lista.length?lista.map(function(x){
     return "<tr"+(admP?' data-sdprod="'+esc(x.p.id)+'" style="cursor:pointer" title="Abrir o cadastro do produto"':"")+"><td>"+esc(x.p.nome||"")+"</td><td>"+esc(x.p.cod||"")+"</td>"+(comLoc?"<td>"+locHtml(x.p)+"</td>":"")+'<td class="num"><b class="'+cls(x.s)+'">'+x.s+"</b></td>"+
-      '<td class="num">'+(x.r?'<span class="pill p-res">'+x.r+" reservado(s)</span>":"—")+
-        (x.i?'<div class="t-sub">'+x.i+" instalado(s), aguardando aprovação</div>":"")+
+      "<td>"+(x.i?'<span class="pill p-warn">'+x.i+"</span>"+
+          (x.peds.length?'<div class="t-sub">'+esc(x.peds.map(function(d){return "pedido "+d.numero+" ("+(d.cliente||"")+", "+dataBR(d.data)+")";}).join(" · "))+"</div>":"")
+        :"—")+
+        (x.r?'<div class="t-sub">'+x.r+" separado(s) para encomenda</div>":"")+
         (textoReservaEnc(x.p.id,loc)?'<div class="t-sub">'+esc(textoReservaEnc(x.p.id,loc))+"</div>":"")+
         (textoDividaProduto(x.p.id)?'<div class="t-sub">'+esc(textoDividaProduto(x.p.id))+"</div>":"")+"</td>"+
       (custo?'<td class="num">'+BRL(x.saldo*custoTotalDe(x.p))+"</td>":"")+"</tr>";}).join("")
@@ -33915,7 +34006,9 @@ function renderEstColab(){
   var q=($("ecBusca").value||"").toLowerCase();
 
   var reserv=reservasDe(loc);
-  var comigo=produtos.filter(function(p){return saldoEm(p.id,loc)!==0||(reserv[p.id]||0)>0;});
+  /* v616: o que já saiu e espera aprovação — só informação, não desconta de nada */
+  var saiuEC={};try{saiuEC=saiuAguardandoAprov(loc)||{};}catch(eSe){}
+  var comigo=produtos.filter(function(p){return saldoEm(p.id,loc)!==0||(reserv[p.id]||0)>0||!!saiuEC[p.id];});
   var unid=comigo.reduce(function(a,p){return a+saldoEm(p.id,loc);},0);
   var valor=comigo.reduce(function(a,p){return a+saldoEm(p.id,loc)*custoTotalDe(p);},0);
   /* v515: a requisição "pego na troca" sai daqui — a sucata entra sozinha, sem confirmar */
@@ -33928,8 +34021,11 @@ function renderEstColab(){
   $("ecKpis").innerHTML=
     '<div class="kpi"><div class="l">Itens diferentes</div><div class="v">'+comigo.length+"</div></div>"+
     '<div class="kpi"><div class="l">Unidades</div><div class="v">'+unid+"</div></div>"+
-    '<div class="kpi"><div class="l">Reservado para vendas</div><div class="v">'+
+    '<div class="kpi"><div class="l">Separado para encomenda</div><div class="v">'+
       Object.keys(reserv).reduce(function(a,k){return a+reserv[k];},0)+"</div></div>"+
+    '<div class="kpi"><div class="l">Saiu, aguardando aprovação</div><div class="v">'+
+      Object.keys(saiuEC).reduce(function(a,k){return a+(saiuEC[k].qtd||0);},0)+
+      '</div><div class="l" style="margin-top:4px">não desconta do disponível</div></div>'+
     (podeVerCusto()?'<div class="kpi"><div class="l">Valor sob responsabilidade</div><div class="v">'+BRL(valor)+"</div></div>":"")+
     '<div class="kpi"><div class="l">A receber</div><div class="v" style="color:'+
       (receber.length?"var(--warn)":"inherit")+'">'+receber.length+"</div></div>"+
@@ -33942,11 +34038,11 @@ function renderEstColab(){
 
   var h=$("ecHead"),b=$("ecBody");b.innerHTML="";
   if(ecAba==="meu"){
-    h.innerHTML="<th>Produto</th><th class=\"num\">Comigo</th><th class=\"num\">Reservado</th><th class=\"num\">Disponível</th><th class=\"num\">No almoxarifado</th>"+(podeVerCusto()?"<th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th>":"")+"<th></th>";
+    h.innerHTML="<th>Produto</th><th class=\"num\">Comigo</th><th class=\"num\">Separado para encomenda</th><th class=\"num\">Disponível</th><th>Saiu, aguardando aprovação</th><th class=\"num\">No almoxarifado</th>"+(podeVerCusto()?"<th class=\"num\">Custo unit.</th><th class=\"num\">Valor</th>":"")+"<th></th>";
     var l1=comigo.filter(function(p){return !q||(p.nome||"").toLowerCase().indexOf(q)>=0||(p.cod||"").toLowerCase().indexOf(q)>=0;})
       .sort(function(a,b2){return (a.nome||"").localeCompare(b2.nome||"","pt-BR");});
     $("ecCount").textContent=l1.length+(l1.length===1?" produto":" produtos");
-    if(!l1.length){b.innerHTML='<tr><td colspan="8"><div class="empty"><div class="big">Estoque vazio</div>'+
+    if(!l1.length){b.innerHTML='<tr><td colspan="9"><div class="empty"><div class="big">Estoque vazio</div>'+
       (ehLoja?"Use <b>Requisitar produto</b> para pedir ao almoxarifado. O estoquista separa e você confirma o recebimento."
              :"Use <b>Requisitar produto</b> para pedir ao almoxarifado.")+"</div></td></tr>";return;}
     l1.forEach(function(p){
@@ -33956,6 +34052,11 @@ function renderEstColab(){
         (utRow?' <span class="pill '+(utRow.atrasado?"p-crit":"p-warn")+'">'+(utRow.atrasado?"atrasado: devolver hoje":"devolver ao almoxarifado amanhã")+"</span>":"")+"</div></td>"+
         '<td class="num"><b>'+s+'</b></td><td class="num">'+(rs||"—")+"</td>"+
         '<td class="num"><span class="pill '+(dp<0?"p-crit":(dp>0?"p-ok":"p-mut"))+'">'+dp+"</span></td>"+
+        /* v616: só informa — a venda pendente não tira a peça de ninguém */
+        "<td>"+(function(){var sa=saiuEC[p.id];
+          if(!sa||!sa.qtd)return "—";
+          return '<span class="pill p-warn">'+sa.qtd+"</span>"+
+            '<div class="t-sub">'+esc(sa.peds.map(function(d){return "pedido "+d.numero+" ("+(d.cliente||"")+", "+dataBR(d.data)+")";}).join(" · "))+"</div>";})()+"</td>"+
         '<td class="num">'+estEmpresaDe(p)+"</td>"+
         (podeVerCusto()?'<td class="num">'+BRL(custoTotalDe(p))+'</td><td class="num">'+BRL(s*custoTotalDe(p))+"</td>":"")+
         '<td class="num">'+(s>0?'<button class="btn mut sm" type="button" data-ecd="'+p.id+'">Devolver</button>':"")+"</td></tr>";
@@ -47350,16 +47451,53 @@ window.__semPecaMF=itensSemPecaNoEstoque;
    aconteceu pela regra antiga ou foi coberta pela contagem que zerou os negativos. Esses aprovam
    normalmente e o estoque NÃO baixa de novo. */
 function pecaAindaNoEstoque(p){return !!(p&&p.instalacao&&!p.instaladoEm);}
+/* v616 (26/11, regra dele): acabou a reserva, então a trava do saldo passou a valer em TODA
+   aprovação, inclusive na venda de balcão. Sem saldo no estoque de origem a aprovação não passa:
+   a peça foi parar em outra venda e quem vendeu requisita ao almoxarifado. O estoque continua
+   proibido de ficar negativo. */
 function pedidoAguardandoPeca(p){
   if(!travaNegativoLigada())return [];
   if(!vendaPendente(p)&&!p.aprovado)return [];
-  if(!pecaAindaNoEstoque(p))return [];
   return itensSemPecaNoEstoque(p);
+}
+/* o recado da trava, com o nome do estoque e as outras vendas que estão usando a peça */
+function textoSemSaldoAprov(p,lista){
+  return (lista||[]).map(function(x){
+    var outras=vendasPendentesDoProduto(x.it.pid,x.loc,p&&p.id);
+    return "Sem saldo de "+(x.it.nome||codNomeItem(x.it))+" no "+nomeLocal(x.loc)+
+      " (tem "+x.tem+", precisa de "+x.precisa+"). Requisite ao almoxarifado."+
+      (outras.length?" Usando esta peça neste estoque: "+textoVendasPendentes(outras)+".":"");
+  }).join("  ");
+}
+function htmlSemSaldoAprov(p,lista){
+  return '<div class="note crit"><b>Sem saldo para baixar.</b><br>'+
+    (lista||[]).map(function(x){
+      var outras=vendasPendentesDoProduto(x.it.pid,x.loc,p&&p.id);
+      return "Sem saldo de <b>"+esc(x.it.nome||codNomeItem(x.it))+"</b> no estoque de "+
+        esc(nomeLocal(x.loc))+" (tem "+x.tem+", precisa de "+x.precisa+"). <b>Requisite ao almoxarifado.</b>"+
+        (outras.length?'<div class="t-sub">Outras vendas usando este produto neste estoque: '+
+          esc(textoVendasPendentes(outras))+"</div>":"");
+    }).join("<br>")+"</div>";
+}
+window.__semSaldoAprovMF={texto:textoSemSaldoAprov,html:htmlSemSaldoAprov,itens:pedidoAguardandoPeca};
+/* v616 (26/11): a partir do dia em que a reserva acabou, a venda de balcão e a instalação
+   concluída passaram a precisar de SALDO para aprovar — a dispensa da baixa ficou só para o que
+   saiu ANTES desta data, que é o caso para o qual ela nasceu (v565): peça que já estava com o
+   cliente quando a trava foi ligada e cujo saldo a contagem já acertou. */
+var DATA_FIM_RESERVA="2026-11-26";
+function saidaAntesDaRegra(p){
+  var q=String((p&&(p.instaladoEm||p.data))||"").slice(0,10);
+  return !!q&&q<DATA_FIM_RESERVA;
 }
 /* dispensa a baixa do que já está com o cliente, uma vez só, com registro no histórico */
 async function dispensarBaixaAntiga(p){
   if(!travaNegativoLigada()||pecaAindaNoEstoque(p))return 0;
-  var l=itensSemPecaNoEstoque(p),n=0;
+  if(!saidaAntesDaRegra(p))return 0;
+  /* 26/11 (pedido dele, v616): a dispensa é só para o que NÃO TEM SALDO NENHUM. Tendo saldo —
+     inteiro ou em parte —, a venda antiga baixa normalmente na aprovação, senão o saldo fica
+     sobrando (é o caso do inventário que somou unidades justamente para cobrir estas vendas).
+     Com saldo em PARTE, nada é dispensado: a aprovação trava e manda requisitar o que falta. */
+  var l=itensSemPecaNoEstoque(p).filter(function(x){return (+x.tem||0)===0;}),n=0;
   if(!l.length)return 0;
   var agora=new Date().toISOString();
   var motivo=p.instaladoEm
@@ -47373,13 +47511,15 @@ async function dispensarBaixaAntiga(p){
       n++;
     });
     registrarEvento(p,"Baixa de estoque dispensada na aprovação por "+usuarioAtual+": "+x.precisa+"× "+
-      codNomeItem(x.it)+" · a peça já está com o cliente ("+motivo+") e o saldo do "+nomeLocal(x.loc)+
-      " já foi acertado pela contagem — o estoque não baixa de novo, para não baixar duas vezes.");
+      codNomeItem(x.it)+" · a peça já está com o cliente ("+motivo+") e o "+nomeLocal(x.loc)+
+      " está ZERADO deste produto — o saldo já foi acertado pela contagem e o estoque não baixa de novo, "+
+      "para não baixar duas vezes. Houvesse saldo, a baixa teria acontecido normalmente (regra de 26/11).");
   });
   if(n){try{await gravaConf("pedidos",p);}catch(e){console.warn("dispensa da baixa",e);}}
   return n;
 }
 window.__dispensarBaixaMF=function(p){return dispensarBaixaAntiga(p);};
+window.__antesDaRegraMF=saidaAntesDaRegra;
 function itensBaixaDispensada(p){
   return itensDeEstoque(p).filter(function(it){return !!it.baixaDispensada;});
 }
@@ -47407,9 +47547,9 @@ window.__htmlAgPecaMF=function(p){return htmlAguardandoPeca(p);};
 /* a faixa "aguardando peça" do cartão da Aprovação Financeira e da tela da instalação (v565) */
 function htmlAguardandoPeca(p){
   var h="",l=pedidoAguardandoPeca(p);
-  if(l.length)h+='<div class="note crit" style="margin:6px 0"><b>Aguardando peça.</b> '+esc(textoAguardandoPeca(l))+
-    ". Nenhum estoque pode ficar negativo: a venda só é aprovada e a instalação só é concluída depois de a peça entrar "+
-    "no estoque (o dono recebe a requisição em Demandas do Estoque).</div>";
+  /* v616: o mesmo recado da trava — o produto, o estoque, "requisite ao almoxarifado" e em quais
+     outras vendas a peça foi parar */
+  if(l.length)h+=htmlSemSaldoAprov(p,l);
   var d=itensBaixaDispensada(p);
   if(d.length)h+='<div class="note" style="margin:6px 0"><b>Peça já com o cliente.</b> '+
     esc(d.map(function(it){return (it.qtd||1)+"× "+(it.nome||"");}).join(", "))+
@@ -62234,14 +62374,15 @@ async function aprovarVenda__corpo(p,caixaId,pagoEm,cxFormas,decRec){
     return false;}
   /* v565: a aprovação baixa o estoque, e nenhum estoque fica negativo — peça que ainda não chegou
      não baixa. O pedido continua aberto, "aguardando peça", até o dono receber a requisição. */
+  /* a peça que já estava com o cliente ANTES da regra de 26/11 não trava e não baixa de novo —
+     fica dispensada, uma vez só, com registro no histórico */
+  try{await dispensarBaixaAntiga(p);}catch(eDb){console.warn("dispensa",eDb);}
+  /* v616: sem saldo no estoque de origem, a aprovação não passa — e o recado diz em quais outras
+     vendas pendentes a peça foi parar, para achar onde ela está */
   var semPeca=pedidoAguardandoPeca(p);
   if(semPeca.length){
-    toast("Aguardando peça: "+textoAguardandoPeca(semPeca)+
-      ". O estoque não pode ficar negativo — receba a requisição no almoxarifado (Demandas do Estoque) e aprove depois.");
+    toast(textoSemSaldoAprov(p,semPeca));
     return false;}
-  /* a peça que já está com o cliente (instalação concluída ou balcão entregue antes da trava) não
-     trava e não baixa de novo — fica dispensada, uma vez só, com registro no histórico */
-  try{await dispensarBaixaAntiga(p);}catch(eDb){console.warn("dispensa",eDb);}
   if(aprovandoVenda[p.id])return false;
   aprovandoVenda[p.id]=true;
   try{
@@ -62787,9 +62928,8 @@ async function finalizarInstalacao__corpo(p,obs){
      "aguardando peça", com a requisição ao almoxarifado aberta. */
   var semPecaI=pedidoAguardandoPeca(p);
   if(semPecaI.length){
-    $("ins_alerta").innerHTML='<div class="note crit"><b>Aguardando peça.</b> '+
-      esc(textoAguardandoPeca(semPecaI))+". O estoque não pode ficar negativo: receba a requisição no almoxarifado "+
-      "(Demandas do Estoque) e conclua a instalação depois.</div>";
+    /* v616: o mesmo recado da aprovação, com as outras vendas que estão usando a peça */
+    $("ins_alerta").innerHTML=htmlSemSaldoAprov(p,semPecaI);
     return false;
   }
   var ms=(p.itens||[]).filter(function(i){return i.daInstalacao;}),
