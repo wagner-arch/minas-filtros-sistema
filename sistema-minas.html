@@ -1798,6 +1798,12 @@ body.tn .tv-so{display:none!important}
   .ca-linha{border:1px solid var(--line);border-radius:var(--r-sm);padding:12px;margin-bottom:10px;
     background:var(--bg)}
   .ca-linha input,.ca-linha select{background:var(--card)}
+  /* 26/11 (v614): o quadro de incluir é o primeiro da tela e se destaca dos já incluídos */
+  .ca-novo{border-color:var(--acc);background:var(--card)}
+  .ca-novo .ca-linha-cab .t{color:var(--acc)}
+  .ca-novo input{background:var(--bg)}
+  .ca-nb-aviso{margin-top:8px;font-size:13px;color:var(--crit)}
+  .ca-vazio{color:var(--ink-3);font-size:13px;padding:2px 0 6px}
   .ca-lig{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--card);
     border:1px solid var(--field-bd);border-radius:8px;padding:8px 10px;min-height:38px}
   .ca-lig b{font-weight:600;min-width:0;overflow-wrap:anywhere}
@@ -3668,7 +3674,18 @@ img{max-width:100%}
         <div class="card">
           <div class="ca-passo"><span class="n">1</span><h2>Produtos da venda</h2></div>
           <p class="ca-help">O valor que precisa <b>cair para a empresa</b> em cada produto, à vista. O produto pode vir do cadastro ou ser digitado à mão.</p>
-          <div class="actions" style="justify-content:flex-start;margin:0 0 10px"><button class="btn ghost sm" type="button" id="caAddProd">+ Adicionar produto</button></div>
+          <!-- 26/11 (v614, pedido dele): o quadro de ADICIONAR fica sempre no alto; o produto
+               incluído desce para a lista de baixo e o quadro já volta limpo para o próximo. -->
+          <div class="ca-linha ca-novo" id="caNovoBox">
+            <div class="ca-linha-cab"><span class="t">Adicionar produto</span></div>
+            <div class="ca-g3">
+              <div class="fld"><label>Produto</label><div id="caNbProd"></div></div>
+              <div class="fld"><label for="caNbQtd">Qtd.</label><input type="number" min="1" step="1" id="caNbQtd" value="1"></div>
+              <div class="fld"><label for="caNbLiq">Precisa cair por unidade</label><input type="text" inputmode="decimal" style="text-align:right" id="caNbLiq" placeholder="0,00"></div>
+            </div>
+            <div class="actions" style="justify-content:flex-start;margin:10px 0 0"><button class="btn" type="button" id="caAddProd">Incluir na lista</button></div>
+            <div class="ca-nb-aviso" id="caNbAviso" hidden></div>
+          </div>
           <div id="caProds"></div>
         </div>
         <div class="card">
@@ -43923,6 +43940,68 @@ function escolherCalcProd(k,pid){
   renderCalc();
   return true;
 }
+/* 26/11 (v614, pedido dele no celular): ADICIONAR PRODUTO é um quadro fixo no alto, nunca uma
+   linha em branco que nasce lá embaixo. Escolhido o produto (ou digitado o nome à mão), o botão
+   "Incluir na lista" desce o item para a lista e o quadro volta limpo, com o cursor na busca. */
+function calcNovoVazio(){return {pid:"",nome:"",qtd:1,liq:0};}
+function calcNovoAtual(){if(!CALC.novo)CALC.novo=calcNovoVazio();return CALC.novo;}
+function calcAvisoNovo(txt){
+  var a=$("caNbAviso");if(!a)return;
+  a.textContent=txt||"";a.hidden=!txt;
+}
+function renderCalcNovo(){
+  var w=$("caNbProd");if(!w)return;
+  var n=calcNovoAtual();
+  w.innerHTML=n.pid
+    ?'<div class="ca-lig"><b>'+esc(nomeProdCalc(n))+'</b><span class="sp"></span>'+
+      '<span class="pill p-ok">do cadastro</span>'+
+      '<button class="btn mut sm" type="button" id="caNbTrocar">Trocar</button></div>'
+    :'<div style="position:relative"><input id="caNbBusca" placeholder="Digite o nome ou o código" '+
+      'aria-label="Buscar o produto no cadastro" value="'+esc(n.nome||"")+'">'+
+      '<div class="auto" id="caNbSug" hidden></div></div>';
+  var q=$("caNbQtd"),l=$("caNbLiq");
+  if(q&&document.activeElement!==q)q.value=Math.max(1,+n.qtd||1);
+  if(l&&document.activeElement!==l)l.value=(+n.liq||0)>0?brMF(n.liq):"";
+  ligarCalcNovo();
+}
+function sugerirCalcNovo(){
+  var n=calcNovoAtual(),box=$("caNbSug");if(!box)return;
+  var l=calcAchaProdutos(n.nome);
+  if(!l.length){box.hidden=true;box.innerHTML="";return;}
+  box.innerHTML="";
+  l.forEach(function(pr){
+    var b=document.createElement("button");b.type="button";
+    b.innerHTML="<b>"+esc(pr.cod?pr.cod+" · "+pr.nome:pr.nome)+"</b><span>"+
+      (pr.pop?esc(pr.pop)+" · ":"")+(calcPrecoBase(pr)>0?"tabela "+BRL(calcPrecoBase(pr)):"sem tabela")+"</span>";
+    b.onclick=function(){escolherCalcNovo(pr.id);};
+    box.appendChild(b);
+  });
+  box.hidden=false;
+}
+function escolherCalcNovo(pid){
+  var n=calcNovoAtual(),pr=prodPorId(pid);if(!pr)return false;
+  n.pid=pr.id;n.nome=pr.nome;
+  if(!(+n.liq>0))n.liq=calcPrecoBase(pr);
+  calcAvisoNovo("");renderCalcNovo();
+  try{var l=$("caNbLiq");if(l)l.focus({preventScroll:true});}catch(e){}
+  return true;
+}
+function ligarCalcNovo(){
+  var b=$("caNbBusca");
+  if(b){
+    b.oninput=function(){calcNovoAtual().nome=b.value;
+      try{sugerirCalcNovo();}catch(e){console.warn("busca do quadro de incluir",e);}};
+    b.onfocus=function(){try{sugerirCalcNovo();}catch(e){}};
+    try{ligarListinha("caNbBusca","caNbSug",null,null);}catch(e){console.warn("listinha do quadro de incluir",e);}
+  }
+  var t=$("caNbTrocar");
+  if(t)t.onclick=function(){var n=calcNovoAtual();n.pid="";renderCalcNovo();
+    try{var el=$("caNbBusca");if(el){el.focus();el.select();}}catch(e){}};
+  var q=$("caNbQtd");
+  if(q)q.oninput=function(){calcNovoAtual().qtd=Math.max(1,parseInt(q.value,10)||1);};
+  var l=$("caNbLiq");
+  if(l)l.oninput=function(){calcNovoAtual().liq=centavos(numMF(l.value)||0);};
+}
 function calcOpcoesForma(sel){
   var l=calcFormasLista();
   return (l.some(function(f){return f.nome===sel;})?"":'<option value="" selected>— escolha a forma —</option>')+
@@ -43964,6 +44043,10 @@ function calcFaltaFaixa(p,fx,v){
 /* ---------- a tela ---------- */
 function renderCalcProds(){
   var w=$("caProds");if(!w)return;
+  if(!CALC.itens.length){
+    w.innerHTML='<div class="ca-vazio">Nenhum produto incluído ainda. Use o quadro <b>Adicionar produto</b>, aqui em cima.</div>';
+    return;
+  }
   w.innerHTML=CALC.itens.map(function(i,k){
     var f=calcFaixaItem(i),liq=centavos(+i.liq||0);
     var tab="";
@@ -43973,7 +44056,7 @@ function renderCalcProds(){
         linhaTabelasItem(f.p,f.fx,precoTabela(f.p),pisoCem(f.p),pisoMinimo(f.p),falta)+"</div>";
     }
     return '<div class="ca-linha"><div class="ca-linha-cab"><span class="t">Produto '+(k+1)+'</span><span class="sp"></span>'+
-      (CALC.itens.length>1?'<button class="btn mut sm" type="button" data-carm="'+k+'">Remover</button>':"")+"</div>"+
+      '<button class="btn mut sm" type="button" data-carm="'+k+'">Remover</button></div>'+
       '<div class="ca-g3">'+
         '<div class="fld"><label>Produto</label>'+
           /* v602: não se escolhe mais numa lista enorme — digita-se, e o cadastro aparece */
@@ -44121,10 +44204,9 @@ function renderCalcCoefs(){
 }
 function renderCalc(){
   if(!$("caProds"))return;
-  if(!CALC.itens.length)CALC.itens=[calcItemNovo()];
   if(!CALC.pgs.length)CALC.pgs=[calcFormaNova()];
   calcAcertarAuto();
-  renderCalcProds();renderCalcFormas();renderCalcConf();renderCalcCoefs();
+  renderCalcNovo();renderCalcProds();renderCalcFormas();renderCalcConf();renderCalcCoefs();
   ligarCalc();
   Array.prototype.forEach.call($("caAbas").querySelectorAll("[data-caa]"),function(b){
     var on=b.getAttribute("data-caa")===CALC.aba;b.setAttribute("aria-pressed",String(on));});
@@ -44161,17 +44243,19 @@ function pintarFormasAuto(){
     if(el.value!==v)el.value=v;
   });
 }
-function calcNovo(){CALC.itens=[calcItemNovo()];CALC.pgs=[calcFormaNova()];renderCalc();}
+function calcNovo(){CALC.itens=[];CALC.pgs=[calcFormaNova()];CALC.novo=calcNovoVazio();renderCalc();}
 function calcAddProd(){
-  CALC.itens.push(calcItemNovo());renderCalc();
-  /* o botão ficou em cima: sem isto, o produto novo nasce fora da tela */
-  try{
-    var w=$("caProds"),ls=w?w.querySelectorAll(".ca-linha"):null;
-    if(ls&&ls.length){
-      ls[ls.length-1].scrollIntoView({block:"center",behavior:"smooth"});
-      var b=$("caBusca"+(CALC.itens.length-1));if(b)b.focus({preventScroll:true});
-    }
-  }catch(e){}
+  var n=calcNovoAtual(),nome=String(n.nome||"").trim();
+  if(!n.pid&&!nome){
+    calcAvisoNovo("Escolha o produto do cadastro ou digite o nome dele.");
+    try{var bb=$("caNbBusca");if(bb)bb.focus();}catch(e){}
+    return false;
+  }
+  CALC.itens.push({pid:n.pid||"",nome:nome,qtd:Math.max(1,+n.qtd||1),liq:centavos(+n.liq||0)});
+  CALC.novo=calcNovoVazio();
+  calcAvisoNovo("");renderCalc();
+  try{var b=$("caNbBusca");if(b)b.focus({preventScroll:true});}catch(e){}
+  return true;
 }
 function calcAddForma(){CALC.pgs.push(calcFormaNova());renderCalc();}
 /* o botão devolve a última forma ao automático — o resto cai nela sozinho */
@@ -44273,7 +44357,7 @@ window.__calcMF={estado:function(){return CALC;},render:renderCalc,problemas:cal
   totLiq:calcTotLiq,totDist:calcTotDist,totCobrar:calcTotCobrar,rateio:calcRateio,
   cobrarForma:calcCobrarForma,faixa:calcFaixaItem,formas:calcFormasLista,
   acha:calcAchaProdutos,sugerir:sugerirCalcProd,escolher:escolherCalcProd,
-  novo:calcNovo,addProd:calcAddProd,addForma:calcAddForma,falta:calcFaltaUltima,
+  novo:calcNovo,addProd:calcAddProd,caixa:calcNovoAtual,escolherNovo:escolherCalcNovo,addForma:calcAddForma,falta:calcFaltaUltima,
   lancar:calcLancarPedido,pendente:calcPedidoPendente,aplicar:aplicarCalcNaVenda,
   guardar:calcGuardar,ler:calcLer,migrar:migrarCalcTodos};
 
