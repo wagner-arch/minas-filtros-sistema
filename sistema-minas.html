@@ -1412,6 +1412,16 @@ body.tn .tv-so{display:none!important}
     body.sem-export .aviso-imp{display:block;padding:40px;font:16px/1.6 system-ui,Arial;color:#111}
     body.sem-export.doc-aberta .app,body.sem-export.doc-os .app,body.sem-export.rel-aberta .app{display:block !important}
     body.sem-export.doc-aberta .aviso-imp,body.sem-export.doc-os .aviso-imp{display:none !important}
+    /* 26/11 (v618): O PAPEL DO CLIENTE IMPRIME PARA TODO MUNDO.
+       A trava de exportar é para LISTA e RELATÓRIO de cliente, não para o documento que o cliente
+       leva: a ficha e o canhoto da OS, o orçamento do serviço, o termo de recebimento, o termo
+       das ferramentas e o recibo do prestador. Sem esta linha, quem não tem "Imprimir e exportar"
+       — que é a loja inteira — mandava imprimir e saía uma folha em branco (o .app ficava
+       escondido). O próprio aviso "Impressão não liberada" já prometia o contrário desde 05/10.
+       A marca `doc-papel` é posta antes de imprimir (`marcarDocDoCliente`), olhando o que está
+       aberto na tela naquele momento. */
+    body.sem-export.doc-papel .app{display:block !important}
+    body.sem-export.doc-papel .aviso-imp,body.doc-papel .marca-dagua{display:none !important}
     @page{size:A4;margin:0}
     body{background:#fff}
     body>*{display:none!important}
@@ -1455,6 +1465,8 @@ body.tn .tv-so{display:none!important}
     body.imp-recibo #rc_corpo .tw{overflow:visible!important}
     body.imp-recibo #recModal .actions,body.imp-recibo #recModal .help,body.imp-recibo #rc_limparSig,body.imp-recibo #rc_alerta{display:none!important}
     #osImpressao{overflow:visible!important}
+    /* v618: o encolhimento é só da tela — no papel a folha é A4 inteira */
+    #os_folha{zoom:1!important}
     .folha-os.os-a4{width:210mm!important;height:296mm!important;margin:0!important;break-inside:avoid;page-break-inside:avoid}
     .hamb,.titulo-tela,.barra-inf,.gaveta-fundo,.novo{display:none!important}
     /* v592: do Cartao de Ponto vai ao papel o nome, o mes e a tabela das horas com os totais */
@@ -4185,6 +4197,37 @@ img{max-width:100%}
               <button type="button" data-l="externo" aria-pressed="false">Externo — no endereço do cliente</button>
             </div>
             <div id="os_localNota"></div>
+          </div>
+          <!-- 26/11 (v618, pedido dele): o endereço do atendimento pode ser OUTRO, sem mexer no
+               cadastro do cliente nem no endereço do aparelho. -->
+          <div class="fld" style="margin-top:14px" id="os_endEscolha">
+            <label>Endereço do atendimento</label>
+            <div class="chips" id="os_endQual">
+              <button type="button" data-eq="cadastro" aria-pressed="true">É o endereço do cadastro</button>
+              <button type="button" data-eq="outro" aria-pressed="false">É outro endereço</button>
+            </div>
+            <div class="help" id="os_endResumo"></div>
+            <div id="os_endOutro" hidden style="margin-top:10px">
+              <div class="grid g4">
+                <div class="fld"><label for="osx_cep">CEP</label><input id="osx_cep" inputmode="numeric" placeholder="00000-000"></div>
+                <div class="fld" style="grid-column:span 2"><label for="osx_rua">Rua</label><input id="osx_rua"></div>
+                <div class="fld"><label for="osx_num">Número</label><input id="osx_num"></div>
+              </div>
+              <div class="grid g4" style="margin-top:12px">
+                <div class="fld"><label for="osx_comp">Complemento</label><input id="osx_comp" placeholder="apartamento, bloco, fundos…"></div>
+                <div class="fld"><label for="osx_bairro">Bairro</label><input id="osx_bairro"></div>
+                <div class="fld"><label for="osx_cidade">Cidade</label><input id="osx_cidade"></div>
+                <div class="fld"><label for="osx_uf">Estado</label><input id="osx_uf" maxlength="2" placeholder="MG"></div>
+              </div>
+              <div class="fld" style="margin-top:12px"><label for="osx_ref">Ponto de referência</label>
+                <input id="osx_ref" placeholder="perto da praça, portão verde…"></div>
+              <label class="nf-chk" id="osx_aparelhoBox" hidden style="margin-top:10px">
+                <input type="checkbox" id="osx_aparelho">
+                <span>Atualizar também o endereço deste aparelho? <b>Só marque se o aparelho mudou de lugar de vez</b> — o cadastro do cliente não muda de qualquer jeito.</span>
+              </label>
+              <div class="help">Este endereço fica <b>só nesta OS</b>: vale para a ficha, o canhoto, a agenda do técnico, o mapa e o WhatsApp da visita.</div>
+            </div>
+            <div id="os_endHist"></div>
           </div>
         </div>
 
@@ -58235,6 +58278,7 @@ function abrirOS(o,ctx){
       "<br>Quando você concluir esta OS, a atividade de origem é encerrada automaticamente.</div>"
     : "";
   $("os_achou").innerHTML=osCli?htmlPlanoCliente(osCli.id):"";$("os_sug").hidden=true;$("os_alerta").innerHTML="";
+  try{carregarEndOS(o||v);}catch(eCe){console.warn("endereço da OS",eCe);}
   calcOS();notaGarantiaOS();notaFabricante();renderHistOS();
   try{notaPlanoOS();}catch(e){console.warn(e);}
   $("osDiagSalvar").onclick=salvarDiagnosticoOS;
@@ -58260,7 +58304,20 @@ function abrirOS(o,ctx){
     setTimeout(function(){enviarOrcamentoOSWhatsApp(o,bt);},120);
   };
   Array.prototype.forEach.call($("os_local").querySelectorAll("button"),function(b){
-    b.onclick=function(){osLocalSel=b.getAttribute("data-l");marcarLocalOS();$("os_alerta").innerHTML="";};});
+    b.onclick=function(){osLocalSel=b.getAttribute("data-l");marcarLocalOS();marcarEndQualOS();$("os_alerta").innerHTML="";};});
+  /* v618: a escolha do endereço do atendimento */
+  if($("os_endQual"))Array.prototype.forEach.call($("os_endQual").querySelectorAll("[data-eq]"),function(b){
+    b.onclick=function(){
+      osEndQual=b.getAttribute("data-eq");
+      /* indo para "outro" com os campos vazios, puxa o do cadastro como ponto de partida */
+      if(osEndQual==="outro"&&!endOSPreenchido()){
+        var c=cliPorId((editandoOS&&editandoOS.clienteId)||(osCli&&osCli.id))||{};
+        porEndOSForm({cep:c.cep||"",rua:c.rua||"",num:c.num||"",comp:c.comp||"",
+          bairro:c.bairro||"",cidade:c.cidade||"",uf:c.uf||"",ref:""});
+      }
+      marcarEndQualOS();$("os_alerta").innerHTML="";
+      if(osEndQual==="outro")try{$("osx_rua").focus();}catch(e){}
+    };});
   $("osFotoBt").onclick=function(){$("os_fotoIn").click();};
   $("os_fotoIn").onchange=lerFotosOS;
   $("osCriarAtiv").onclick=criarAtividadeTecnicoOS;
@@ -58384,6 +58441,93 @@ function renderHistOS(){
       return '<div class="lt"><div class="cab"><b>'+esc(dataBR(h.quando))+"</b> · "+esc(h.por||"")+"</div>"+
         '<div class="txt">'+esc(h.texto)+"</div></div>";}).join("")+"</div></div>";
 }
+/* ===== v618: a escolha do endereço do atendimento ===== */
+var osEndQual="cadastro";
+function partesEndOSForm(){
+  function v(id){var e=$(id);return e?String(e.value||"").trim():"";}
+  return {cep:v("osx_cep"),rua:v("osx_rua"),num:v("osx_num"),comp:v("osx_comp"),
+    bairro:v("osx_bairro"),cidade:v("osx_cidade"),uf:v("osx_uf").toUpperCase(),ref:v("osx_ref")};
+}
+function porEndOSForm(x){
+  x=x||{};
+  function p(id,val){var e=$(id);if(e)e.value=val||"";}
+  p("osx_cep",x.cep);p("osx_rua",x.rua);p("osx_num",x.num);p("osx_comp",x.comp);
+  p("osx_bairro",x.bairro);p("osx_cidade",x.cidade);p("osx_uf",x.uf);p("osx_ref",x.ref);
+}
+function endOSPreenchido(){
+  var x=partesEndOSForm();
+  return !!(x.rua||x.cidade||x.cep);
+}
+function marcarEndQualOS(){
+  var ch=$("os_endQual");if(!ch)return;
+  Array.prototype.forEach.call(ch.querySelectorAll("[data-eq]"),function(b){
+    b.setAttribute("aria-pressed",String(b.getAttribute("data-eq")===osEndQual));});
+  var box=$("os_endOutro");if(box)box.hidden=(osEndQual!=="outro");
+  /* a pergunta do aparelho só aparece quando a OS tem aparelho COM endereço próprio */
+  var cx=$("osx_aparelhoBox");
+  if(cx){
+    var e=(editandoOS&&editandoOS.equipId)?equipPorId(editandoOS.equipId):null;
+    cx.hidden=!(osEndQual==="outro"&&e&&temEndProprio(e));
+    if(cx.hidden&&$("osx_aparelho"))$("osx_aparelho").checked=false;
+  }
+  var r=$("os_endResumo");
+  if(r){
+    var c=cliPorId((editandoOS&&editandoOS.clienteId)||(osCli&&osCli.id))||{};
+    r.innerHTML=(osEndQual==="cadastro")
+      ? "O técnico vai ao endereço do cadastro: <b>"+esc(enderecoCadastroCli(c)||"sem endereço no cadastro")+"</b>"
+      : "O cadastro do cliente <b>não muda</b>. O que você escrever aqui vale só para esta OS.";
+  }
+}
+function renderHistEndOS(){
+  var w=$("os_endHist");if(!w)return;
+  var l=(editandoOS&&editandoOS.endOSHist)||[];
+  w.innerHTML=l.length?'<div class="t-sub" style="margin-top:8px"><b>Trocas do endereço desta OS:</b><br>'+
+    l.slice().reverse().map(function(h){
+      return esc(h.de||"endereço do cadastro")+" → "+esc(h.para||"endereço do cadastro")+
+        " · "+esc(h.por||"")+" em "+esc(carimboBR(h.quando));}).join("<br>")+"</div>":"";
+}
+function carregarEndOS(o){
+  osEndQual=temEndOS(o)?"outro":"cadastro";
+  porEndOSForm((o&&o.endOS)||{});
+  if($("osx_aparelho"))$("osx_aparelho").checked=false;
+  marcarEndQualOS();renderHistEndOS();
+}
+/* grava a escolha na OS, com histórico de → para. Devolve o aviso para quem chamou. */
+async function aplicarEndOS(o,novo){
+  var antes=temEndOS(o)?enderecoDaOS(o).texto:"",eraOutro=temEndOS(o);
+  if(osEndQual!=="outro"){
+    if(eraOutro){
+      o.endOSHist=(o.endOSHist||[]).concat([{de:antes,para:"",por:usuarioAtual,quando:agoraCarimbo()}]);
+      o.endOS=null;
+      o.historico=(o.historico||[]).concat([{quando:hojeISO(),por:usuarioAtual,
+        texto:"Endereço do atendimento voltou a ser o do cadastro"}]);
+    }
+    return "";
+  }
+  var x=partesEndOSForm();
+  if(!(x.rua||x.cidade))return "falta";
+  o.endOS=x;
+  var depois=enderecoDaOS(o).texto;
+  if(depois!==antes){
+    o.endOSHist=(o.endOSHist||[]).concat([{de:antes,para:depois,por:usuarioAtual,quando:agoraCarimbo()}]);
+    if(!novo)o.historico=(o.historico||[]).concat([{quando:hojeISO(),por:usuarioAtual,
+      texto:"Endereço do atendimento trocado para "+depois}]);
+  }
+  /* o aparelho só muda se a pessoa pedir — e o cadastro do cliente nunca muda */
+  var cx=$("osx_aparelho"),e=(o.equipId)?equipPorId(o.equipId):null;
+  if(cx&&cx.checked&&e){
+    var antesAp=JSON.parse(JSON.stringify(e.endInst||{}));
+    e.endInst=Object.assign({},e.endInst||{},x);
+    e.endInstHist=(e.endInstHist||[]).concat([{por:usuarioAtual,quando:agoraCarimbo(),
+      de:antesAp,para:x,origem:"OS "+(o.numero||"")}]);
+    try{await gravaConf("equipamentos",e);}
+    catch(eq){e.endInst=antesAp;toast("O endereço do aparelho NÃO foi alterado ("+motivoBanco(eq)+"). A OS foi gravada.");}
+  }
+  return "";
+}
+window.__endOSTelaMF={qual:function(){return osEndQual;},por:function(q){osEndQual=q;marcarEndQualOS();},
+  campos:partesEndOSForm,preencher:porEndOSForm,carregar:carregarEndOS,
+  aplicar:function(o,n){return aplicarEndOS(o,n);}};
 /* toque duplo nunca grava duas vezes (30/10) */
 function salvarOS(){return travaSalvar("salvarOS",salvarOS__corpo,this,arguments);}
 async function salvarOS__corpo(){
@@ -58436,6 +58580,15 @@ async function salvarOS__corpo(){
     toast("Só a gestão troca o Técnico responsável desta OS.");
   }
   o.defeito=$("os_defeito").value.trim();
+  /* v618: o endereço do atendimento, só nesta OS */
+  var faltaEnd="";
+  try{faltaEnd=await aplicarEndOS(o,novo);}catch(eEo){console.warn("endereço da OS",eEo);}
+  if(faltaEnd==="falta"){
+    $("os_alerta").innerHTML='<div class="note crit"><b>Escreva o outro endereço.</b> '+
+      "Informe ao menos a rua e a cidade, ou volte para <b>É o endereço do cadastro</b>.</div>";
+    try{$("os_endEscolha").scrollIntoView({block:"center"});}catch(e){}
+    return null;
+  }
   /* no atendimento externo não existe entrada de produto (20/09): nada de acessórios,
      avarias e fotos da entrada — o aparelho fica com o cliente */
   var externoOS=(osLocalSel==="externo");
@@ -58640,6 +58793,36 @@ function enderecoDoAparelho(e,c){
   return {proprio:false,texto:enderecoCadastroCli(c),geo:(c&&c.geo)||"",geoNivel:(c&&c.geoNivel)||"",
     ref:(c&&c.ref)||"",contatoNome:"",contatoTel:"",horario:""};
 }
+/* ===== O ENDEREÇO DA OS (26/11, v618; pedido dele) =====
+   Na abertura e na edição da OS dá para dizer que o atendimento é em OUTRO endereço, sem mexer
+   no cadastro do cliente nem no endereço do aparelho. O que for digitado fica gravado SÓ NA OS,
+   em `o.endOS`, e passa a valer na ficha, no canhoto, na agenda do técnico, no mapa e na
+   mensagem de WhatsApp da visita. OS antiga, sem o campo, continua pelo cadastro.
+   A ordem é: endereço da OS → endereço do aparelho → endereço do cadastro. */
+function temEndOS(o){
+  var x=o&&o.endOS;
+  return !!(x&&(x.rua||x.cidade||x.cep||x.geo));
+}
+function osPorIdEnd(id){
+  if(!id)return null;
+  return (typeof ordens!=="undefined"?ordens:[]).filter(function(x){return x.id===id;})[0]||null;
+}
+function enderecoDaOS(o){
+  var c=cliPorId(o&&o.clienteId)||{};
+  if(temEndOS(o)){
+    var x=enderecoDoAparelho({endInst:o.endOS},c);
+    x.partes=o.endOS;x.daOS=true;x.equip=null;
+    return x;
+  }
+  var e=(o&&o.equipId)?equipPorId(o.equipId):null;
+  if(e&&temEndProprio(e)){var y=enderecoDoAparelho(e,c);y.equip=e;y.partes=e.endInst;return y;}
+  return {proprio:false,texto:enderecoCadastroCli(c),geo:c.geo||"",geoNivel:c.geoNivel||"",partes:c,
+    equip:null,ref:c.ref||"",contatoNome:"",contatoTel:"",horario:""};
+}
+/* o texto curto, para a ficha, o canhoto e as listas */
+function textoEndOS(o){return enderecoDaOS(o).texto;}
+var MARCA_END_OS="endereço informado na OS";
+window.__endOSMF={tem:temEndOS,end:enderecoDaOS,texto:textoEndOS};
 /* ===== O ENDEREÇO DE INSTALAÇÃO INFORMADO NO PEDIDO (18/11, v576) =====
    Regra dele: "a agenda da instalação tem de mostrar o endereço que a vendedora informou no
    pedido, não o do cadastro". Na instalação o APARELHO AINDA NÃO EXISTE — ele nasce na aprovação
@@ -58698,7 +58881,13 @@ function purificadoresDoCliente(cid){
 function enderecoDaAtividade(a){
   var c=cliPorId(a&&a.clienteId)||{};
   var e=(a&&a.equipId)?equipPorId(a.equipId):null;
-  /* 1º: o aparelho, quando ele já existe E tem endereço próprio */
+  /* v618: 1º de todos — o endereço informado NA OS desta atividade. É o que a pessoa escreveu
+     para este atendimento, e vence o aparelho e o cadastro. */
+  if(a&&a.osId){
+    var oOS=osPorIdEnd(a.osId);
+    if(oOS&&temEndOS(oOS)){var xo=enderecoDaOS(oOS);xo.os=oOS;return xo;}
+  }
+  /* 2º: o aparelho, quando ele já existe E tem endereço próprio */
   if(e&&temEndProprio(e)){var x=enderecoDoAparelho(e,c);x.equip=e;x.partes=e.endInst;return x;}
   /* 2º (v576): o endereço de instalação informado no pedido desta instalação */
   var pd=(a&&a.__pedInst)||null;
@@ -59033,8 +59222,16 @@ function notaEnderecoExterno(){
     "pelo pedido — com as peças e serviços, ou cobrando o serviço de atendimento se o cliente não aprovar.</div>";
   if(!c)return '<div class="note os-instrucao"><b>Atendimento externo: no endereço do cadastro do cliente.</b> '+
     "Escolha o cliente pela busca para ver o endereço.</div>"+fluxo;
-  return '<div class="note '+(falta.length?"crit":"")+'"><b>Atendimento externo no endereço do cadastro:</b> '+esc(enderecoCadastroCli(c)||"sem endereço")+
-    (c.ref?"<br>Ponto de referência: "+esc(c.ref):"")+mapaLink(c.geo)+
+  /* v618: com endereço próprio na OS, é ele que o técnico vê aqui */
+  var eo=null;try{eo=editandoOS?enderecoDaOS(editandoOS):null;}catch(eE){eo=null;}
+  if(!eo&&osEndQual==="outro"&&endOSPreenchido())
+    try{eo=enderecoDaOS({clienteId:c.id,endOS:partesEndOSForm()});}catch(eE2){eo=null;}
+  var daOS=!!(eo&&eo.daOS);
+  if(daOS)falta=[];
+  return '<div class="note '+(falta.length?"crit":"")+'"><b>Atendimento externo '+
+    (daOS?"no endereço informado nesta OS:":"no endereço do cadastro:")+"</b> "+
+    esc((daOS?eo.texto:enderecoCadastroCli(c))||"sem endereço")+
+    (((daOS?eo.ref:c.ref)||"")?"<br>Ponto de referência: "+esc(daOS?eo.ref:c.ref):"")+mapaLink(daOS?(eo.geo||c.geo):c.geo)+
     (falta.length?"<br><b>O cadastro de "+esc(c.nome||"")+" está sem "+esc(falta.join(", "))+".</b> Complete o cadastro do cliente para agendar a visita.":"")+
     "</div>"+fluxo+
     htmlDeslocamento(deslocamentoDe(c.geo,($("ot_resp")&&$("ot_resp").value)||usuarioAtual,hojeISO()),"visita");
@@ -59042,6 +59239,7 @@ function notaEnderecoExterno(){
 function marcarLocalOS(){
   Array.prototype.forEach.call($("os_local").querySelectorAll("button"),function(b){
     b.setAttribute("aria-pressed",String(b.getAttribute("data-l")===osLocalSel));});
+  try{marcarEndQualOS();}catch(eMl){}
   /* atendimento externo: o aparelho fica com o cliente, então não há entrada de produto
      (acessórios, avarias e fotos da entrada) — regra dele, 20/09 */
   var se=$("os_secEntrada");
@@ -59169,11 +59367,15 @@ async function criarAtividadeTecnicoOS__corpo(){
   var nova=!editandoOS;
   var o=await salvarOS();if(!o)return;
   var obs=$("ot_obs").value.trim()||("OS "+o.numero+" · "+localOSN(o.local)+(o.equipamento?" · "+o.equipamento:"")+(o.serie?" · série "+o.serie:"")+" · Alegação: "+(o.defeito||""));
-  if(o.local==="externo")obs+="\nEndereço do cadastro: "+enderecoCadastroCli(c)+(c.ref?" · referência: "+c.ref:"");
+  /* v618: o endereço que vale para esta OS (o informado nela, o do aparelho ou o do cadastro) */
+  var endA=null;try{endA=enderecoDaOS(o);}catch(eEa){endA=null;}
+  if(o.local==="externo")obs+="\n"+((endA&&endA.daOS)?"Endereço desta OS: ":"Endereço do cadastro: ")+
+    ((endA&&endA.texto)||enderecoCadastroCli(c))+(((endA&&endA.ref)||c.ref)?" · referência: "+((endA&&endA.ref)||c.ref):"");
   var tt=tipos.indexOf("Atendimento técnico")>=0?["Atendimento técnico"]:[];
   var a={id:uid(),loja:lojaAtual,natureza:"atividade",clienteId:c.id,cliente:c.nome,tel:c.tel||"",doc:c.doc||"",cidade:c.cidade||"",
     endereco:[c.rua,c.num,c.bairro,c.cidade].filter(Boolean).join(", "),origem:c.origem||"",
     colaborador:resp,vendedor:"",tipos:tt,tipo:tt.join(" · "),data:data,inicio:hora,fim:"",obs:obs,
+    endOSTexto:((endA&&endA.daOS&&endA.texto)||""),
     origemOrc:"",origemAtiv:"",equipId:"",osId:o.id,osEtapa:"",situacao:"pendente",status:"aberto",criadoEm:hojeISO(),criadoPor:usuarioAtual};
   atendimentos.push(a);
   await grava("atendimentos",a);
@@ -59415,7 +59617,8 @@ function resumoEtapaOS(o,e){
   if(e.k==="abertura"){
     L+=linhaFeitoOS("Aberta em",dataBR(o.abertura||"")+(o.hora?" às "+o.hora:""));
     L+=linhaFeitoOS("Atendente",o.atendente||o.criadoPor||"");
-    L+=linhaFeitoOS("Onde o técnico atende",localOSN(o.local));
+    L+=linhaFeitoOS("Onde o técnico atende",localOSN(o.local)+
+      (o.local==="externo"?" · "+(function(){try{return enderecoDaOS(o).texto;}catch(e){return o.endereco||"";}})():""));
     L+=linhaFeitoOS("Equipamento",(o.equipamento||"")+(o.serie?" · série "+o.serie:""));
     L+=linhaFeitoOS("Tipo da OS",nomeTipoOS(o.tipoOS)||(o.tipoOS?"Normal":""));
     L+=linhaFeitoOS("Alegação do cliente",o.defeito||"");
@@ -60518,7 +60721,35 @@ function aplicarImpressaoOS(){
   if(q)Array.prototype.forEach.call(q.querySelectorAll("[data-imp]"),function(bt){
     bt.setAttribute("aria-current",bt.getAttribute("data-imp")===osImpQue?"true":"false");});
   if(!soCanhoto){try{ajustarOSA4(f);}catch(eA){console.warn("ficha da OS",eA);}}
+  try{ajustarZoomFolhaOS(f);}catch(eZ){console.warn("zoom da ficha",eZ);}
 }
+/* A FOLHA CABE NA TELA (26/11, v618, pedido dele): a ficha e o canhoto são uma folha A4 de
+   tamanho fixo (210 mm), e num celular de 390 px ela saía cortada pela direita — dava para ver
+   só metade do papel. Agora ela é REDUZIDA para caber na largura da tela, inteira. O papel não
+   muda: o zoom é só da tela e sai no `@media print`, e quem mede a folha (o protetor de blocos
+   e o gerador de PDF) já tira o zoom antes de medir. */
+function ajustarZoomFolhaOS(f){
+  f=f||$("os_folha");if(!f)return;
+  f.style.zoom="";
+  if(!f.classList.contains("os-a4"))return;
+  var pai=f.parentElement,larg=0;
+  if(pai){
+    /* a largura ÚTIL: o que sobra dentro do cartão, já sem a folga das bordas dele */
+    var cs=null;try{cs=getComputedStyle(pai);}catch(e){}
+    larg=pai.clientWidth-(cs?((parseFloat(cs.paddingLeft)||0)+(parseFloat(cs.paddingRight)||0)):0);
+  }
+  if(!(larg>0))larg=window.innerWidth||0;
+  var papel=794;   /* 210 mm a 96 pontos por polegada */
+  if(larg&&larg<papel-2)f.style.zoom=String(Math.max(.3,Math.round(((larg-2)/papel)*1000)/1000));
+}
+window.__zoomFolhaOSMF=function(){return ajustarZoomFolhaOS();};
+/* virou o celular de lado, ou a janela mudou de tamanho: a folha se ajusta de novo */
+window.addEventListener("resize",function(){
+  try{
+    var w=$("osImpressao");
+    if(w&&!w.hidden)ajustarZoomFolhaOS();
+  }catch(e){}
+});
 function fichaOS(){
   var o=editandoOS;if(!o)return;
   if($("os_impTitulo"))$("os_impTitulo").textContent="Ficha e canhoto";
@@ -60534,7 +60765,13 @@ function fichaOS(){
     return '<div class="lin'+(larga?" larga":"")+'"><b>'+r+"</b><span"+(varia?' data-var="1" data-full="'+esc(txt)+'"':"")+">"+esc(txt)+"</span></div>";}
   var comum=lin("Abertura",dataCurta(o.abertura||"")+(o.hora?" às "+o.hora:""))+lin("Atendente",o.atendente||o.criadoPor)+
     lin("Cliente",o.cliente,true,true)+lin("Telefone",o.tel)+lin("Número de série",o.serie)+
-    lin("Onde o técnico atende",localOSN(o.local)+(o.local==="externo"&&o.endereco?" · "+o.endereco+(o.cidade?" · "+o.cidade:""):""),true,true)+
+    /* v618: no atendimento externo vale o endereço da OS — o que foi informado nela, o do
+       aparelho ou o do cadastro, nesta ordem */
+    lin("Onde o técnico atende",localOSN(o.local)+
+      (o.local==="externo"?" · "+(function(){try{return enderecoDaOS(o).texto;}
+        catch(e){return (o.endereco||"")+(o.cidade?" · "+o.cidade:"");}})():""),true,true)+
+    ((o.local==="externo"&&temEndOS(o))?lin("Endereço informado nesta OS","sim · o cadastro do cliente não mudou"):"")+
+    ((o.local==="externo"&&(enderecoDaOS(o).ref||""))?lin("Referência",enderecoDaOS(o).ref,true,true):"")+
     lin("Produto",o.equipamento,true,true)+(o.marca?lin("Marca / modelo",o.marca,false,true):"")+
     (o.diagnosticoEm?lin("Tipo de serviço",osTipoN(o.tipo)):"")+(o.prazo?lin("Prazo",dataCurta(o.prazo)):"")+
     lin("Alegação do cliente",o.defeito,true,true)+
@@ -63826,7 +64063,26 @@ function alturaPaginaDe(raiz){
   if(document.body.classList.contains("doc-os")||raiz.querySelector&&raiz.querySelector(".folha-pg,.os-pg"))return 794;
   return 1123;
 }
+/* 26/11 (v618): tem documento do CLIENTE aberto na tela? Esses são o papel que ele leva —
+   imprimem para qualquer pessoa, com permissão de exportar ou sem. Lista e relatório continuam
+   presos à permissão. */
+var DOCS_DO_CLIENTE=["osImpressao","orcProposta","docVenda","frTermoArea"];
+function docDoClienteNaTela(){
+  return DOCS_DO_CLIENTE.some(function(id){
+    var el=document.getElementById(id);
+    if(!el||el.hidden)return false;
+    return !!(el.offsetParent!==null||el.getClientRects().length);
+  })||document.body.classList.contains("imp-recibo");
+}
+function marcarDocDoCliente(){
+  var tem=false;
+  try{tem=docDoClienteNaTela();}catch(e){}
+  try{document.body.classList.toggle("doc-papel",tem);}catch(e2){}
+  return tem;
+}
+window.__docPapelMF={tem:docDoClienteNaTela,marcar:marcarDocDoCliente,ids:DOCS_DO_CLIENTE};
 function protegerImpressaoAberta(){
+  marcarDocDoCliente();
   var n=0;
   RAIZES_IMPRESSAO.forEach(function(sel){
     var el=document.querySelector(sel);if(!el||el.offsetParent===null&&!el.getClientRects().length)return;
@@ -80880,7 +81136,9 @@ function erro(msg){
     {cep:"u_cep", rua:"u_rua", bairro:"u_bairro", cidade:"u_cidade", uf:"u_uf", num:"u_num", comp:"u_comp"},
     {cep:"",      rua:"na_rua",bairro:"na_bairro",cidade:"na_cidade",uf:"na_uf", num:"na_num", comp:""},
     {cep:"",      rua:"",      bairro:"",         cidade:"os_cidade",uf:"os_uf"},
-    {cep:"at_cep",rua:"at_rua",bairro:"at_bairro",cidade:"at_cidade",uf:"at_uf", num:"at_num", comp:"at_comp"}
+    {cep:"at_cep",rua:"at_rua",bairro:"at_bairro",cidade:"at_cidade",uf:"at_uf", num:"at_num", comp:"at_comp"},
+    /* v618: o endereço próprio da OS */
+    {cep:"osx_cep",rua:"osx_rua",bairro:"osx_bairro",cidade:"osx_cidade",uf:"osx_uf",num:"osx_num",comp:"osx_comp"}
   ];
   var cacheCEP={},buscandoCEP={},preenchendoCEP=false;
 
