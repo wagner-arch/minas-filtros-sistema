@@ -105,15 +105,36 @@ $$;
 comment on function public.evt_chave(text) is
   'Texto em minúsculas e sem pontuação solta: usado para comparar e-mail. 27/11/2026.';
 
--- QUEM ATENDE (correção 11 dele): Vendedor, Consultor, Gerente e
--- Administrador. Financeiro e Almoxarifado ficam de fora.
+-- QUEM ATENDE — REGRA DE 27/11 (a última dele): aparecem TODOS os
+-- usuários ATIVOS da empresa do formulário, QUALQUER função. Quem está
+-- marcado para as duas empresas aparece nas duas. Inativo fica fora.
+--
+-- A função CONTINUA existindo, com o mesmo nome, o mesmo argumento e o
+-- mesmo tipo de retorno, para evento_publico e evento_inscrever não
+-- mudarem — e para um dia dar para restringir de novo num lugar só.
+-- O que separa quem entra é o "ativo" e a empresa, nas duas portas.
+--
+-- A regra de antes (vendedor, consultor, gerente e administrador) ficou
+-- guardada em backup.evt_funcao_atende_20261127, com o texto inteiro da
+-- função, para voltar atrás copiando de lá:
+--   select definicao from backup.evt_funcao_atende_20261127;
+create table if not exists backup.evt_funcao_atende_20261127 as
+select p.proname,
+       pg_get_function_identity_arguments(p.oid) as argumentos,
+       pg_get_functiondef(p.oid)                as definicao,
+       now()                                    as guardado_em
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public'
+   and p.proname = 'evt_funcao_atende';
+
 create or replace function public.evt_funcao_atende(f text)
 returns boolean language sql immutable parallel safe as $$
-  select coalesce(f,'') ~* '(vendedor|consultor|gerente|administrador)'
+  select true
 $$;
 
 comment on function public.evt_funcao_atende(text) is
-  'Diz se a função atende cliente (vendedor, consultor, gerente, administrador). 27/11/2026.';
+  'Quem atende cliente no formulário de evento: QUALQUER função (regra dele de 27/11). O que filtra é o ativo e a empresa. A definição anterior está em backup.evt_funcao_atende_20261127.';
 
 -- O NOME CURTO DE QUEM ATENDE (correção 6 dele): a página pública recebe
 -- só o primeiro nome; havendo dois com o mesmo primeiro nome, entra a
@@ -362,9 +383,9 @@ comment on function public.evt_aberto(jsonb) is
 --    data do sorteio e — se o formulário pedir — a lista de quem atende,
 --    com o NOME CURTO e um CÓDIGO (correção 6). Nada de cliente, nada de
 --    lead, nada de outro formulário, nenhum nome completo.
---    Quem atende: vendedor, consultor, gerente ou administrador, ativo,
---    da empresa do formulário (quem está marcado para as duas aparece
---    nas duas) — correção 11.
+--    Quem atende: TODOS os usuários ATIVOS da empresa do formulário,
+--    qualquer função (regra dele de 27/11); quem está marcado para as
+--    duas aparece nas duas, e inativo fica fora.
 -- ---------------------------------------------------------------------
 create or replace function public.evento_publico(p_id text)
 returns jsonb
@@ -889,13 +910,21 @@ select indexname from pg_indexes
 -- e) o WhatsApp com e sem o 55 é a mesma chave (as duas colunas têm de vir iguais):
 select public.evt_zap('+55 (37) 98888-0001') as com_55, public.evt_zap('37988880001') as sem_55;
 
--- f) quem atende: vendedor, consultor, gerente e administrador sim; financeiro e almoxarifado não
-select public.evt_funcao_atende('Vendedor')      as vendedor,
-       public.evt_funcao_atende('Consultor')     as consultor,
-       public.evt_funcao_atende('Gerente')       as gerente,
-       public.evt_funcao_atende('Administrador') as administrador,
-       public.evt_funcao_atende('Financeiro')    as financeiro,
-       public.evt_funcao_atende('Almoxarifado')  as almoxarifado;
+-- f) quem atende: TODAS as funções entram (regra dele de 27/11) — esta
+--    consulta tem de dar true em todas as linhas, inclusive sem função
+-- select 'f) '||coalesce(f,'(sem funcao)') as funcao,
+--        public.evt_funcao_atende(f) as entra
+--   from (values ('Vendedor'),('Consultor'),('Gerente'),('Administrador'),
+--                ('Financeiro'),('Almoxarifado'),('Instalador'),('Prestador'),
+--                ('Marketing'),(''),(null)) as t(f);
+--
+--    E o que separa de verdade quem entra: ativo e a empresa do
+--    formulario. Esta consulta tem de trazer a equipe ATIVA da loja, com
+--    inativo nenhum:
+-- select p.nome, p.funcao, p.ativo, p.loja, p.ambas
+--   from public.perfis p
+--  where p.ativo and (p.loja = 'mf' or p.ambas)
+--  order by p.nome;
 
 
 -- g) O ENDEREÇO DE QUEM ENVIA (acerto 2 dele). No SQL Editor não chega
