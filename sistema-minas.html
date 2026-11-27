@@ -8033,6 +8033,10 @@ img{max-width:100%}
     <div id="es_serBox"></div>
     <div class="fld" id="es_motivoWrap" hidden style="margin-top:10px"><label for="es_motivoDev">Motivo da devolução <span class="req">*</span></label>
       <select id="es_motivoDev"><option value="">— escolha —</option><option>Sobra</option><option>Com defeito / quebrado</option></select></div>
+    <!-- v619: a requisição pode dizer para qual instalação a peça vai; assim a aprovação da venda não repõe o que já saiu para ela -->
+    <div class="fld" id="es_pedInstWrap" hidden style="margin-top:10px"><label for="es_pedInst">Para a instalação de qual pedido?</label>
+      <select id="es_pedInst"><option value="">— nenhum: é para o meu estoque —</option></select>
+      <p class="t-sub">Apontando o pedido, o almoxarifado não repõe esta peça quando a venda for aprovada: ela já saiu da empresa para essa instalação.</p></div>
     <div class="grid g3" style="margin-top:6px">
       <div class="fld"><label for="es_data">Data</label><input id="es_data" type="date"></div>
       <div class="fld" id="es_centroWrap" hidden><label for="es_centro">Centro de custo <span class="req">*</span></label><select id="es_centro"></select></div>
@@ -15046,7 +15050,7 @@ window.__lancarContagemMF=function(){return lancarContagem();};
 window.__movEstMF=function(){return movEst;};
 window.__requisicoesMF2=function(){return requisicoes;};
 window.__atenderReqMF=function(id){return atenderReq(id);};
-window.__abrirEstoqueMF=function(m,c,l){return abrirEstoque(m,c,l);};
+window.__abrirEstoqueMF=function(m,c,l,pi,pp){return abrirEstoque(m,c,l,pi,pp);};
 window.__ecQuemMF=function(v){var s=$("ecQuem");if(v!==undefined){s.value=v;renderEstColab();}return s.value;};
 window.__autPendPedMF=function(p){return autorizacoesPendentes(p);};
 window.__precisaAutMF=function(loc,q){return precisaAutorizacaoEstoque(loc,q);};
@@ -22684,9 +22688,13 @@ async function salvarPedidoAgora(){
   /* ESTOQUE NA VENDA (03/11): cada item novo fica com o estoque, a autorização ou a escolha
      usar/requisitar; sem saldo na entrega na hora o pedido não fecha (trava por dentro, não só na tela) */
   /* 05/11: o instalador foi trocado nesta edição e algum produto ainda sai da caixinha de outra
-     pessoa → pergunta antes de gravar. Pedido aberto sem trocar o instalador não muda sozinho. */
-  if(pedEditando&&tiInstOriginal!==null&&instaladorForm()&&instaladorForm()!==tiInstOriginal&&
-     itensForaDoInstalador(itens,instaladorForm()).length){conferirTrocaInstalador(true);return null;}
+     pessoa → antes de gravar a peça passa para quem instala.
+     v619 (26/11, decisão dele): esta conferência passou a valer SEMPRE, não só quando o
+     instalador foi trocado nesta edição — "a revisão final confere de novo: venda com instalação
+     NÃO finaliza com peça saindo da caixinha de quem vende quando outra pessoa instala". A troca
+     é automática, com aviso, e a revisão volta para a tela antes de o pedido fechar. Pedido
+     aberto e NÃO editado continua sem mudar sozinho: quem não passa por aqui não muda. */
+  if(instaladorForm()&&itensForaDoInstalador(itens,instaladorForm()).length){conferirTrocaInstalador(true);return null;}
   var falhaEst=aplicarEstoqueVenda();
   if(falhaEst){toast(falhaEst);try{abrirRevisaoPedido();}catch(eRv){}return null;}
   /* v597: a forma do adiantamento do orçamento nunca passa do que o cliente pagou (trava por dentro) */
@@ -24753,9 +24761,10 @@ function itensForaDoInstalador(lista,inst){
   if(!inst)return [];
   var alvo=locColab(inst);
   return (lista||[]).filter(function(i){
-    /* v595: item cuja origem quem vende ESCOLHEU de propósito (estoque que ela tem permissão)
-       não entra na troca: não se pergunta nada e ele não é movido sozinho. */
-    if(i&&i.estEscolhido)return false;
+    /* v619 (26/11, decisão dele): a origem escolhida por quem vende NÃO protege mais o item — a
+       peça passa para o estoque de quem instala "mesmo que quem vende tenha escolhido o próprio
+       estoque antes" (a v595 deixava ela parada). Estoque da Loja e almoxarifado continuam fora:
+       a Loja é a exceção combinada, e o que não é permitido a revisão devolve para o padrão. */
     return !!i&&!!i.pid&&!ehPlano(i)&&!ehServico(i)&&String(i.estoque||"").indexOf("colab:")===0&&i.estoque!==alvo;});
 }
 /* quem instala o pedido salvo: o responsável da instalação futura, ou o escolhido na entrega */
@@ -24792,10 +24801,21 @@ function voltarFotoInstalador(f){
 function conferirTrocaInstalador(revisao){
   var inst=instaladorForm();
   if(!inst){tiAntes=fotoInstalador();return true;}
+  /* v619 (proteção dele): venda já APROVADA ou finalizada não tem o estoque trocado — a baixa já
+     aconteceu, e mexer na origem agora mudaria movimento que já está lançado */
+  try{
+    var pE=(typeof pedEditando!=="undefined")?pedEditando:null;
+    if(pE&&(pE.aprovado||pE.encerrada||pE.status==="Cancelada"))return true;
+  }catch(ePa){}
   var fora=itensForaDoInstalador(itens,inst);
   if(!fora.length){tiAntes=fotoInstalador();return true;}
-  abrirTrocaInstalador(fora,inst,!!revisao);
-  return false;
+  /* v619 (26/11, decisão dele): a troca NÃO se pergunta mais — ela é AUTOMÁTICA, e o aviso sai na
+     tela na mesma hora (e no histórico do pedido, ao gravar). Na revisão, a tela volta para ele
+     ver o que mudou antes de finalizar: nenhuma venda com instalação fecha com a peça saindo da
+     caixinha de quem vende quando outra pessoa instala. */
+  tiCtx={fora:fora,inst:inst,revisao:!!revisao,antes:tiAntes};
+  escolherTrocaInstalador(locColab(inst));
+  return !revisao;
 }
 function abrirTrocaInstalador(fora,inst,revisao){
   tiCtx={fora:fora,inst:inst,revisao:revisao,antes:tiAntes};
@@ -24818,7 +24838,7 @@ function escolherTrocaInstalador(destino){
   var c=tiCtx;if(!c)return false;
   var agora=new Date().toISOString(),eu=euNoEstoque();
   /* v564: a origem passa a ser a caixinha do NOVO instalador, e só ela */
-  var loc=locColab(c.inst),tiUsados={};
+  var loc=locColab(c.inst),tiUsados={},tiFalta=[],tiComQuem=[];
   c.fora.forEach(function(i){
     var q=+(i.qtd||1),rec=reqRecebidaDoItem(i),t0=i.trocaEst||null;
     i.trocaEst={de:t0?t0.de:i.estoque,para:loc,por:usuarioAtual,em:agora,instalador:c.inst,
@@ -24839,14 +24859,25 @@ function escolherTrocaInstalador(destino){
     delete i.autEstoque;
     var excP=(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"";
     var dispN=saldoEm(i.pid,loc)-((reservasDe(loc,excP)[i.pid])||0)-(tiUsados[i.pid]||0);
-    var usarN=podeRequisitarNaVenda()?Math.max(0,Math.min(q,dispN)):q;
-    tiUsados[i.pid]=(tiUsados[i.pid]||0)+usarN;
-    i.usoEstoque={usar:usarN,req:q-usarN,reqId:"",por:usuarioAtual,em:agora,auto:(q-usarN)>0};
+    /* v619 (26/11, decisão dele): NÃO nasce requisição automática — nem para quem vende, nem para
+       o instalador. Sem a peça, a venda grava igual e o instalador requisita antes de instalar
+       (o aviso vai para a revisão e para o sino dele). A origem deixou de ser escolha de quem
+       vende, então a marca da escolha sai do item. */
+    delete i.estEscolhido;
+    tiUsados[i.pid]=(tiUsados[i.pid]||0)+q;
+    i.usoEstoque={usar:q,req:0,reqId:"",por:usuarioAtual,em:agora,auto:false};
+    if(dispN<q)tiFalta.push(codNomeItem(i));
+    /* o dono antigo já RECEBEU a peça do almoxarifado: o aviso manda transferir (antes isso
+       aparecia na janela da troca, que deixou de existir na v619) */
+    if(rec){var nmA=nomeLocal(t0?t0.de:(i.trocaEst&&i.trocaEst.de)||"");if(nmA&&tiComQuem.indexOf(nmA)<0)tiComQuem.push(nmA);}
   });
   tiCtx=null;$("trInstModal").hidden=true;
   tiAntes=fotoInstalador();
   try{calcular();opcoesEstoqueItem();notaEstoqueItem();}catch(e){}
-  toast(c.fora.length+(c.fora.length>1?" produtos passam":" produto passa")+" a sair do "+nomeLocal(loc)+".");
+  /* v619: o aviso que ele pediu, com o nome de quem vai instalar. Nunca em silêncio. */
+  toast((c.fora.length>1?"As peças passaram":"A peça passou")+" para o estoque de "+c.inst+", que vai instalar."+
+    (tiComQuem.length?" O produto está com "+tiComQuem.join(" e ")+": transfira para "+c.inst+".":"")+
+    (tiFalta.length?" "+c.inst+" precisa requisitar "+tiFalta.join(" e ")+" antes da instalação.":""));
   if(c.revisao)try{abrirRevisaoPedido();}catch(e2){}
   return true;
 }
@@ -24913,10 +24944,20 @@ function estoquesPermitidosVenda(vend){
   function poe(l){if(l&&!vis[l]){vis[l]=1;out.push(l);}}
   var t=temInstalacaoVenda(),comInst=(t==="sim"||t==="agora"),ins=instaladorForm();
   /* o padrão da v564 vem primeiro: é ele que fica marcado no item */
+  /* v619 (26/11, decisão dele): COM INSTALAÇÃO e instalador escolhido, TODAS as peças saem da
+     caixinha de QUEM VAI INSTALAR. A única exceção é o ESTOQUE DA LOJA, e só quando quem vende OU
+     quem instala responde por ela (a marcação da ficha, a mesma de sempre) — aí a peça continua
+     saindo da Loja mesmo informando outro instalador. Quem não tem a marcação não vê a opção.
+     O estoque pessoal de quem vende SAIU da lista (era a v596): "nunca use o estoque pessoal de
+     quem vende quando outra pessoa vai instalar". Nenhum outro estoque marcado na ficha entra. */
+  if(comInst&&ins){
+    poe(locColab(ins));
+    if(marcadoNaLoja(v)||marcadoNaLoja(ins))poe(locLoja(lojaAtual));
+    return out;
+  }
   if(comInst){
-    if(ins)poe(locColab(ins));
-    /* v596: o estoque da própria pessoa é sempre permissão dela — com instalação, a caixinha de
-       quem vende também entra (quando ela é quem instala, o poe não repete) */
+    /* instalador ainda não escolhido: o item fica como "sai do estoque de quem instalar" e nada
+       sai de estoque nenhum até ele ser informado (item 2 da regra dele) */
     poe(locColab(v));
   }
   else{
@@ -24959,6 +25000,19 @@ function estoquePadraoVenda(){
   if(!comInst&&marcadoNaLoja(vend))return locLoja(lojaAtual);
   return locColab(vend);
 }
+/* v619: a venda tem instalação e ninguém foi informado para instalar — a peça é de quem instalar,
+   e nada sai de estoque nenhum enquanto isso */
+function semInstaladorAinda(){
+  var t=temInstalacaoVenda();
+  if(t==="sim")return !String((($("v_iresp")||{}).value)||"").trim();
+  if(t==="agora")return !instaladorForm();
+  return false;
+}
+function textoPadraoVenda(){
+  if(semInstaladorAinda())return "o estoque de quem instalar";
+  return nomeLocal(estoquePadraoVenda());
+}
+window.__semInstAindaMF=function(){return semInstaladorAinda();};
 /* requisitar ao almoxarifado só não vale quando quem vende entrega na hora (balcão) */
 function podeRequisitarNaVenda(){
   var t=temInstalacaoVenda(),vend=quemVendeForm(),ins=instaladorForm();
@@ -25077,9 +25131,10 @@ function ligarUsoAut(p,it,a,podeDecidir){
 }
 /* o texto embaixo do "Sai de", na etapa dos itens */
 function textoEstItemNovo(loc,auto,aut,dono){
-  if(auto)return '<span class="pill p-acc">automático</span> O estoque é decidido no fim: sem instalação, sai de quem vende '+
-    "(ou do Estoque da Loja, para quem é responsável por ele); com instalação feita por outra pessoa, do estoque de quem instala, que autoriza. "+
-    "Na revisão aparece de onde sai cada item e, quando der, a escolha entre usar do estoque e requisitar ao almoxarifado.";
+  if(auto)return '<span class="pill p-acc">automático</span> '+(semInstaladorAinda()
+    ? "A venda tem instalação e ainda não foi informado quem instala: o item sai do <b>estoque de quem instalar</b> e <b>nada sai de estoque nenhum</b> até ele ser escolhido."
+    : "O estoque é decidido no fim: COM instalação a peça sai da caixinha de quem instala (só o Estoque da Loja continua, quando quem vende ou quem instala responde por ela); SEM instalação sai de quem vende, ou do Estoque da Loja para quem responde por ela.")+
+    " Na revisão aparece de onde sai cada item.";
   if(aut)return '<span class="pill p-warn">precisa de autorização</span> '+
     (dono?esc(dono)+" responde por este estoque e recebe o pedido quando a venda for salva. Na autorização, escolhe usar do estoque ou requisitar ao almoxarifado."
       :"este estoque está <b>sem responsável</b> — peça ao Administrador para marcar alguém na ficha do colaborador.")+
@@ -25090,6 +25145,7 @@ function textoEstItemNovo(loc,auto,aut,dono){
 function planoEstoqueVenda(){
   if(!regraNovaEstoque())return [];
   var vend=quemVendeForm(),padrao=estoquePadraoVenda(),podeReq=podeRequisitarNaVenda(),eu=euNoEstoque();
+  var tInstP=temInstalacaoVenda(),comInstP=(tInstP==="sim"||tInstP==="agora"),insP=instaladorForm();
   var exc=(typeof pedEditando!=="undefined"&&pedEditando)?pedEditando.id:"";
   var usados={},out=[],resCache={};
   function res(l){return resCache[l]||(resCache[l]=reservasDe(l,exc));}
@@ -25111,14 +25167,28 @@ function planoEstoqueVenda(){
       /* 03/11 (regra dele, urgente): com a chave "Permitir estoque negativo" LIGADA nenhum estoque trava
          a venda — sai assim mesmo e fica negativo, com aviso; a reposição vem depois da aprovação.
          Desligada a chave, volta a não deixar vender sem saldo. */
+      /* v619 (26/11, decisão dele): da caixinha de QUEM INSTALA não nasce requisição AUTOMÁTICA.
+         Faltando a peça, a venda grava igual ("aguardando peça"), o aviso aparece na revisão e no
+         sino do instalador, e é ele quem requisita antes de instalar. A escolha de quem fecha a
+         venda — usar do estoque ou requisitar ao almoxarifado — continua a mesma. O balcão
+         (entrega na hora por quem vende) continua precisando de saldo, como sempre. */
+      var doInstP=comInstP&&insP&&loc===locColab(insP)&&(tInstP==="sim"||insP!==vend);
+      o.doInst=doInstP;
       if(!podeReq){o.usar=q;o.req=0;o.fica=disp-q;o.bloqueia=o.podeUsar<q&&!estoqueNegativoPermitido();}
       /* sem nada disponível a requisição nasce sozinha: a marca "auto" é o que o sino e as
          Demandas mostram como "Sem saldo no estoque" (vinha do resolverAutSemSaldo, que saiu na v564) */
-      else if(!o.podeUsar){o.usar=0;o.req=q;o.auto=true;}
+      else if(!o.podeUsar){
+        /* v619: nada na caixinha de quem instala — aviso, e ele requisita antes de instalar */
+        if(doInstP){o.usar=q;o.req=0;o.semPeca=q;}
+        else{o.usar=0;o.req=q;o.auto=true;}
+      }
       else{
         var e=revEstoque[o.k];
         o.precisaEscolha=!e;
         o.usar=(e==="usar")?o.podeUsar:0;o.req=q-o.usar;
+        /* v619: escolheu usar da caixinha de quem instala e falta peça — o que falta NÃO vira
+           requisição automática: o instalador requisita antes de instalar */
+        if(e==="usar"&&doInstP&&o.req>0){o.semPeca=o.req;o.usar=q;o.req=0;}
       }
       usados[kk]=(usados[kk]||0)+(o.precisaEscolha?o.podeUsar:o.usar);
     }
@@ -25147,20 +25217,32 @@ function htmlEstRevisao(){
     var tem=esc(nomeLocal(o.loc))+" tem <b>"+Math.max(0,o.disp)+"</b> disponível. ";
     if(o.bloqueia)return '<div class="note crit">'+cab+"<br>"+tem+"Entrega na hora só sai de estoque que tem o produto: "+
       "volte e troque o \"Sai de\" deste item.</div>";
+    /* v619: da caixinha de quem instala não nasce requisição automática — este é o aviso, e ele
+       aparece tanto quando não há nada quanto quando falta parte do que a venda pede. Ele sai na
+       tela ANTES da escolha: quem fecha a venda já vê que a peça não está lá. */
+    var qFalta=o.doInst?Math.max(0,o.q-Math.max(0,o.podeUsar)):0;
+    var txFalta=qFalta?("<b>Falta "+qFalta+".</b> "+esc(instaladorForm())+" precisa requisitar "+
+      esc(o.i.nome||"")+" ao almoxarifado antes da instalação. A venda pode ser salva: o estoque só baixa "+
+      "quando a peça entrar e a instalação for concluída."):"";
+    if(!o.podeUsar&&qFalta)return '<div class="note warn">'+cab+"<br>"+tem+txFalta+"</div>";
     if(!o.podeReq)return '<div class="note '+(o.fica<0?"warn":"ok")+'">'+cab+"<br>"+tem+
       (o.fica<0?"<b>O estoque vai ficar "+o.fica+".</b> A venda segue e, depois da aprovação, o almoxarifado repõe.":"Vai usar "+o.q+" deste estoque; depois da aprovação o almoxarifado repõe.")+"</div>";
     if(!o.podeUsar)return '<div class="note">'+cab+"<br>"+tem+"Vai nascer uma requisição de "+o.q+
       " para retirar no almoxarifado, ligada a este pedido. Depois da aprovação não tem reposição.</div>";
     var e=revEstoque[o.k]||"";
-    var lU=o.podeUsar<o.q?"Usar "+o.podeUsar+" do estoque e requisitar "+(o.q-o.podeUsar):"Usar do estoque";
+    /* v619: da caixinha de quem instala o botão não promete requisição do que falta */
+    var lU=(o.podeUsar<o.q)
+      ? (qFalta?("Usar os "+o.podeUsar+" que ele tem"):("Usar "+o.podeUsar+" do estoque e requisitar "+(o.q-o.podeUsar)))
+      : "Usar do estoque";
     var lR=o.q>1?"Requisitar os "+o.q+" do almoxarifado":"Requisitar do almoxarifado";
-    return '<div class="note'+(e?"":" warn")+'">'+cab+"<br>"+tem+
+    return '<div class="note'+(e?"":" warn")+'">'+cab+"<br>"+tem+(txFalta?txFalta+"<br>":"")+
       '<div class="chips" style="margin:6px 0 2px">'+[["usar",lU],["req",lR]].map(function(x){
         var on=e===x[0];
         return '<button type="button" data-rvest="'+esc(o.k)+'" data-v="'+x[0]+'" aria-pressed="'+on+'">'+(on?"✓ ":"")+esc(x[1])+"</button>";}).join("")+"</div>"+
       '<div class="help">'+(e==="usar"
-        ? (o.podeUsar<o.q?"Usa "+o.podeUsar+" do estoque (o almoxarifado repõe depois da aprovação) e nasce uma requisição de "+(o.q-o.podeUsar)+" para retirar no almoxarifado."
-          :"Usa "+o.q+" do estoque. Depois da aprovação o almoxarifado repõe.")
+        ? (txFalta?("Usa os "+o.podeUsar+" que ele tem; o que falta ele requisita ao almoxarifado antes de instalar.")
+          :(o.podeUsar<o.q?"Usa "+o.podeUsar+" do estoque (o almoxarifado repõe depois da aprovação) e nasce uma requisição de "+(o.q-o.podeUsar)+" para retirar no almoxarifado."
+          :"Usa "+o.q+" do estoque. Depois da aprovação o almoxarifado repõe."))
         : e==="req"?"Nasce uma requisição de "+o.q+" para retirar no almoxarifado, ligada a este pedido. Depois da aprovação não tem reposição."
         : "Escolha uma das duas.")+"</div></div>";
   }).join("");
@@ -25350,7 +25432,7 @@ window.__naoReporItensMF=function(id){return naoReporItens__corpo(id);};
 window.__prateleiraMF={pend:prateleiraPend,devolvido:function(id,j){return devolvidoPrateleira__corpo(id,j);},pode:podeNaoRepor,pendentes:itensPendReq};
 window.__naoReporMF=function(id){return naoQueroRepor(id);};
 window.__planoEstMF=function(){return planoEstoqueVenda().map(function(o){
-  return {nome:o.i.nome,loc:o.loc,aut:o.aut,disp:o.disp,podeUsar:o.podeUsar,podeReq:o.podeReq,bloqueia:!!o.bloqueia,precisaEscolha:!!o.precisaEscolha,usar:o.usar,req:o.req};});};
+  return {nome:o.i.nome,loc:o.loc,aut:o.aut,disp:o.disp,podeUsar:o.podeUsar,podeReq:o.podeReq,bloqueia:!!o.bloqueia,precisaEscolha:!!o.precisaEscolha,usar:o.usar,req:o.req,semPeca:(o.semPeca==null?null:o.semPeca)};});};
 window.__revEstMF=function(k,v){if(k===null){revEstoque={};return;}revEstoque[k]=v;};
 window.__estPadraoMF=function(){return estoquePadraoVenda();};
 /* trocar vendedor, instalador ou a pergunta da instalação refaz o "Sai de" */
@@ -25459,7 +25541,7 @@ function opcoesEstoqueItem__base(){
     if(lista.length>1){
       if(wEst)wEst.hidden=false;
       if(lab)lab.textContent="Sai do estoque de";
-      add("meu","Automático · "+nomeLocal(estoquePadraoVenda()));
+      add("meu","Automático · "+textoPadraoVenda());
       lista.forEach(function(l){add(l,rotuloEstoqueVenda(l,vendI,insI,comI));});
       if(ant){try{s.value=ant;}catch(eV2){}}
       if(!s.value||!origemPermitidaVenda(s.value))s.value="meu";
@@ -25467,13 +25549,13 @@ function opcoesEstoqueItem__base(){
     }
     if(lab)lab.textContent="Sai de qual estoque";
     if(comI&&insI){
-      add(locColab(insI),"Caixinha de quem instala · "+insI);
+      add(locColab(insI),semInstaladorAinda()?"Automático · o estoque de quem instalar":("Caixinha de quem instala · "+insI));
       s.value=locColab(insI);
       if(wEst)wEst.hidden=true;
       return;
     }
     if(wEst)wEst.hidden=false;
-    add("meu","Automático · "+(marcadoNaLoja(vendI)?"Estoque da Loja":"de quem vende"));
+    add("meu","Automático · "+(semInstaladorAinda()?"o estoque de quem instalar":(marcadoNaLoja(vendI)?"Estoque da Loja":"de quem vende")));
     add(locColab(vendI),"Estoque de quem vende · "+vendI);
     if(marcadoNaLoja(vendI))add(locLoja(lojaAtual),"Estoque da Loja · "+nomeLoja()+
       (respEstoqueLoja(lojaAtual)?" · "+respEstoqueLoja(lojaAtual):""));
@@ -29387,6 +29469,41 @@ function pedidosInstaladosSemAprovar(dias){
     .sort(function(a,b){return b.dias-a.dias;});
 }
 window.__pecasAviso3MF=function(d){return pedidosInstaladosSemAprovar(d);};
+/* v619 (26/11, decisão dele): a peça da instalação não está no estoque de quem vai instalar.
+   NÃO nasce requisição automática: o aviso vai para o sino DELE, que requisita antes de instalar.
+   A lista é feita na hora, então ela some sozinha quando a peça entrar ou a venda for cancelada. */
+/* v619: os pedidos que esperam a instalação desta pessoa — a requisição aponta para um deles e,
+   por causa disso, a aprovação não repõe a peça que já saiu para essa instalação */
+function pedidosAguardandoInstalacao(quem){
+  var eu=quem||euNoEstoque(),out=[];
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||ehTeste(p)||p.rascunho)return;
+    if(p.status==="Cancelada"||p.cancelado)return;
+    if(!(p.instalacao||p.instalacaoAgora)||p.instaladoEm)return;
+    if(quemInstalaPedido(p)!==eu)return;
+    out.push(p);
+  });
+  return out.sort(function(a,b){return String(a.numero||"").localeCompare(String(b.numero||""));});
+}
+window.__pedsAgInstMF=function(q){return pedidosAguardandoInstalacao(q);};
+function pecasQueFaltamParaInstalar(quem){
+  var eu=quem||euNoEstoque(),meu=locColab(eu),out=[];
+  (pedidos||[]).forEach(function(p){
+    if(!p||p.loja!==lojaAtual||ehTeste(p)||p.rascunho)return;
+    if(p.status==="Cancelada"||p.cancelado)return;
+    if(!(p.instalacao||p.instalacaoAgora)||p.instaladoEm)return;
+    if(quemInstalaPedido(p)!==eu)return;
+    try{
+      itensSemPecaNoEstoque(p).forEach(function(x){
+        if(x.loc!==meu)return;
+        out.push({pedidoId:p.id,numero:p.numero||"",cliente:p.cliente||"",pid:x.it.pid,
+          produto:codNomeItem(x.it),precisa:x.precisa,tem:x.tem,falta:x.falta,data:diaDe(p.data)});
+      });
+    }catch(eF){}
+  });
+  return out;
+}
+window.__faltaPecaInstMF=function(q){return pecasQueFaltamParaInstalar(q);};
 function diasDesde(d){
   var t=Date.parse(String(d||"").slice(0,10)+"T12:00:00");
   if(isNaN(t))return 0;
@@ -29403,6 +29520,18 @@ function repoFaltandoDoPedido(p){
     if(r.pedidoId!==p.id)return;
     /* 03/11: o que ele já recebeu pela requisição da venda não se repõe (nunca em dobro), e a
        reposição que o dono não quis continua contando — senão nasceria de novo na reaprovação */
+    /* v619 (27/11, decisão dele): a peça que entrou na caixinha de quem instala por requisição
+       APONTADA PARA ESTE PEDIDO também não se repõe — ela já saiu da empresa para esta
+       instalação. Conta só o que de fato CHEGOU: atendida em parte, repõe-se o resto. E nunca
+       em dobro, nem na reaprovação de uma venda reaberta, porque esta conta é refeita inteira
+       (o que saiu menos o que já foi pedido ou já veio). */
+    if(r.paraInstalacao&&r.tipo==="requisicao"&&r.status!=="cancelada"){
+      var lI=localDaReq(r);
+      (r.itens||[]).forEach(function(i){
+        if(!(i.recebido||(r.status==="concluida"&&!i.naoReposto)))return;
+        var kI=i.pid+"|"+lI;pedido[kI]=(pedido[kI]||0)+(+(i.atendida||i.qtd)||0);});
+      return;
+    }
     var conta=(r.origem==="reposicao"&&(r.status!=="cancelada"||r.canceladaPeloDono))||
       (r.origem==="venda"&&r.status!=="cancelada");
     if(!conta)return;
@@ -29564,7 +29693,7 @@ function localOpcoes(sel,incluirColabs,incluirExternos){
   }
   if(incluirExternos){add("fornecedor","Fornecedor (entrada avulsa)");add("ajuste","Ajuste de inventário");add("venda","Venda ao cliente");}
 }
-function abrirEstoque(modo,colab,local){
+function abrirEstoque(modo,colab,local,pedInst,pidPre){
   esModo=modo;esColab=colab||"";esItens=[];
   /* o local manda quando ele vem: é assim que o Estoque da Loja requisita e devolve */
   esLocal=local||(esColab?locColab(esColab):"");
@@ -29605,6 +29734,24 @@ function abrirEstoque(modo,colab,local){
   } else {
     $("es_origem").value="fornecedor";$("es_destino").value=LOC_EMPRESA;
     nota="Use para entrada avulsa, ajuste de inventário ou baixa que não passou por venda.";
+  }
+  /* v619: a requisição pode apontar o pedido que ele vai instalar */
+  if($("es_pedInstWrap")){
+    var quemPI=String(esLocal||"").indexOf("colab:")===0?String(esLocal).slice(6):"";
+    var pedsPI=[];
+    if(modo==="req"&&quemPI){try{pedsPI=pedidosAguardandoInstalacao(quemPI);}catch(ePi){pedsPI=[];}}
+    $("es_pedInstWrap").hidden=!pedsPI.length;
+    opcoes("es_pedInst",pedsPI,function(p){return p.id;},
+      function(p){return "Pedido "+(p.numero||"")+(p.cliente?" · "+p.cliente:"");},
+      "— nenhum: é para o meu estoque —");
+    $("es_pedInst").value=(modo==="req"&&pedInst&&pedsPI.some(function(p){return p.id===pedInst;}))?pedInst:"";
+  }
+  /* e já vem com a peça que falta, quando o aviso do sino é que abriu */
+  if(modo==="req"&&pidPre){
+    try{
+      var prP=prodPorId(pidPre),dP=dispAlmox(pidPre);
+      if(prP&&dP>0)esItens.push({pid:prP.id,nome:prP.nome,cod:prP.cod,qtd:1});
+    }catch(ePp){}
   }
   $("es_nota").innerHTML=nota;
   renderEsItens();
@@ -29665,6 +29812,16 @@ async function confirmarEstoque__corpo(){
       itens:esItens.map(function(i){return {pid:i.pid,nome:i.nome,cod:i.cod,qtd:i.qtd,atendida:i.qtd};}),
       obs:obs,data:data,status:"pendente",criadoEm:hojeISO(),criadoPor:usuarioAtual,abertaEm:new Date().toISOString()};
     if(esModo==="dev")r.motivoDev=$("es_motivoDev").value;
+    /* v619 (27/11, decisão dele): requisição apontada para o pedido que ele vai instalar — a peça
+       que entrar por ela NÃO é reposta na aprovação da venda */
+    if(esModo==="req"&&$("es_pedInst")&&$("es_pedInst").value&&$("es_pedInstWrap")&&!$("es_pedInstWrap").hidden){
+      var pPI=pedPorId($("es_pedInst").value);
+      if(pPI&&pPI.loja===lojaAtual){
+        r.pedidoId=pPI.id;r.pedidoNumero=pPI.numero||"";r.cliente=pPI.cliente||"";
+        r.paraInstalacao=true;
+        r.obs=(r.obs?r.obs+" · ":"")+"Para a instalação do pedido "+(pPI.numero||"");
+      }
+    }
     /* v586: as séries informadas na criação ficam reservadas, conferidas no banco */
     if(confNov){
       var resNov=await reservarSeriesReq(r,confNov.mapa);
@@ -33118,6 +33275,8 @@ function textoReq(r){
   if(r.origem==="reposicao")return "Reposição do pedido aprovado nº "+num+(cli?" · "+cli:"")+qdT;
   if(r.origem==="venda")return "Para atender o pedido nº "+num+(cli?" · "+cli:"")+qdT;
   if(r.origem==="troca")return "Purificador pego na troca"+(num?" · pedido nº "+num:"")+(cli?" · "+cli:"")+qdT;
+  /* v619: requisição apontada para a instalação de um pedido */
+  if(r.paraInstalacao)return "Para a instalação do pedido nº "+num+(cli?" · "+cli:"")+qdT;
   return "Requisição de "+(r.pedidaPor||r.criadoPor||r.colaborador||"—")+qdT+
     /* v586: voltou porque a série do aparelho não era a que estava na tela */
     (r.serieNaoConfere?" · SÉRIE NÃO CONFERE: corrija a série e separe de novo":"");
@@ -33252,7 +33411,7 @@ function itensAbertosAf(r){return (r.itens||[]).filter(function(i){return !itemF
 function produtoReqAf(r){return itensAbertosAf(r).map(function(i){return (i.atendida||i.qtd)+"× "+codNomeItem(i);}).join(", ");}
 function qtdReqAf(r){return itensAbertosAf(r).reduce(function(a,i){return a+(+(i.atendida||i.qtd)||0);},0);}
 function criadoReqAf(r){return r.abertaEm||r.criadoEm||r.data||"";}
-function tipoReqAf(r){return r.origem==="reposicao"?"Reposição":r.origem==="venda"?"Para pedido":r.origem==="troca"?"Troca":"Requisição";}
+function tipoReqAf(r){return r.origem==="reposicao"?"Reposição":r.origem==="venda"?"Para pedido":r.origem==="troca"?"Troca":r.paraInstalacao?"Para instalar":"Requisição";}
 function bt(attr,v,txt,cls){return '<button class="btn'+(cls?" "+cls:"")+'" type="button" '+attr+'="'+esc(v)+'">'+txt+"</button>";}
 /* todas as demandas da loja aberta que esta pessoa vê — cada uma com a sua linha e as suas ações */
 function demandasAf(){
@@ -74286,6 +74445,19 @@ function avisosDoTrabalho(){
         ir:function(){ir("estAguardando");}});
     });}catch(ePa2){console.warn("aviso das peças",ePa2);}
   }
+  /* v619 (26/11, regra dele): a peça que o instalador precisa requisitar antes de instalar */
+  try{pecasQueFaltamParaInstalar().forEach(function(x){
+    L.push({chave:"faltapecainst:"+x.pedidoId+"|"+x.pid,icone:"📦",
+      titulo:"Você precisa requisitar "+x.produto+" antes da instalação do pedido "+x.numero,
+      texto:(x.cliente||"")+" · o seu estoque tem "+x.tem+" e a instalação pede "+x.precisa+
+        " — requisite ao almoxarifado antes da instalação",
+      quando:x.data,
+      /* v619: o aviso abre a requisição já apontada para esse pedido, com a peça que falta */
+      ir:function(){
+        try{ir("estAfazer");}catch(eI){}
+        try{abrirEstoque("req",euNoEstoque(),"",x.pedidoId,x.pid);}catch(eA){}
+      }});
+  });}catch(eFp){console.warn("aviso de requisitar a peça",eFp);}
   /* v574: contagem do estoque — o que não foi feito e o que falta para amanhã */
   if(podeContagemEstoque()){
     var hojeCt=hojeISO();
