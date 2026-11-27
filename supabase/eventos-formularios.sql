@@ -634,6 +634,11 @@ begin
     values ('evtinscr', novo_id, l,
       dados ||
       jsonb_build_object(
+        -- A EMPRESA TAMBÉM DENTRO DO DOCUMENTO (defeito achado no teste de verdade, 27/11):
+        -- gravar só na coluna docs.loja não basta. O adaptador devolve ao sistema SÓ o
+        -- documento, então a inscrição chegava sem empresa, o filtro por empresa derrubava
+        -- todas, a tela mostrava 0 inscritos e nada era ligado ao cadastro.
+        'loja',     l,
         'formId',   p_id,
         'kWhats',   whats,
         'kCpf',     cpf,

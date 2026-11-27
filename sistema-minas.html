@@ -5524,6 +5524,7 @@ img{max-width:100%}
               <button class="btn ghost" type="button" id="evt_copiar">Copiar link</button>
               <button class="btn ghost" type="button" id="evt_enviarZap">Enviar pelo WhatsApp</button>
               <button class="btn ghost" type="button" id="evt_imprimirQR">Imprimir o QR Code</button>
+              <button class="btn ghost" type="button" id="evt_baixarQR">Baixar QR Code</button>
             </div>
             <div id="evt_qr" style="margin-top:10px"></div>
           </div>
@@ -8183,6 +8184,24 @@ img{max-width:100%}
     <div class="actions">
       <button class="btn" type="button" id="evt_tOk">Confirmar</button>
       <button class="btn mut" type="button" id="evt_tFechar">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<!-- v623: baixar o QR Code, nas duas formas (decisão dele, 27/11) -->
+<div class="modal" id="evBaixaQRModal" hidden>
+  <div class="box">
+    <h3>Baixar o QR Code</h3>
+    <div class="sub" id="evt_bqSub"></div>
+    <div class="note warn" id="evt_bqFechado" hidden><b>Este formulário não está aceitando inscrições.</b> Quem apontar a câmera vai ver o aviso de inscrições encerradas. A imagem baixa do mesmo jeito, se você quiser guardar.</div>
+    <div class="note" id="evt_bqNota">Escolha como quer a imagem. As duas saem com o link do site publicado.</div>
+    <div class="grid g2" style="margin-top:14px">
+      <button class="btn" type="button" id="evt_bqSo">Só o QR Code<div class="t-sub">PNG grande, fundo branco com margem — para colar em banner ou cartaz</div></button>
+      <button class="btn" type="button" id="evt_bqCom">QR Code com o nome do evento<div class="t-sub">PNG com a logomarca, o nome do evento e a frase — pronto para imprimir ou mandar no WhatsApp</div></button>
+    </div>
+    <div id="evt_bqAlerta"></div>
+    <div class="actions">
+      <button class="btn mut" type="button" id="evt_bqFechar">Fechar</button>
     </div>
   </div>
 </div>
@@ -80739,8 +80758,22 @@ window.__evtSorteiosMF=function(){return evtSorteios;};
 /* ---------- as contas de sempre ---------- */
 function evtDaLoja(){return (evtForms||[]).filter(function(f){return f&&f.loja===lojaAtual;});}
 function evtPorId(id){return (evtForms||[]).filter(function(f){return f.id===id;})[0]||null;}
+/* A LOJA DA INSCRIÇÃO (defeito achado no teste de verdade, 27/11): a inscrição feita pelo LINK
+   PÚBLICO nascia com a empresa só na COLUNA do banco, não dentro do documento — e o adaptador
+   devolve só o documento. Resultado: `i.loja` chegava vazia, o filtro por empresa derrubava
+   todas, a tela mostrava 0 inscritos e nada era ligado ao cadastro.
+   A porta do banco passou a gravar a empresa dentro do documento; aqui fica a rede de baixo,
+   que vale para as inscrições gravadas ANTES disso e para qualquer caminho que esqueça o campo:
+   sem empresa na inscrição, vale a empresa do FORMULÁRIO dela. Uma inscrição nunca pertence a
+   uma empresa diferente da do formulário, então a conta é sempre a mesma. */
+function lojaDaInscr(i){
+  if(!i)return "";
+  if(i.loja)return i.loja;
+  var f=evtPorId(i.formId);
+  return (f&&f.loja)||"";
+}
 function evtInscrDe(formId){
-  return (evtInscr||[]).filter(function(i){return i&&i.formId===formId&&i.loja===lojaAtual;})
+  return (evtInscr||[]).filter(function(i){return i&&i.formId===formId&&lojaDaInscr(i)===lojaAtual;})
     .sort(function(a,b){return String(a.em||"").localeCompare(String(b.em||""));});
 }
 function evtInscrPorId(id){return (evtInscr||[]).filter(function(i){return i.id===id;})[0]||null;}
@@ -80982,12 +81015,25 @@ function renderEvtLista(){
 }
 
 /* ---------- o formulário aberto ---------- */
+/* ABRIR O FORMULÁRIO LÊ AS INSCRIÇÕES DE NOVO (27/11): quem preenche o link está no celular
+   dele, não neste aparelho, e a leitura das três coleções só acontecia na entrada. Sem isto, a
+   inscrição nova só aparecia depois de sair e voltar ao sistema. A tela desenha na hora, com o
+   que já está na memória, e se redesenha sozinha quando a leitura chega — ninguém fica
+   esperando. Ligar ao cadastro vem junto, para a linha "Inscrito no evento X" não depender de
+   alguém fechar e abrir o sistema. */
 function abrirEvtForm(id){
   evtSel=id||"";
   var f=evtPorId(evtSel);
   if(!f){evtSel="";$("evt_det").hidden=true;$("evt_cardLista").hidden=false;return;}
   $("evt_cardLista").hidden=true;$("evt_det").hidden=false;
   renderEvtDet();
+  var alvo=evtSel;
+  try{
+    Promise.resolve(carregarEventos(true))
+      .then(function(){return ligarInscricoesEvt();})
+      .then(function(){if(evtSel===alvo&&!$("evt_det").hidden)renderEvtDet();})
+      .catch(function(e){console.warn("reler as inscrições",e);});
+  }catch(e){console.warn("reler as inscrições",e);}
 }
 function fecharEvtForm(){
   evtSel="";
@@ -81869,7 +81915,7 @@ async function registrarAvisoGanhador(s,pos){
 async function ligarInscricoesEvt(){
   if(!podeMarketing())return 0;
   var novas=(evtInscr||[]).filter(function(i){
-    return i&&i.loja===lojaAtual&&!i.ligadoEm&&!i.lgpd&&!i.aConferir&&String(i.nome||"").trim();
+    return i&&lojaDaInscr(i)===lojaAtual&&!i.ligadoEm&&!i.lgpd&&!i.aConferir&&String(i.nome||"").trim();
   });
   var n=0;
   for(var k=0;k<novas.length;k++){
@@ -81985,6 +82031,187 @@ async function escolherCadastroEvt__corpo(id,cid){
   renderEventos();
 }
 
+/* ---------- BAIXAR O QR CODE (decisão dele, 27/11) ----------------------------------------
+   Duas imagens PNG:
+     1. só o QR Code, 1200 x 1200, fundo branco com margem — para colar em arte de banner;
+     2. o QR com a logomarca da loja do formulário, o nome do evento e a frase de chamada —
+        pronto para imprimir ou mandar no WhatsApp.
+   O link é SEMPRE o do site publicado, como no "Copiar link": fora do site não baixa, avisa que
+   é link de teste. Formulário encerrado, arquivado ou já sorteado: o botão continua, mas a
+   janela avisa antes de baixar.
+   No celular abre o compartilhar/salvar da imagem; no computador baixa o arquivo. */
+
+/* o nome do arquivo: QR-NOME-DO-EVENTO.png, sem acento e sem espaço */
+function nomeArqQREvt(f){
+  var n=String((f&&f.nome)||"evento");
+  try{n=n.normalize("NFD").replace(/[\u0300-\u036f]/g,"");}catch(e){}
+  n=n.replace(/[^A-Za-z0-9]+/g,"-").replace(/^-+/,"").replace(/-+$/,"").toUpperCase();
+  return "QR-"+(n||"EVENTO")+".png";
+}
+
+/* A LOGOMARCA DA LOJA DO FORMULÁRIO: a da Minas Filtros está no repositório; a da WF entra
+   quando o arquivo existir (ele ainda vai mandar). Não existindo, a imagem sai com o nome da
+   loja escrito no lugar do logo — nunca com um quadrado vazio. */
+function logoDaLojaEvt(loja){return (loja==="wf")?"img/logo-wf.jpg":LOGO;}
+function carregarImagem(src){
+  return new Promise(function(ok){
+    if(!src)return ok(null);
+    var im=new Image();
+    im.onload=function(){ok(im);};
+    im.onerror=function(){ok(null);};
+    im.src=src;
+  });
+}
+
+/* o QR Code desenhado grande, num canvas próprio */
+function qrCanvasEvt(texto,lado){
+  if(!texto||!window.QRCode)return null;
+  var d=document.createElement("div"),cv=null;
+  d.style.cssText="position:absolute;left:-9999px;top:0";
+  document.body.appendChild(d);
+  try{
+    new QRCode(d,{text:texto,width:lado,height:lado,correctLevel:QRCode.CorrectLevel.M});
+    var ori=d.querySelector("canvas");
+    if(ori){
+      cv=document.createElement("canvas");cv.width=ori.width;cv.height=ori.height;
+      cv.getContext("2d").drawImage(ori,0,0);
+    }
+  }catch(e){cv=null;}
+  if(d.parentNode)d.parentNode.removeChild(d);
+  return cv;
+}
+
+/* quebra o texto em linhas que caibam na largura, para o nome do evento comprido */
+function linhasNoCanvas(ctx,texto,larg,maxLinhas){
+  var ps=String(texto||"").split(/\s+/).filter(Boolean),ls=[],atual="";
+  ps.forEach(function(p){
+    var t=atual?atual+" "+p:p;
+    if(ctx.measureText(t).width<=larg||!atual)atual=t;
+    else{ls.push(atual);atual=p;}
+  });
+  if(atual)ls.push(atual);
+  if(maxLinhas&&ls.length>maxLinhas){
+    ls=ls.slice(0,maxLinhas);
+    ls[maxLinhas-1]=ls[maxLinhas-1].replace(/\s*\S*$/,"")+"…";
+  }
+  return ls;
+}
+
+function canvasParaArquivo(cv,nome){
+  return new Promise(function(ok){
+    if(!cv)return ok(null);
+    try{
+      if(cv.toBlob)cv.toBlob(function(b){ok(b?new File([b],nome,{type:"image/png"}):null);},"image/png");
+      else{
+        var u=cv.toDataURL("image/png"),bin=atob(u.split(",")[1]),ar=new Uint8Array(bin.length);
+        for(var i=0;i<bin.length;i++)ar[i]=bin.charCodeAt(i);
+        ok(new File([ar],nome,{type:"image/png"}));
+      }
+    }catch(e){ok(null);}
+  });
+}
+
+/* 1. SÓ O QR CODE: 1200 x 1200, com 80 px de margem branca de cada lado */
+function imagemSoQREvt(f){
+  var cv=document.createElement("canvas"),LADO=1200,MARG=80;
+  cv.width=LADO;cv.height=LADO;
+  var ctx=cv.getContext("2d");
+  ctx.fillStyle="#fff";ctx.fillRect(0,0,LADO,LADO);
+  var q=qrCanvasEvt(evtLink(f),LADO-MARG*2);
+  if(!q)return null;
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(q,MARG,MARG,LADO-MARG*2,LADO-MARG*2);
+  return cv;
+}
+
+/* 2. O QR COM A LOGOMARCA, O NOME DO EVENTO E A FRASE */
+async function imagemQRComNomeEvt(f){
+  var L=1200,ctx,cv=document.createElement("canvas");
+  var QR=760,MARG=70;
+  cv.width=L;cv.height=1560;
+  ctx=cv.getContext("2d");
+  ctx.fillStyle="#fff";ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.textAlign="center";ctx.fillStyle="#111";
+  var y=MARG;
+  /* a logomarca da loja; não existindo, o nome da loja escrito */
+  var logo=await carregarImagem(logoDaLojaEvt(f&&f.loja));
+  if(logo&&logo.width&&logo.height){
+    var alt=170,larg=Math.min(L-MARG*2,Math.round(logo.width*(alt/logo.height)));
+    ctx.drawImage(logo,Math.round((L-larg)/2),y,larg,alt);
+    y+=alt+46;
+  }else{
+    ctx.font="700 54px system-ui, Arial, sans-serif";
+    ctx.fillText(nomeLojaId(f&&f.loja),L/2,y+54);
+    y+=54+46;
+  }
+  /* o nome do evento, em até três linhas */
+  ctx.font="700 62px system-ui, Arial, sans-serif";
+  var ls=linhasNoCanvas(ctx,(f&&f.nome)||"",L-MARG*2,3);
+  ls.forEach(function(t){y+=70;ctx.fillText(t,L/2,y);});
+  y+=54;
+  /* o QR Code, grande e no meio */
+  var q=qrCanvasEvt(evtLink(f),QR);
+  if(!q)return null;
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(q,Math.round((L-QR)/2),y,QR,QR);
+  y+=QR+86;
+  /* a frase de chamada */
+  ctx.font="400 46px system-ui, Arial, sans-serif";
+  ctx.fillStyle="#111";
+  ctx.fillText("Aponte a câmera do celular para participar",L/2,y);
+  y+=40;
+  /* a folha sai do tamanho do que foi desenhado */
+  var fim=document.createElement("canvas");
+  fim.width=L;fim.height=Math.max(1200,y+MARG);
+  var c2=fim.getContext("2d");
+  c2.fillStyle="#fff";c2.fillRect(0,0,fim.width,fim.height);
+  c2.drawImage(cv,0,0);
+  return fim;
+}
+
+/* a janela das duas opções */
+function abrirBaixaQREvt(){
+  var f=evtPorId(evtSel);if(!f)return false;
+  if(!sistemaNoSite()){
+    toast("Link de teste — abra o sistema pelo site para gerar o link real.");return false;}
+  $("evt_bqSub").textContent=(f.nome||"")+" · "+nomeLojaId(f.loja);
+  $("evt_bqFechado").hidden=evtEstaAberto(f);
+  $("evt_bqAlerta").innerHTML="";
+  $("evBaixaQRModal").hidden=false;
+  return true;
+}
+function baixarQREvt(comNome){return travaSalvar("baixarQREvt",baixarQREvt__corpo,this,arguments);}
+async function baixarQREvt__corpo(comNome){
+  var f=evtPorId(evtSel);if(!f)return false;
+  if(!sistemaNoSite()){
+    toast("Link de teste — abra o sistema pelo site para gerar o link real.");return false;}
+  if(!window.QRCode){
+    $("evt_bqAlerta").innerHTML='<div class="note crit"><b>Não consegui montar o QR Code aqui.</b> Recarregue a página e tente de novo.</div>';
+    return false;
+  }
+  var cv=comNome?(await imagemQRComNomeEvt(f)):imagemSoQREvt(f);
+  var arq=await canvasParaArquivo(cv,nomeArqQREvt(f));
+  if(!arq){
+    $("evt_bqAlerta").innerHTML='<div class="note crit"><b>Não consegui montar a imagem aqui.</b> Tente pelo site, com o sistema aberto no endereço publicado.</div>';
+    return false;
+  }
+  window.__qrArqMF=arq;window.__qrCvMF=cv;
+  /* no celular, o compartilhar/salvar da própria imagem; no computador, baixa o arquivo */
+  if(ehCelular()&&navigator.canShare&&navigator.canShare({files:[arq]})){
+    try{
+      await navigator.share({files:[arq],title:f.nome||"QR Code do evento",
+        text:(f.nome||"")+" — aponte a câmera do celular para participar"});
+      $("evBaixaQRModal").hidden=true;
+      toast("QR Code pronto para salvar ou mandar.");
+      return true;
+    }catch(e){if(e&&e.name==="AbortError")return false;}
+  }
+  baixarArquivo(arq);
+  $("evBaixaQRModal").hidden=true;
+  toast("Imagem baixada: "+arq.name);
+  return true;
+}
+
 /* ---------- imprimir o QR Code (a folha para pregar na loja ou no evento) ---------- */
 function imprimirQREvt(){
   var f=evtPorId(evtSel);if(!f)return false;
@@ -82043,6 +82270,10 @@ function ligarTelaEventos(){
   if(b=$("evt_tOk"))b.onclick=function(){confirmarMotivoEvt();};
   if(b=$("evt_tFechar"))b.onclick=function(){$("evtMotModal").hidden=true;evtMotCtx=null;};
   if(b=$("evt_eFechar"))b.onclick=function(){$("evEscModal").hidden=true;};
+  if(b=$("evt_baixarQR"))b.onclick=function(){abrirBaixaQREvt();};
+  if(b=$("evt_bqSo"))b.onclick=function(){baixarQREvt(false);};
+  if(b=$("evt_bqCom"))b.onclick=function(){baixarQREvt(true);};
+  if(b=$("evt_bqFechar"))b.onclick=function(){$("evBaixaQRModal").hidden=true;};
   if(b=$("evt_sOk"))b.onclick=function(){sortearEvt();};
   if(b=$("evt_sFechar"))b.onclick=function(){$("evSortModal").hidden=true;evtSortCtx=null;renderEventos();};
 }
@@ -82065,7 +82296,10 @@ window.__evtTelaMF={lista:renderEvtLista,abrir:abrirEvtForm,det:renderEvtDet,nov
   desclassificar:desclassificarInscr,reclassificar:reclassificarInscr,lgpd:apagarDadosInscr,
   campos:CAMPOS_EVENTO,sel:function(){return evtSel;},
   clienteFeito:evtEhClienteFeito,acha:evtAchaCadastro,parecidos:cadastrosParecidosEvt,
-  escolher:escolherCadastroEvt__corpo};
+  escolher:escolherCadastroEvt__corpo,
+  lojaDaInscr:lojaDaInscr,inscrDe:evtInscrDe,
+  abrirBaixaQR:abrirBaixaQREvt,baixarQR:baixarQREvt__corpo,nomeArqQR:nomeArqQREvt,
+  soQR:imagemSoQREvt,comNomeQR:imagemQRComNomeEvt,logoDaLoja:logoDaLojaEvt};
 
 /* ============ AVISO DE VERSÃO NOVA (27/10, decisão dele) ============
    Quem está com o sistema aberto é avisado da versão nova. A conferência é só o versao.txt
