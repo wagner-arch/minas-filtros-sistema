@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Inscrição no evento</title>
+<meta name="robots" content="noindex">
+<!-- ======================================================================
+     PÁGINA PÚBLICA DO FORMULÁRIO DE EVENTO (27/11/2026, v621 — decisão dele)
+     Quem abre este link NÃO tem login. Por isso esta página não fala com a
+     tabela do banco: ela usa só duas funções próprias (evento_publico e
+     evento_inscrever, em supabase/eventos-formularios.sql), que fazem todas
+     as conferências do lado do servidor — formulário aberto, encerramento
+     automático, inscrição repetida, quem pode participar e validação.
+     Nada do sistema é lido aqui: nem cliente, nem lead, nem outro formulário.
+     Proteção contra robô: campo isca escondido, tempo mínimo de preenchimento
+     e limite de envios seguidos do mesmo aparelho (este, no servidor).
+     ====================================================================== -->
+<style>
+  :root{--az:#1f3f8f;--az2:#2E4DA7;--ink:#1a1f2b;--ink2:#495066;--ink3:#6b7280;
+    --bg:#f4f6fb;--card:#fff;--lin:#e3e8f2;--ok:#0f8a4b;--crit:#b3261e;--amb:#8a5a00}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;font-size:15px;line-height:1.5}
+  .folha{max-width:560px;margin:0 auto;padding:18px 16px 40px}
+  .marca{text-align:center;margin:10px 0 16px}
+  .marca img{max-width:200px;max-height:62px;display:none;margin:0 auto 8px}
+  .marca .emp{font-size:13px;color:var(--ink3);letter-spacing:.04em;text-transform:uppercase}
+  .cartao{background:var(--card);border:1px solid var(--lin);border-radius:14px;padding:18px 16px;
+    box-shadow:0 6px 24px rgba(20,30,60,.06)}
+  h1{font-size:21px;margin:0 0 4px;color:var(--az)}
+  .sub{font-size:13.5px;color:var(--ink2);margin-bottom:14px}
+  .bloco{background:var(--bg);border-radius:10px;padding:12px 14px;margin:14px 0;font-size:13.5px}
+  .bloco b{color:var(--az2)}
+  .fld{margin-bottom:12px}
+  label{display:block;font-size:13px;color:var(--ink2);margin-bottom:5px;font-weight:600}
+  label .req{color:var(--crit)}
+  input,select,textarea{width:100%;padding:11px 12px;font-size:16px;color:var(--ink);
+    background:#fff;border:1px solid var(--lin);border-radius:9px;font-family:inherit}
+  input:focus,select:focus{outline:2px solid var(--az2);outline-offset:1px}
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .aceite{display:flex;gap:10px;align-items:flex-start;background:var(--bg);border-radius:10px;padding:12px 14px;margin:14px 0}
+  .aceite input{width:20px;height:20px;flex:none;margin-top:2px}
+  .aceite span{font-size:13.5px;color:var(--ink2)}
+  .btn{width:100%;padding:14px;font-size:16.5px;font-weight:600;color:#fff;background:var(--az);
+    border:0;border-radius:10px;cursor:pointer}
+  .btn[disabled]{opacity:.6;cursor:default}
+  .isca{position:absolute;left:-5000px;width:1px;height:1px;overflow:hidden}
+  .aviso{border-radius:10px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .aviso.crit{background:#fdeceb;color:var(--crit)}
+  .aviso.ok{background:#e9f7ef;color:var(--ok)}
+  .aviso.warn{background:#fff6e5;color:var(--amb)}
+  .fim{text-align:center;padding:26px 10px}
+  .fim .big{font-size:22px;font-weight:700;color:var(--az);margin-bottom:6px}
+  .pe{text-align:center;font-size:11.5px;color:var(--ink3);margin-top:18px}
+  @media (max-width:420px){ .g2{grid-template-columns:1fr} h1{font-size:19px} }
+</style>
+</head>
+<body>
+<div class="folha">
+  <div class="marca">
+    <img id="logo" alt="">
+    <div class="emp" id="emp"></div>
+  </div>
+  <div class="cartao" id="cartao">
+    <div id="carregando" class="sub">Abrindo o formulário…</div>
+    <div id="corpo" hidden>
+      <h1 id="titulo"></h1>
+      <div class="sub" id="sub"></div>
+      <form id="form" autocomplete="on" novalidate>
+        <div id="campos"></div>
+        <div class="isca" aria-hidden="true">
+          <label for="isca">Não preencha este campo</label>
+          <input id="isca" name="isca" tabindex="-1" autocomplete="off">
+        </div>
+        <div id="premio"></div>
+        <label class="aceite" for="aceite">
+          <input type="checkbox" id="aceite">
+          <span id="aceiteTexto"></span>
+        </label>
+        <div id="alerta"></div>
+        <button class="btn" type="submit" id="enviar">Quero participar</button>
+      </form>
+    </div>
+    <div id="fim" hidden class="fim"></div>
+  </div>
+  <div class="pe" id="rodape"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
+<script>
+(function(){
+  "use strict";
+  /* a chave publicável é pública por natureza (a proteção é a regra de acesso do banco); a
+     service_role nunca entra em página nenhuma */
+  var URL_BANCO="https://clnccthtvfuetmfwuanu.supabase.co";
+  var CHAVE_BANCO="sb_publishable_d4fzLYOX1QobjBlxXOnhUg_evOgwcw-";
+  var LOJAS={mf:{nome:"Minas Filtros",logo:"img/logo.jpg"},wf:{nome:"WF Filtros",logo:"img/logo-wf.jpg"}};
+  var $=function(id){return document.getElementById(id);};
+  function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(m){
+    return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[m];});}
+  var T0=Date.now(),FORM=null,cli=null,enviando=false;
+
+  /* ---------- as duas portas do banco ---------- */
+  function cliente(){
+    if(cli)return cli;
+    if(!window.supabase||!window.supabase.createClient)return null;
+    cli=window.supabase.createClient(URL_BANCO,CHAVE_BANCO,{auth:{persistSession:false}});
+    return cli;
+  }
+  async function chamar(fn,args){
+    /* só os ensaios: responde sem banco, para conferir a página inteira */
+    if(window.__evtRPCTeste)return window.__evtRPCTeste(fn,args);
+    var c=cliente();
+    if(!c)throw new Error("sem internet");
+    var r=await c.rpc(fn,args);
+    if(r.error)throw new Error(r.error.message||"erro no banco");
+    return r.data;
+  }
+
+  /* ---------- as mesmas conferências do cadastro ---------- */
+  function soDig(t){return String(t||"").replace(/[^0-9]/g,"");}
+  function cpfValido(v){
+    var d=soDig(v);
+    if(d.length!==11||/^(\d)\1{10}$/.test(d))return false;
+    for(var t=9;t<11;t++){
+      var s=0;for(var i=0;i<t;i++)s+=(+d.charAt(i))*(t+1-i);
+      var r=(s*10)%11;if(r===10)r=0;
+      if(r!==+d.charAt(t))return false;
+    }
+    return true;
+  }
+  function cnpjValido(v){
+    var d=soDig(v);
+    if(d.length!==14||/^(\d)\1{13}$/.test(d))return false;
+    var p=[5,4,3,2,9,8,7,6,5,4,3,2];
+    function dig(n,pes){
+      var s=0;for(var i=0;i<pes.length;i++)s+=(+d.charAt(i))*pes[i];
+      var r=s%11;return r<2?0:11-r;
+    }
+    if(dig(12,p)!==+d.charAt(12))return false;
+    return dig(13,[6].concat(p))===+d.charAt(13);
+  }
+  function docValido(v){
+    var d=soDig(v);
+    if(d.length===11)return cpfValido(d);
+    if(d.length===14)return cnpjValido(d);
+    return false;
+  }
+  function emailValido(e){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e||"").trim());}
+  /* data e hora no padrão brasileiro: 20/12/2026 às 19:00 */
+  function quandoBR(v,comAs){
+    var t=String(v==null?"":v).replace("T"," "),d=t.slice(0,10),h=t.slice(11,16);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(d))return t;
+    var p=d.split("-");
+    return p[2]+"/"+p[1]+"/"+p[0]+(h?(comAs?" às ":" ")+h:"");
+  }
+  /* quem te atendeu: só o primeiro nome; dois com o mesmo primeiro nome, entra a inicial do
+     sobrenome. O que vai gravado é sempre o nome COMPLETO. */
+  function nomesCurtos(lista){
+    var ls=(lista||[]).slice(),conta={};
+    ls.forEach(function(n){
+      var p=String(n||"").trim().split(/\s+/)[0]||"";
+      conta[p.toLowerCase()]=(conta[p.toLowerCase()]||0)+1;
+    });
+    return ls.map(function(n){
+      var ps=String(n||"").trim().split(/\s+/),p=ps[0]||"";
+      if(conta[p.toLowerCase()]>1&&ps[1])return p+" "+ps[1].charAt(0).toUpperCase()+".";
+      return p;
+    });
+  }
+  function dataValida(v){
+    var p=String(v||"").split("-");
+    if(p.length!==3)return false;
+    var d=new Date(+p[0],+p[1]-1,+p[2]);
+    if(d.getFullYear()!==+p[0]||d.getMonth()!==(+p[1]-1)||d.getDate()!==+p[2])return false;
+    var hoje=new Date();
+    return d<=hoje;
+  }
+  /* o CEP preenche o endereço, pelas mesmas bases do sistema */
+  async function porCEP(d){
+    var bases=[
+      function(){return fetch("https://viacep.com.br/ws/"+d+"/json/").then(function(r){return r.json();})
+        .then(function(j){if(!j||j.erro||!j.localidade)throw 0;
+          return {rua:j.logradouro||"",bairro:j.bairro||"",cidade:j.localidade||"",uf:j.uf||""};});},
+      function(){return fetch("https://brasilapi.com.br/api/cep/v2/"+d).then(function(r){return r.json();})
+        .then(function(j){if(!j||!j.city)throw 0;
+          return {rua:j.street||"",bairro:j.neighborhood||"",cidade:j.city||"",uf:j.state||""};});}
+    ];
+    for(var i=0;i<bases.length;i++){
+      try{var r=await bases[i]();if(r)return r;}catch(e){}
+    }
+    return null;
+  }
+
+  /* ---------- a página ---------- */
+  var ROTULOS={tipo:"Tipo de contato",doc:"CPF/CNPJ",rg:"Identidade (RG)",nasc:"Data de nascimento",
+    sexo:"Sexo",email:"E-mail",prof:"Profissão",apelido:"Como prefere ser chamado",
+    tel2:"Outro telefone",cep:"CEP",rua:"Rua",num:"Número",comp:"Complemento",bairro:"Bairro",
+    cidade:"Cidade",uf:"Estado",ref:"Como chegar / ponto de referência"};
+  var TIPOS={tipo:"lista",sexo:"lista",nasc:"data",email:"email",doc:"num",cep:"num",tel2:"num"};
+  var LISTAS={tipo:["Pessoa Física","Pessoa Jurídica"],sexo:["Masculino","Feminino"]};
+  function idDoLink(){
+    var m=String(location.search||"").match(/[?&]f=([^&]+)/);
+    return m?decodeURIComponent(m[1]):"";
+  }
+  function campoHTML(k,obrig){
+    var rot=ROTULOS[k]||k,tipo=TIPOS[k]||"texto",eid="c_"+k;
+    var at=' id="'+eid+'" name="'+esc(k)+'"';
+    var campo;
+    if(tipo==="lista")campo="<select"+at+'><option value="">— escolha —</option>'+
+      (LISTAS[k]||[]).map(function(x){return "<option>"+esc(x)+"</option>";}).join("")+"</select>";
+    else if(tipo==="data")campo="<input"+at+' type="date">';
+    else if(tipo==="email")campo="<input"+at+' type="email" inputmode="email" autocomplete="email">';
+    else if(tipo==="num")campo="<input"+at+' inputmode="numeric">';
+    else campo="<input"+at+">";
+    var span=(k==="rua"||k==="ref"||k==="email")?' style="grid-column:span 2"':"";
+    return '<div class="fld"'+span+'><label for="'+eid+'">'+esc(rot)+
+      (obrig?' <span class="req">*</span>':"")+"</label>"+campo+"</div>";
+  }
+  function desenhar(f){
+    FORM=f;
+    var l=LOJAS[f.loja]||{nome:"",logo:""};
+    $("emp").textContent=l.nome;
+    if(l.logo){
+      var im=$("logo");
+      im.onload=function(){im.style.display="block";};
+      im.onerror=function(){im.style.display="none";};
+      im.alt=l.nome;im.src=l.logo;
+    }
+    document.title=f.nome+" · "+l.nome;
+    $("carregando").hidden=true;
+    if(!f.aberto){
+      $("corpo").hidden=true;
+      $("fim").hidden=false;
+      $("fim").innerHTML='<div class="big">Inscrições encerradas</div>'+
+        "<div>O formulário <b>"+esc(f.nome)+"</b> não está mais recebendo inscrição."+
+        (f.sorteioEm?" O sorteio está marcado para "+esc(quandoBR(f.sorteioEm,true))+".":"")+
+        "</div>";
+      return;
+    }
+    $("corpo").hidden=false;
+    $("titulo").textContent=f.nome;
+    $("sub").textContent="Preencha para participar. É rápido.";
+    /* nome e WhatsApp primeiro, sempre; depois o que o formulário pedir */
+    var h='<div class="fld"><label for="c_nome">Nome e sobrenome <span class="req">*</span></label>'+
+      '<input id="c_nome" name="nome" autocomplete="name"></div>'+
+      '<div class="fld"><label for="c_whats">WhatsApp (com DDD) <span class="req">*</span></label>'+
+      '<input id="c_whats" name="whats" inputmode="numeric" autocomplete="tel" placeholder="37 99999-9999"></div>';
+    var pares=(f.campos||[]).map(function(c){return campoHTML(c.k,!!c.obrig);});
+    h+='<div class="g2">'+pares.join("")+"</div>";
+    if(f.pedeAtendente){
+      /* a porta do banco manda {cod, curto}: o nome completo não sai por ela. O que esta página
+         envia de volta é só o CÓDIGO, e quem grava o nome na inscrição é o próprio banco. */
+      var eq=(f.atendentes||[]).map(function(x){
+        return (x&&typeof x==="object")?{cod:String(x.cod||""),curto:String(x.curto||"")}
+                                       :{cod:String(x||""),curto:String(x||"")};
+      });
+      var curtos=nomesCurtos(eq.map(function(x){return x.curto;}));
+      h+='<div class="fld"><label for="c_atendente">Quem te atendeu?</label>'+
+        '<select id="c_atendente" name="atendenteId"><option value="">— escolha —</option>'+
+        eq.map(function(x,ix){return '<option value="'+esc(x.cod)+'">'+esc(curtos[ix]||x.curto)+"</option>";}).join("")+
+        "</select></div>";
+    }
+    $("campos").innerHTML=h;
+    /* prêmio, data do sorteio e regras aparecem ANTES do botão de enviar (regra dele) */
+    var p=[];
+    if(f.premio)p.push("<b>Prêmio:</b> "+esc(f.premio));
+    if(f.sorteioEm)p.push("<b>Sorteio:</b> "+esc(quandoBR(f.sorteioEm,true)));
+    if(f.regras)p.push("<b>Regras:</b><br>"+esc(f.regras).replace(/\n/g,"<br>"));
+    $("premio").innerHTML=p.length?'<div class="bloco">'+p.join("<br>")+"</div>":"";
+    $("aceiteTexto").textContent="Autorizo a "+l.nome+" a entrar em contato comigo e a usar meus dados para este evento e sorteio.";
+    $("rodape").textContent=l.nome+" · seus dados são usados só para este evento.";
+    /* o CEP preenche o resto do endereço, como no sistema */
+    var cep=$("c_cep");
+    if(cep)cep.onchange=async function(){
+      var d=soDig(cep.value);
+      if(d.length!==8)return;
+      var r=await porCEP(d);
+      if(!r)return;
+      function poe(k,v){var e=$("c_"+k);if(e&&v&&!e.value)e.value=v;}
+      poe("rua",r.rua);poe("bairro",r.bairro);
+      var ci=$("c_cidade"),uf=$("c_uf");
+      if(ci&&r.cidade)ci.value=r.cidade;
+      if(uf&&r.uf)uf.value=r.uf;
+      try{if($("c_num"))$("c_num").focus();}catch(e){}
+    };
+  }
+  function aviso(cl,txt){$("alerta").innerHTML='<div class="aviso '+cl+'">'+txt+"</div>";}
+  function dados(){
+    var d={};
+    Array.prototype.forEach.call(document.querySelectorAll("#form [name]"),function(e){
+      d[e.getAttribute("name")]=String(e.value||"").trim();
+    });
+    d.aceite=!!$("aceite").checked;
+    d.segundos=Math.round((Date.now()-T0)/1000);
+    return d;
+  }
+  function conferir(f,d){
+    var falta=[];
+    if(!d.nome||d.nome.split(/\s+/).filter(function(x){return x.length>=2;}).length<2)
+      falta.push("nome e sobrenome");
+    if(soDig(d.whats).length<10)falta.push("WhatsApp com DDD");
+    (f.campos||[]).forEach(function(c){
+      if(c.obrig&&!String(d[c.k]||"").trim())falta.push((ROTULOS[c.k]||c.k).toLowerCase());
+    });
+    if(falta.length)return "Falta preencher: "+esc(falta.join(", "))+".";
+    if(d.doc&&!docValido(d.doc))return "O CPF/CNPJ não parece certo. Confira o número.";
+    if(d.email&&!emailValido(d.email))return "O e-mail não parece certo.";
+    if(d.nasc&&!dataValida(d.nasc))return "A data de nascimento não parece certa.";
+    if(d.cep&&soDig(d.cep).length!==8)return "O CEP tem 8 números.";
+    if(!d.aceite)return "Para participar, marque a autorização.";
+    return "";
+  }
+  var MENSAGENS={
+    repetido:"Você já está inscrito neste evento.",
+    nao_pode:"Não foi possível concluir sua inscrição neste formulário. Procure nossa equipe.",
+    fechado:"As inscrições deste formulário foram encerradas.",
+    nao_existe:"Este formulário não existe mais.",
+    aceite:"Para participar, marque a autorização.",
+    invalido:"Confira o nome e o WhatsApp.",
+    faltou:"Falta preencher um campo obrigatório. Confira os campos com *.",
+    rapido:"Confira os dados e envie de novo, por favor.",
+    robo:"Não foi possível concluir sua inscrição neste formulário. Procure nossa equipe.",
+    muitos:"Já recebemos vários envios deste aparelho agora. Tente de novo em alguns minutos."
+  };
+  async function enviar(ev){
+    if(ev)ev.preventDefault();
+    if(enviando||!FORM)return;
+    var d=dados();
+    var erro=conferir(FORM,d);
+    if(erro){aviso("crit",erro);return;}
+    enviando=true;$("enviar").disabled=true;$("enviar").textContent="Enviando…";
+    aviso("warn","Enviando a sua inscrição…");
+    try{
+      var r=await chamar("evento_inscrever",{p_id:FORM.id,p_dados:d});
+      if(r&&r.ok){
+        $("corpo").hidden=true;$("fim").hidden=false;
+        $("fim").innerHTML='<div class="big">Inscrição feita!</div><div>Boa sorte no sorteio.</div>'+
+          (FORM.sorteioEm?'<div class="bloco">O sorteio é em <b>'+
+            esc(quandoBR(FORM.sorteioEm,true))+"</b>.</div>":"");
+        return;
+      }
+      var k=(r&&r.erro)||"";
+      aviso("crit",esc(MENSAGENS[k]||"Não foi possível concluir sua inscrição neste formulário. Procure nossa equipe."));
+      if(k==="fechado"||k==="nao_existe"){$("enviar").hidden=true;return;}
+    }catch(e){
+      aviso("crit","Não consegui enviar agora. Confira a internet e tente de novo.");
+    }finally{
+      enviando=false;$("enviar").disabled=false;$("enviar").textContent="Quero participar";
+    }
+  }
+  async function comecar(){
+    var id=idDoLink();
+    if(!id){
+      $("carregando").hidden=true;$("fim").hidden=false;
+      $("fim").innerHTML='<div class="big">Link incompleto</div><div>Peça o link do evento à nossa equipe.</div>';
+      return;
+    }
+    try{
+      var f=await chamar("evento_publico",{p_id:id});
+      if(!f||f.erro){
+        $("carregando").hidden=true;$("fim").hidden=false;
+        $("fim").innerHTML='<div class="big">Formulário não encontrado</div>'+
+          "<div>Este link não está mais valendo. Peça o link do evento à nossa equipe.</div>";
+        return;
+      }
+      desenhar(f);
+    }catch(e){
+      $("carregando").hidden=true;
+      $("fim").hidden=false;
+      $("fim").innerHTML='<div class="big">Sem internet</div><div>Confira a conexão e abra o link de novo.</div>';
+    }
+  }
+  $("form").addEventListener("submit",enviar);
+  /* ensaios: a página inteira sem banco */
+  window.__EVTPUB={comecar:comecar,desenhar:desenhar,conferir:conferir,dados:dados,enviar:enviar,
+    docValido:docValido,emailValido:emailValido,dataValida:dataValida,mensagens:MENSAGENS,
+    quandoBR:quandoBR,nomesCurtos:nomesCurtos,
+    form:function(){return FORM;},t0:function(v){T0=v;}};
+  if(!window.__evtSemComecar)comecar();
+})();
+</script>
+</body>
+</html>
