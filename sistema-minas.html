@@ -29676,7 +29676,7 @@ function custoTotalDe(p){
 }
 
 /* ---------- modal de movimento ---------- */
-var esModo="mov",esItens=[],esColab="",esLocal="";
+var esModo="mov",esItens=[],esColab="",esLocal="",esPedMexido=false;
 function localOpcoes(sel,incluirColabs,incluirExternos){
   var s=$(sel);s.innerHTML="";
   function add(v,t){var o=document.createElement("option");o.value=v;o.textContent=t;s.appendChild(o);}
@@ -29745,6 +29745,13 @@ function abrirEstoque(modo,colab,local,pedInst,pidPre){
       function(p){return "Pedido "+(p.numero||"")+(p.cliente?" · "+p.cliente:"");},
       "— nenhum: é para o meu estoque —");
     $("es_pedInst").value=(modo==="req"&&pedInst&&pedsPI.some(function(p){return p.id===pedInst;}))?pedInst:"";
+    /* v619 (27/11): vindo do aviso do sino, o pedido já vem apontado e ninguém mexe nele depois.
+       Abrindo pelo menu, a sugestão é calculada quando a peça entra na lista. */
+    esPedMexido=!!$("es_pedInst").value;
+    if(!$("es_pedInst").__ligadoMF){
+      $("es_pedInst").__ligadoMF=true;
+      $("es_pedInst").addEventListener("change",function(){esPedMexido=true;});
+    }
   }
   /* e já vem com a peça que falta, quando o aviso do sino é que abriu */
   if(modo==="req"&&pidPre){
@@ -29757,6 +29764,27 @@ function abrirEstoque(modo,colab,local,pedInst,pidPre){
   renderEsItens();
   $("estModal").hidden=false;
 }
+/* v619 (27/11, pedido dele): requisitando pelo menu, se a peça que ele acabou de pôr na lista
+   falta para um pedido que ESPERA a instalação dele, o campo "Para a instalação de qual pedido?"
+   já vem sugerido com esse pedido — ele pode trocar ou deixar em branco. Faltando para MAIS DE UM
+   pedido, a lista fica à mostra e nada é sugerido, para ele escolher. Mexeu no campo, a sugestão
+   não mexe mais. */
+function sugerirPedidoInstReq(){
+  if(esModo!=="req"||esPedMexido)return;
+  var w=$("es_pedInstWrap"),sel=$("es_pedInst");
+  if(!w||!sel||w.hidden)return;
+  var quem=String(esLocal||"").indexOf("colab:")===0?String(esLocal).slice(6):"";
+  if(!quem)return;
+  var pids={};(esItens||[]).forEach(function(i){if(i&&i.pid)pids[i.pid]=1;});
+  var achados={};
+  try{
+    pecasQueFaltamParaInstalar(quem).forEach(function(x){if(pids[x.pid])achados[x.pedidoId]=1;});
+  }catch(eS){return;}
+  var ks=Object.keys(achados);
+  var um=(ks.length===1)&&[].some.call(sel.options,function(o){return o.value===ks[0];});
+  sel.value=um?ks[0]:"";
+}
+window.__sugPedInstMF=function(){sugerirPedidoInstReq();return ($("es_pedInst")||{}).value||"";};
 function renderEsItens(){
   var b=$("es_itens");b.innerHTML="";
   var org=$("es_origem").value;
@@ -29775,6 +29803,7 @@ function renderEsItens(){
   Array.prototype.forEach.call(b.querySelectorAll("[data-esrm]"),function(bt){
     bt.onclick=function(){esItens.splice(+bt.getAttribute("data-esrm"),1);renderEsItens();};});
   try{renderEsSeries();}catch(e){}   /* v586 */
+  try{sugerirPedidoInstReq();}catch(eSg){}   /* v619 */
 }
 /* toque duplo nunca grava duas vezes (30/10) */
 function confirmarEstoque(){return travaSalvar("confirmarEstoque",confirmarEstoque__corpo,this,arguments);}
